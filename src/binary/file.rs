@@ -28,6 +28,14 @@ impl BinaryReader for FileBinaryReader {
         Ok(buf)
     }
 
+    fn read_one(&mut self) -> io::Result<Option<u8>> {
+        let (len, buf) = self.read::<1>()?;
+        match len {
+            0 => Ok(None),
+            _ => Ok(Some(buf[0]))
+        }
+    }
+
     fn read_exact_one(&mut self) -> io::Result<u8> {
         let buf = self.read_exact::<1>()?;
         Ok(buf[0])
