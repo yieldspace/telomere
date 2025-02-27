@@ -1,6 +1,4 @@
 mod reader;
-mod file;
-mod raw;
 
 pub use reader::BinaryReader;
-pub use file::FileBinaryReader;
+pub use reader::new_binary_reader;
