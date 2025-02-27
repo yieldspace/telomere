@@ -398,17 +398,3 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::binary::{new_binary_reader, BinaryReader};
-
-    use super::WasmParser;
-
-    #[test]
-    fn test_wasm() {
-        let mut reader = new_binary_reader(&[0x00u8][..]);
-        let parser = WasmParser {
-            reader: &mut reader,
-        };
-    }
-}

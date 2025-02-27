@@ -47,6 +47,8 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
         Ok(buf)
     }
 }
-pub fn new_binary_reader<R: Read>(source: R) -> IoReadBinaryReader<R> {
-    IoReadBinaryReader { read: source }
+impl<R: Read> From<R> for IoReadBinaryReader<R> {
+    fn from(read: R) -> Self {
+        Self { read }
+    }
 }

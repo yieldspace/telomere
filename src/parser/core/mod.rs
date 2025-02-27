@@ -1,4 +1,3 @@
-pub use crate::binary::BinaryReader;
 use crate::common::Instr;
 mod dispatch;
 mod parser;

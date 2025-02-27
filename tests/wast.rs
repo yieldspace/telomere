@@ -15,7 +15,7 @@ fn run_wast(wast: &str) {
         match directive {
             WastDirective::Module(mut m) => {
                 let source = m.encode().unwrap();
-                let mut reader = telomere::new_binary_reader(&source[..]);
+                let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                 let mut parser = telomere::WasmParser::new(&mut reader);
                 let m = parser.parse_module().unwrap();
                 module = Some(m)
@@ -56,7 +56,7 @@ fn run_wast(wast: &str) {
             } => {
                 //TODO: Is there anything that wast fails to encode that could be binary?
                 if let Ok(source) = module.encode() {
-                    let mut reader = telomere::new_binary_reader(&source[..]);
+                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                     let mut parser = telomere::WasmParser::new(&mut reader);
                     let m = parser.parse_module().unwrap_err();
                     assert_eq!(message, m.to_string())
