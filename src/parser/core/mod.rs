@@ -66,6 +66,9 @@ impl ResultType {
     pub fn iter(&self) -> impl Iterator<Item = &ValType> + use<'_> {
         self.0.iter().rev()
     }
+    pub fn rev_iter(&self) -> impl Iterator<Item = &ValType> + use<'_> {
+        self.0.iter()
+    }
 }
 
 #[derive(Debug, Clone)]

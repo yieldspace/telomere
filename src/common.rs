@@ -9,7 +9,8 @@ pub union Operand {
     pub f32: f32,
     pub f64: f64,
 
-    pub jump_addr: usize,
+    pub jump_addr: u32,
+    pub jump_addr2: (u32, u32),
     pub drop_size: usize,
     pub local_addr: u32,
     pub select: usize,
@@ -50,15 +51,15 @@ pub struct ExecuteContext<'a> {
     pub memory: Memory<'a>,
 }
 
-pub struct JumpTable(Vec<usize>);
+pub struct JumpTable(Vec<u32>);
 impl JumpTable {
     pub fn new() -> Self {
         Self(Vec::new())
     }
-    pub fn push(&mut self, addr: usize) {
+    pub fn push(&mut self, addr: u32) {
         self.0.push(addr);
     }
-    pub fn br(&mut self, idx: usize) -> Option<usize> {
+    pub fn br(&mut self, idx: usize) -> Option<u32> {
         self.0.drain(self.0.len() - 1 - idx..).next()
     }
     pub fn end(&mut self) {

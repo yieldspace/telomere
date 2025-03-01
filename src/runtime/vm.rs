@@ -91,14 +91,14 @@ pub fn op_br(tail_code: &[Instr], ctx: &mut ExecuteContext) {
         .jump_table
         .br(unsafe { tail_code[0].operand.u32 } as usize)
         .unwrap();
-    let tail_code = &ctx.code[addr..];
+    let tail_code = &ctx.code[(addr as usize)..];
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
 pub fn op_else(_tail_code: &[Instr], ctx: &mut ExecuteContext) {
     println!("op_else");
 
     let addr = ctx.jump_table.br(0).unwrap();
-    let tail_code = &ctx.code[addr..];
+    let tail_code = &ctx.code[(addr as usize)..];
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
 pub fn op_br_if(tail_code: &[Instr], ctx: &mut ExecuteContext) {
@@ -109,7 +109,7 @@ pub fn op_br_if(tail_code: &[Instr], ctx: &mut ExecuteContext) {
             .jump_table
             .br(unsafe { tail_code[0].operand.u32 } as usize)
             .unwrap();
-        let tail_code = &ctx.code[addr..];
+        let tail_code = &ctx.code[(addr as usize)..];
         (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
     } else {
         (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
@@ -124,7 +124,7 @@ pub fn op_br_table(tail_code: &[Instr], ctx: &mut ExecuteContext) {
         unsafe { tail_code[(table_size + 1) as usize].operand.u32 }
     };
     let addr = ctx.jump_table.br(idx as usize).unwrap();
-    let tail_code = &ctx.code[addr..];
+    let tail_code = &ctx.code[(addr as usize)..];
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
 pub fn op_block(tail_code: &[Instr], ctx: &mut ExecuteContext) {
@@ -141,10 +141,16 @@ pub fn op_loop(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
 pub fn op_if(tail_code: &[Instr], ctx: &mut ExecuteContext) {
-    println!("op_if: {}", unsafe { tail_code[0].operand.jump_addr });
-    ctx.jump_table
-        .push(unsafe { tail_code[0].operand.jump_addr });
-    (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
+    let (end_addr, else_addr) = unsafe { tail_code[0].operand.jump_addr2 };
+    ctx.jump_table.push(end_addr);
+    let v = ctx.stack.pop_u32();
+    println!("op_if: {end_addr} {else_addr} {v}");
+
+    if v == 0 {
+        (unsafe { ctx.code[else_addr as usize].op })(&ctx.code[else_addr as usize + 1..], ctx)
+    } else {
+        (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
+    }
 }
 
 pub fn op_call(tail_code: &[Instr], ctx: &mut ExecuteContext) {
@@ -324,7 +330,7 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
         let mut memory = Vec::new();
         memory.resize(65535, 0);
         let mut jump_table = JumpTable::new();
-        jump_table.push(code.expr.len() - 1);
+        jump_table.push(code.expr.len() as u32 - 1);
         let mut ctx = ExecuteContext {
             stack: &mut stack,
             code: &code.expr,
@@ -333,7 +339,7 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
             globals: &mut globals[..],
             memory: Memory::new(&mut memory[..]),
         };
-        ctx.jump_table.push(code.expr.len() - 1);
+        ctx.jump_table.push(code.expr.len() as u32 - 1);
         (unsafe { code.expr[0].op })(&code.expr[1..], &mut ctx);
 
         return ResultValue(

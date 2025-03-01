@@ -1,4 +1,4 @@
-use std::mem::transmute;
+use std::{collections::VecDeque, mem::transmute};
 
 use thiserror::Error;
 
@@ -44,7 +44,7 @@ pub enum WasmParserError {
     #[error("invalid stack valtype: expected: {0:?}, actual: {1:?}")]
     InvalidStackValType(ValType, Option<ValType>),
     #[error("invalid stack valtype")]
-    InvalidStackValTypeAny(),
+    InvalidStackValTypeAny,
     #[error("invalid funcidx: {0:?}")]
     InvalidFuncIdx(FuncIdx),
     #[error("invalid typeidx: {0:?}")]
@@ -66,6 +66,7 @@ impl WasmParserError {
 pub type Result<R> = std::result::Result<R, WasmParserError>;
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]
+
 enum WasmSectionType {
     Custom = 0,
     Type = 1,
@@ -364,54 +365,99 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         globals: &[Global],
         instrs: &mut Vec<Instr>,
         types: &mut Vec<ValType>,
+        block_types_idxs: &mut VecDeque<(BlockType, usize)>,
+        else_addr: &mut Option<u32>,
+        unreachable: &mut bool,
     ) -> Result<(usize, bool)> {
         let v = self.reader.read_exact_one()?;
         use crate::runtime::vm;
+
         Ok(match v {
             0x0F => {
-                instrs.push(Instr { op: vm::op_return });
+                println!("parse_op_return");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_return });
+                }
                 (1, false)
             }
             0x0B => {
-                instrs.push(Instr { op: vm::op_end });
+                println!("parse_op_end");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_end });
+                    *unreachable = false;
+                }
                 (1, true)
             }
 
             0x5e => {
-                instrs.push(Instr { op: vm::op_f32_gt });
-                assert_valtype(ValType::F32, types.pop())?;
-                assert_valtype(ValType::F32, types.pop())?;
-                types.push(ValType::I32);
+                println!("parse_op_f32_gt");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_gt });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_valtype(ValType::F32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             0x6A => {
-                instrs.push(Instr { op: vm::op_i32_add });
-                assert_valtype(ValType::I32, types.pop())?;
-                assert_valtype(ValType::I32, types.pop())?;
-                types.push(ValType::I32);
+                println!("parse_op_i32_add");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_add });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             0x7C => {
-                instrs.push(Instr { op: vm::op_i64_add });
-                assert_valtype(ValType::I64, types.pop())?;
-                assert_valtype(ValType::I64, types.pop())?;
-                types.push(ValType::I64);
+                println!("parse_op_i64_add");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_add });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    types.push(ValType::I64);
+                }
                 (1, false)
             }
             0x00 => {
-                instrs.push(Instr {
-                    op: vm::op_unreachable,
-                });
+                println!("parse_op_unreachable");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_unreachable,
+                    });
+                    *unreachable = true;
+                }
                 (1, false)
             }
             0x01 => (1, false),
             0x02 => {
+                println!("parse_op_block");
                 let (len, blocktype) = self.parse_block_type()?;
+                let mut unreachable = *unreachable;
+
                 instrs.push(Instr { op: vm::op_block });
                 instrs.push(Instr {
                     operand: Operand { u32: 0xFAFAFAFA },
                 });
                 let index = instrs.len() - 1;
+                let before_stack_len = types.len();
+                let mut block_input_size = 0;
+                block_types_idxs.push_front((blocktype, before_stack_len));
+                match blocktype {
+                    BlockType::TypeIdx(idx) => {
+                        let ty = type_section
+                            .get(idx)
+                            .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
+                        for ty in ty.0.iter() {
+                            block_input_size += 1;
+                            assert_valtype(*ty, types.pop())?;
+                        }
+                        for ty in ty.0.rev_iter() {
+                            types.push(*ty);
+                        }
+                    }
+                    _ => {}
+                }
                 let len2 = self.parse_instrs(
                     type_section,
                     function_section,
@@ -420,36 +466,52 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     globals,
                     instrs,
                     types,
+                    block_types_idxs,
+                    else_addr,
+                    &mut unreachable,
                 )?;
+                block_types_idxs.pop_front();
                 instrs[index].operand = Operand {
-                    jump_addr: instrs.len(),
+                    jump_addr: instrs.len() as u32,
                 };
+                let after_stack_len = types.len();
+                let mut block_output_size = 0;
                 match blocktype {
                     BlockType::Void => {}
                     BlockType::TypeIdx(idx) => {
                         let ty = type_section
                             .get(idx)
                             .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
+
                         for ty in ty.1.iter() {
+                            block_output_size += 1;
                             assert_valtype(*ty, types.pop())?;
                         }
-                        for ty in ty.1.iter() {
+                        for ty in ty.1.rev_iter() {
                             types.push(*ty);
                         }
                     }
                     BlockType::ValType(ty) => {
                         assert_valtype(ty, types.last().copied())?;
+                        block_output_size += 1;
                     }
+                }
+                println!("{before_stack_len} - {block_input_size} == {after_stack_len} - {block_output_size}");
+                if before_stack_len + block_output_size != after_stack_len + block_input_size {
+                    Err(WasmParserError::InvalidStackValTypeAny)?
                 }
                 (1 + len + len2, false)
             }
             0x03 => {
+                println!("parse_op_loop");
                 let (len, blocktype) = self.parse_block_type()?;
+                let mut unreachable = *unreachable;
                 instrs.push(Instr { op: vm::op_loop });
                 instrs.push(Instr {
                     operand: Operand { u32: 0xFBFBFBFB },
                 });
                 let index = instrs.len() - 1;
+                let before_stack_len = types.len();
                 let len2 = self.parse_instrs(
                     type_section,
                     function_section,
@@ -458,36 +520,73 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     globals,
                     instrs,
                     types,
+                    block_types_idxs,
+                    else_addr,
+                    &mut unreachable,
                 )?;
                 instrs[index].operand = Operand {
-                    jump_addr: instrs.len(),
+                    jump_addr: instrs.len() as u32,
                 };
+                let mut after_stack_len = types.len();
+
                 match blocktype {
                     BlockType::Void => {}
                     BlockType::TypeIdx(idx) => {
                         let ty = type_section
                             .get(idx)
                             .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
-                        for ty in ty.0.iter() {
+                        for ty in ty.1.iter() {
+                            after_stack_len -= 1;
                             assert_valtype(*ty, types.pop())?;
                         }
-                        for ty in ty.1.iter() {
+                        for ty in ty.1.rev_iter() {
                             types.push(*ty);
                         }
                     }
                     BlockType::ValType(ty) => {
+                        after_stack_len -= 1;
                         assert_valtype(ty, types.last().copied())?;
                     }
+                }
+
+                println!("{before_stack_len} {after_stack_len}");
+                if before_stack_len != after_stack_len {
+                    Err(WasmParserError::InvalidStackValTypeAny)?
                 }
                 (1 + len + len2, false)
             }
             0x04 => {
+                println!("parse_op_if");
                 let (len, blocktype) = self.parse_block_type()?;
+                let mut unreachable = *unreachable;
+
                 instrs.push(Instr { op: vm::op_if });
                 instrs.push(Instr {
-                    operand: Operand { u32: 0xFCFCFCFC },
+                    operand: Operand {
+                        jump_addr2: (0xFCFCFCFC, 0xFDFDFDFD),
+                    },
                 });
+                assert_valtype(ValType::I32, types.pop())?;
                 let index = instrs.len() - 1;
+                let before_stack_len = types.len();
+                let mut block_input_size = 0;
+                block_types_idxs.push_front((blocktype, before_stack_len));
+                match blocktype {
+                    BlockType::TypeIdx(idx) => {
+                        let ty = type_section
+                            .get(idx)
+                            .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
+                        for ty in ty.0.iter() {
+                            block_input_size += 1;
+                            assert_valtype(*ty, types.pop())?;
+                        }
+                        for ty in ty.0.rev_iter() {
+                            types.push(*ty);
+                        }
+                    }
+                    _ => {}
+                }
+                let mut else_addr = None;
                 let len2 = self.parse_instrs(
                     type_section,
                     function_section,
@@ -496,368 +595,522 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     globals,
                     instrs,
                     types,
+                    block_types_idxs,
+                    &mut else_addr,
+                    &mut unreachable,
                 )?;
+                block_types_idxs.pop_front();
                 instrs[index].operand = Operand {
-                    jump_addr: instrs.len(),
+                    jump_addr2: (
+                        instrs.len() as u32,
+                        else_addr.unwrap_or_else(|| instrs.len() as u32),
+                    ),
                 };
-
+                let after_stack_len = types.len();
+                let mut block_output_size = 0;
                 match blocktype {
                     BlockType::Void => {}
                     BlockType::TypeIdx(idx) => {
                         let ty = type_section
                             .get(idx)
                             .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
-                        for ty in ty.0.iter() {
+
+                        for ty in ty.1.iter() {
+                            block_output_size += 1;
                             assert_valtype(*ty, types.pop())?;
                         }
-                        for ty in ty.1.iter() {
+                        for ty in ty.1.rev_iter() {
                             types.push(*ty);
                         }
                     }
                     BlockType::ValType(ty) => {
                         assert_valtype(ty, types.last().copied())?;
+                        block_output_size += 1;
                     }
                 }
+                println!("{before_stack_len} - {block_input_size} == {after_stack_len} - {block_output_size}");
+                if before_stack_len + block_output_size != after_stack_len + block_input_size {
+                    Err(WasmParserError::InvalidStackValTypeAny)?
+                }
+
                 (1 + len + len2, false)
             }
             0x05 => {
+                println!("parse_op_else");
                 instrs.push(Instr { op: vm::op_else });
+                *else_addr = Some(instrs.len() as u32);
+                *unreachable = false;
+                if let Some((blocktype, size)) = block_types_idxs.get(0) {
+                    match blocktype {
+                        BlockType::Void => {}
+                        BlockType::TypeIdx(idx) => {
+                            let ty = type_section
+                                .get(*idx)
+                                .ok_or_else(|| WasmParserError::InvalidTypeIdx(*idx))?;
+                            for ty in ty.1.iter() {
+                                assert_valtype(*ty, types.pop())?;
+                            }
+                        }
+                        BlockType::ValType(ty) => {
+                            assert_valtype(*ty, types.pop())?;
+                        }
+                    }
+                    if *size != types.len() {
+                        Err(WasmParserError::InvalidStackValTypeAny)?
+                    }
+                } else {
+                    Err(WasmParserError::InvalidStackValTypeAny)?
+                }
                 (1, false)
             }
             0x0C => {
+                println!("parse_op_br");
                 let (len, idx) = self.parse_u32()?;
+                println!("parse_op_br: {idx}");
+                *unreachable = true;
                 instrs.push(Instr { op: vm::op_br });
                 instrs.push(Instr {
                     operand: Operand { u32: idx },
                 });
+                let mut return_size = 0;
+                let mut consumed_size = 0;
+                if let Some((blocktype, size)) = block_types_idxs.get(idx as usize) {
+                    match blocktype {
+                        BlockType::Void => {}
+                        BlockType::TypeIdx(idx) => {
+                            let ty = type_section
+                                .get(*idx)
+                                .ok_or_else(|| WasmParserError::InvalidTypeIdx(*idx))?;
+                            consumed_size += ty.0.iter().count();
+
+                            for ty in ty.1.iter() {
+                                return_size += 1;
+                                assert_valtype(*ty, types.pop())?;
+                            }
+                            for ty in ty.1.rev_iter() {
+                                types.push(*ty);
+                            }
+                        }
+                        BlockType::ValType(ty) => {
+                            return_size += 1;
+                            assert_valtype(*ty, types.last().copied())?;
+                        }
+                    }
+                    if *size + return_size != types.len() + consumed_size {
+                        Err(WasmParserError::InvalidStackValTypeAny)?
+                    }
+                } else {
+                    Err(WasmParserError::InvalidStackValTypeAny)?
+                }
                 (1 + len, false)
             }
             0x0D => {
+                println!("parse_op_br_if");
                 let (len, idx) = self.parse_u32()?;
-
-                assert_valtype(ValType::I32, types.pop())?;
-                instrs.push(Instr { op: vm::op_br_if });
-                instrs.push(Instr {
-                    operand: Operand { u32: idx },
-                });
-                (1 + len, false)
-            }
-            0x0E => {
-                let (len, idxs) = self.parse_vec(Self::parse_u32)?;
-                let (len2, default_idx) = self.parse_u32()?;
-                instrs.push(Instr {
-                    op: vm::op_br_table,
-                });
-                instrs.push(Instr {
-                    operand: Operand {
-                        u32: idxs.len() as u32,
-                    },
-                });
-                for idx in idxs {
+                if !*unreachable {
+                    assert_valtype(ValType::I32, types.pop())?;
+                    instrs.push(Instr { op: vm::op_br_if });
                     instrs.push(Instr {
                         operand: Operand { u32: idx },
                     });
                 }
-                instrs.push(Instr {
-                    operand: Operand { u32: default_idx },
-                });
-                assert_valtype(ValType::I32, types.pop())?;
+                (1 + len, false)
+            }
+            0x0E => {
+                println!("parse_op_br_table");
+                let (len, idxs) = self.parse_vec(Self::parse_u32)?;
+                let (len2, default_idx) = self.parse_u32()?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_br_table,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand {
+                            u32: idxs.len() as u32,
+                        },
+                    });
+                    for idx in idxs {
+                        instrs.push(Instr {
+                            operand: Operand { u32: idx },
+                        });
+                    }
+                    instrs.push(Instr {
+                        operand: Operand { u32: default_idx },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                }
                 (1 + len + len2, false)
             }
             0x10 => {
+                println!("parse_op_call");
                 let (len, idx) = self.parse_u32()?;
-                instrs.push(Instr { op: vm::op_call });
-                instrs.push(Instr {
-                    operand: Operand { u32: idx },
-                });
-                let typeidx = function_section
-                    .get(FuncIdx(idx))
-                    .ok_or_else(|| WasmParserError::InvalidFuncIdx(FuncIdx(idx)))?;
-                let ty = type_section
-                    .get(typeidx)
-                    .ok_or_else(|| WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
-                for ty in ty.0.iter() {
-                    assert_valtype(*ty, types.pop())?;
-                }
-                for ty in ty.1.iter() {
-                    types.push(*ty);
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_call });
+                    instrs.push(Instr {
+                        operand: Operand { u32: idx },
+                    });
+                    let typeidx = function_section
+                        .get(FuncIdx(idx))
+                        .ok_or_else(|| WasmParserError::InvalidFuncIdx(FuncIdx(idx)))?;
+                    let ty = type_section
+                        .get(typeidx)
+                        .ok_or_else(|| WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
+                    for ty in ty.0.iter() {
+                        assert_valtype(*ty, types.pop())?;
+                    }
+                    for ty in ty.1.rev_iter() {
+                        types.push(*ty);
+                    }
                 }
                 (1 + len, false)
             }
             0x11 => {
+                println!("parse_op_call_indirect");
                 let (len, typeidx) = self.parse_u32()?;
                 let (len2, tableidx) = self.parse_u32()?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_call_indirect,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { u32: tableidx },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
 
-                instrs.push(Instr {
-                    op: vm::op_call_indirect,
-                });
-                instrs.push(Instr {
-                    operand: Operand { u32: tableidx },
-                });
-                let ty = type_section
-                    .get(TypeIdx(typeidx))
-                    .ok_or_else(|| WasmParserError::InvalidTypeIdx(TypeIdx(typeidx)))?;
-                for ty in ty.0.iter() {
-                    assert_valtype(*ty, types.pop())?;
-                }
-                for ty in ty.1.iter() {
-                    types.push(*ty);
+                    let ty = type_section
+                        .get(TypeIdx(typeidx))
+                        .ok_or_else(|| WasmParserError::InvalidTypeIdx(TypeIdx(typeidx)))?;
+                    for ty in ty.0.iter() {
+                        assert_valtype(*ty, types.pop())?;
+                    }
+                    for ty in ty.1.rev_iter() {
+                        types.push(*ty);
+                    }
                 }
                 (1 + len + len2, false)
             }
             0x1A => {
-                if let Some(x) = types.pop() {
-                    instrs.push(Instr { op: vm::op_drop });
-                    instrs.push(Instr {
-                        operand: Operand {
-                            drop_size: x.stack_size().usize(),
-                        },
-                    });
-                } else {
-                    Err(WasmParserError::InvalidStackValTypeAny())?
+                println!("parse_op_drop");
+                if !*unreachable {
+                    if let Some(x) = types.pop() {
+                        instrs.push(Instr { op: vm::op_drop });
+                        instrs.push(Instr {
+                            operand: Operand {
+                                drop_size: x.stack_size().usize(),
+                            },
+                        });
+                    } else {
+                        Err(WasmParserError::InvalidStackValTypeAny)?
+                    }
                 }
                 (1, false)
             }
             0x1B => {
-                let x = if let Some(first) = types.pop() {
-                    assert_valtype(first, types.pop())?;
-                    first
-                } else {
-                    Err(WasmParserError::InvalidStackValTypeAny())?
-                };
-                assert_valtype(ValType::I32, types.pop())?;
-
-                instrs.push(Instr { op: vm::op_select });
-                instrs.push(Instr {
-                    operand: Operand {
-                        select: x.stack_size().usize(),
-                    },
-                });
+                println!("parse_op_select");
+                if !*unreachable {
+                    let x = if let Some(first) = types.pop() {
+                        assert_valtype(first, types.pop())?;
+                        first
+                    } else {
+                        Err(WasmParserError::InvalidStackValTypeAny)?
+                    };
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(x);
+                    instrs.push(Instr { op: vm::op_select });
+                    instrs.push(Instr {
+                        operand: Operand {
+                            select: x.stack_size().usize(),
+                        },
+                    });
+                }
                 (1, false)
             }
             0x20 => {
+                println!("parse_op_local_get");
                 let (len, idx) = self.parse_u32()?;
-                function_section.get(FuncIdx(idx));
-                let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
-                match ty.stack_size() {
-                    crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_local_get4,
-                    }),
-                    crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_local_get8,
-                    }),
-                    crate::parser::core::ValueSize::Byte16 => todo!(),
+                if !*unreachable {
+                    function_section.get(FuncIdx(idx));
+                    let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
+                    match ty.stack_size() {
+                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                            op: vm::op_local_get4,
+                        }),
+                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                            op: vm::op_local_get8,
+                        }),
+                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                    }
+                    instrs.push(Instr {
+                        operand: Operand { local_addr: addr },
+                    });
+                    types.push(ty);
                 }
-                instrs.push(Instr {
-                    operand: Operand { local_addr: addr },
-                });
-                types.push(ty);
                 (1 + len, false)
             }
             0x21 => {
+                println!("parse_op_local_set");
                 let (len, idx) = self.parse_u32()?;
-                function_section.get(FuncIdx(idx));
-                let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
-                match ty.stack_size() {
-                    crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_local_set4,
-                    }),
-                    crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_local_set8,
-                    }),
-                    crate::parser::core::ValueSize::Byte16 => todo!(),
+                if !*unreachable {
+                    function_section.get(FuncIdx(idx));
+                    let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
+                    match ty.stack_size() {
+                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                            op: vm::op_local_set4,
+                        }),
+                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                            op: vm::op_local_set8,
+                        }),
+                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                    }
+                    assert_valtype(ty, types.pop())?;
+                    instrs.push(Instr {
+                        operand: Operand { local_addr: addr },
+                    });
                 }
-                assert_valtype(ty, types.pop())?;
-                instrs.push(Instr {
-                    operand: Operand { local_addr: addr },
-                });
                 (1 + len, false)
             }
             0x22 => {
+                println!("parse_op_local_tee");
                 let (len, idx) = self.parse_u32()?;
-                function_section.get(FuncIdx(idx));
-                let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
-                match ty.stack_size() {
-                    crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_local_tee4,
-                    }),
-                    crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_local_tee8,
-                    }),
-                    crate::parser::core::ValueSize::Byte16 => todo!(),
+                if !*unreachable {
+                    function_section.get(FuncIdx(idx));
+                    let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
+                    match ty.stack_size() {
+                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                            op: vm::op_local_tee4,
+                        }),
+                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                            op: vm::op_local_tee8,
+                        }),
+                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                    }
+                    assert_valtype(ty, types.pop())?;
+                    types.push(ty);
+                    instrs.push(Instr {
+                        operand: Operand { local_addr: addr },
+                    });
                 }
-                assert_valtype(ty, types.pop())?;
-                types.push(ty);
-                instrs.push(Instr {
-                    operand: Operand { local_addr: addr },
-                });
                 (1 + len, false)
             }
             0x23 => {
+                println!("parse_op_global_get");
+
                 let (len, idx) = self.parse_u32()?;
-                let (ty, addr) = get_global_addr(globals, idx)?;
-                match ty.0.stack_size() {
-                    crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_global_get4,
-                    }),
-                    crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_global_get8,
-                    }),
-                    crate::parser::core::ValueSize::Byte16 => todo!(),
+                if !*unreachable {
+                    let (ty, addr) = get_global_addr(globals, idx)?;
+                    match ty.0.stack_size() {
+                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                            op: vm::op_global_get4,
+                        }),
+                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                            op: vm::op_global_get8,
+                        }),
+                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                    }
+                    types.push(ty.0);
+                    instrs.push(Instr {
+                        operand: Operand { u32: addr },
+                    });
                 }
-                types.push(ty.0);
-                instrs.push(Instr {
-                    operand: Operand { u32: addr },
-                });
                 (1 + len, false)
             }
             0x24 => {
+                println!("parse_op_global_set");
                 let (len, idx) = self.parse_u32()?;
-                function_section.get(FuncIdx(idx));
-                let (ty, addr) = get_global_addr(globals, idx)?;
-                if ty.1 != Mut::Var {
-                    Err(WasmParserError::InvalidGlobalAccess)?
+                if !*unreachable {
+                    function_section.get(FuncIdx(idx));
+                    let (ty, addr) = get_global_addr(globals, idx)?;
+                    if ty.1 != Mut::Var {
+                        Err(WasmParserError::InvalidGlobalAccess)?
+                    }
+                    match ty.0.stack_size() {
+                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                            op: vm::op_global_set4,
+                        }),
+                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                            op: vm::op_global_set8,
+                        }),
+                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                    }
+                    assert_valtype(ty.0, types.pop())?;
+                    instrs.push(Instr {
+                        operand: Operand { u32: addr },
+                    });
                 }
-                match ty.0.stack_size() {
-                    crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_global_set4,
-                    }),
-                    crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_global_set8,
-                    }),
-                    crate::parser::core::ValueSize::Byte16 => todo!(),
-                }
-                assert_valtype(ty.0, types.pop())?;
-                instrs.push(Instr {
-                    operand: Operand { u32: addr },
-                });
                 (1 + len, false)
             }
             0x28 => {
+                println!("parse_op_i32_load");
                 let (len, memarg) = self.parse_memarg()?;
-                instrs.push(Instr {
-                    op: vm::op_i32_load,
-                });
-                instrs.push(Instr {
-                    operand: Operand { memarg },
-                });
-                types.push(ValType::I32);
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_load,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1 + len, false)
             }
             0x36 => {
+                println!("parse_op_i32_store");
                 let (len, memarg) = self.parse_memarg()?;
-                instrs.push(Instr {
-                    op: vm::op_i32_store,
-                });
-                instrs.push(Instr {
-                    operand: Operand { memarg },
-                });
-                assert_valtype(ValType::I32, types.pop())?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_store,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                }
                 (1 + len, false)
             }
             0x40 => {
+                println!("parse_op_mem_glow");
                 let next = self.reader.read_exact_one()?;
                 if next != 0 {
                     Err(WasmParserError::InvalidInstruction([0x40, next, 0, 0]))?
                 }
-                instrs.push(Instr {
-                    op: vm::op_mem_glow,
-                });
+                if !*unreachable {
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                    instrs.push(Instr {
+                        op: vm::op_mem_glow,
+                    });
+                }
                 (2, false)
             }
             0x41 => {
+                println!("parse_op_i32_const");
+
                 let (len, operand) = self.parse_i32()?;
-                instrs.push(Instr {
-                    op: vm::op_i32_const,
-                });
-                instrs.push(Instr {
-                    operand: Operand { i32: operand },
-                });
-                types.push(ValType::I32);
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_const,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { i32: operand },
+                    });
+                    types.push(ValType::I32);
+                }
                 (1 + len, false)
             }
             0x42 => {
+                println!("parse_op_i64_const");
                 let (len, operand) = self.parse_i64()?;
-                instrs.push(Instr {
-                    op: vm::op_i64_const,
-                });
-                instrs.push(Instr {
-                    operand: Operand { i64: operand },
-                });
-                types.push(ValType::I64);
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_const,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { i64: operand },
+                    });
+                    types.push(ValType::I64);
+                }
                 (1 + len, false)
             }
             0x43 => {
+                println!("parse_op_f32_const");
                 let (len, operand) = self.parse_f32()?;
-                instrs.push(Instr {
-                    op: vm::op_f32_const,
-                });
-                instrs.push(Instr {
-                    operand: Operand { f32: operand },
-                });
-                types.push(ValType::F32);
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f32_const,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { f32: operand },
+                    });
+                    types.push(ValType::F32);
+                }
                 (1 + len, false)
             }
             0x44 => {
+                println!("parse_op_f64_const");
                 let (len, operand) = self.parse_f64()?;
-                instrs.push(Instr {
-                    op: vm::op_f64_const,
-                });
-                instrs.push(Instr {
-                    operand: Operand { f64: operand },
-                });
-                types.push(ValType::F64);
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f64_const,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { f64: operand },
+                    });
+                    types.push(ValType::F64);
+                }
                 (1 + len, false)
             }
             0x45 => {
-                instrs.push(Instr { op: vm::op_i32_eqz });
-                assert_valtype(ValType::I32, types.pop())?;
-                types.push(ValType::I32);
+                println!("parse_op_i32_eqz");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_eqz });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             0x46 => {
-                instrs.push(Instr { op: vm::op_i32_eq });
-                assert_valtype(ValType::I32, types.pop())?;
-                assert_valtype(ValType::I32, types.pop())?;
+                println!("parse_op_i32_eq");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_eq });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
 
-                types.push(ValType::I32);
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             0x68 => {
-                instrs.push(Instr { op: vm::op_i32_ctz });
-                assert_valtype(ValType::I32, types.pop())?;
-                types.push(ValType::I32);
+                println!("parse_op_i32_ctz");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_ctz });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             0x69 => {
-                instrs.push(Instr {
-                    op: vm::op_i32_popcnt,
-                });
-                assert_valtype(ValType::I32, types.pop())?;
-                types.push(ValType::I32);
+                println!("parse_op_i32_popcnt");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_popcnt,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             0x70 => {
-                instrs.push(Instr {
-                    op: vm::op_i32_rem_u,
-                });
-                assert_valtype(ValType::I32, types.pop())?;
-                assert_valtype(ValType::I32, types.pop())?;
-                types.push(ValType::I32);
+                println!("parse_op_i32_rem_u");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_rem_u,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             0x6B => {
-                instrs.push(Instr { op: vm::op_i32_sub });
-                assert_valtype(ValType::I32, types.pop())?;
-                assert_valtype(ValType::I32, types.pop())?;
-                types.push(ValType::I32);
+                println!("parse_op_i32_sub");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_sub });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             0x6C => {
-                instrs.push(Instr { op: vm::op_i32_mul });
-                assert_valtype(ValType::I32, types.pop())?;
-                assert_valtype(ValType::I32, types.pop())?;
-                types.push(ValType::I32);
+                println!("parse_op_i32_mul");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_mul });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I32);
+                }
                 (1, false)
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
@@ -872,6 +1125,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         globals: &[Global],
         instrs: &mut Vec<Instr>,
         types: &mut Vec<ValType>,
+        block_types_idxs: &mut VecDeque<(BlockType, usize)>,
+        else_addr: &mut Option<u32>,
+        unreachable: &mut bool,
     ) -> Result<usize> {
         let mut read_bytes = 0;
         loop {
@@ -883,6 +1139,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 globals,
                 instrs,
                 types,
+                block_types_idxs,
+                else_addr,
+                unreachable,
             )?;
             read_bytes += len;
             if end {
@@ -901,7 +1160,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
         let mut instrs = Vec::new();
         let mut types = Vec::new();
-
+        let mut block_types_idxs = VecDeque::new();
+        let mut unreachable = false;
+        let mut else_addr = None;
         let len2 = self.parse_instrs(
             type_section,
             function_section,
@@ -910,7 +1171,16 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             &global_section.0,
             &mut instrs,
             &mut types,
+            &mut block_types_idxs,
+            &mut else_addr,
+            &mut unreachable,
         )?;
+        for ty in functype.1.iter() {
+            assert_valtype(*ty, types.pop())?;
+        }
+        if !types.is_empty() {
+            Err(WasmParserError::InvalidStackValTypeAny)?
+        }
         if len + len2 != size as usize {
             Err(WasmParserError::InvalidInstructionSize(
                 size,
@@ -932,6 +1202,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         global_section: &GlobalSection,
         funcidx: FuncIdx,
     ) -> Result<(usize, Func)> {
+        println!("parse_code: {funcidx:?}");
         let (len, size) = self.parse_u32()?;
         let typeidx = function_section
             .get(funcidx)
@@ -952,11 +1223,23 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     fn parse_section_type(&mut self) -> Result<WasmSectionType> {
         let kind = self.reader.read_exact_one()?;
         println!("{kind}");
-        if kind <= 12 {
-            Ok(unsafe { transmute(kind) })
-        } else {
-            Ok(WasmSectionType::Custom)
-        }
+        use WasmSectionType::*;
+        Ok(match kind {
+            0 => Custom,
+            1 => Type,
+            2 => Import,
+            3 => Function,
+            4 => Table,
+            5 => Memory,
+            6 => Global,
+            7 => Export,
+            8 => Start,
+            9 => Element,
+            10 => Code,
+            11 => Data,
+            12 => DataCount,
+            _ => Custom,
+        })
     }
 
     fn parse_type_section(&mut self, size: u32) -> Result<TypeSection> {
