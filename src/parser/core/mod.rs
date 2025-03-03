@@ -129,7 +129,7 @@ pub enum Mut {
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalType(pub ValType, pub Mut);
 #[derive(Debug, Clone)]
-pub struct Global(pub GlobalType,pub WasmValue);
+pub struct Global(pub GlobalType, pub WasmValue);
 #[derive()]
 pub struct Func {
     pub locals: Vec<Locals>,

@@ -85,7 +85,11 @@ fn run_wast(text: &str) {
                     let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                     let mut parser = telomere::WasmParser::new(&mut reader);
                     // TODO: test error message
-                    assert!(parser.parse_module().is_err(), "{:?}", span.linecol_in(text))
+                    assert!(
+                        parser.parse_module().is_err(),
+                        "{:?}",
+                        span.linecol_in(text)
+                    )
                 }
             }
             _ => unimplemented!(),

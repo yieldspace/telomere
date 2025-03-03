@@ -6,5 +6,5 @@ pub enum ParseError {
     #[error("Signature is not valid: {0}")]
     InvalidSignature(String),
     #[error("Reading binary failed")]
-    BinaryError(#[from] io::Error)
+    BinaryError(#[from] io::Error),
 }
