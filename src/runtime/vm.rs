@@ -3,9 +3,9 @@ use std::ops::Rem;
 use tracing::trace;
 
 use crate::{
-    common::{ExecuteContext, Instr, JumpTable, Memory, Operand, Stack},
+    common::{ExecuteContext, Instr, JumpTable, Memory, Stack},
     parser::{
-        core::{ExportDesc, MemArg, ValType},
+        core::{ExportDesc, ValType},
         Module,
     },
 };
