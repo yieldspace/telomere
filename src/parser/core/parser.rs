@@ -1279,6 +1279,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         instrs.push(Instr {
             op: special_function_return,
         });
+        instrs.push(Instr {
+            operand: Operand {
+                drop_size: functype.1.iter().map(|v| v.stack_size().usize()).sum(),
+            },
+        });
         Ok(Func {
             locals,
             expr: instrs,

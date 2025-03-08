@@ -5,7 +5,7 @@ use tracing::trace;
 use crate::{
     common::{ExecuteContext, Instr, JumpTable, Memory, Stack},
     parser::{
-        core::{ExportDesc, FuncIdx, MemArg, ValType},
+        core::{ExportDesc, FuncIdx, ValType},
         Module,
     },
 };
@@ -197,15 +197,12 @@ pub fn op_call(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     for local in &code.locals {
         local_size += local.n as usize * local.t.stack_size().usize();
     }
-    let mut locals = Vec::new();
-
-    locals.resize(local_size, 0);
-    locals[0..param_size].copy_from_slice(ctx.stack.drop(param_size));
+    let local_reference = ctx.stack.allocate_locals(param_size, local_size);
     trace!(
         "op_call: {funcidx} {local_size} {:?} {:?} {:?}",
         ft,
         code.locals,
-        locals
+        local_reference
     );
 
     {
@@ -214,7 +211,7 @@ pub fn op_call(tail_code: &[Instr], ctx: &mut ExecuteContext) {
             module: ctx.module,
             stack: ctx.stack,
             jump_table,
-            locals: &mut locals,
+            local_reference,
             globals: ctx.globals,
             memory: Memory::new(ctx.memory.0),
         };
@@ -244,40 +241,39 @@ pub fn op_select(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 }
 pub fn op_local_get4(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let addr = unsafe { tail_code[0].operand.local_addr } as usize;
-    let v = &ctx.locals[addr..addr + 4];
-    ctx.stack.push_slice(v);
-    trace!("op_local_get4: {addr} => {v:?}");
+    ctx.stack.local_get(&ctx.local_reference, addr, 4);
+    trace!("op_local_get4: {addr}");
 
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
 pub fn op_local_get8(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let addr = unsafe { tail_code[0].operand.local_addr } as usize;
-    ctx.stack.push_slice(&ctx.locals[addr..addr + 8]);
+    ctx.stack.local_get(&ctx.local_reference, addr, 8);
+    trace!("op_local_get8: {addr}");
+
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
 
 pub fn op_local_set4(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let addr = unsafe { tail_code[0].operand.local_addr } as usize;
-    ctx.locals[addr..addr + 4].copy_from_slice(&ctx.stack.pop_u8_array::<4>());
+    ctx.stack.local_set(&ctx.local_reference, addr, 4);
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
 pub fn op_local_set8(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let addr = unsafe { tail_code[0].operand.local_addr } as usize;
-    ctx.locals[addr..addr + 8].copy_from_slice(&ctx.stack.pop_u8_array::<8>());
+    ctx.stack.local_set(&ctx.local_reference, addr, 8);
+
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
 pub fn op_local_tee4(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let addr = unsafe { tail_code[0].operand.local_addr } as usize;
-    let v = ctx.stack.pop_u8_array::<4>();
-    ctx.locals[addr..addr + 4].copy_from_slice(&v);
-    ctx.stack.push_u8_array(v);
+    ctx.stack.local_tee(&ctx.local_reference, addr, 4);
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
 pub fn op_local_tee8(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let addr = unsafe { tail_code[0].operand.local_addr } as usize;
-    let v = ctx.stack.pop_u8_array::<8>();
-    ctx.locals[addr..addr + 8].copy_from_slice(&v);
-    ctx.stack.push_u8_array(v);
+    ctx.stack.local_tee(&ctx.local_reference, addr, 8);
+
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
 pub fn op_global_get4(tail_code: &[Instr], ctx: &mut ExecuteContext) {
@@ -404,13 +400,16 @@ pub fn op_mem_glow(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 pub fn op_unreachable(_tail_code: &[Instr], _ctx: &mut ExecuteContext) {
     unreachable!()
 }
-pub fn special_function_return(_tail_code: &[Instr], _ctx: &mut ExecuteContext) {
-    trace!("function return")
+pub fn special_function_return(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    trace!("function return");
+    ctx.stack.function_return(&ctx.local_reference, unsafe {
+        tail_code[0].operand.drop_size
+    });
 }
 pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> ResultValue {
     if let Some(ExportDesc::Func(idx)) = m.exs.find(name) {
         let code = m.codes.get(idx).unwrap();
-        let mut stack = Stack::new(1000);
+        let mut stack = Stack::new(16*1024);
         let tidx = m.xs.get(idx).unwrap();
         let ft = m.fts.get(tidx).unwrap();
 
@@ -434,9 +433,7 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
                 WasmValue::F64(v) => stack.push_f64(*v),
             }
         }
-        let mut locals = Vec::new();
-        locals.resize(local_size, 0);
-        locals[0..param_size].copy_from_slice(stack.drop(param_size));
+        let local_reference = stack.allocate_locals(param_size, local_size);
 
         trace!(
             "run_module_function: {name} {local_size} {:?} {global_size} {:?}",
@@ -455,7 +452,7 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
             stack: &mut stack,
             code: &code.expr,
             jump_table,
-            locals: &mut locals[..],
+            local_reference,
             globals: &mut globals[..],
             memory: Memory::new(&mut memory[..]),
         };

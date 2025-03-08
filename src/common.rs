@@ -49,11 +49,15 @@ pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     // TODO: We should resolve jump address during instantiate time
     pub jump_table: JumpTable,
-    pub locals: &'a mut [u8],
+    pub local_reference: LocalReference,
     pub globals: &'a mut [u8],
     pub memory: Memory<'a>,
 }
-
+impl ExecuteContext<'_> {
+    pub fn locals(&mut self) -> &mut [u8] {
+        self.stack.access_locals(&self.local_reference)
+    }
+}
 pub struct JumpTable(Vec<u32>);
 impl JumpTable {
     pub fn new() -> Self {
@@ -72,6 +76,11 @@ impl JumpTable {
 pub struct Stack {
     memory: Box<[u8]>,
     top: usize,
+}
+#[derive(Debug, Clone, Copy)]
+pub struct LocalReference {
+    local_top: usize,
+    local_size: usize,
 }
 impl Stack {
     pub fn new(size: usize) -> Self {
@@ -142,5 +151,37 @@ impl Stack {
     }
     pub fn pop_f64(&mut self) -> f64 {
         f64::from_le_bytes(self.pop_u8_array::<8>())
+    }
+    pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
+        &mut self.memory[reference.local_top..self.top + reference.local_size]
+    }
+    pub fn local_get(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+        self.memory.copy_within(
+            reference.local_top + local_addr..reference.local_top + local_addr + size,
+            self.top,
+        );
+        self.top += size;
+    }
+    pub fn local_set(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+        self.top -= size;
+        self.memory
+            .copy_within(self.top..self.top + size, reference.local_top + local_addr);
+    }
+    pub fn local_tee(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+        self.memory
+            .copy_within(self.top - size..self.top, reference.local_top + local_addr);
+    }
+    pub fn allocate_locals(&mut self, param_size: usize, local_size: usize) -> LocalReference {
+        let local_top = self.top - param_size;
+        self.top += local_size;
+        LocalReference {
+            local_top,
+            local_size: param_size + local_size,
+        }
+    }
+    pub fn function_return(&mut self, reference: &LocalReference, return_size: usize) {
+        self.memory
+            .copy_within(self.top - return_size..self.top, reference.local_top);
+        self.top = reference.local_top + return_size;
     }
 }
