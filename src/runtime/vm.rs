@@ -104,7 +104,7 @@ pub fn op_i64_extend_i32_s(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     ctx.stack.push_i64(a.into());
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
-pub fn op_return(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+pub fn op_return(_tail_code: &[Instr], _ctx: &mut ExecuteContext) {
     // TODO:
 }
 
@@ -193,7 +193,7 @@ pub fn op_call(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     for t in ft.0.iter() {
         param_size += t.stack_size().usize();
     }
-    let mut local_size = param_size;
+    let mut local_size = 0usize;
     for local in &code.locals {
         local_size += local.n as usize * local.t.stack_size().usize();
     }
@@ -421,7 +421,7 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
         for t in ft.0.iter() {
             param_size += t.stack_size().usize();
         }
-        let mut local_size = param_size;
+        let mut local_size = 0usize;
         for local in &code.locals {
             local_size += local.n as usize * local.t.stack_size().usize();
         }
