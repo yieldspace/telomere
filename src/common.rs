@@ -1,4 +1,4 @@
-use crate::parser::core::MemArg;
+use crate::{parser::core::MemArg, Module};
 
 #[derive(Clone, Copy)]
 pub union Operand {
@@ -22,11 +22,13 @@ pub union Instr {
     pub op: Op,
     pub operand: Operand,
 }
-
-pub struct Memory<'a>(&'a mut [u8]);
+pub struct Memory<'a>(pub &'a mut [u8]);
 impl<'a> Memory<'a> {
     pub fn new(inner: &'a mut [u8]) -> Self {
         Self(inner)
+    }
+    pub fn copy(v: &'a mut Self) -> Self {
+        Self(v.0)
     }
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> [u8; N] {
         let mut arr = [0u8; N];
@@ -42,6 +44,7 @@ impl<'a> Memory<'a> {
     }
 }
 pub struct ExecuteContext<'a> {
+    pub module: &'a Module,
     pub code: &'a [Instr],
     pub stack: &'a mut Stack,
     // TODO: We should resolve jump address during instantiate time
@@ -100,14 +103,21 @@ impl Stack {
         arr[0..n].copy_from_slice(&self.memory[self.top..self.top + n]);
         arr
     }
-    pub fn drop(&mut self, n: usize) {
+    pub fn drop(&mut self, n: usize) -> &[u8] {
         self.top -= n;
+        &self.memory[self.top..self.top + n]
     }
     pub fn push_u32(&mut self, v: u32) {
         self.push_u8_array(v.to_le_bytes());
     }
     pub fn pop_u32(&mut self) -> u32 {
         u32::from_le_bytes(self.pop_u8_array::<4>())
+    }
+    pub fn push_u64(&mut self, v: u64) {
+        self.push_u8_array(v.to_le_bytes());
+    }
+    pub fn pop_u64(&mut self) -> u64 {
+        u64::from_le_bytes(self.pop_u8_array::<8>())
     }
     pub fn push_i32(&mut self, v: i32) {
         self.push_u8_array(v.to_le_bytes());

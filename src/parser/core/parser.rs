@@ -155,11 +155,12 @@ fn get_local_addr(ty: &ResultType, locals: &[Locals], idx: u32) -> Result<(ValTy
         if idx < i + 1 {
             return Ok((*t, addr));
         }
+        addr += t.stack_size().u32();
         i += 1;
     }
     for local in locals {
         if idx < i + local.n {
-            addr += (idx - i) * local.t.stack_size() as u32;
+            addr += (idx - i) * local.t.stack_size().u32();
             return Ok((local.t, addr));
         }
         addr += local.t.stack_size().u32() * local.n;
@@ -449,11 +450,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         let ty = type_section
                             .get(idx)
                             .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
-                        for ty in ty.0.iter() {
+                        for ty in ty.0.stack_pop_iter() {
                             block_input_size += 1;
                             assert_valtype(*ty, types.pop())?;
                         }
-                        for ty in ty.0.rev_iter() {
+                        for ty in ty.0.iter() {
                             types.push(*ty);
                         }
                     }
@@ -484,11 +485,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             .get(idx)
                             .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
 
-                        for ty in ty.1.iter() {
+                        for ty in ty.1.stack_pop_iter() {
                             block_output_size += 1;
                             assert_valtype(*ty, types.pop())?;
                         }
-                        for ty in ty.1.rev_iter() {
+                        for ty in ty.1.iter() {
                             types.push(*ty);
                         }
                     }
@@ -536,11 +537,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         let ty = type_section
                             .get(idx)
                             .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
-                        for ty in ty.1.iter() {
+                        for ty in ty.1.stack_pop_iter() {
                             after_stack_len -= 1;
                             assert_valtype(*ty, types.pop())?;
                         }
-                        for ty in ty.1.rev_iter() {
+                        for ty in ty.1.iter() {
                             types.push(*ty);
                         }
                     }
@@ -581,7 +582,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             block_input_size += 1;
                             assert_valtype(*ty, types.pop())?;
                         }
-                        for ty in ty.0.rev_iter() {
+                        for ty in ty.0.iter() {
                             types.push(*ty);
                         }
                     }
@@ -616,11 +617,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             .get(idx)
                             .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
 
-                        for ty in ty.1.iter() {
+                        for ty in ty.1.stack_pop_iter() {
                             block_output_size += 1;
                             assert_valtype(*ty, types.pop())?;
                         }
-                        for ty in ty.1.rev_iter() {
+                        for ty in ty.1.iter() {
                             types.push(*ty);
                         }
                     }
@@ -648,7 +649,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             let ty = type_section
                                 .get(*idx)
                                 .ok_or_else(|| WasmParserError::InvalidTypeIdx(*idx))?;
-                            for ty in ty.1.iter() {
+                            for ty in ty.1.stack_pop_iter() {
                                 assert_valtype(*ty, types.pop())?;
                             }
                         }
@@ -683,11 +684,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                                 .ok_or_else(|| WasmParserError::InvalidTypeIdx(*idx))?;
                             consumed_size += ty.0.iter().count();
 
-                            for ty in ty.1.iter() {
+                            for ty in ty.1.stack_pop_iter() {
                                 return_size += 1;
                                 assert_valtype(*ty, types.pop())?;
                             }
-                            for ty in ty.1.rev_iter() {
+                            for ty in ty.1.iter() {
                                 types.push(*ty);
                             }
                         }
@@ -756,10 +757,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     let ty = type_section
                         .get(typeidx)
                         .ok_or_else(|| WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
-                    for ty in ty.0.iter() {
+                    for ty in ty.0.stack_pop_iter() {
                         assert_valtype(*ty, types.pop())?;
                     }
-                    for ty in ty.1.rev_iter() {
+                    for ty in ty.1.iter() {
                         types.push(*ty);
                     }
                 }
@@ -781,10 +782,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     let ty = type_section
                         .get(TypeIdx(typeidx))
                         .ok_or_else(|| WasmParserError::InvalidTypeIdx(TypeIdx(typeidx)))?;
-                    for ty in ty.0.iter() {
+                    for ty in ty.0.stack_pop_iter() {
                         assert_valtype(*ty, types.pop())?;
                     }
-                    for ty in ty.1.rev_iter() {
+                    for ty in ty.1.iter() {
                         types.push(*ty);
                     }
                 }
@@ -1062,6 +1063,51 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x47 => {
+                trace!("parse_op_i32_ne");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_ne });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x4D => {
+                trace!("parse_op_i32_le_u");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_le_u,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x50 => {
+                trace!("parse_op_i64_eqz");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_eqz });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x58 => {
+                trace!("parse_op_i64_le_u");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_le_u,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x68 => {
                 trace!("parse_op_i32_ctz");
                 if !*unreachable {
@@ -1111,6 +1157,48 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_valtype(ValType::I32, types.pop())?;
                     types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x7D => {
+                trace!("parse_op_i64_sub");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_sub });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x7E => {
+                trace!("parse_op_i64_mul");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_mul });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x91 => {
+                trace!("parse_op_f32_sqrt");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f32_sqrt,
+                    });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
+            0xAC => {
+                trace!("parse_op_i64_extend_i32_s");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_extend_i32_s,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    types.push(ValType::I64);
                 }
                 (1, false)
             }
@@ -1176,7 +1264,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             &mut else_addr,
             &mut unreachable,
         )?;
-        for ty in functype.1.iter() {
+        for ty in functype.1.stack_pop_iter() {
             assert_valtype(*ty, types.pop())?;
         }
         if !types.is_empty() {

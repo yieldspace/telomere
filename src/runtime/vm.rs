@@ -5,7 +5,7 @@ use tracing::trace;
 use crate::{
     common::{ExecuteContext, Instr, JumpTable, Memory, Stack},
     parser::{
-        core::{ExportDesc, ValType},
+        core::{ExportDesc, FuncIdx, MemArg, ValType},
         Module,
     },
 };
@@ -51,6 +51,18 @@ pub fn op_i32_sub(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
+
+pub fn op_i64_sub(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    let a = ctx.stack.pop_i64();
+    let b = ctx.stack.pop_i64();
+    let r = b - a;
+    ctx.stack.push_i64(r);
+
+    trace!("op_i64_sub: {a} {b} {r}");
+
+    (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
+}
+
 pub fn op_i64_const(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     trace!("op_i64_const");
     ctx.stack.push_i64(unsafe { tail_code[0].operand.i64 });
@@ -74,10 +86,22 @@ pub fn op_f32_gt(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
+pub fn op_f32_sqrt(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    trace!("op_f32_sqrt");
+    let a = ctx.stack.pop_f32();
+    ctx.stack.push_f32(a.sqrt());
+
+    (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
+}
 pub fn op_i64_add(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let a = ctx.stack.pop_i64();
     let b = ctx.stack.pop_i64();
     ctx.stack.push_i64(a + b);
+    (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
+}
+pub fn op_i64_extend_i32_s(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    let a = ctx.stack.pop_i32();
+    ctx.stack.push_i64(a.into());
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
 pub fn op_return(tail_code: &[Instr], ctx: &mut ExecuteContext) {
@@ -156,6 +180,46 @@ pub fn op_if(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 }
 
 pub fn op_call(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    let funcidx = unsafe { tail_code[0].operand.u32 };
+    //FIXME: unwrap
+    let code = ctx.module.codes.get(FuncIdx(funcidx)).unwrap();
+    let typeidx = ctx.module.xs.get(FuncIdx(funcidx)).unwrap();
+    let ft = ctx.module.fts.get(typeidx).unwrap();
+
+    let mut jump_table = JumpTable::new();
+    jump_table.push(code.expr.len() as u32 - 1);
+
+    let mut param_size = 0usize;
+    for t in ft.0.iter() {
+        param_size += t.stack_size().usize();
+    }
+    let mut local_size = param_size;
+    for local in &code.locals {
+        local_size += local.n as usize * local.t.stack_size().usize();
+    }
+    let mut locals = Vec::new();
+
+    locals.resize(local_size, 0);
+    locals[0..param_size].copy_from_slice(ctx.stack.drop(param_size));
+    trace!(
+        "op_call: {funcidx} {local_size} {:?} {:?} {:?}",
+        ft,
+        code.locals,
+        locals
+    );
+
+    {
+        let mut ctx = ExecuteContext {
+            code: &code.expr,
+            module: ctx.module,
+            stack: ctx.stack,
+            jump_table,
+            locals: &mut locals,
+            globals: ctx.globals,
+            memory: Memory::new(ctx.memory.0),
+        };
+        (unsafe { code.expr[0].op })(&code.expr[1..], &mut ctx)
+    }
     //TODO:
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
@@ -180,7 +244,10 @@ pub fn op_select(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 }
 pub fn op_local_get4(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let addr = unsafe { tail_code[0].operand.local_addr } as usize;
-    ctx.stack.push_slice(&ctx.locals[addr..addr + 4]);
+    let v = &ctx.locals[addr..addr + 4];
+    ctx.stack.push_slice(v);
+    trace!("op_local_get4: {addr} => {v:?}");
+
     (unsafe { tail_code[1].op })(&tail_code[2..], ctx)
 }
 pub fn op_local_get8(tail_code: &[Instr], ctx: &mut ExecuteContext) {
@@ -257,9 +324,17 @@ pub fn op_i32_popcnt(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 pub fn op_i32_mul(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let a = ctx.stack.pop_i32();
     let b = ctx.stack.pop_i32();
-    let r = a * b;
+    let r = a.wrapping_mul(b);
     ctx.stack.push_i32(r);
     trace!("op_i32_mul: {a} {b} => {r}");
+    (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
+}
+pub fn op_i64_mul(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    let a = ctx.stack.pop_i64();
+    let b = ctx.stack.pop_i64();
+    let r = a.wrapping_mul(b);
+    ctx.stack.push_i64(r);
+    trace!("op_i64_mul: {a} {b} => {r}");
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
 pub fn op_i32_rem_u(tail_code: &[Instr], ctx: &mut ExecuteContext) {
@@ -274,10 +349,46 @@ pub fn op_i32_eqz(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 
     (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
 }
+pub fn op_i64_eqz(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    let a = ctx.stack.pop_u64();
+    let r = if a == 0 { 1 } else { 0 };
+    trace!("op_i64_eqz: {a} => {r}");
+    ctx.stack.push_u32(r);
+
+    (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
+}
+pub fn op_i64_le_u(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    let b = ctx.stack.pop_u64();
+    let a = ctx.stack.pop_u64();
+
+    ctx.stack.push_u32(if a <= b { 1 } else { 0 });
+
+    (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
+}
 pub fn op_i32_eq(tail_code: &[Instr], ctx: &mut ExecuteContext) {
     let a = ctx.stack.pop_u32();
     let b = ctx.stack.pop_u32();
     let r = if a == b { 1 } else { 0 };
+    trace!("op_i32_eq: {a} {b} => {r}");
+
+    ctx.stack.push_u32(r);
+
+    (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
+}
+pub fn op_i32_ne(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    let a = ctx.stack.pop_u32();
+    let b = ctx.stack.pop_u32();
+    let r = if a != b { 1 } else { 0 };
+    trace!("op_i32_ne: {a} {b} => {r}");
+
+    ctx.stack.push_u32(r);
+
+    (unsafe { tail_code[0].op })(&tail_code[1..], ctx)
+}
+pub fn op_i32_le_u(tail_code: &[Instr], ctx: &mut ExecuteContext) {
+    let b = ctx.stack.pop_u32();
+    let a = ctx.stack.pop_u32();
+    let r = if a <= b { 1 } else { 0 };
     trace!("op_i32_eq: {a} {b} => {r}");
 
     ctx.stack.push_u32(r);
@@ -303,7 +414,18 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
         let tidx = m.xs.get(idx).unwrap();
         let ft = m.fts.get(tidx).unwrap();
 
-        // TODO: we must validate input argument type
+        let mut global_size = 0usize;
+        for global in m.gs.iter() {
+            global_size += global.0 .0.stack_size().usize();
+        }
+        let mut param_size = 0usize;
+        for t in ft.0.iter() {
+            param_size += t.stack_size().usize();
+        }
+        let mut local_size = param_size;
+        for local in &code.locals {
+            local_size += local.n as usize * local.t.stack_size().usize();
+        }
         for arg in args.iter() {
             match arg {
                 WasmValue::I32(i32) => stack.push_i32(*i32),
@@ -312,22 +434,16 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
                 WasmValue::F64(v) => stack.push_f64(*v),
             }
         }
-        let mut global_size = 0usize;
-        for global in m.gs.iter() {
-            global_size += global.0 .0.stack_size().usize();
-        }
-        let mut local_size = 0usize;
-        for local in &code.locals {
-            local_size += local.n as usize * local.t.stack_size().usize();
-        }
+        let mut locals = Vec::new();
+        locals.resize(local_size, 0);
+        locals[0..param_size].copy_from_slice(stack.drop(param_size));
+
         trace!(
             "run_module_function: {name} {local_size} {:?} {global_size} {:?}",
             code.locals,
             m.gs
         );
 
-        let mut locals = Vec::new();
-        locals.resize(local_size, 0);
         let mut globals = Vec::new();
         globals.resize(global_size, 0);
         let mut memory = Vec::new();
@@ -335,6 +451,7 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
         let mut jump_table = JumpTable::new();
         jump_table.push(code.expr.len() as u32 - 1);
         let mut ctx = ExecuteContext {
+            module: m,
             stack: &mut stack,
             code: &code.expr,
             jump_table,
@@ -344,9 +461,8 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
         };
         ctx.jump_table.push(code.expr.len() as u32 - 1);
         (unsafe { code.expr[0].op })(&code.expr[1..], &mut ctx);
-
-        return ResultValue(
-            ft.1.iter()
+        let mut result =
+            ft.1.stack_pop_iter()
                 .map(|t| match t {
                     ValType::I32 => WasmValue::I32(stack.pop_i32()),
                     ValType::I64 => WasmValue::I64(stack.pop_i64()),
@@ -354,8 +470,9 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
                     ValType::F64 => WasmValue::F64(stack.pop_f64()),
                     _ => unimplemented!(),
                 })
-                .collect(),
-        );
+                .collect::<Vec<_>>();
+        result.reverse();
+        return ResultValue(result);
     }
     unimplemented!()
 }
