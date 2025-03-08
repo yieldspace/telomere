@@ -107,7 +107,7 @@ fn run_wast(text: &str) {
             WastDirective::AssertInvalid {
                 span,
                 mut module,
-                message,
+                message: _,
             } => {
                 //TODO: Is there anything that wast fails to encode that could be binary?
                 if let Ok(source) = module.encode() {
@@ -121,12 +121,14 @@ fn run_wast(text: &str) {
                     )
                 }
             }
-            WastDirective::AssertExhaustion { span, call, message } => {
-                // TODO: 
-            },
-            _ => {
-
+            WastDirective::AssertExhaustion {
+                span: _,
+                call: _,
+                message: _,
+            } => {
+                // TODO:
             }
+            _ => {}
         }
     }
 }

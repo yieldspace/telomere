@@ -409,7 +409,7 @@ pub fn special_function_return(tail_code: &[Instr], ctx: &mut ExecuteContext) {
 pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> ResultValue {
     if let Some(ExportDesc::Func(idx)) = m.exs.find(name) {
         let code = m.codes.get(idx).unwrap();
-        let mut stack = Stack::new(16*1024);
+        let mut stack = Stack::new(16 * 1024);
         let tidx = m.xs.get(idx).unwrap();
         let ft = m.fts.get(tidx).unwrap();
 
