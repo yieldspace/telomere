@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use telomere::{common::WasmValue, runtime::vm::ResultValue, Module};
+use telomere::{Module, ResultValue, WasmValue};
 use tracing::{error, Level};
 use wast::{
     core::{NanPattern, WastRetCore},
