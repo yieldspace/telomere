@@ -103,12 +103,22 @@ impl CodeSection {
         self.0.get(idx.0 as usize)
     }
 }
+pub struct MemType {
+    pub min: u32,
+    pub max: Option<u32>,
+}
+pub struct MemorySection(pub Vec<MemType>);
 pub struct Module {
     pub fts: TypeSection,
     pub xs: FunctionSection,
+    pub mems: MemorySection,
     pub gs: GlobalSection,
     pub exs: ExportSection,
     pub codes: CodeSection,
+}
+pub struct Instance {
+    pub memory: Memory,
+    pub globals: Vec<u8>,
 }
 #[derive(Debug, Clone)]
 pub struct Locals {
@@ -189,34 +199,48 @@ pub enum WasmValue {
     //FuncRef,
     //ExternRef,
 }
-
-pub struct Memory<'a>(pub &'a mut [u8]);
-impl<'a> Memory<'a> {
-    pub fn new(inner: &'a mut [u8]) -> Self {
-        Self(inner)
-    }
-    pub fn copy(v: &'a mut Self) -> Self {
-        Self(v.0)
-    }
+pub const PAGE_SIZE: usize = 64 * 1024;
+pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
+pub struct Memory(pub Vec<u8>);
+impl Memory {
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> [u8; N] {
         let mut arr = [0u8; N];
         arr.copy_from_slice(&self.0[offset..offset + N]);
         arr
     }
-    pub fn write_u32(&mut self, memarg: MemArg, value: u32) {
-        self.0[memarg.offset as usize..(memarg.offset + 4) as usize]
+    pub fn write_u32(&mut self, memarg: MemArg, offset: u32, value: u32) {
+        self.0[(memarg.offset + offset) as usize..(memarg.offset + offset + 4) as usize]
             .copy_from_slice(&value.to_le_bytes());
     }
-    pub fn read_u32(&self, memarg: MemArg) -> u32 {
-        u32::from_le_bytes(self.read_u8_array::<4>(memarg.offset as usize))
+    pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) {
+        self.0[(memarg.offset + offset) as usize] = value;
+    }
+    pub fn write_u16(&mut self, memarg: MemArg, offset: u32, value: u16) {
+        self.0[(memarg.offset + offset) as usize..(memarg.offset + offset + 2) as usize]
+            .copy_from_slice(&value.to_le_bytes());
+    }
+    pub fn read_u32(&self, memarg: MemArg, offset: u32) -> u32 {
+        u32::from_le_bytes(self.read_u8_array::<4>((memarg.offset + offset) as usize))
+    }
+    pub fn read_u8(&self, memarg: MemArg, offset: u32) -> u8 {
+        self.read_u8_array::<1>((memarg.offset + offset) as usize)[0]
+    }
+    pub fn read_i8(&self, memarg: MemArg, offset: u32) -> i8 {
+        self.read_u8_array::<1>((memarg.offset + offset) as usize)[0] as i8
+    }
+    pub fn page_size(&self) -> u32 {
+        (self.0.len() / PAGE_SIZE) as u32
+    }
+    pub fn grow(&mut self, page_size_delta: u32) {
+        self.0
+            .resize((self.page_size() + page_size_delta) as usize * PAGE_SIZE, 0);
     }
 }
 pub struct ExecuteContext<'a> {
     pub module: &'a Module,
     pub stack: &'a mut Stack,
 
-    pub globals: &'a mut [u8],
-    pub memory: Memory<'a>,
+    pub instance: &'a mut Instance,
     pub local_state: Vec<LocalState<'a>>,
 }
 impl<'a> ExecuteContext<'a> {
