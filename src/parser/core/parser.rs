@@ -5,15 +5,15 @@ use tracing::trace;
 
 use crate::{
     binary::BinaryReader,
-    common::Operand,
+    common::{
+        BlockType, CodeSection, Export, ExportDesc, ExportSection, Func, FuncIdx, FuncType,
+        FunctionSection, Global, GlobalIdx, GlobalSection, GlobalType, Instr, Locals, MemArg,
+        MemIdx, Mut, Operand, ResultType, TableIdx, TypeIdx, TypeSection, ValType, ValueSize,
+        WasmValue,
+    },
     parser,
-    runtime::vm::{special_function_return, WasmValue},
-};
-
-use super::{
-    BlockType, CodeSection, Export, ExportDesc, ExportSection, Func, FuncIdx, FuncType,
-    FunctionSection, Global, GlobalIdx, GlobalSection, GlobalType, Instr, Locals, MemArg, MemIdx,
-    Module, Mut, ResultType, TableIdx, TypeIdx, TypeSection, ValType,
+    runtime::vm,
+    Module,
 };
 
 #[derive(Error, Debug)]
@@ -372,7 +372,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         unreachable: &mut bool,
     ) -> Result<(usize, bool)> {
         let v = self.reader.read_exact_one()?;
-        use crate::runtime::vm;
 
         Ok(match v {
             0x0F => {
@@ -834,13 +833,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     function_section.get(FuncIdx(idx));
                     let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
                     match ty.stack_size() {
-                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                        ValueSize::Byte4 => instrs.push(Instr {
                             op: vm::op_local_get4,
                         }),
-                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                        ValueSize::Byte8 => instrs.push(Instr {
                             op: vm::op_local_get8,
                         }),
-                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                        ValueSize::Byte16 => todo!(),
                     }
                     instrs.push(Instr {
                         operand: Operand { local_addr: addr },
@@ -856,13 +855,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     function_section.get(FuncIdx(idx));
                     let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
                     match ty.stack_size() {
-                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                        ValueSize::Byte4 => instrs.push(Instr {
                             op: vm::op_local_set4,
                         }),
-                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                        ValueSize::Byte8 => instrs.push(Instr {
                             op: vm::op_local_set8,
                         }),
-                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                        ValueSize::Byte16 => todo!(),
                     }
                     assert_valtype(ty, types.pop())?;
                     instrs.push(Instr {
@@ -878,13 +877,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     function_section.get(FuncIdx(idx));
                     let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
                     match ty.stack_size() {
-                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                        ValueSize::Byte4 => instrs.push(Instr {
                             op: vm::op_local_tee4,
                         }),
-                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                        ValueSize::Byte8 => instrs.push(Instr {
                             op: vm::op_local_tee8,
                         }),
-                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                        ValueSize::Byte16 => todo!(),
                     }
                     assert_valtype(ty, types.pop())?;
                     types.push(ty);
@@ -901,13 +900,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 if !*unreachable {
                     let (ty, addr) = get_global_addr(globals, idx)?;
                     match ty.0.stack_size() {
-                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                        ValueSize::Byte4 => instrs.push(Instr {
                             op: vm::op_global_get4,
                         }),
-                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                        ValueSize::Byte8 => instrs.push(Instr {
                             op: vm::op_global_get8,
                         }),
-                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                        ValueSize::Byte16 => todo!(),
                     }
                     types.push(ty.0);
                     instrs.push(Instr {
@@ -926,13 +925,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         Err(WasmParserError::InvalidGlobalAccess)?
                     }
                     match ty.0.stack_size() {
-                        crate::parser::core::ValueSize::Byte4 => instrs.push(Instr {
+                        ValueSize::Byte4 => instrs.push(Instr {
                             op: vm::op_global_set4,
                         }),
-                        crate::parser::core::ValueSize::Byte8 => instrs.push(Instr {
+                        ValueSize::Byte8 => instrs.push(Instr {
                             op: vm::op_global_set8,
                         }),
-                        crate::parser::core::ValueSize::Byte16 => todo!(),
+                        ValueSize::Byte16 => todo!(),
                     }
                     assert_valtype(ty.0, types.pop())?;
                     instrs.push(Instr {
@@ -1277,7 +1276,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             ))?
         }
         instrs.push(Instr {
-            op: special_function_return,
+            op: vm::special_function_return,
         });
         instrs.push(Instr {
             operand: Operand {
@@ -1380,7 +1379,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 type_section,
                 function_section,
                 global_section,
-                parser::core::FuncIdx(idx),
+                FuncIdx(idx),
             )?;
             idx += 1;
             Ok(r)

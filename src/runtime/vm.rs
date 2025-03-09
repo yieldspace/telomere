@@ -1,11 +1,11 @@
 use std::ops::Rem;
 
 use crate::{
-    common::{ExecuteContext, Instr, JumpTable, LocalState, Memory, Stack, VMError},
-    parser::{
-        core::{ExportDesc, FuncIdx, ValType},
-        Module,
+    common::{
+        ExecuteContext, ExportDesc, FuncIdx, Instr, JumpTable, LocalState, Memory, Stack, VMError,
+        ValType, WasmValue,
     },
+    parser::Module,
 };
 pub struct ResultValue(Vec<WasmValue>);
 impl ResultValue {
@@ -16,16 +16,7 @@ impl ResultValue {
         self.0.iter()
     }
 }
-#[derive(Debug, Clone)]
-pub enum WasmValue {
-    I32(i32),
-    I64(i64),
-    F32(f32),
-    F64(f64),
-    //V128,
-    //FuncRef,
-    //ExternRef,
-}
+
 #[inline(always)]
 unsafe fn call_next(
     tail_code: *const Instr,
