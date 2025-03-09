@@ -118,7 +118,7 @@ fn run_wast(text: &str) {
                 }
             }
             WastDirective::AssertExhaustion {
-                span,
+                span: _,
                 call,
                 message: _,
             } => {
