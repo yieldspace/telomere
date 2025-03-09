@@ -378,7 +378,7 @@ pub unsafe fn op_i32_load(
 ) -> Result<u32, VMError> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = ctx.instance.memory.read_u32(memarg, offset);
+    let v = ctx.instance.memory.read_u32(memarg, offset)?;
     ctx.stack.push_u32(v);
     trace!("op_i32_load: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -389,7 +389,7 @@ pub unsafe fn op_i32_load8_u(
 ) -> Result<u32, VMError> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = ctx.instance.memory.read_u8(memarg, offset) as u32;
+    let v = ctx.instance.memory.read_u8(memarg, offset)? as u32;
     ctx.stack.push_u32(v);
     trace!("op_i32_load8_u: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -400,7 +400,7 @@ pub unsafe fn op_i32_load8_s(
 ) -> Result<u32, VMError> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = ctx.instance.memory.read_i8(memarg, offset) as i32;
+    let v = ctx.instance.memory.read_i8(memarg, offset)? as i32;
     ctx.stack.push_i32(v);
     trace!("op_i32_load8_u: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -413,7 +413,7 @@ pub unsafe fn op_i32_store(
     let v = ctx.stack.pop_u32();
     let offset = ctx.stack.pop_u32();
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    ctx.instance.memory.write_u32(memarg, offset, v);
+    ctx.instance.memory.write_u32(memarg, offset, v)?;
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i32_store8(
@@ -424,7 +424,7 @@ pub unsafe fn op_i32_store8(
     let v = ctx.stack.pop_u32();
     let offset = ctx.stack.pop_u32();
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    ctx.instance.memory.write_u8(memarg, offset, v as u8);
+    ctx.instance.memory.write_u8(memarg, offset, v as u8)?;
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i32_store16(
@@ -435,7 +435,7 @@ pub unsafe fn op_i32_store16(
     let v = ctx.stack.pop_u32();
     let offset = ctx.stack.pop_u32();
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    ctx.instance.memory.write_u16(memarg, offset, v as u16);
+    ctx.instance.memory.write_u16(memarg, offset, v as u16)?;
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i32_ctz(

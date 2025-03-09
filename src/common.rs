@@ -181,6 +181,7 @@ pub union Operand {
 pub enum VMError {
     Unreachable,
     StackOverflow,
+    MemoryIndexOutOfRange,
 }
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> Result<u32, VMError>;
 pub union Instr {
@@ -203,30 +204,49 @@ pub const PAGE_SIZE: usize = 64 * 1024;
 pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct Memory(pub Vec<u8>);
 impl Memory {
-    pub fn read_u8_array<const N: usize>(&self, offset: usize) -> [u8; N] {
+    pub fn read_u8_array<const N: usize>(&self, offset: usize) -> Result<[u8; N], VMError> {
         let mut arr = [0u8; N];
-        arr.copy_from_slice(&self.0[offset..offset + N]);
-        arr
+        arr.copy_from_slice(
+            &self
+                .0
+                .get(offset..offset + N)
+                .ok_or_else(|| VMError::MemoryIndexOutOfRange)?,
+        );
+        Ok(arr)
     }
-    pub fn write_u32(&mut self, memarg: MemArg, offset: u32, value: u32) {
-        self.0[(memarg.offset + offset) as usize..(memarg.offset + offset + 4) as usize]
-            .copy_from_slice(&value.to_le_bytes());
+    fn write_slice(&mut self, memarg: MemArg, offset: u32, value: &[u8]) -> Result<(), VMError> {
+        self.0
+            .get_mut(
+                (memarg.offset + offset) as usize..(memarg.offset + offset) as usize + value.len(),
+            )
+            .ok_or_else(|| VMError::MemoryIndexOutOfRange)?
+            .copy_from_slice(value);
+        Ok(())
     }
-    pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) {
-        self.0[(memarg.offset + offset) as usize] = value;
+    pub fn write_u32(&mut self, memarg: MemArg, offset: u32, value: u32) -> Result<(), VMError> {
+        self.write_slice(memarg, offset, &value.to_le_bytes())
     }
-    pub fn write_u16(&mut self, memarg: MemArg, offset: u32, value: u16) {
-        self.0[(memarg.offset + offset) as usize..(memarg.offset + offset + 2) as usize]
-            .copy_from_slice(&value.to_le_bytes());
+    pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) -> Result<(), VMError> {
+        *self
+            .0
+            .get_mut((memarg.offset + offset) as usize)
+            .ok_or_else(|| VMError::MemoryIndexOutOfRange)? = value;
+        Ok(())
     }
-    pub fn read_u32(&self, memarg: MemArg, offset: u32) -> u32 {
-        u32::from_le_bytes(self.read_u8_array::<4>((memarg.offset + offset) as usize))
+    pub fn write_u16(&mut self, memarg: MemArg, offset: u32, value: u16) -> Result<(), VMError> {
+        self.write_slice(memarg, offset, &value.to_le_bytes())?;
+        Ok(())
     }
-    pub fn read_u8(&self, memarg: MemArg, offset: u32) -> u8 {
-        self.read_u8_array::<1>((memarg.offset + offset) as usize)[0]
+    pub fn read_u32(&self, memarg: MemArg, offset: u32) -> Result<u32, VMError> {
+        Ok(u32::from_le_bytes(
+            self.read_u8_array::<4>((memarg.offset + offset) as usize)?,
+        ))
     }
-    pub fn read_i8(&self, memarg: MemArg, offset: u32) -> i8 {
-        self.read_u8_array::<1>((memarg.offset + offset) as usize)[0] as i8
+    pub fn read_u8(&self, memarg: MemArg, offset: u32) -> Result<u8, VMError> {
+        Ok(self.read_u8_array::<1>((memarg.offset + offset) as usize)?[0])
+    }
+    pub fn read_i8(&self, memarg: MemArg, offset: u32) -> Result<i8, VMError> {
+        Ok(self.read_u8_array::<1>((memarg.offset + offset) as usize)?[0] as i8)
     }
     pub fn page_size(&self) -> u32 {
         (self.0.len() / PAGE_SIZE) as u32

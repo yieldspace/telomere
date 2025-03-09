@@ -130,7 +130,27 @@ fn run_wast(text: &str) {
                 );
                 assert!(result.is_err());
             }
-            _ => {}
+            WastDirective::AssertTrap {
+                span: _,
+                exec,
+                message: _,
+            } => match exec {
+                wast::WastExecute::Invoke(v) => {
+                    let result = telomere::run_module_function(
+                        module.as_ref().unwrap(),
+                        instance.as_mut().unwrap(),
+                        v.name,
+                        &ResultValue::new(convert_args(&v.args)),
+                    );
+                    assert!(result.is_err())
+                }
+                _ => {
+                    todo!()
+                }
+            },
+            _ => {
+                todo!()
+            }
         }
     }
 }
