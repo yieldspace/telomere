@@ -11,7 +11,6 @@ use crate::{
         MemIdx, Mut, Operand, ResultType, TableIdx, TypeIdx, TypeSection, ValType, ValueSize,
         WasmValue,
     },
-    parser,
     runtime::vm,
     Module,
 };
