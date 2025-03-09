@@ -275,7 +275,8 @@ pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Resu
     ctx.stack.drop((*tail_code).operand.drop_size);
     call_next(tail_code, 1, ctx)
 }
-pub unsafe fn op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
+#[inline(never)]
+unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) {
     let x = (*tail_code).operand.select;
     let cond = ctx.stack.pop_u32();
 
@@ -284,6 +285,9 @@ pub unsafe fn op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Re
     let v = if cond == 0 { a } else { b };
     trace!("op_select: {x} {cond} {a:?} {b:?} => {v:?}");
     ctx.stack.push_slice(&v[0..x]);
+}
+pub unsafe fn op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
+    internal_op_select(tail_code, ctx);
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_local_get4(
