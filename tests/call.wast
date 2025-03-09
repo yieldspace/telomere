@@ -356,14 +356,14 @@
 (assert_return (invoke "as-store-first"))
 (assert_return (invoke "as-store-last"))
 
-;;(assert_return (invoke "as-memory.grow-value") (i32.const 1))
+(assert_return (invoke "as-memory.grow-value") (i32.const 1))
 (assert_return (invoke "as-return-value") (i32.const 0x132))
 (assert_return (invoke "as-drop-operand"))
 (assert_return (invoke "as-br-value") (i32.const 0x132))
 (assert_return (invoke "as-local.set-value") (i32.const 0x132))
 (assert_return (invoke "as-local.tee-value") (i32.const 0x132))
 (assert_return (invoke "as-global.set-value") (i32.const 0x132))
-;;(assert_return (invoke "as-load-operand") (i32.const 1))
+(assert_return (invoke "as-load-operand") (i32.const 1))
 
 (assert_return (invoke "as-unary-operand") (f32.const 0x0p+0))
 (assert_return (invoke "as-binary-left") (i32.const 11))
