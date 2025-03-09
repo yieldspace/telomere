@@ -16,9 +16,10 @@ pub union Operand {
     pub select: usize,
     pub memarg: MemArg,
 }
-
+#[derive(Debug)]
 pub enum VMError {
     Unreachable,
+    StackOverflow,
 }
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> Result<u32, VMError>;
 pub union Instr {

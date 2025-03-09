@@ -220,48 +220,52 @@ pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result
     };
     call_next(ptr, 0, ctx)
 }
+const MAX_CALL_STACK: usize = 10000;
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
-unsafe fn internal_op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> *const Instr {
-    let ptr = {
-        let funcidx = (*tail_code).operand.u32;
-        //FIXME: unwrap
-        let code = ctx.module.codes.get(FuncIdx(funcidx)).unwrap_unchecked();
-        let typeidx = ctx.module.xs.get(FuncIdx(funcidx)).unwrap_unchecked();
-        let ft = ctx.module.fts.get(typeidx).unwrap_unchecked();
+unsafe fn internal_op_call(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<*const Instr, VMError> {
+    if ctx.local_state.len() > MAX_CALL_STACK {
+        Err(VMError::StackOverflow)?
+    }
+    let funcidx = (*tail_code).operand.u32;
+    //FIXME: unwrap
+    let code = ctx.module.codes.get(FuncIdx(funcidx)).unwrap_unchecked();
+    let typeidx = ctx.module.xs.get(FuncIdx(funcidx)).unwrap_unchecked();
+    let ft = ctx.module.fts.get(typeidx).unwrap_unchecked();
 
-        let mut jump_table = JumpTable::new();
-        jump_table.push(code.expr.len() as u32 - 1);
+    let mut jump_table = JumpTable::new();
+    jump_table.push(code.expr.len() as u32 - 1);
 
-        let mut param_size = 0usize;
-        for t in ft.0.iter() {
-            param_size += t.stack_size().usize();
-        }
-        let mut local_size = 0usize;
-        for local in &code.locals {
-            local_size += local.n as usize * local.t.stack_size().usize();
-        }
-        let local_reference = ctx
-            .stack
-            .function_call(param_size, local_size, tail_code.offset(1));
-        /*trace!(
-            "op_call: {funcidx} {local_size} {:?} {:?} {:?}",
-            ft,
-            code.locals,
-            local_reference
-        );*/
-        ctx.local_state.push(LocalState {
-            local_reference,
-            jump_table,
-            code: &code.expr,
-        });
-        code.expr.as_ptr()
-    };
-    ptr
+    let mut param_size = 0usize;
+    for t in ft.0.iter() {
+        param_size += t.stack_size().usize();
+    }
+    let mut local_size = 0usize;
+    for local in &code.locals {
+        local_size += local.n as usize * local.t.stack_size().usize();
+    }
+    let local_reference = ctx
+        .stack
+        .function_call(param_size, local_size, tail_code.offset(1));
+    trace!(
+        "op_call: {funcidx} {local_size} {:?} {:?} {:?}",
+        ft,
+        code.locals,
+        local_reference
+    );
+    ctx.local_state.push(LocalState {
+        local_reference,
+        jump_table,
+        code: &code.expr,
+    });
+    Ok(code.expr.as_ptr())
 }
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
-    let ptr = internal_op_call(tail_code, ctx);
+    let ptr = internal_op_call(tail_code, ctx)?;
     call_next(ptr, 0, ctx)
 }
 pub unsafe fn op_call_indirect(
@@ -541,10 +545,14 @@ pub unsafe fn special_function_vm_end(
 const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
-pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> ResultValue {
+pub fn run_module_function(
+    m: &Module,
+    name: &str,
+    args: &ResultValue,
+) -> Result<ResultValue, VMError> {
     if let Some(ExportDesc::Func(idx)) = m.exs.find(name) {
         let code = m.codes.get(idx).unwrap();
-        let mut stack = Stack::new(16 * 1024);
+        let mut stack = Stack::new(128 * 1024);
         let tidx = m.xs.get(idx).unwrap();
         let ft = m.fts.get(tidx).unwrap();
 
@@ -594,19 +602,25 @@ pub fn run_module_function(m: &Module, name: &str, args: &ResultValue) -> Result
             memory: Memory::new(&mut memory[..]),
         };
         ctx.jump_table().push(code.expr.len() as u32 - 1);
-        let _ = unsafe { call_next(code.expr.as_ptr(), 0, &mut ctx) };
-        let mut result =
-            ft.1.stack_pop_iter()
-                .map(|t| match t {
-                    ValType::I32 => WasmValue::I32(stack.pop_i32()),
-                    ValType::I64 => WasmValue::I64(stack.pop_i64()),
-                    ValType::F32 => WasmValue::F32(stack.pop_f32()),
-                    ValType::F64 => WasmValue::F64(stack.pop_f64()),
-                    _ => unimplemented!(),
-                })
-                .collect::<Vec<_>>();
-        result.reverse();
-        return ResultValue(result);
+        let res = unsafe { call_next(code.expr.as_ptr(), 0, &mut ctx) };
+        match res {
+            Ok(_) => {
+                let mut result =
+                    ft.1.stack_pop_iter()
+                        .map(|t| match t {
+                            ValType::I32 => WasmValue::I32(stack.pop_i32()),
+                            ValType::I64 => WasmValue::I64(stack.pop_i64()),
+                            ValType::F32 => WasmValue::F32(stack.pop_f32()),
+                            ValType::F64 => WasmValue::F64(stack.pop_f64()),
+                            _ => unimplemented!(),
+                        })
+                        .collect::<Vec<_>>();
+                result.reverse();
+                Ok(ResultValue(result))
+            }
+            Err(err) => Err(err),
+        }
+    } else {
+        unimplemented!()
     }
-    unimplemented!()
 }
