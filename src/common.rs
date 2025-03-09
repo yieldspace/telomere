@@ -71,7 +71,9 @@ impl<'a> ExecuteContext<'a> {
 pub struct LocalState<'a> {
     // TODO: We should resolve jump address during instantiate time
     pub jump_table: JumpTable,
+    // TODO: We should write this to stack and holds current only.
     pub local_reference: LocalReference,
+    // TODO: We should write this to stack and holds current code or may avoid this?
     pub code: &'a [Instr],
 }
 
