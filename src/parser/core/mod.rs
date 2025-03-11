@@ -6,7 +6,7 @@ mod parser;
 #[derive(Debug, Clone, Copy)]
 pub struct TypeIdx(u32);
 #[derive(Debug, Clone, Copy)]
-pub struct FuncIdx(u32);
+pub struct FuncIdx(pub u32);
 #[derive(Debug, Clone, Copy)]
 pub struct TableIdx(u32);
 #[derive(Debug, Clone, Copy)]
@@ -63,10 +63,10 @@ impl ValType {
 #[derive(Debug, Clone)]
 pub struct ResultType(pub Vec<ValType>);
 impl ResultType {
-    pub fn iter(&self) -> impl Iterator<Item = &ValType> + use<'_> {
+    pub fn stack_pop_iter(&self) -> impl Iterator<Item = &ValType> + use<'_> {
         self.0.iter().rev()
     }
-    pub fn rev_iter(&self) -> impl Iterator<Item = &ValType> + use<'_> {
+    pub fn iter(&self) -> impl Iterator<Item = &ValType> + use<'_> {
         self.0.iter()
     }
 }

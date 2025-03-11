@@ -4,12 +4,30 @@ use telomere::{
     runtime::vm::{ResultValue, WasmValue},
     Module,
 };
+use tracing::{error, Level};
 use wast::{
     core::{NanPattern, WastRetCore},
     parser::ParseBuffer,
-    Wast, WastRet,
+    Wast, WastArg, WastRet,
 };
-
+fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
+    args.iter()
+        .map(|v| match v {
+            wast::WastArg::Core(wast_arg_core) => match wast_arg_core {
+                wast::core::WastArgCore::I32(v) => WasmValue::I32(*v),
+                wast::core::WastArgCore::I64(v) => WasmValue::I64(*v),
+                wast::core::WastArgCore::F32(f32) => WasmValue::F32(f32::from_bits(f32.bits)),
+                wast::core::WastArgCore::F64(f64) => WasmValue::F64(f64::from_bits(f64.bits)),
+                wast::core::WastArgCore::V128(_) => todo!(),
+                wast::core::WastArgCore::RefNull(_) => todo!(),
+                wast::core::WastArgCore::RefExtern(_) => todo!(),
+                wast::core::WastArgCore::RefHost(_) => todo!(),
+            },
+            wast::WastArg::Component(_) => todo!(),
+            _ => todo!(),
+        })
+        .collect()
+}
 fn run_wast(text: &str) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
@@ -33,9 +51,10 @@ fn run_wast(text: &str) {
                     let actual = telomere::run_module_function(
                         module.as_ref().unwrap(),
                         v.name,
-                        &ResultValue::new(vec![]),
-                    );
-                    for (expected, actual) in expected.iter().rev().zip(actual.iter()) {
+                        &ResultValue::new(convert_args(&v.args)),
+                    )
+                    .unwrap();
+                    for (expected, actual) in expected.iter().zip(actual.iter()) {
                         if let WastRet::Core(expected) = expected {
                             match (expected, actual) {
                                 (WastRetCore::I32(expected), WasmValue::I32(actual)) => {
@@ -48,12 +67,18 @@ fn run_wast(text: &str) {
                                     WastRetCore::F32(NanPattern::Value(expected)),
                                     WasmValue::F32(actual),
                                 ) => {
-                                    // TODO: validate result
+                                    assert_eq!(expected.bits, actual.to_bits())
                                 }
-                                (WastRetCore::F64(expected), WasmValue::F64(actual)) => {
-                                    // TODO: validate result
+                                (
+                                    WastRetCore::F64(NanPattern::Value(expected)),
+                                    WasmValue::F64(actual),
+                                ) => {
+                                    assert_eq!(expected.bits, actual.to_bits())
                                 }
-                                _ => unimplemented!(),
+                                _ => {
+                                    error!("{:?} {:?}", expected, actual);
+                                    unimplemented!()
+                                }
                             }
                         } else {
                             unimplemented!()
@@ -78,7 +103,7 @@ fn run_wast(text: &str) {
             WastDirective::AssertInvalid {
                 span,
                 mut module,
-                message,
+                message: _,
             } => {
                 //TODO: Is there anything that wast fails to encode that could be binary?
                 if let Ok(source) = module.encode() {
@@ -92,7 +117,19 @@ fn run_wast(text: &str) {
                     )
                 }
             }
-            _ => unimplemented!(),
+            WastDirective::AssertExhaustion {
+                span: _,
+                call,
+                message: _,
+            } => {
+                let result = telomere::run_module_function(
+                    module.as_ref().unwrap(),
+                    call.name,
+                    &ResultValue::new(convert_args(&call.args)),
+                );
+                assert!(result.is_err());
+            }
+            _ => {}
         }
     }
 }
@@ -108,6 +145,16 @@ fn int_literals() {
 fn block() {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     d.push("tests/block.wast");
+    let wast = std::fs::read_to_string(d).unwrap();
+    run_wast(&wast);
+}
+#[test]
+fn call() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
+    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    d.push("tests/call.wast");
     let wast = std::fs::read_to_string(d).unwrap();
     run_wast(&wast);
 }

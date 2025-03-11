@@ -1,4 +1,4 @@
-use crate::parser::core::MemArg;
+use crate::{parser::core::MemArg, Module};
 
 #[derive(Clone, Copy)]
 pub union Operand {
@@ -16,17 +16,25 @@ pub union Operand {
     pub select: usize,
     pub memarg: MemArg,
 }
-
-pub type Op = fn(&[Instr], &mut ExecuteContext);
+#[derive(Debug)]
+pub enum VMError {
+    Unreachable,
+    StackOverflow,
+}
+pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> Result<u32, VMError>;
 pub union Instr {
     pub op: Op,
     pub operand: Operand,
 }
-
-pub struct Memory<'a>(&'a mut [u8]);
+unsafe impl Send for Instr {}
+unsafe impl Sync for Instr {}
+pub struct Memory<'a>(pub &'a mut [u8]);
 impl<'a> Memory<'a> {
     pub fn new(inner: &'a mut [u8]) -> Self {
         Self(inner)
+    }
+    pub fn copy(v: &'a mut Self) -> Self {
+        Self(v.0)
     }
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> [u8; N] {
         let mut arr = [0u8; N];
@@ -42,13 +50,31 @@ impl<'a> Memory<'a> {
     }
 }
 pub struct ExecuteContext<'a> {
-    pub code: &'a [Instr],
+    pub module: &'a Module,
     pub stack: &'a mut Stack,
-    // TODO: We should resolve jump address during instantiate time
-    pub jump_table: JumpTable,
-    pub locals: &'a mut [u8],
+
     pub globals: &'a mut [u8],
     pub memory: Memory<'a>,
+    pub local_state: Vec<LocalState<'a>>,
+}
+impl<'a> ExecuteContext<'a> {
+    pub fn jump_table(&mut self) -> &mut JumpTable {
+        unsafe { &mut self.local_state.last_mut().unwrap_unchecked().jump_table }
+    }
+    pub fn code(&self) -> *const Instr {
+        unsafe { self.local_state.last().unwrap_unchecked().code.as_ptr() }
+    }
+    pub fn local_reference(&self) -> LocalReference {
+        unsafe { self.local_state.last().unwrap_unchecked().local_reference }
+    }
+}
+pub struct LocalState<'a> {
+    // TODO: We should resolve jump address during instantiate time
+    pub jump_table: JumpTable,
+    // TODO: We should write this to stack and holds current only.
+    pub local_reference: LocalReference,
+    // TODO: We should write this to stack and holds current code or may avoid this?
+    pub code: &'a [Instr],
 }
 
 pub struct JumpTable(Vec<u32>);
@@ -70,6 +96,11 @@ pub struct Stack {
     memory: Box<[u8]>,
     top: usize,
 }
+#[derive(Debug, Clone, Copy)]
+pub struct LocalReference {
+    local_top: usize,
+    local_size: usize,
+}
 impl Stack {
     pub fn new(size: usize) -> Self {
         let mut vec = Vec::with_capacity(size);
@@ -80,34 +111,65 @@ impl Stack {
         }
     }
     pub fn push_u8_array<const N: usize>(&mut self, v: [u8; N]) {
-        self.memory[self.top..self.top + N].copy_from_slice(&v);
+        unsafe {
+            std::ptr::copy(
+                v.as_ptr(),
+                self.memory[self.top..self.top + N].as_mut_ptr(),
+                N,
+            )
+        };
         self.top += N;
     }
 
     pub fn push_slice(&mut self, v: &[u8]) {
-        self.memory[self.top..self.top + v.len()].copy_from_slice(v);
+        unsafe {
+            std::ptr::copy(
+                v.as_ptr(),
+                self.memory[self.top..self.top + v.len()].as_mut_ptr(),
+                v.len(),
+            )
+        };
         self.top += v.len();
     }
     pub fn pop_u8_array<const N: usize>(&mut self) -> [u8; N] {
         self.top -= N;
         let mut arr = [0u8; N];
-        arr.copy_from_slice(&self.memory[self.top..self.top + N]);
+        unsafe {
+            std::ptr::copy(
+                self.memory[self.top..self.top + N].as_ptr(),
+                arr.as_mut_ptr(),
+                N,
+            )
+        };
         arr
     }
     pub fn pop_u8_array_generic<const N: usize>(&mut self, n: usize) -> [u8; N] {
         self.top -= n;
         let mut arr = [0u8; N];
-        arr[0..n].copy_from_slice(&self.memory[self.top..self.top + n]);
+        unsafe {
+            std::ptr::copy(
+                self.memory[self.top..self.top + n].as_ptr(),
+                arr.as_mut_ptr(),
+                N,
+            )
+        };
         arr
     }
-    pub fn drop(&mut self, n: usize) {
+    pub fn drop(&mut self, n: usize) -> &[u8] {
         self.top -= n;
+        &self.memory[self.top..self.top + n]
     }
     pub fn push_u32(&mut self, v: u32) {
         self.push_u8_array(v.to_le_bytes());
     }
     pub fn pop_u32(&mut self) -> u32 {
         u32::from_le_bytes(self.pop_u8_array::<4>())
+    }
+    pub fn push_u64(&mut self, v: u64) {
+        self.push_u8_array(v.to_le_bytes());
+    }
+    pub fn pop_u64(&mut self) -> u64 {
+        u64::from_le_bytes(self.pop_u8_array::<8>())
     }
     pub fn push_i32(&mut self, v: i32) {
         self.push_u8_array(v.to_le_bytes());
@@ -132,5 +194,56 @@ impl Stack {
     }
     pub fn pop_f64(&mut self) -> f64 {
         f64::from_le_bytes(self.pop_u8_array::<8>())
+    }
+    pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
+        &mut self.memory[reference.local_top..self.top + reference.local_size]
+    }
+    pub fn local_get(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+        self.memory.copy_within(
+            reference.local_top + local_addr..reference.local_top + local_addr + size,
+            self.top,
+        );
+        self.top += size;
+    }
+    pub fn local_set(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+        self.top -= size;
+        self.memory
+            .copy_within(self.top..self.top + size, reference.local_top + local_addr);
+    }
+    pub fn local_tee(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+        self.memory
+            .copy_within(self.top - size..self.top, reference.local_top + local_addr);
+    }
+    pub fn function_call(
+        &mut self,
+        param_size: usize,
+        local_size: usize,
+        return_addr: *const Instr,
+    ) -> LocalReference {
+        let local_top = self.top - param_size;
+        self.top += local_size;
+        self.push_slice(&(return_addr as usize).to_le_bytes());
+        LocalReference {
+            local_top,
+            local_size: param_size + local_size + std::mem::size_of_val(&return_addr),
+        }
+    }
+    pub fn function_return(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+    ) -> *const Instr {
+        let return_addr_addr =
+            reference.local_top + reference.local_size - std::mem::size_of::<usize>();
+        let mut buf = [0; std::mem::size_of::<usize>()];
+        buf.copy_from_slice(
+            &self.memory[return_addr_addr..return_addr_addr + std::mem::size_of::<usize>()],
+        );
+        let return_addr = usize::from_le_bytes(buf);
+
+        self.memory
+            .copy_within(self.top - return_size..self.top, reference.local_top);
+        self.top = reference.local_top + return_size;
+        return_addr as *const Instr
     }
 }
