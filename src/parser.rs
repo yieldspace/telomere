@@ -14,4 +14,4 @@ where
     where
         Self: Sized;
 }
-pub use core::Module;
+pub use crate::common::Module;
