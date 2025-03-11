@@ -280,10 +280,10 @@
 (assert_return (invoke "as-call-mid") (i32.const -1))
 (assert_return (invoke "as-call-last") (i32.const -1))
 
-;;(assert_return (invoke "as-call_indirect-first") (i32.const -1))
-;;(assert_return (invoke "as-call_indirect-mid") (i32.const -1))
-;;(assert_return (invoke "as-call_indirect-last") (i32.const -1))
-;;(assert_trap (invoke "as-call_indirect-index") "undefined element")
+(assert_return (invoke "as-call_indirect-first") (i32.const -1))
+(assert_return (invoke "as-call_indirect-mid") (i32.const -1))
+(assert_return (invoke "as-call_indirect-last") (i32.const -1))
+(assert_trap (invoke "as-call_indirect-index") "undefined element")
 
 (assert_return (invoke "as-local.set-value"))
 (assert_return (invoke "as-local.tee-value") (i32.const 1))

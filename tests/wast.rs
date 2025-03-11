@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use telomere::{common::Instance, instantiate, Module, ResultValue, WasmValue};
-use tracing::{error, Level};
+use tracing::error;
 use wast::{
     core::{NanPattern, WastRetCore},
     parser::ParseBuffer,
@@ -38,6 +38,7 @@ fn run_wast(text: &str) {
                 let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                 let mut parser = telomere::WasmParser::new(&mut reader);
                 let m = parser.parse_module().unwrap();
+                tracing::trace!("{:?}", m.elems);
                 instance = Some(instantiate(&m).unwrap());
                 module = Some(m);
             }
@@ -47,6 +48,7 @@ fn run_wast(text: &str) {
                 results: expected,
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
+                    tracing::trace!("executing {}", v.name);
                     let actual = telomere::run_module_function(
                         module.as_ref().unwrap(),
                         instance.as_mut().unwrap(),
@@ -67,7 +69,7 @@ fn run_wast(text: &str) {
                                     WastRetCore::F32(NanPattern::Value(expected)),
                                     WasmValue::F32(actual),
                                 ) => {
-                                    assert_eq!(expected.bits, actual.to_bits())
+                                    assert_eq!(f32::from_bits(expected.bits), *actual)
                                 }
                                 (
                                     WastRetCore::F64(NanPattern::Value(expected)),
@@ -179,11 +181,16 @@ fn call() {
 
 #[test]
 fn memory_grow() {
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     d.push("tests/memory_grow.wast");
+    let wast = std::fs::read_to_string(d).unwrap();
+    run_wast(&wast);
+}
+
+#[test]
+fn call_indirect() {
+    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    d.push("tests/call_indirect.wast");
     let wast = std::fs::read_to_string(d).unwrap();
     run_wast(&wast);
 }

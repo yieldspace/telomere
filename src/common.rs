@@ -55,7 +55,7 @@ impl ValType {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResultType(pub Vec<ValType>);
 impl ResultType {
     pub fn stack_pop_iter(&self) -> impl Iterator<Item = &ValType> + use<'_> {
@@ -65,8 +65,17 @@ impl ResultType {
         self.0.iter()
     }
 }
+#[derive(Debug, Clone, Copy)]
+pub struct TableType {
+    pub reftype: RefType,
+    pub limits: Limits,
+}
+#[derive(Debug)]
+pub struct Table(pub TableType);
+#[derive(Debug)]
+pub struct TableSection(pub Vec<Table>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncType(pub ResultType, pub ResultType);
 #[derive(Debug, Clone)]
 pub struct TypeSection(pub Vec<FuncType>);
@@ -76,7 +85,6 @@ impl TypeSection {
     }
 }
 #[derive(Debug, Clone)]
-
 pub struct FunctionSection(pub Vec<TypeIdx>);
 impl FunctionSection {
     pub fn get(&self, idx: FuncIdx) -> Option<TypeIdx> {
@@ -103,21 +111,48 @@ impl CodeSection {
         self.0.get(idx.0 as usize)
     }
 }
-pub struct MemType {
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
     pub min: u32,
     pub max: Option<u32>,
 }
+#[derive(Debug)]
+pub struct MemType(pub Limits);
 pub struct MemorySection(pub Vec<MemType>);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefType {
+    FuncRef,
+    ExternRef,
+}
+#[derive(Debug)]
+pub enum ElemMode {
+    Passive,
+    Active(TableIdx, WasmValue),
+    Declarative,
+}
+#[derive(Debug)]
+pub struct Elem {
+    pub kind: RefType,
+    pub init: Vec<u32>,
+    pub mode: ElemMode,
+}
+#[derive(Debug)]
+pub struct ElementSection(pub Vec<Elem>);
+
 pub struct Module {
     pub fts: TypeSection,
     pub xs: FunctionSection,
     pub mems: MemorySection,
     pub gs: GlobalSection,
     pub exs: ExportSection,
+    pub tables: TableSection,
+    pub elems: ElementSection,
     pub codes: CodeSection,
 }
+pub struct TableInstance(pub TableType, pub Vec<u32>);
 pub struct Instance {
     pub memory: Memory,
+    pub table: Vec<TableInstance>,
     pub globals: Vec<u8>,
 }
 #[derive(Debug, Clone)]
@@ -182,6 +217,9 @@ pub enum VMError {
     Unreachable,
     StackOverflow,
     MemoryIndexOutOfRange,
+    TableIndexOutOfRange,
+    CallIndirectInvalidType,
+    TableUninitialized,
 }
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> Result<u32, VMError>;
 pub union Instr {
@@ -197,7 +235,7 @@ pub enum WasmValue {
     F32(f32),
     F64(f64),
     //V128,
-    //FuncRef,
+    FuncRef(u32),
     //ExternRef,
 }
 pub const PAGE_SIZE: usize = 64 * 1024;
@@ -222,6 +260,9 @@ impl Memory {
             .ok_or_else(|| VMError::MemoryIndexOutOfRange)?
             .copy_from_slice(value);
         Ok(())
+    }
+    pub fn write_f64(&mut self, memarg: MemArg, offset: u32, value: f64) -> Result<(), VMError> {
+        self.write_slice(memarg, offset, &value.to_le_bytes())
     }
     pub fn write_u32(&mut self, memarg: MemArg, offset: u32, value: u32) -> Result<(), VMError> {
         self.write_slice(memarg, offset, &value.to_le_bytes())

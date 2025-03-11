@@ -2,8 +2,9 @@ use std::ops::Rem;
 
 use crate::{
     common::{
-        ExecuteContext, ExportDesc, FuncIdx, Instance, Instr, JumpTable, LocalState, Memory, Stack,
-        VMError, ValType, WasmValue, PAGE_SIZE, PAGE_SIZE_MAX,
+        ElemMode, ExecuteContext, ExportDesc, FuncIdx, Instance, Instr, JumpTable, LocalState,
+        Memory, Stack, TableInstance, TypeIdx, VMError, ValType, WasmValue, PAGE_SIZE,
+        PAGE_SIZE_MAX,
     },
     parser::Module,
 };
@@ -114,6 +115,80 @@ pub unsafe fn op_f32_sqrt(
 
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_f32_add(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    trace!("op_f32_add");
+    let b = ctx.stack.pop_f32();
+    let a = ctx.stack.pop_f32();
+
+    ctx.stack.push_f32(a + b);
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f32_sub(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    trace!("op_f32_sub");
+    let a = ctx.stack.pop_f32();
+
+    let b = ctx.stack.pop_f32();
+
+    ctx.stack.push_f32(b - a);
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f32_mul(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    trace!("op_f32_mul");
+    let b = ctx.stack.pop_f32();
+    let a = ctx.stack.pop_f32();
+
+    ctx.stack.push_f32(a * b);
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_add(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    trace!("op_f64_add");
+    let b = ctx.stack.pop_f64();
+    let a = ctx.stack.pop_f64();
+
+    ctx.stack.push_f64(a + b);
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_sub(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    trace!("op_f64_sub");
+    let a = ctx.stack.pop_f64();
+
+    let b = ctx.stack.pop_f64();
+
+    ctx.stack.push_f64(b - a);
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_mul(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    trace!("op_f64_mul");
+    let b = ctx.stack.pop_f64();
+    let a = ctx.stack.pop_f64();
+
+    ctx.stack.push_f64(a * b);
+
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_i64_add(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -216,13 +291,13 @@ const MAX_CALL_STACK: usize = 10000;
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
 unsafe fn internal_op_call(
-    tail_code: *const Instr,
+    return_addr: *const Instr,
+    funcidx: u32,
     ctx: &mut ExecuteContext,
 ) -> Result<*const Instr, VMError> {
     if ctx.local_state.len() > MAX_CALL_STACK {
         Err(VMError::StackOverflow)?
     }
-    let funcidx = (*tail_code).operand.u32;
     //FIXME: unwrap
     let code = ctx.module.codes.get(FuncIdx(funcidx)).unwrap_unchecked();
     let typeidx = ctx.module.xs.get(FuncIdx(funcidx)).unwrap_unchecked();
@@ -239,9 +314,7 @@ unsafe fn internal_op_call(
     for local in &code.locals {
         local_size += local.n as usize * local.t.stack_size().usize();
     }
-    let local_reference = ctx
-        .stack
-        .function_call(param_size, local_size, tail_code.offset(1));
+    let local_reference = ctx.stack.function_call(param_size, local_size, return_addr);
     trace!(
         "op_call: {funcidx} {local_size} {:?} {:?} {:?}",
         ft,
@@ -255,16 +328,53 @@ unsafe fn internal_op_call(
     });
     Ok(code.expr.as_ptr())
 }
+
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
-    let ptr = internal_op_call(tail_code, ctx)?;
+    let funcidx = (*tail_code).operand.u32;
+
+    let ptr = internal_op_call(tail_code.offset(1), funcidx, ctx)?;
     call_next(ptr, 0, ctx)
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_indirect(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<*const Instr, VMError> {
+    let i = ctx.stack.pop_u32();
+    let tableidx = (*tail_code).operand.u32 as usize;
+    let table = ctx
+        .instance
+        .table
+        .get(tableidx)
+        .ok_or(VMError::TableIndexOutOfRange)?;
+    let funcidx = *table
+        .1
+        .get(i as usize)
+        .ok_or(VMError::TableIndexOutOfRange)?;
+    if funcidx == TABLE_UNINITIALIZED {
+        Err(VMError::TableUninitialized)?;
+    }
+    let actual_typeidx = ctx.module.xs.get(FuncIdx(funcidx)).unwrap(); //FIXME:
+    let actual_ft = ctx.module.fts.get(actual_typeidx).unwrap(); //FIXME:
+    let expected_typeidx = (*tail_code.offset(1)).operand.u32;
+    let expected_ft = ctx
+        .module
+        .fts
+        .get(TypeIdx(expected_typeidx))
+        .unwrap_unchecked();
+    if actual_ft != expected_ft {
+        Err(VMError::CallIndirectInvalidType)?
+    }
+    let ptr = internal_op_call(tail_code.offset(2), funcidx, ctx)?;
+    Ok(ptr)
 }
 pub unsafe fn op_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> Result<u32, VMError> {
-    //TODO:
-    call_next(tail_code, 1, ctx)
+    let ptr = internal_op_call_indirect(tail_code, ctx)?;
+    call_next(ptr, 0, ctx)
 }
 pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
     ctx.stack.drop((*tail_code).operand.drop_size);
@@ -416,6 +526,17 @@ pub unsafe fn op_i32_store(
     ctx.instance.memory.write_u32(memarg, offset, v)?;
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_f64_store(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    let memarg = (*tail_code).operand.memarg;
+    let v = ctx.stack.pop_f64();
+    let offset = ctx.stack.pop_u32();
+    trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
+    ctx.instance.memory.write_f64(memarg, offset, v)?;
+    call_next(tail_code, 1, ctx)
+}
 pub unsafe fn op_i32_store8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -437,6 +558,30 @@ pub unsafe fn op_i32_store16(
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
     ctx.instance.memory.write_u16(memarg, offset, v as u16)?;
     call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_f32_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
+    let a = ctx.stack.pop_f32();
+    let b = ctx.stack.pop_f32();
+    ctx.stack.push_u32(if a == b { 1 } else { 0 });
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f32_le(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
+    let b = ctx.stack.pop_f32();
+    let a = ctx.stack.pop_f32();
+    ctx.stack.push_u32(if a <= b { 1 } else { 0 });
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
+    let a = ctx.stack.pop_f64();
+    let b = ctx.stack.pop_f64();
+    ctx.stack.push_u32(if a == b { 1 } else { 0 });
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_le(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
+    let b = ctx.stack.pop_f64();
+    let a = ctx.stack.pop_f64();
+    ctx.stack.push_u32(if a <= b { 1 } else { 0 });
+    call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_i32_ctz(
     tail_code: *const Instr,
@@ -473,6 +618,17 @@ pub unsafe fn op_i32_mul(
     trace!("op_i32_mul: {a} {b} => {r}");
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_i32_div_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    let a = ctx.stack.pop_u32();
+    let b = ctx.stack.pop_u32();
+    let r = b / a;
+    ctx.stack.push_u32(r);
+    trace!("op_i32_div_u: {a} {b} => {r}");
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_i64_mul(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -488,8 +644,8 @@ pub unsafe fn op_i32_rem_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> Result<u32, VMError> {
-    let a = ctx.stack.pop_u32();
     let b = ctx.stack.pop_u32();
+    let a = ctx.stack.pop_u32();
     ctx.stack.push_u32(a.rem(b));
     call_next(tail_code, 0, ctx)
 }
@@ -598,7 +754,7 @@ pub unsafe fn op_mem_grow(
     let current_page_size = ctx.instance.memory.page_size();
     let new_page_size = current_page_size + page_size_delta;
 
-    if ctx.module.mems.0[0].max.unwrap_or(PAGE_SIZE_MAX as u32) >= new_page_size {
+    if ctx.module.mems.0[0].0.max.unwrap_or(PAGE_SIZE_MAX as u32) >= new_page_size {
         ctx.stack.push_u32(current_page_size);
         ctx.instance.memory.grow(page_size_delta);
     } else {
@@ -634,20 +790,53 @@ pub unsafe fn special_function_vm_end(
 const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
+const TABLE_UNINITIALIZED: u32 = 0xFFFFFFFF;
 pub fn instantiate(m: &Module) -> Result<Instance, ()> {
     let mut global_size = 0usize;
     for global in m.gs.iter() {
         global_size += global.0 .0.stack_size().usize();
     }
-    let instance = Instance {
+    let mut instance = Instance {
         memory: Memory(vec![
             0;
-            m.mems.0.first().map(|v| v.min).unwrap_or_else(|| 0)
+            m.mems.0.first().map(|v| v.0.min).unwrap_or_else(|| 0)
                 as usize
                 * PAGE_SIZE
         ]),
+        table: m
+            .tables
+            .0
+            .iter()
+            .map(|v| TableInstance(v.0, vec![TABLE_UNINITIALIZED; v.0.limits.min as usize]))
+            .collect(),
         globals: vec![0; global_size],
     };
+    for elem in &m.elems.0 {
+        match &elem.mode {
+            ElemMode::Active(idx, offset) => {
+                let offset = match offset {
+                    WasmValue::I32(v) => *v as usize,
+                    WasmValue::I64(v) => *v as usize,
+                    _ => panic!(),
+                };
+                let instance = instance.table.get_mut(idx.0 as usize).unwrap();
+                if instance.0.reftype != elem.kind {
+                    panic!("reftype mismatch")
+                }
+                let expected_len = offset + elem.init.len();
+                if instance.1.len() < expected_len {
+                    instance.1.resize(expected_len, TABLE_UNINITIALIZED);
+                }
+
+                for (idx, e) in elem.init.iter().enumerate() {
+                    instance.1[offset + idx] = *e;
+                }
+            }
+            _ => {
+                // do nothing
+            }
+        }
+    }
     Ok(instance)
 }
 pub fn run_module_function(
@@ -676,6 +865,7 @@ pub fn run_module_function(
                 WasmValue::I64(i64) => stack.push_i64(*i64),
                 WasmValue::F32(v) => stack.push_f32(*v),
                 WasmValue::F64(v) => stack.push_f64(*v),
+                _ => unimplemented!(),
             }
         }
         let local_reference = stack.function_call(param_size, local_size, &VM_END as *const Instr);

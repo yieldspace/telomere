@@ -374,9 +374,9 @@
 (assert_return (invoke "as-br_table-first") (i32.const 1))
 (assert_return (invoke "as-br_table-last") (i32.const 2))
 
-;;(assert_return (invoke "as-call_indirect-first") (i32.const 1))
-;;(assert_return (invoke "as-call_indirect-mid") (i32.const 2))
-;;(assert_return (invoke "as-call_indirect-last") (i32.const 1))
+(assert_return (invoke "as-call_indirect-first") (i32.const 1))
+(assert_return (invoke "as-call_indirect-mid") (i32.const 2))
+(assert_return (invoke "as-call_indirect-last") (i32.const 1))
 
 (assert_return (invoke "as-store-first"))
 (assert_return (invoke "as-store-last"))
