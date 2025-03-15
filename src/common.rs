@@ -196,6 +196,16 @@ pub struct MemArg {
     pub align: u32,
     pub offset: u32,
 }
+#[derive(Debug, Clone, Copy)]
+pub struct LoopParam {
+    pub stack_top: u32,
+    pub param_size: u32,
+}
+#[derive(Debug, Clone, Copy)]
+pub struct BlockReturn {
+    pub stack_top: u32,
+    pub return_size: u32,
+}
 #[derive(Clone, Copy)]
 pub union Operand {
     pub i32: i32,
@@ -207,10 +217,12 @@ pub union Operand {
 
     pub jump_addr: u32,
     pub jump_addr2: (u32, u32),
-    pub drop_size: usize,
+    pub drop_size: u32,
     pub local_addr: u32,
-    pub select: usize,
+    pub select: u32,
     pub memarg: MemArg,
+    pub block_return: BlockReturn,
+    pub loop_param: LoopParam
 }
 #[derive(Debug)]
 pub enum VMError {
@@ -339,6 +351,7 @@ impl JumpTable {
         self.0.pop();
     }
 }
+#[derive(Debug)]
 pub struct Stack {
     memory: Box<[u8]>,
     top: usize,
@@ -492,5 +505,16 @@ impl Stack {
             .copy_within(self.top - return_size..self.top, reference.local_top);
         self.top = reference.local_top + return_size;
         return_addr as *const Instr
+    }
+    pub fn block_return(
+        &mut self,
+        reference: &LocalReference,
+        stack_top: usize,
+        return_size: usize,
+    ) {
+        self.memory.copy_within(
+            self.top - return_size..self.top,
+            reference.local_top + reference.local_size + stack_top,
+        );
     }
 }
