@@ -347,7 +347,7 @@ unsafe fn internal_op_call(
     let ft = ctx.module.fts.get(typeidx).unwrap_unchecked();
 
     let mut jump_table = JumpTable::new();
-    jump_table.push(code.expr.len() as u32 - 1);
+    jump_table.push(code.expr.len() as u32 - 2);
 
     let mut param_size = 0usize;
     for t in ft.0.iter() {

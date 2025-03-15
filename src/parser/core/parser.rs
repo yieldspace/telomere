@@ -523,6 +523,14 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_return });
                 }
+                for ty in functype.1.stack_pop_iter() {
+                    assert_valtype(*ty, types.pop())?;
+                }
+                types.truncate(0);
+                for ty in functype.1.iter() {
+                    types.push(*ty);
+                }
+                *unreachable = true;
                 (1, false)
             }
             0x0B => {
@@ -1358,7 +1366,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             }
             0x41 => {
                 trace!("parse_op_i32_const");
-
                 let (len, operand) = self.parse_i32()?;
                 if !*unreachable {
                     instrs.push(Instr {
@@ -1883,6 +1890,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             &mut else_addr,
             &mut unreachable,
         )?;
+        trace!("function return");
         if !unreachable {
             for ty in functype.1.stack_pop_iter() {
                 assert_valtype(*ty, types.pop())?;
