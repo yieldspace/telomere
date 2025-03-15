@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use telomere::{common::Instance, instantiate, Module, ResultValue, WasmValue};
-use tracing::error;
+use tracing::{error, Level};
 use wast::{
     core::{NanPattern, WastRetCore},
     parser::ParseBuffer,
@@ -198,6 +198,17 @@ fn call_indirect() {
 fn loop_() {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     d.push("tests/loop.wast");
+    let wast = std::fs::read_to_string(d).unwrap();
+    run_wast(&wast);
+}
+
+#[test]
+fn br_if() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
+    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    d.push("tests/br_if.wast");
     let wast = std::fs::read_to_string(d).unwrap();
     run_wast(&wast);
 }
