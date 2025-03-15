@@ -222,7 +222,7 @@ pub union Operand {
     pub select: u32,
     pub memarg: MemArg,
     pub block_return: BlockReturn,
-    pub loop_param: LoopParam
+    pub loop_param: LoopParam,
 }
 #[derive(Debug)]
 pub enum VMError {
