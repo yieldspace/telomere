@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use telomere::{common::Instance, instantiate, Module, ResultValue, WasmValue};
-use tracing::{error, Level};
+use tracing::error;
 use wast::{
     core::{NanPattern, WastRetCore},
     parser::ParseBuffer,
