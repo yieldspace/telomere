@@ -420,7 +420,10 @@ pub unsafe fn op_call_indirect(
     call_next(ptr, 0, ctx)
 }
 pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Result<u32, VMError> {
-    ctx.stack.drop((*tail_code).operand.drop_size as usize);
+    let size = (*tail_code).operand.drop_size as usize;
+    trace!("op_drop: {size}");
+
+    ctx.stack.drop(size);
     call_next(tail_code, 1, ctx)
 }
 #[inline(never)]
@@ -884,13 +887,20 @@ pub unsafe fn special_block_return(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> Result<u32, VMError> {
-    trace!("block return");
     let block_return = &(*tail_code).operand.block_return;
+    trace!(
+        "block return: {:?} {:?} {:?}",
+        ctx.local_reference(),
+        block_return,
+        ctx.stack
+    );
     ctx.stack.block_return(
         &ctx.local_reference(),
         block_return.stack_top as usize,
         block_return.return_size as usize,
     );
+    trace!("stack: {:?}", ctx.stack);
+
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn special_function_vm_end(
@@ -1000,7 +1010,7 @@ pub fn run_module_function(
             }],
             instance,
         };
-        ctx.jump_table().push(code.expr.len() as u32 - 1);
+        ctx.jump_table().push(code.expr.len() as u32 - 2);
         let res = unsafe { call_next(code.expr.as_ptr(), 0, &mut ctx) };
         match res {
             Ok(_) => {
