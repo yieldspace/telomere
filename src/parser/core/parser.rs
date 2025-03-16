@@ -1916,7 +1916,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     assert_valtype(ValType::F64, types.pop())?;
                     assert_type_stack_size(&types, &blocks)?;
 
-
                     types.push(ValType::F64);
                 }
                 (1, false)
