@@ -195,3 +195,9 @@ fn loop_() {
 fn br_if() {
     run_test_file("br_if");
 }
+
+
+#[test]
+fn const_() {
+    run_test_file("const");
+}
