@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 #[derive(Debug, Clone, Copy)]
 pub struct TypeIdx(pub u32);
 #[derive(Debug, Clone, Copy)]
@@ -351,10 +353,14 @@ impl JumpTable {
         self.0.pop();
     }
 }
-#[derive(Debug)]
 pub struct Stack {
     memory: Box<[u8]>,
     top: usize,
+}
+impl Debug for Stack {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stack({},{:?})", self.top, &self.memory[0..self.top])
+    }
 }
 #[derive(Debug, Clone, Copy)]
 pub struct LocalReference {
@@ -516,5 +522,6 @@ impl Stack {
             self.top - return_size..self.top,
             reference.local_top + reference.local_size + stack_top,
         );
+        self.top = reference.local_top + reference.local_size + stack_top + return_size;
     }
 }
