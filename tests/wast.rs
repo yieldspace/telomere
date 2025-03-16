@@ -196,8 +196,12 @@ fn br_if() {
     run_test_file("br_if");
 }
 
-
 #[test]
 fn const_() {
     run_test_file("const");
+}
+
+#[test]
+fn nop() {
+    run_test_file("nop");
 }
