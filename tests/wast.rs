@@ -75,7 +75,7 @@ fn run_wast(text: &str) {
                                     WastRetCore::F64(NanPattern::Value(expected)),
                                     WasmValue::F64(actual),
                                 ) => {
-                                    assert_eq!(expected.bits, actual.to_bits())
+                                    assert_eq!(f64::from_bits(expected.bits), *actual)
                                 }
                                 _ => {
                                     error!("{:?} {:?}", expected, actual);
@@ -191,6 +191,13 @@ fn memory_grow() {
 fn call_indirect() {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     d.push("tests/call_indirect.wast");
+    let wast = std::fs::read_to_string(d).unwrap();
+    run_wast(&wast);
+}
+#[test]
+fn loop_() {
+    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    d.push("tests/loop.wast");
     let wast = std::fs::read_to_string(d).unwrap();
     run_wast(&wast);
 }
