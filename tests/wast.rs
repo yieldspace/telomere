@@ -90,16 +90,19 @@ fn run_wast(text: &str) {
                 _ => unimplemented!(),
             },
             WastDirective::AssertMalformed {
-                span: _,
+                span,
                 mut module,
-                message,
+                message: _,
             } => {
                 //TODO: Is there anything that wast fails to encode that could be binary?
                 if let Ok(source) = module.encode() {
                     let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                     let mut parser = telomere::WasmParser::new(&mut reader);
-                    let m = parser.parse_module().is_err();
-                    assert_eq!(message, m.to_string())
+                    assert!(
+                        parser.parse_module().is_err(),
+                        "{:?}",
+                        span.linecol_in(text)
+                    )
                 }
             }
             WastDirective::AssertInvalid {
@@ -204,4 +207,9 @@ fn const_() {
 #[test]
 fn nop() {
     run_test_file("nop");
+}
+
+#[test]
+fn func() {
+    run_test_file("func");
 }
