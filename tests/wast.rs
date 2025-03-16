@@ -156,59 +156,42 @@ fn run_wast(text: &str) {
         }
     }
 }
-
-#[test]
-fn int_literals() {
+fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    d.push("tests/int_literals.wast");
+
+    d.push("tests");
+    d.push(format!("{name}.wast"));
     let wast = std::fs::read_to_string(d).unwrap();
     run_wast(&wast);
+}
+#[test]
+fn int_literals() {
+    run_test_file("int_literals");
 }
 #[test]
 fn block() {
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    d.push("tests/block.wast");
-    let wast = std::fs::read_to_string(d).unwrap();
-    run_wast(&wast);
+    run_test_file("block");
 }
 #[test]
 fn call() {
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    d.push("tests/call.wast");
-    let wast = std::fs::read_to_string(d).unwrap();
-    run_wast(&wast);
+    run_test_file("call");
 }
 
 #[test]
 fn memory_grow() {
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    d.push("tests/memory_grow.wast");
-    let wast = std::fs::read_to_string(d).unwrap();
-    run_wast(&wast);
+    run_test_file("memory_grow");
 }
 
 #[test]
 fn call_indirect() {
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    d.push("tests/call_indirect.wast");
-    let wast = std::fs::read_to_string(d).unwrap();
-    run_wast(&wast);
+    run_test_file("call_indirect");
 }
 #[test]
 fn loop_() {
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    d.push("tests/loop.wast");
-    let wast = std::fs::read_to_string(d).unwrap();
-    run_wast(&wast);
+    run_test_file("loop");
 }
 
 #[test]
 fn br_if() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    d.push("tests/br_if.wast");
-    let wast = std::fs::read_to_string(d).unwrap();
-    run_wast(&wast);
+    run_test_file("br_if");
 }
