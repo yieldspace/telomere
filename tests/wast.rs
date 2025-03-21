@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use telomere::{common::Instance, instantiate, Module, ResultValue, WasmValue};
-use tracing::error;
+use tracing::{error, Level};
 use wast::{
     core::{NanPattern, WastRetCore},
     parser::ParseBuffer,
@@ -212,4 +212,12 @@ fn nop() {
 #[test]
 fn func() {
     run_test_file("func");
+}
+
+#[test]
+fn br_table() {
+    tracing_subscriber::fmt()
+    .with_max_level(Level::TRACE)
+    .init();
+    run_test_file("br_table");
 }
