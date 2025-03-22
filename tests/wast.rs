@@ -217,7 +217,7 @@ fn func() {
 #[test]
 fn br_table() {
     tracing_subscriber::fmt()
-    .with_max_level(Level::TRACE)
-    .init();
+        .with_max_level(Level::TRACE)
+        .init();
     run_test_file("br_table");
 }

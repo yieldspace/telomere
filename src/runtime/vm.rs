@@ -316,7 +316,6 @@ pub unsafe fn op_br_table(
     );
     let addr = ctx.jump_table().br(idx as usize).unwrap_unchecked();
 
-
     let tail_code = ctx.code().offset(addr as isize);
     call_next(tail_code, 0, ctx)
 }
