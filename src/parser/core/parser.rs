@@ -173,6 +173,68 @@ fn assert_type_stack_size(
         Err(WasmParserError::InvalidStackValTypeAny)
     }
 }
+fn validate_br_table_types(
+    idx: u32,
+    type_section: &TypeSection,
+    types: &mut Vec<ValType>,
+    blocks: &VecDeque<(BlockKind, BlockType, u32)>,
+) -> Result<u32> {
+    let result_len = if let Some((kind, blocktype, _)) = blocks.get(idx as usize) {
+        match kind {
+            BlockKind::Block | BlockKind::If => match blocktype {
+                BlockType::Void => {
+                    assert_type_stack_size(types, blocks)?;
+                    0
+                }
+                BlockType::ValType(ty) => {
+                    assert_valtype(*ty, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(*ty);
+                    1
+                }
+                BlockType::TypeIdx(idx) => {
+                    let ty = type_section
+                        .get(*idx)
+                        .ok_or_else(|| WasmParserError::InvalidTypeIdx(*idx))?;
+                    for ty in ty.1.stack_pop_iter() {
+                        assert_valtype(*ty, types.pop())?;
+                    }
+                    assert_type_stack_size(types, blocks)?;
+
+                    for ty in ty.1.iter() {
+                        types.push(*ty);
+                    }
+                    ty.1.iter().count() as u32
+                }
+            },
+            BlockKind::Loop => match blocktype {
+                BlockType::Void | BlockType::ValType(_) => {
+                    assert_type_stack_size(types, blocks)?;
+
+                    // ok
+                    0
+                }
+                BlockType::TypeIdx(idx) => {
+                    let ty = type_section
+                        .get(*idx)
+                        .ok_or_else(|| WasmParserError::InvalidTypeIdx(*idx))?;
+                    for ty in ty.0.stack_pop_iter() {
+                        assert_valtype(*ty, types.pop())?;
+                    }
+                    assert_type_stack_size(types, blocks)?;
+                    for ty in ty.0.iter() {
+                        types.push(*ty);
+                    }
+                    ty.1.iter().count() as u32
+                }
+            },
+        }
+    } else {
+        Err(WasmParserError::InvalidStackValTypeAny)?
+    };
+    Ok(result_len)
+}
 fn get_local_addr(ty: &ResultType, locals: &[Locals], idx: u32) -> Result<(ValType, u32)> {
     let mut addr = 0;
     let mut i = 0;
@@ -529,6 +591,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         blocks: &mut VecDeque<(BlockKind, BlockType, u32)>,
         else_addr: &mut Option<u32>,
         unreachable: &mut bool,
+        is_unreachable_if_block: bool,
     ) -> Result<(usize, bool)> {
         let v = self.reader.read_exact_one()?;
 
@@ -537,16 +600,16 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 trace!("parse_op_return");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_return });
+                    for ty in functype.1.stack_pop_iter() {
+                        assert_valtype(*ty, types.pop())?;
+                    }
+                    assert_type_stack_size(types, blocks)?;
+                    types.truncate(0);
+                    for ty in functype.1.iter() {
+                        types.push(*ty);
+                    }
+                    *unreachable = true;
                 }
-                for ty in functype.1.stack_pop_iter() {
-                    assert_valtype(*ty, types.pop())?;
-                }
-                assert_type_stack_size(types, blocks)?;
-                types.truncate(0);
-                for ty in functype.1.iter() {
-                    types.push(*ty);
-                }
-                *unreachable = true;
                 (1, false)
             }
             0x0B => {
@@ -640,6 +703,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     blocks,
                     else_addr,
                     &mut unreachable,
+                    is_unreachable_if_block,
                 )?;
                 blocks.pop_front();
                 instrs[index].operand.jump_addr = instrs.len() as u32;
@@ -758,6 +822,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     blocks,
                     else_addr,
                     &mut unreachable,
+                    is_unreachable_if_block,
                 )?;
 
                 blocks.pop_front();
@@ -829,35 +894,35 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 trace!("parse_op_if");
                 let (len, blocktype) = self.parse_block_type()?;
                 let mut unreachable = *unreachable;
-
-                instrs.push(Instr { op: vm::op_if });
-                instrs.push(Instr {
-                    operand: Operand {
-                        jump_addr2: (0xFCFCFCFC, 0xFDFDFDFD),
-                    },
-                });
-                assert_valtype(ValType::I32, types.pop())?;
-                assert_type_stack_size(types, blocks)?;
-                let index = instrs.len() - 1;
-                let before_stack_len = types.len();
-                let mut block_input_size = 0;
-                blocks.push_front((BlockKind::If, blocktype, before_stack_len as u32));
-                match blocktype {
-                    BlockType::TypeIdx(idx) => {
-                        let ty = type_section
-                            .get(idx)
-                            .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
-                        for ty in ty.0.iter() {
-                            block_input_size += 1;
-                            assert_valtype(*ty, types.pop())?;
+                let is_unreachable_if_block = unreachable;
+                if !is_unreachable_if_block {
+                    instrs.push(Instr { op: vm::op_if });
+                    instrs.push(Instr {
+                        operand: Operand {
+                            jump_addr2: (0xFCFCFCFC, 0xFDFDFDFD),
+                        },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    let before_stack_len = types.len();
+                    blocks.push_front((BlockKind::If, blocktype, before_stack_len as u32));
+                    match blocktype {
+                        BlockType::TypeIdx(idx) => {
+                            let ty = type_section
+                                .get(idx)
+                                .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
+                            for ty in ty.0.iter() {
+                                assert_valtype(*ty, types.pop())?;
+                            }
                             assert_type_stack_size(types, blocks)?;
+                            for ty in ty.0.iter() {
+                                types.push(*ty);
+                            }
                         }
-                        for ty in ty.0.iter() {
-                            types.push(*ty);
-                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                let index = instrs.len() - 1;
                 let mut else_addr = None;
                 let len2 = self.parse_instrs(
                     type_section,
@@ -871,70 +936,71 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     blocks,
                     &mut else_addr,
                     &mut unreachable,
+                    is_unreachable_if_block,
                 )?;
-                blocks.pop_front();
-                instrs[index].operand = Operand {
-                    jump_addr2: (
-                        instrs.len() as u32,
-                        else_addr.unwrap_or_else(|| instrs.len() as u32),
-                    ),
-                };
-                let after_stack_len = types.len();
-                let mut block_output_size = 0;
-                match blocktype {
-                    BlockType::Void => {}
-                    BlockType::TypeIdx(idx) => {
-                        let ty = type_section
-                            .get(idx)
-                            .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
-
-                        for ty in ty.1.stack_pop_iter() {
-                            block_output_size += 1;
-                            assert_valtype(*ty, types.pop())?;
-                        }
-                        assert_type_stack_size(types, blocks)?;
-                        for ty in ty.1.iter() {
-                            types.push(*ty);
-                        }
-                    }
-                    BlockType::ValType(ty) => {
-                        assert_valtype(ty, types.last().copied())?;
-                        block_output_size += 1;
-                    }
+                if !is_unreachable_if_block {
+                    instrs[index].operand = Operand {
+                        jump_addr2: (
+                            instrs.len() as u32,
+                            else_addr.unwrap_or_else(|| instrs.len() as u32),
+                        ),
+                    };
                 }
-                //FIXME:
-                trace!("{before_stack_len} - {block_input_size} == {after_stack_len} - {block_output_size}");
-                if before_stack_len + block_output_size != after_stack_len + block_input_size {
-                    Err(WasmParserError::InvalidStackValTypeAny)?
+                if !unreachable {
+                    blocks.pop_front();
+                    match blocktype {
+                        BlockType::Void => {}
+                        BlockType::TypeIdx(idx) => {
+                            let ty = type_section
+                                .get(idx)
+                                .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
+
+                            for ty in ty.1.stack_pop_iter() {
+                                assert_valtype(*ty, types.pop())?;
+                            }
+                            assert_type_stack_size(types, blocks)?;
+                            for ty in ty.1.iter() {
+                                types.push(*ty);
+                            }
+                        }
+                        BlockType::ValType(ty) => {
+                            assert_valtype(ty, types.pop())?;
+                            assert_type_stack_size(types, blocks)?;
+                            types.push(ty);
+                        }
+                    }
                 }
 
                 (1 + len + len2, false)
             }
             0x05 => {
                 trace!("parse_op_else");
-                instrs.push(Instr { op: vm::op_else });
-                *else_addr = Some(instrs.len() as u32);
-                *unreachable = false;
-                if let Some((BlockKind::If, blocktype, _size)) = blocks.get(0) {
-                    match blocktype {
-                        BlockType::Void => {}
-                        BlockType::TypeIdx(idx) => {
-                            let ty = type_section
-                                .get(*idx)
-                                .ok_or_else(|| WasmParserError::InvalidTypeIdx(*idx))?;
-                            for ty in ty.1.stack_pop_iter() {
-                                assert_valtype(*ty, types.pop())?;
+                *unreachable = is_unreachable_if_block;
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_else });
+                    *else_addr = Some(instrs.len() as u32);
+                    if let Some((BlockKind::If, blocktype, _size)) = blocks.get(0) {
+                        match blocktype {
+                            BlockType::Void => {}
+                            BlockType::TypeIdx(idx) => {
+                                let ty = type_section
+                                    .get(*idx)
+                                    .ok_or_else(|| WasmParserError::InvalidTypeIdx(*idx))?;
+                                for ty in ty.1.stack_pop_iter() {
+                                    assert_valtype(*ty, types.pop())?;
+                                }
+                                assert_type_stack_size(types, blocks)?;
                             }
-                            assert_type_stack_size(types, blocks)?;
+                            BlockType::ValType(ty) => {
+                                assert_valtype(*ty, types.pop())?;
+                                assert_type_stack_size(types, blocks)?;
+                            }
                         }
-                        BlockType::ValType(ty) => {
-                            assert_valtype(*ty, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-                        }
+                    } else {
+                        Err(WasmParserError::InvalidStackValTypeAny)?
                     }
-                } else {
-                    Err(WasmParserError::InvalidStackValTypeAny)?
                 }
+
                 (1, false)
             }
             0x0C => {
@@ -1050,9 +1116,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 (1 + len, false)
             }
             0x0E => {
-                trace!("parse_op_br_table");
                 let (len, idxs) = self.parse_vec(Self::parse_u32)?;
                 let (len2, default_idx) = self.parse_u32()?;
+                trace!("parse_op_br_table: {idxs:?} {default_idx} {types:?}");
+
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_br_table,
@@ -1062,9 +1129,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             u32: idxs.len() as u32,
                         },
                     });
-                    for idx in idxs {
+                    for idx in &idxs {
                         instrs.push(Instr {
-                            operand: Operand { u32: idx },
+                            operand: Operand { u32: *idx },
                         });
                     }
                     instrs.push(Instr {
@@ -1072,6 +1139,14 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     });
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(&types, &blocks)?;
+                    let result_len =
+                        validate_br_table_types(default_idx, type_section, types, blocks)?;
+                    for idx in idxs {
+                        if result_len != validate_br_table_types(idx, type_section, types, blocks)?
+                        {
+                            Err(WasmParserError::InvalidStackValTypeAny)?;
+                        }
+                    }
                     *unreachable = true;
                 }
                 (1 + len + len2, false)
@@ -1306,7 +1381,24 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
-            0x2c => {
+
+            0x2A => {
+                trace!("parse_op_f32_load");
+                let (len, memarg) = self.parse_memarg()?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f32_load,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+                    types.push(ValType::F32);
+                }
+                (1 + len, false)
+            }
+            0x2C => {
                 trace!("parse_op_i32_load8_s");
                 let (len, memarg) = self.parse_memarg()?;
                 if !*unreachable {
@@ -1322,7 +1414,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
-            0x2d => {
+            0x2D => {
                 trace!("parse_op_i32_load8_u");
                 let (len, memarg) = self.parse_memarg()?;
                 if !*unreachable {
@@ -1338,6 +1430,22 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
+            0x30 => {
+                trace!("parse_op_i64_load8_s");
+                let (len, memarg) = self.parse_memarg()?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_load8_s,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+                    types.push(ValType::I64);
+                }
+                (1 + len, false)
+            }
             0x36 => {
                 trace!("parse_op_i32_store");
                 let (len, memarg) = self.parse_memarg()?;
@@ -1349,6 +1457,22 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         operand: Operand { memarg },
                     });
                     assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+                }
+                (1 + len, false)
+            }
+            0x37 => {
+                trace!("parse_op_i64_store");
+                let (len, memarg) = self.parse_memarg()?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_store,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(&types, &blocks)?;
                 }
@@ -1381,6 +1505,22 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         operand: Operand { memarg },
                     });
                     assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+                }
+                (1 + len, false)
+            }
+            0x3D => {
+                trace!("parse_op_i64_store16");
+                let (len, memarg) = self.parse_memarg()?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_store16,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(&types, &blocks)?;
                 }
@@ -1635,6 +1775,18 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 trace!("parse_op_f32_eq");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_eq });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x5C => {
+                trace!("parse_op_f32_ne");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_ne });
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_type_stack_size(&types, &blocks)?;
@@ -1944,6 +2096,19 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0xA7 => {
+                trace!("parse_op_i32_wrap_i64");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_wrap_i64,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0xAC => {
                 trace!("parse_op_i64_extend_i32_s");
                 if !*unreachable {
@@ -1973,6 +2138,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         blocks: &mut VecDeque<(BlockKind, BlockType, u32)>,
         else_addr: &mut Option<u32>,
         unreachable: &mut bool,
+        is_unreachable_if_block: bool,
     ) -> Result<usize> {
         let mut read_bytes = 0;
         loop {
@@ -1988,7 +2154,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 blocks,
                 else_addr,
                 unreachable,
+                is_unreachable_if_block,
             )?;
+            trace!("{types:?}");
             read_bytes += len;
             if end {
                 return Ok(read_bytes);
@@ -2024,6 +2192,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             &mut block_types_idxs,
             &mut else_addr,
             &mut unreachable,
+            false,
         )?;
         trace!("function return");
         if !unreachable {

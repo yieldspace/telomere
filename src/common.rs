@@ -281,6 +281,9 @@ impl Memory {
     pub fn write_u32(&mut self, memarg: MemArg, offset: u32, value: u32) -> Result<(), VMError> {
         self.write_slice(memarg, offset, &value.to_le_bytes())
     }
+    pub fn write_u64(&mut self, memarg: MemArg, offset: u32, value: u64) -> Result<(), VMError> {
+        self.write_slice(memarg, offset, &value.to_le_bytes())
+    }
     pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) -> Result<(), VMError> {
         *self
             .0
@@ -295,6 +298,11 @@ impl Memory {
     pub fn read_u32(&self, memarg: MemArg, offset: u32) -> Result<u32, VMError> {
         Ok(u32::from_le_bytes(
             self.read_u8_array::<4>((memarg.offset + offset) as usize)?,
+        ))
+    }
+    pub fn read_f32(&self, memarg: MemArg, offset: u32) -> Result<f32, VMError> {
+        Ok(f32::from_le_bytes(
+            self.read_u8_array((memarg.offset + offset) as usize)?,
         ))
     }
     pub fn read_u8(&self, memarg: MemArg, offset: u32) -> Result<u8, VMError> {
@@ -348,6 +356,9 @@ impl JumpTable {
     }
     pub fn br(&mut self, idx: usize) -> Option<u32> {
         self.0.drain(self.0.len() - 1 - idx..).next()
+    }
+    pub fn ret(&mut self) -> u32 {
+        unsafe { self.0.drain(0..).next().unwrap_unchecked() }
     }
     pub fn end(&mut self) {
         self.0.pop();
