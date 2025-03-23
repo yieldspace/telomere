@@ -239,7 +239,7 @@ pub unsafe fn op_i64_add(
 ) -> Result<u32, VMError> {
     let a = ctx.stack.pop_i64();
     let b = ctx.stack.pop_i64();
-    ctx.stack.push_i64(a + b);
+    ctx.stack.push_i64(a.wrapping_add(b));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_i64_extend_i32_s(
@@ -247,6 +247,14 @@ pub unsafe fn op_i64_extend_i32_s(
     ctx: &mut ExecuteContext,
 ) -> Result<u32, VMError> {
     let a = ctx.stack.pop_i32();
+    ctx.stack.push_i64(a.into());
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_extend_i32_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    let a = ctx.stack.pop_u32();
     ctx.stack.push_i64(a.into());
     call_next(tail_code, 0, ctx)
 }
@@ -918,6 +926,17 @@ pub unsafe fn op_i64_eqz(
     let r = if a == 0 { 1 } else { 0 };
     trace!("op_i64_eqz: {a} => {r}");
     ctx.stack.push_u32(r);
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_lt_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Result<u32, VMError> {
+    let b = ctx.stack.pop_u64();
+    let a = ctx.stack.pop_u64();
+
+    ctx.stack.push_u32(if a < b { 1 } else { 0 });
 
     call_next(tail_code, 0, ctx)
 }

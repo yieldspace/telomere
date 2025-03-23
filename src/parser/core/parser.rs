@@ -994,17 +994,34 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     BlockType::Void => {
                         if unreachable {
                             types.truncate(base_stack_len);
+                        } else {
+                            if types.len() != base_stack_len {
+                                Err(WasmParserError::InvalidStackValTypeAny)?;
+                            }
                         }
                     }
                     BlockType::TypeIdx(idx) => {
                         let ty = type_section
                             .get(idx)
                             .ok_or_else(|| WasmParserError::InvalidTypeIdx(idx))?;
+
                         if !unreachable {
+                            if else_addr.is_none() {
+                                for ty in ty.1.stack_pop_iter() {
+                                    assert_valtype(*ty, types.pop())?;
+                                }
+                                assert_type_stack_size(types, blocks)?;
+                                for ty in ty.0.iter() {
+                                    types.push(*ty);
+                                }
+                            }
                             for ty in ty.1.stack_pop_iter() {
                                 assert_valtype(*ty, types.pop())?;
                             }
                             assert_type_stack_size(types, blocks)?;
+                            if types.len() != base_stack_len {
+                                Err(WasmParserError::InvalidStackValTypeAny)?;
+                            }
                         } else {
                             types.truncate(base_stack_len);
                         }
@@ -1015,8 +1032,15 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     }
                     BlockType::ValType(ty) => {
                         if !unreachable {
+                            if else_addr.is_none() {
+                                assert_valtype(ty, types.pop())?;
+                                assert_type_stack_size(types, blocks)?;
+                            }
                             assert_valtype(ty, types.pop())?;
                             assert_type_stack_size(types, blocks)?;
+                            if types.len() != base_stack_len {
+                                Err(WasmParserError::InvalidStackValTypeAny)?;
+                            }
                         } else {
                             types.truncate(base_stack_len);
                         }
@@ -1033,9 +1057,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_else });
                     *else_addr = Some(instrs.len() as u32);
-                    if let Some((BlockKind::If, blocktype, _size)) = blocks.get(0) {
+                    if let Some((BlockKind::If, blocktype, block_base_stack_len)) = blocks.get(0) {
                         match blocktype {
-                            BlockType::Void => {}
+                            BlockType::Void => {
+                                if types.len() != *block_base_stack_len as usize {
+                                    Err(WasmParserError::InvalidStackValTypeAny)?;
+                                }
+                            }
                             BlockType::TypeIdx(idx) => {
                                 let ty = type_section
                                     .get(*idx)
@@ -1044,10 +1072,19 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                                     assert_valtype(*ty, types.pop())?;
                                 }
                                 assert_type_stack_size(types, blocks)?;
+                                if types.len() != *block_base_stack_len as usize {
+                                    Err(WasmParserError::InvalidStackValTypeAny)?;
+                                }
+                                for ty in ty.0.iter() {
+                                    types.push(*ty);
+                                }
                             }
                             BlockType::ValType(ty) => {
                                 assert_valtype(*ty, types.pop())?;
                                 assert_type_stack_size(types, blocks)?;
+                                if types.len() != *block_base_stack_len as usize {
+                                    Err(WasmParserError::InvalidStackValTypeAny)?;
+                                }
                             }
                         }
                     } else {
@@ -2005,6 +2042,20 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x54 => {
+                trace!("parse_op_i64_lt_u");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_lt_u,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x56 => {
                 trace!("parse_op_i64_gt_u");
                 if !*unreachable {
@@ -2410,6 +2461,19 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_extend_i32_s,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0xAD => {
+                trace!("parse_op_i64_extend_i32_u");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_extend_i32_u,
                     });
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(&types, &blocks)?;
