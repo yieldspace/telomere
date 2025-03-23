@@ -286,6 +286,12 @@ pub enum WasmValue {
 pub const PAGE_SIZE: usize = 64 * 1024;
 pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct Memory(pub Vec<u8>);
+fn compute_offset(memarg: MemArg, offset: u32) -> Result<usize, VMError> {
+    Ok(memarg
+        .offset
+        .checked_add(offset)
+        .ok_or_else(|| VMError::MemoryIndexOutOfRange)? as usize)
+}
 impl Memory {
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> Result<[u8; N], VMError> {
         let mut arr = [0u8; N];
@@ -333,33 +339,33 @@ impl Memory {
     }
     pub fn read_u32(&self, memarg: MemArg, offset: u32) -> Result<u32, VMError> {
         Ok(u32::from_le_bytes(
-            self.read_u8_array::<4>((memarg.offset + offset) as usize)?,
+            self.read_u8_array::<4>(compute_offset(memarg, offset)?)?,
         ))
     }
     pub fn read_f32(&self, memarg: MemArg, offset: u32) -> Result<f32, VMError> {
         Ok(f32::from_le_bytes(
-            self.read_u8_array((memarg.offset + offset) as usize)?,
+            self.read_u8_array(compute_offset(memarg, offset)?)?,
         ))
     }
     pub fn read_f64(&self, memarg: MemArg, offset: u32) -> Result<f64, VMError> {
         Ok(f64::from_le_bytes(
-            self.read_u8_array((memarg.offset + offset) as usize)?,
+            self.read_u8_array(compute_offset(memarg, offset)?)?,
         ))
     }
     pub fn read_u8(&self, memarg: MemArg, offset: u32) -> Result<u8, VMError> {
-        Ok(self.read_u8_array::<1>((memarg.offset + offset) as usize)?[0])
+        Ok(self.read_u8_array::<1>(compute_offset(memarg, offset)?)?[0])
     }
     pub fn read_i8(&self, memarg: MemArg, offset: u32) -> Result<i8, VMError> {
-        Ok(self.read_u8_array::<1>((memarg.offset + offset) as usize)?[0] as i8)
+        Ok(self.read_u8_array::<1>(compute_offset(memarg, offset)?)?[0] as i8)
     }
     pub fn read_i16(&self, memarg: MemArg, offset: u32) -> Result<i16, VMError> {
         Ok(i16::from_le_bytes(
-            self.read_u8_array((memarg.offset + offset) as usize)?,
+            self.read_u8_array(compute_offset(memarg, offset)?)?,
         ))
     }
     pub fn read_u16(&self, memarg: MemArg, offset: u32) -> Result<u16, VMError> {
         Ok(u16::from_le_bytes(
-            self.read_u8_array((memarg.offset + offset) as usize)?,
+            self.read_u8_array(compute_offset(memarg, offset)?)?,
         ))
     }
     pub fn page_size(&self) -> u32 {
