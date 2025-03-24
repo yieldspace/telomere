@@ -270,3 +270,8 @@ fn memory_fill() {
 fn memory_trap() {
     run_test_file("memory_trap");
 }
+
+#[test]
+fn memory_redundancy() {
+    run_test_file("memory_redundancy");
+}
