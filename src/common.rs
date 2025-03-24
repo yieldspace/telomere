@@ -486,11 +486,8 @@ impl Stack {
         }));
         VMResult::Success(())
     }
-    fn sub_top(&mut self, n: usize) -> VMResult<()> {
-        self.top = vm_try!(VMResult::from_option(self.top.checked_sub(n), || {
-            VMResult::StackOverflow
-        }));
-        VMResult::Success(())
+    fn sub_top(&mut self, n: usize) {
+        self.top -= n;
     }
     fn get_memory(&mut self, n: usize) -> VMResult<&mut [u8]> {
         let last = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
@@ -516,36 +513,35 @@ impl Stack {
         };
         self.add_top(v.len())
     }
-    pub fn pop_u8_array<const N: usize>(&mut self) -> VMResult<[u8; N]> {
-        vm_try!(self.sub_top(N));
+    pub fn pop_u8_array<const N: usize>(&mut self) -> [u8; N] {
+        self.sub_top(N);
         let mut arr = [0u8; N];
-        unsafe { std::ptr::copy(vm_try!(self.get_memory(N)).as_ptr(), arr.as_mut_ptr(), N) };
-        VMResult::Success(arr)
+        unsafe { std::ptr::copy(self.memory.as_ptr().add(self.top), arr.as_mut_ptr(), N) };
+        arr
     }
-    pub fn pop_u8_array_generic<const N: usize>(&mut self, n: usize) -> VMResult<[u8; N]> {
-        vm_try!(self.sub_top(n));
+    pub fn pop_u8_array_generic<const N: usize>(&mut self, n: usize) -> [u8; N] {
+        self.sub_top(n);
 
         let mut arr = [0u8; N];
-        unsafe { std::ptr::copy(vm_try!(self.get_memory(n)).as_ptr(), arr.as_mut_ptr(), N) };
-        VMResult::Success(arr)
+        unsafe { std::ptr::copy(self.memory.as_ptr().add(self.top), arr.as_mut_ptr(), N) };
+        arr
     }
-    pub fn drop(&mut self, n: usize) -> VMResult<&[u8]> {
-        vm_try!(self.sub_top(n));
-        let slice = vm_try!(self.get_memory(n));
-        VMResult::Success(slice)
+    pub fn drop(&mut self, n: usize) -> &[u8] {
+        self.sub_top(n);
+        let slice = &self.memory[self.top..self.top + n];
+        slice
     }
     pub fn push_u32(&mut self, v: u32) -> VMResult<()> {
         self.push_u8_array(v.to_le_bytes())
     }
-    #[inline(never)]
-    pub fn pop_u32(&mut self) -> VMResult<u32> {
-        VMResult::Success(u32::from_le_bytes(vm_try!(self.pop_u8_array::<4>())))
+    pub fn pop_u32(&mut self) -> u32 {
+        u32::from_le_bytes(self.pop_u8_array::<4>())
     }
     pub fn push_u64(&mut self, v: u64) -> VMResult<()> {
         self.push_u8_array(v.to_le_bytes())
     }
-    pub fn pop_u64(&mut self) -> VMResult<u64> {
-        VMResult::Success(u64::from_le_bytes(vm_try!(self.pop_u8_array::<8>())))
+    pub fn pop_u64(&mut self) -> u64 {
+        u64::from_le_bytes(self.pop_u8_array::<8>())
     }
     pub fn push_i32(&mut self, v: i32) -> VMResult<()> {
         self.push_u8_array(v.to_le_bytes())
@@ -556,30 +552,42 @@ impl Stack {
     pub fn push_f64(&mut self, v: f64) -> VMResult<()> {
         self.push_u8_array(v.to_le_bytes())
     }
-    pub fn pop_i32(&mut self) -> VMResult<i32> {
-        VMResult::Success(i32::from_le_bytes(vm_try!(self.pop_u8_array::<4>())))
+    pub fn pop_i32(&mut self) -> i32 {
+        i32::from_le_bytes(self.pop_u8_array::<4>())
     }
     pub fn push_i64(&mut self, v: i64) -> VMResult<()> {
         self.push_u8_array(v.to_le_bytes())
     }
-    pub fn pop_i64(&mut self) -> VMResult<i64> {
-        VMResult::Success(i64::from_le_bytes(vm_try!(self.pop_u8_array::<8>())))
+    pub fn pop_i64(&mut self) -> i64 {
+        i64::from_le_bytes(self.pop_u8_array::<8>())
     }
-    pub fn pop_f32(&mut self) -> VMResult<f32> {
-        VMResult::Success(f32::from_le_bytes(vm_try!(self.pop_u8_array::<4>())))
+    pub fn pop_f32(&mut self) -> f32 {
+        f32::from_le_bytes(self.pop_u8_array::<4>())
     }
-    pub fn pop_f64(&mut self) -> VMResult<f64> {
-        VMResult::Success(f64::from_le_bytes(vm_try!(self.pop_u8_array::<8>())))
+    pub fn pop_f64(&mut self) -> f64 {
+        f64::from_le_bytes(self.pop_u8_array::<8>())
     }
     pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
         &mut self.memory[reference.local_top..self.top + reference.local_size]
     }
-    pub fn local_get(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+    pub fn local_get(
+        &mut self,
+        reference: &LocalReference,
+        local_addr: usize,
+        size: usize,
+    ) -> VMResult<()> {
+        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(size), || {
+            VMResult::StackOverflow
+        }));
+        if new_top >= self.memory.len() {
+            return VMResult::StackOverflow;
+        }
         self.memory.copy_within(
             reference.local_top + local_addr..reference.local_top + local_addr + size,
             self.top,
         );
-        self.top += size;
+        self.top = new_top;
+        VMResult::Success(())
     }
     pub fn local_set(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
         self.top -= size;
