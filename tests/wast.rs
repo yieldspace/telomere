@@ -238,3 +238,9 @@ fn br_table() {
 fn memory() {
     run_test_file("memory");
 }
+
+#[test]
+fn if_() {
+    tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
+    run_test_file("if");
+}
