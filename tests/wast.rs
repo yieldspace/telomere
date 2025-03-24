@@ -168,9 +168,16 @@ fn run_wast(text: &str) {
                     todo!()
                 }
             },
-            _ => {
-                todo!()
+            WastDirective::Invoke(invoke) => {
+                let result = telomere::run_module_function(
+                    module.as_ref().unwrap(),
+                    instance.as_mut().unwrap(),
+                    invoke.name,
+                    &ResultValue::new(convert_args(&invoke.args)),
+                );
+                assert!(!result.is_err())
             }
+            _ => unimplemented!(),
         }
     }
 }
@@ -250,4 +257,8 @@ fn address() {
 #[test]
 fn align() {
     run_test_file("align");
+}
+#[test]
+fn memory_copy() {
+    run_test_file("memory_copy");
 }

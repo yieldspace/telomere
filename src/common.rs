@@ -427,6 +427,37 @@ impl Memory {
             .resize((self.page_size() + page_size_delta) as usize * PAGE_SIZE, 0);
         VMResult::Success(())
     }
+    pub fn fill(&mut self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
+        let last = vm_try!(VMResult::from_option(ptr.checked_add(len), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        let slice = vm_try!(VMResult::from_option(
+            self.0.get_mut(ptr as usize..last as usize),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+
+        slice.fill(vm_try!(VMResult::from_option(data.try_into().ok(), || {
+            VMResult::Unreachable
+        })));
+        VMResult::Success(())
+    }
+    pub fn copy(&mut self, dst: u32, src: u32, len: u32) -> VMResult<()> {
+        let src_last = vm_try!(VMResult::from_option(src.checked_add(len), || {
+            VMResult::MemoryIndexOutOfRange
+        })) as usize;
+        if src_last > self.0.len() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        let dst_last = vm_try!(VMResult::from_option(dst.checked_add(len), || {
+            VMResult::MemoryIndexOutOfRange
+        })) as usize;
+        if dst_last > self.0.len() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        self.0.copy_within(src as usize..src_last, dst as usize);
+
+        VMResult::Success(())
+    }
 }
 pub struct ExecuteContext<'a> {
     pub module: &'a Module,
@@ -454,7 +485,7 @@ pub struct LocalState<'a> {
     // TODO: We should write this to stack and holds current code or may avoid this?
     pub code: &'a [Instr],
 }
-
+#[derive(Debug)]
 pub struct JumpTable(Vec<u32>);
 impl JumpTable {
     pub fn new() -> Self {

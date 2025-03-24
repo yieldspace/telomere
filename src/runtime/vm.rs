@@ -212,6 +212,8 @@ pub unsafe fn op_return(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 }
 
 pub unsafe fn op_end(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    trace!("op_end");
+
     ctx.jump_table().end();
     call_next(tail_code, 0, ctx)
 }
@@ -220,6 +222,8 @@ pub unsafe fn op_br(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
         .jump_table()
         .br((*tail_code).operand.u32 as usize)
         .unwrap_unchecked();
+    trace!("op_br: {addr}");
+
     let tail_code = ctx.code().offset(addr as isize);
     call_next(tail_code, 0, ctx)
 }
@@ -273,8 +277,13 @@ pub unsafe fn op_block(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
 }
 
 pub unsafe fn op_loop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    trace!("op_loop: {}", (*tail_code).operand.jump_addr);
     ctx.jump_table().push((*tail_code).operand.jump_addr);
+    trace!(
+        "op_loop: {} {:?}",
+        (*tail_code).operand.jump_addr,
+        ctx.jump_table()
+    );
+
     let loop_param = (*tail_code.offset(1)).operand.loop_param;
     ctx.stack.block_return(
         &ctx.local_reference(),
@@ -288,7 +297,7 @@ pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
     let (end_addr, else_addr) = (*tail_code).operand.jump_addr2;
     ctx.jump_table().push(end_addr);
     let v = ctx.stack.pop_u32();
-    trace!("op_if: {end_addr} {else_addr} {v}");
+    trace!("op_if: {end_addr} {else_addr} {v} {:?}", ctx.jump_table());
 
     let ptr = if v == 0 {
         ctx.code().offset(else_addr as isize)
@@ -863,6 +872,20 @@ pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
         vm_try!(ctx.stack.push_i32(-1));
     }
 
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    vm_try!(ctx.instance.memory.copy(dst, src, len));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_mem_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let len = ctx.stack.pop_u32();
+    let data = ctx.stack.pop_u32();
+    let ptr = ctx.stack.pop_u32();
+    vm_try!(ctx.instance.memory.fill(ptr, len, data));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_unreachable(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {

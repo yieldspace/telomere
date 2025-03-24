@@ -990,7 +990,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     instrs[index].operand = Operand {
                         jump_addr2: (
                             instrs.len() as u32,
-                            else_addr.unwrap_or_else(|| instrs.len() as u32),
+                            else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
                         ),
                     };
                     blocks.pop_front();
@@ -1101,10 +1101,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             }
             0x0B => {
                 trace!("parse_op_end");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_end });
-                    *unreachable = false;
-                }
+                instrs.push(Instr { op: vm::op_end });
+
                 (1, true)
             }
 
@@ -2529,6 +2527,52 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     types.push(ValType::F64);
                 }
                 (1, false)
+            }
+            0xFC => {
+                let (len, next) = self.parse_u32()?;
+                match next {
+                    10 => {
+                        let op = self.reader.read_exact_one()?;
+                        if op != 0 {
+                            Err(WasmParserError::InvalidInstruction([0xFC, 10, op, 0x00]))?;
+                        }
+                        let op = self.reader.read_exact_one()?;
+                        if op != 0 {
+                            Err(WasmParserError::InvalidInstruction([0xFC, 10, 0x00, op]))?;
+                        }
+                        assert_memory(memory_section)?;
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_mem_copy,
+                            });
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_type_stack_size(&types, &blocks)?;
+                        }
+                        (3 + len, false)
+                    }
+                    11 => {
+                        let op = self.reader.read_exact_one()?;
+                        if op != 0 {
+                            Err(WasmParserError::InvalidInstruction([0xFC, 11, op, 0x00]))?;
+                        }
+                        assert_memory(memory_section)?;
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_mem_fill,
+                            });
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_type_stack_size(&types, &blocks)?;
+                        }
+                        (2 + len, false)
+                    }
+                    _ => Err(WasmParserError::InvalidInstruction([
+                        0xFC, next as u8, 0x00, 0x00,
+                    ]))?,
+                }
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
         })
