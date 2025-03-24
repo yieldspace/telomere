@@ -275,3 +275,8 @@ fn memory_trap() {
 fn memory_redundancy() {
     run_test_file("memory_redundancy");
 }
+
+#[test]
+fn memory_size() {
+    run_test_file("memory_size");
+}
