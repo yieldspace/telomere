@@ -262,3 +262,7 @@ fn align() {
 fn memory_copy() {
     run_test_file("memory_copy");
 }
+#[test]
+fn memory_fill() {
+    run_test_file("memory_fill");
+}
