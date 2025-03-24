@@ -328,18 +328,24 @@ fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
 impl Memory {
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> VMResult<[u8; N]> {
         let mut arr = [0u8; N];
+        let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
+            VMResult::StackOverflow
+        }));
         arr.copy_from_slice(vm_try!(VMResult::from_option(
-            self.0.get(offset..offset + N),
-            || VMResult::MemoryIndexOutOfRange
+            self.0.get(offset..last),
+            || { VMResult::MemoryIndexOutOfRange }
         )));
         VMResult::Success(arr)
     }
     fn write_slice(&mut self, memarg: MemArg, offset: u32, value: &[u8]) -> VMResult<()> {
         let offset = vm_try!(compute_offset(memarg, offset));
-        vm_try!(VMResult::from_option(
-            self.0.get_mut(offset..offset + value.len()),
-            || VMResult::MemoryIndexOutOfRange
-        ))
+        let n = value.len();
+        let last = vm_try!(VMResult::from_option(offset.checked_add(n), || {
+            VMResult::StackOverflow
+        }));
+        vm_try!(VMResult::from_option(self.0.get_mut(offset..last), || {
+            VMResult::MemoryIndexOutOfRange
+        }))
         .copy_from_slice(value);
         VMResult::Success(())
     }
@@ -354,7 +360,7 @@ impl Memory {
     }
     pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) -> VMResult<()> {
         *vm_try!(VMResult::from_option(
-            self.0.get_mut((memarg.offset + offset) as usize),
+            self.0.get_mut(vm_try!(compute_offset(memarg, offset))),
             || VMResult::MemoryIndexOutOfRange
         )) = value;
 
@@ -372,6 +378,11 @@ impl Memory {
     pub fn read_u32(&self, memarg: MemArg, offset: u32) -> VMResult<u32> {
         VMResult::Success(u32::from_le_bytes(vm_try!(
             self.read_u8_array::<4>(vm_try!(compute_offset(memarg, offset)))
+        )))
+    }
+    pub fn read_u64(&self, memarg: MemArg, offset: u32) -> VMResult<u64> {
+        VMResult::Success(u64::from_le_bytes(vm_try!(
+            self.read_u8_array::<8>(vm_try!(compute_offset(memarg, offset)))
         )))
     }
     pub fn read_f32(&self, memarg: MemArg, offset: u32) -> VMResult<f32> {
@@ -407,9 +418,11 @@ impl Memory {
     pub fn page_size(&self) -> u32 {
         (self.0.len() / PAGE_SIZE) as u32
     }
-    pub fn grow(&mut self, page_size_delta: u32) {
+    pub fn grow(&mut self, page_size_delta: u32) -> VMResult<()> {
+        // FIXME: check memory allocation and new length
         self.0
             .resize((self.page_size() + page_size_delta) as usize * PAGE_SIZE, 0);
+        VMResult::Success(())
     }
 }
 pub struct ExecuteContext<'a> {

@@ -470,6 +470,14 @@ pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     trace!("op_i32_load: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let memarg = (*tail_code).operand.memarg;
+    let offset = ctx.stack.pop_u32();
+    let v = vm_try!(ctx.instance.memory.read_u64(memarg, offset));
+    vm_try!(ctx.stack.push_u64(v));
+    trace!("op_i64_load: {:?} {} => {v}", memarg, offset);
+    call_next(tail_code, 1, ctx)
+}
 pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
@@ -842,7 +850,7 @@ pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 
     if ctx.module.mems.0[0].0.max.unwrap_or(PAGE_SIZE_MAX as u32) >= new_page_size {
         vm_try!(ctx.stack.push_u32(current_page_size));
-        ctx.instance.memory.grow(page_size_delta);
+        vm_try!(ctx.instance.memory.grow(page_size_delta));
     } else {
         vm_try!(ctx.stack.push_i32(-1));
     }

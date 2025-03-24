@@ -1498,7 +1498,23 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
-
+            0x29 => {
+                trace!("parse_op_i64_load");
+                assert_memory(memory_section)?;
+                let (len, memarg) = self.parse_memarg()?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_load,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+                    types.push(ValType::I64);
+                }
+                (1 + len, false)
+            }
             0x2A => {
                 trace!("parse_op_f32_load");
                 assert_memory(memory_section)?;

@@ -70,8 +70,8 @@ fn run_wast(text: &str) {
                                     WasmValue::F32(actual),
                                 ) => {
                                     assert_eq!(
-                                        f32::from_bits(expected.bits),
-                                        *actual,
+                                        expected.bits,
+                                        actual.to_bits(),
                                         "{:?}",
                                         span.linecol_in(text)
                                     )
@@ -81,8 +81,8 @@ fn run_wast(text: &str) {
                                     WasmValue::F64(actual),
                                 ) => {
                                     assert_eq!(
-                                        f64::from_bits(expected.bits),
-                                        *actual,
+                                        expected.bits,
+                                        actual.to_bits(),
                                         "{:?}",
                                         span.linecol_in(text)
                                     )
