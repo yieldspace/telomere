@@ -590,6 +590,14 @@ pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     vm_try!(ctx.instance.memory.write_u64(memarg, offset, v));
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let memarg = (*tail_code).operand.memarg;
+    let v = ctx.stack.pop_f32();
+    let offset = ctx.stack.pop_u32();
+    trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
+    vm_try!(ctx.instance.memory.write_f32(memarg, offset, v));
+    call_next(tail_code, 1, ctx)
+}
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let v = ctx.stack.pop_f64();

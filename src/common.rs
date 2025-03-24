@@ -349,6 +349,9 @@ impl Memory {
         .copy_from_slice(value);
         VMResult::Success(())
     }
+    pub fn write_f32(&mut self, memarg: MemArg, offset: u32, value: f32) -> VMResult<()> {
+        self.write_slice(memarg, offset, &value.to_le_bytes())
+    }
     pub fn write_f64(&mut self, memarg: MemArg, offset: u32, value: f64) -> VMResult<()> {
         self.write_slice(memarg, offset, &value.to_le_bytes())
     }

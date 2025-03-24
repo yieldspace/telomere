@@ -247,3 +247,7 @@ fn if_() {
 fn address() {
     run_test_file("address");
 }
+#[test]
+fn align() {
+    run_test_file("align");
+}
