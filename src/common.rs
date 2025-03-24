@@ -87,6 +87,24 @@ impl TypeSection {
     }
 }
 #[derive(Debug, Clone)]
+
+pub enum ImportDesc {
+    TypeIdx(TypeIdx),
+    TableType(TableType),
+    MemType(MemType),
+    GlobalType(GlobalType),
+}
+
+#[derive(Debug, Clone)]
+pub struct Import {
+    pub module: String,
+    pub name: String,
+    pub desc: ImportDesc,
+}
+#[derive(Debug, Clone)]
+pub struct ImportSection(pub Vec<Import>);
+
+#[derive(Debug, Clone)]
 pub struct FunctionSection(pub Vec<TypeIdx>);
 impl FunctionSection {
     pub fn get(&self, idx: FuncIdx) -> Option<TypeIdx> {
@@ -118,7 +136,7 @@ pub struct Limits {
     pub min: u32,
     pub max: Option<u32>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemType(pub Limits);
 pub struct MemorySection(pub Vec<MemType>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +158,18 @@ pub struct Elem {
 }
 #[derive(Debug)]
 pub struct ElementSection(pub Vec<Elem>);
+#[derive(Debug)]
+pub enum DataMode {
+    Passive,
+    Active(MemIdx, WasmValue),
+}
+#[derive(Debug)]
+pub struct Data {
+    pub init: Vec<u8>,
+    pub mode: DataMode,
+}
+#[derive(Debug)]
+pub struct DataSection(pub Vec<Data>);
 
 pub struct Module {
     pub fts: TypeSection,
@@ -150,6 +180,7 @@ pub struct Module {
     pub tables: TableSection,
     pub elems: ElementSection,
     pub codes: CodeSection,
+    pub data: DataSection,
 }
 pub struct TableInstance(pub TableType, pub Vec<u32>);
 pub struct Instance {
@@ -295,6 +326,11 @@ impl Memory {
         self.write_slice(memarg, offset, &value.to_le_bytes())?;
         Ok(())
     }
+    pub fn read_i32(&self, memarg: MemArg, offset: u32) -> Result<i32, VMError> {
+        Ok(i32::from_le_bytes(
+            self.read_u8_array::<4>((memarg.offset + offset) as usize)?,
+        ))
+    }
     pub fn read_u32(&self, memarg: MemArg, offset: u32) -> Result<u32, VMError> {
         Ok(u32::from_le_bytes(
             self.read_u8_array::<4>((memarg.offset + offset) as usize)?,
@@ -305,11 +341,26 @@ impl Memory {
             self.read_u8_array((memarg.offset + offset) as usize)?,
         ))
     }
+    pub fn read_f64(&self, memarg: MemArg, offset: u32) -> Result<f64, VMError> {
+        Ok(f64::from_le_bytes(
+            self.read_u8_array((memarg.offset + offset) as usize)?,
+        ))
+    }
     pub fn read_u8(&self, memarg: MemArg, offset: u32) -> Result<u8, VMError> {
         Ok(self.read_u8_array::<1>((memarg.offset + offset) as usize)?[0])
     }
     pub fn read_i8(&self, memarg: MemArg, offset: u32) -> Result<i8, VMError> {
         Ok(self.read_u8_array::<1>((memarg.offset + offset) as usize)?[0] as i8)
+    }
+    pub fn read_i16(&self, memarg: MemArg, offset: u32) -> Result<i16, VMError> {
+        Ok(i16::from_le_bytes(
+            self.read_u8_array((memarg.offset + offset) as usize)?,
+        ))
+    }
+    pub fn read_u16(&self, memarg: MemArg, offset: u32) -> Result<u16, VMError> {
+        Ok(u16::from_le_bytes(
+            self.read_u8_array((memarg.offset + offset) as usize)?,
+        ))
     }
     pub fn page_size(&self) -> u32 {
         (self.0.len() / PAGE_SIZE) as u32

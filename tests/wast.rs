@@ -43,7 +43,7 @@ fn run_wast(text: &str) {
                 module = Some(m);
             }
             WastDirective::AssertReturn {
-                span: _,
+                span,
                 exec,
                 results: expected,
             } => match exec {
@@ -60,25 +60,40 @@ fn run_wast(text: &str) {
                         if let WastRet::Core(expected) = expected {
                             match (expected, actual) {
                                 (WastRetCore::I32(expected), WasmValue::I32(actual)) => {
-                                    assert_eq!(expected, actual)
+                                    assert_eq!(expected, actual, "{:?}", span.linecol_in(text))
                                 }
                                 (WastRetCore::I64(expected), WasmValue::I64(actual)) => {
-                                    assert_eq!(expected, actual)
+                                    assert_eq!(expected, actual, "{:?}", span.linecol_in(text))
                                 }
                                 (
                                     WastRetCore::F32(NanPattern::Value(expected)),
                                     WasmValue::F32(actual),
                                 ) => {
-                                    assert_eq!(f32::from_bits(expected.bits), *actual)
+                                    assert_eq!(
+                                        f32::from_bits(expected.bits),
+                                        *actual,
+                                        "{:?}",
+                                        span.linecol_in(text)
+                                    )
                                 }
                                 (
                                     WastRetCore::F64(NanPattern::Value(expected)),
                                     WasmValue::F64(actual),
                                 ) => {
-                                    assert_eq!(f64::from_bits(expected.bits), *actual)
+                                    assert_eq!(
+                                        f64::from_bits(expected.bits),
+                                        *actual,
+                                        "{:?}",
+                                        span.linecol_in(text)
+                                    )
                                 }
                                 _ => {
-                                    error!("{:?} {:?}", expected, actual);
+                                    error!(
+                                        "{:?} {:?} {:?}",
+                                        expected,
+                                        actual,
+                                        span.linecol_in(text)
+                                    );
                                     unimplemented!()
                                 }
                             }
@@ -216,8 +231,10 @@ fn func() {
 
 #[test]
 fn br_table() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     run_test_file("br_table");
+}
+
+#[test]
+fn memory() {
+    run_test_file("memory");
 }
