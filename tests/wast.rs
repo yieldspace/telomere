@@ -266,3 +266,7 @@ fn memory_copy() {
 fn memory_fill() {
     run_test_file("memory_fill");
 }
+#[test]
+fn memory_trap() {
+    run_test_file("memory_trap");
+}
