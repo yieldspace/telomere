@@ -38,9 +38,6 @@ macro_rules! parse_leb128impl {
             Ok((read_bytes, result))
         }
     };
-    ($name: ident, $t: ident, $is_signed: expr) => {
-        parse_leb128impl!($name, $t, $is_signed);
-    };
     ($name: ident, $t: ident) => {
         parse_leb128impl!($name, $t, false);
     };
