@@ -22,6 +22,8 @@ pub enum ComponentModelParserError {
     IoError(#[from] std::io::Error),
     #[error("invalid section type: {0:?}")]
     InvalidSectionType(u8),
+    #[error("invalid instance expression: {0:?}")]
+    InvalidInstanceExpr(u8),
 }
 
 
@@ -52,7 +54,7 @@ impl<'a, R: BinaryReader> ComponentModelParser<'a, R> {
                     }
                 }
                 ComponentSectionType::CoreModule => {
-                    self.parse_core_module(size as usize)?;
+                    let module = self.parse_core_module(size as usize)?;
                 }
                 ComponentSectionType::CoreInstance => {}
                 ComponentSectionType::CoreType => {}
@@ -125,5 +127,26 @@ impl<'a, R: BinaryReader> ComponentModelParser<'a, R> {
         let mut core_module = WasmParser::new(&mut core_reader);
         let module = core_module.parse_module()?;
         Ok(module)
+    }
+
+    fn parse_core_instance(&mut self, size: usize) -> Result<()> {
+        let mut view = self.reader.take(size);
+        match self.reader.read_exact_one()? {
+            0x00 => {
+                let (_, idx) = Leb128Parser::new(&mut view).parse_u32(size_of::<u32>() * 8)?;
+                // parse args
+                todo!()
+            }
+            0x01 => {
+                // parse inline export
+                todo!()
+            }
+            magic => Err(ComponentModelParserError::InvalidInstanceExpr(magic)),
+        }
+    }
+
+    fn parse_u32(&mut self) -> Result<u32> {
+        let (_, value) = Leb128Parser::new(self.reader).parse_u32(size_of::<u32>() * 8)?;
+        Ok(value)
     }
 }
