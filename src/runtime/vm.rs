@@ -874,6 +874,25 @@ pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32;
+    let n = ctx.stack.pop_u32();
+    let s = ctx.stack.pop_u32();
+    let d = ctx.stack.pop_u32();
+    let data = vm_try!(VMResult::from_option(
+        ctx.module.data.0.get(idx as usize),
+        || { VMResult::MemoryIndexOutOfRange }
+    ));
+    let last = vm_try!(VMResult::from_option(s.checked_add(n), || {
+        VMResult::MemoryIndexOutOfRange
+    }));
+    let data = vm_try!(VMResult::from_option(
+        data.init.get(s as usize..last as usize),
+        || { VMResult::MemoryIndexOutOfRange }
+    ));
+    vm_try!(ctx.instance.memory.init(d, data));
+    call_next(tail_code, 1, ctx)
+}
 pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();

@@ -280,3 +280,7 @@ fn memory_redundancy() {
 fn memory_size() {
     run_test_file("memory_size");
 }
+#[test]
+fn memory_init() {
+    run_test_file("memory_init");
+}
