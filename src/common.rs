@@ -168,6 +168,11 @@ pub struct Data {
     pub init: Vec<u8>,
     pub mode: DataMode,
 }
+pub enum DataCountVerifier {
+    OnePass(u32),
+    Lazy { max_data_idx: Option<u32> },
+}
+
 #[derive(Debug)]
 pub struct DataSection(pub Vec<Data>);
 
@@ -258,7 +263,9 @@ pub union Operand {
     pub loop_param: LoopParam,
 }
 #[derive(Debug)]
-pub enum VMError {
+#[must_use]
+pub enum VMResult<V> {
+    Success(V),
     Unreachable,
     StackOverflow,
     MemoryIndexOutOfRange,
@@ -266,7 +273,38 @@ pub enum VMError {
     CallIndirectInvalidType,
     TableUninitialized,
 }
-pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> Result<u32, VMError>;
+
+macro_rules! vm_try {
+    ($expr: expr) => {
+        match $expr {
+            VMResult::Success(v) => v,
+            VMResult::Unreachable => return VMResult::Unreachable,
+            VMResult::StackOverflow => return VMResult::StackOverflow,
+            VMResult::MemoryIndexOutOfRange => return VMResult::MemoryIndexOutOfRange,
+            VMResult::TableIndexOutOfRange => return VMResult::TableIndexOutOfRange,
+            VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
+            VMResult::TableUninitialized => return VMResult::TableUninitialized,
+        }
+    };
+}
+impl<V> VMResult<V> {
+    pub fn from_option(opt: Option<V>, err: impl FnOnce() -> VMResult<V>) -> VMResult<V> {
+        match opt {
+            Some(v) => VMResult::Success(v),
+            None => err(),
+        }
+    }
+    pub fn unwrap(self) -> V {
+        if let VMResult::Success(v) = self {
+            return v;
+        }
+        panic!()
+    }
+    pub fn is_err(&self) -> bool {
+        !matches!(self, VMResult::Success(_))
+    }
+}
+pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
 pub union Instr {
     pub op: Op,
     pub operand: Operand,
@@ -286,88 +324,156 @@ pub enum WasmValue {
 pub const PAGE_SIZE: usize = 64 * 1024;
 pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct Memory(pub Vec<u8>);
+fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
+    VMResult::from_option(
+        memarg.offset.checked_add(offset).map(|v| v as usize),
+        || VMResult::MemoryIndexOutOfRange,
+    )
+}
 impl Memory {
-    pub fn read_u8_array<const N: usize>(&self, offset: usize) -> Result<[u8; N], VMError> {
+    pub fn read_u8_array<const N: usize>(&self, offset: usize) -> VMResult<[u8; N]> {
         let mut arr = [0u8; N];
-        arr.copy_from_slice(
-            &self
-                .0
-                .get(offset..offset + N)
-                .ok_or_else(|| VMError::MemoryIndexOutOfRange)?,
-        );
-        Ok(arr)
+        let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
+            VMResult::StackOverflow
+        }));
+        arr.copy_from_slice(vm_try!(VMResult::from_option(
+            self.0.get(offset..last),
+            || { VMResult::MemoryIndexOutOfRange }
+        )));
+        VMResult::Success(arr)
     }
-    fn write_slice(&mut self, memarg: MemArg, offset: u32, value: &[u8]) -> Result<(), VMError> {
-        self.0
-            .get_mut(
-                (memarg.offset + offset) as usize..(memarg.offset + offset) as usize + value.len(),
-            )
-            .ok_or_else(|| VMError::MemoryIndexOutOfRange)?
-            .copy_from_slice(value);
-        Ok(())
+    pub fn init(&mut self, offset: u32, value: &[u8]) -> VMResult<()> {
+        let offset = offset as usize;
+        let last = vm_try!(VMResult::from_option(
+            offset.checked_add(value.len()),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+        vm_try!(VMResult::from_option(self.0.get_mut(offset..last), || {
+            VMResult::MemoryIndexOutOfRange
+        }))
+        .copy_from_slice(value);
+        VMResult::Success(())
     }
-    pub fn write_f64(&mut self, memarg: MemArg, offset: u32, value: f64) -> Result<(), VMError> {
+    fn write_slice(&mut self, memarg: MemArg, offset: u32, value: &[u8]) -> VMResult<()> {
+        let offset = vm_try!(compute_offset(memarg, offset));
+        let n = value.len();
+        let last = vm_try!(VMResult::from_option(offset.checked_add(n), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        vm_try!(VMResult::from_option(self.0.get_mut(offset..last), || {
+            VMResult::MemoryIndexOutOfRange
+        }))
+        .copy_from_slice(value);
+        VMResult::Success(())
+    }
+    pub fn write_f32(&mut self, memarg: MemArg, offset: u32, value: f32) -> VMResult<()> {
         self.write_slice(memarg, offset, &value.to_le_bytes())
     }
-    pub fn write_u32(&mut self, memarg: MemArg, offset: u32, value: u32) -> Result<(), VMError> {
+    pub fn write_f64(&mut self, memarg: MemArg, offset: u32, value: f64) -> VMResult<()> {
         self.write_slice(memarg, offset, &value.to_le_bytes())
     }
-    pub fn write_u64(&mut self, memarg: MemArg, offset: u32, value: u64) -> Result<(), VMError> {
+    pub fn write_u32(&mut self, memarg: MemArg, offset: u32, value: u32) -> VMResult<()> {
         self.write_slice(memarg, offset, &value.to_le_bytes())
     }
-    pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) -> Result<(), VMError> {
-        *self
-            .0
-            .get_mut((memarg.offset + offset) as usize)
-            .ok_or_else(|| VMError::MemoryIndexOutOfRange)? = value;
-        Ok(())
+    pub fn write_u64(&mut self, memarg: MemArg, offset: u32, value: u64) -> VMResult<()> {
+        self.write_slice(memarg, offset, &value.to_le_bytes())
     }
-    pub fn write_u16(&mut self, memarg: MemArg, offset: u32, value: u16) -> Result<(), VMError> {
-        self.write_slice(memarg, offset, &value.to_le_bytes())?;
-        Ok(())
+    pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) -> VMResult<()> {
+        *vm_try!(VMResult::from_option(
+            self.0.get_mut(vm_try!(compute_offset(memarg, offset))),
+            || VMResult::MemoryIndexOutOfRange
+        )) = value;
+
+        VMResult::Success(())
     }
-    pub fn read_i32(&self, memarg: MemArg, offset: u32) -> Result<i32, VMError> {
-        Ok(i32::from_le_bytes(
-            self.read_u8_array::<4>((memarg.offset + offset) as usize)?,
-        ))
+    pub fn write_u16(&mut self, memarg: MemArg, offset: u32, value: u16) -> VMResult<()> {
+        vm_try!(self.write_slice(memarg, offset, &value.to_le_bytes()));
+        VMResult::Success(())
     }
-    pub fn read_u32(&self, memarg: MemArg, offset: u32) -> Result<u32, VMError> {
-        Ok(u32::from_le_bytes(
-            self.read_u8_array::<4>((memarg.offset + offset) as usize)?,
-        ))
+    pub fn read_i32(&self, memarg: MemArg, offset: u32) -> VMResult<i32> {
+        VMResult::Success(i32::from_le_bytes(vm_try!(
+            self.read_u8_array::<4>(vm_try!(compute_offset(memarg, offset)))
+        )))
     }
-    pub fn read_f32(&self, memarg: MemArg, offset: u32) -> Result<f32, VMError> {
-        Ok(f32::from_le_bytes(
-            self.read_u8_array((memarg.offset + offset) as usize)?,
-        ))
+    pub fn read_u32(&self, memarg: MemArg, offset: u32) -> VMResult<u32> {
+        VMResult::Success(u32::from_le_bytes(vm_try!(
+            self.read_u8_array::<4>(vm_try!(compute_offset(memarg, offset)))
+        )))
     }
-    pub fn read_f64(&self, memarg: MemArg, offset: u32) -> Result<f64, VMError> {
-        Ok(f64::from_le_bytes(
-            self.read_u8_array((memarg.offset + offset) as usize)?,
-        ))
+    pub fn read_u64(&self, memarg: MemArg, offset: u32) -> VMResult<u64> {
+        VMResult::Success(u64::from_le_bytes(vm_try!(
+            self.read_u8_array::<8>(vm_try!(compute_offset(memarg, offset)))
+        )))
     }
-    pub fn read_u8(&self, memarg: MemArg, offset: u32) -> Result<u8, VMError> {
-        Ok(self.read_u8_array::<1>((memarg.offset + offset) as usize)?[0])
+    pub fn read_f32(&self, memarg: MemArg, offset: u32) -> VMResult<f32> {
+        VMResult::Success(f32::from_le_bytes(vm_try!(
+            self.read_u8_array(vm_try!(compute_offset(memarg, offset)))
+        )))
     }
-    pub fn read_i8(&self, memarg: MemArg, offset: u32) -> Result<i8, VMError> {
-        Ok(self.read_u8_array::<1>((memarg.offset + offset) as usize)?[0] as i8)
+    pub fn read_f64(&self, memarg: MemArg, offset: u32) -> VMResult<f64> {
+        VMResult::Success(f64::from_le_bytes(vm_try!(
+            self.read_u8_array(vm_try!(compute_offset(memarg, offset)))
+        )))
     }
-    pub fn read_i16(&self, memarg: MemArg, offset: u32) -> Result<i16, VMError> {
-        Ok(i16::from_le_bytes(
-            self.read_u8_array((memarg.offset + offset) as usize)?,
-        ))
+    pub fn read_u8(&self, memarg: MemArg, offset: u32) -> VMResult<u8> {
+        VMResult::Success(
+            vm_try!(self.read_u8_array::<1>(vm_try!(compute_offset(memarg, offset))))[0],
+        )
     }
-    pub fn read_u16(&self, memarg: MemArg, offset: u32) -> Result<u16, VMError> {
-        Ok(u16::from_le_bytes(
-            self.read_u8_array((memarg.offset + offset) as usize)?,
-        ))
+    pub fn read_i8(&self, memarg: MemArg, offset: u32) -> VMResult<i8> {
+        VMResult::Success(
+            vm_try!(self.read_u8_array::<1>(vm_try!(compute_offset(memarg, offset))))[0] as i8,
+        )
+    }
+    pub fn read_i16(&self, memarg: MemArg, offset: u32) -> VMResult<i16> {
+        VMResult::Success(i16::from_le_bytes(vm_try!(
+            self.read_u8_array(vm_try!(compute_offset(memarg, offset)))
+        )))
+    }
+    pub fn read_u16(&self, memarg: MemArg, offset: u32) -> VMResult<u16> {
+        VMResult::Success(u16::from_le_bytes(vm_try!(
+            self.read_u8_array(vm_try!(compute_offset(memarg, offset)))
+        )))
     }
     pub fn page_size(&self) -> u32 {
         (self.0.len() / PAGE_SIZE) as u32
     }
-    pub fn grow(&mut self, page_size_delta: u32) {
+    pub fn grow(&mut self, page_size_delta: u32) -> VMResult<()> {
+        // FIXME: check memory allocation and new length
         self.0
             .resize((self.page_size() + page_size_delta) as usize * PAGE_SIZE, 0);
+        VMResult::Success(())
+    }
+    pub fn fill(&mut self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
+        let last = vm_try!(VMResult::from_option(ptr.checked_add(len), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        let slice = vm_try!(VMResult::from_option(
+            self.0.get_mut(ptr as usize..last as usize),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+
+        slice.fill(vm_try!(VMResult::from_option(data.try_into().ok(), || {
+            VMResult::Unreachable
+        })));
+        VMResult::Success(())
+    }
+    pub fn copy(&mut self, dst: u32, src: u32, len: u32) -> VMResult<()> {
+        let src_last = vm_try!(VMResult::from_option(src.checked_add(len), || {
+            VMResult::MemoryIndexOutOfRange
+        })) as usize;
+        if src_last > self.0.len() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        let dst_last = vm_try!(VMResult::from_option(dst.checked_add(len), || {
+            VMResult::MemoryIndexOutOfRange
+        })) as usize;
+        if dst_last > self.0.len() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        self.0.copy_within(src as usize..src_last, dst as usize);
+
+        VMResult::Success(())
     }
 }
 pub struct ExecuteContext<'a> {
@@ -396,7 +502,7 @@ pub struct LocalState<'a> {
     // TODO: We should write this to stack and holds current code or may avoid this?
     pub code: &'a [Instr],
 }
-
+#[derive(Debug)]
 pub struct JumpTable(Vec<u32>);
 impl JumpTable {
     pub fn new() -> Self {
@@ -438,81 +544,83 @@ impl Stack {
             top: 0,
         }
     }
-    pub fn push_u8_array<const N: usize>(&mut self, v: [u8; N]) {
-        unsafe {
-            std::ptr::copy(
-                v.as_ptr(),
-                self.memory[self.top..self.top + N].as_mut_ptr(),
-                N,
-            )
-        };
-        self.top += N;
+    fn add_top(&mut self, n: usize) -> VMResult<()> {
+        self.top = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
+            VMResult::StackOverflow
+        }));
+        VMResult::Success(())
+    }
+    fn sub_top(&mut self, n: usize) {
+        self.top -= n;
+    }
+    fn get_memory(&mut self, n: usize) -> VMResult<&mut [u8]> {
+        let last = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
+            VMResult::StackOverflow
+        }));
+        VMResult::Success(vm_try!(VMResult::from_option(
+            self.memory.get_mut(self.top..last),
+            || VMResult::StackOverflow
+        )))
+    }
+    pub fn push_u8_array<const N: usize>(&mut self, v: [u8; N]) -> VMResult<()> {
+        unsafe { std::ptr::copy(v.as_ptr(), vm_try!(self.get_memory(N)).as_mut_ptr(), N) };
+        self.add_top(N)
     }
 
-    pub fn push_slice(&mut self, v: &[u8]) {
+    pub fn push_slice(&mut self, v: &[u8]) -> VMResult<()> {
         unsafe {
             std::ptr::copy(
                 v.as_ptr(),
-                self.memory[self.top..self.top + v.len()].as_mut_ptr(),
+                vm_try!(self.get_memory(v.len())).as_mut_ptr(),
                 v.len(),
             )
         };
-        self.top += v.len();
+        self.add_top(v.len())
     }
     pub fn pop_u8_array<const N: usize>(&mut self) -> [u8; N] {
-        self.top -= N;
+        self.sub_top(N);
         let mut arr = [0u8; N];
-        unsafe {
-            std::ptr::copy(
-                self.memory[self.top..self.top + N].as_ptr(),
-                arr.as_mut_ptr(),
-                N,
-            )
-        };
+        unsafe { std::ptr::copy(self.memory.as_ptr().add(self.top), arr.as_mut_ptr(), N) };
         arr
     }
     pub fn pop_u8_array_generic<const N: usize>(&mut self, n: usize) -> [u8; N] {
-        self.top -= n;
+        self.sub_top(n);
+
         let mut arr = [0u8; N];
-        unsafe {
-            std::ptr::copy(
-                self.memory[self.top..self.top + n].as_ptr(),
-                arr.as_mut_ptr(),
-                N,
-            )
-        };
+        unsafe { std::ptr::copy(self.memory.as_ptr().add(self.top), arr.as_mut_ptr(), N) };
         arr
     }
     pub fn drop(&mut self, n: usize) -> &[u8] {
-        self.top -= n;
-        &self.memory[self.top..self.top + n]
+        self.sub_top(n);
+        let slice = &self.memory[self.top..self.top + n];
+        slice
     }
-    pub fn push_u32(&mut self, v: u32) {
-        self.push_u8_array(v.to_le_bytes());
+    pub fn push_u32(&mut self, v: u32) -> VMResult<()> {
+        self.push_u8_array(v.to_le_bytes())
     }
     pub fn pop_u32(&mut self) -> u32 {
         u32::from_le_bytes(self.pop_u8_array::<4>())
     }
-    pub fn push_u64(&mut self, v: u64) {
-        self.push_u8_array(v.to_le_bytes());
+    pub fn push_u64(&mut self, v: u64) -> VMResult<()> {
+        self.push_u8_array(v.to_le_bytes())
     }
     pub fn pop_u64(&mut self) -> u64 {
         u64::from_le_bytes(self.pop_u8_array::<8>())
     }
-    pub fn push_i32(&mut self, v: i32) {
-        self.push_u8_array(v.to_le_bytes());
+    pub fn push_i32(&mut self, v: i32) -> VMResult<()> {
+        self.push_u8_array(v.to_le_bytes())
     }
-    pub fn push_f32(&mut self, v: f32) {
-        self.push_u8_array(v.to_le_bytes());
+    pub fn push_f32(&mut self, v: f32) -> VMResult<()> {
+        self.push_u8_array(v.to_le_bytes())
     }
-    pub fn push_f64(&mut self, v: f64) {
-        self.push_u8_array(v.to_le_bytes());
+    pub fn push_f64(&mut self, v: f64) -> VMResult<()> {
+        self.push_u8_array(v.to_le_bytes())
     }
     pub fn pop_i32(&mut self) -> i32 {
         i32::from_le_bytes(self.pop_u8_array::<4>())
     }
-    pub fn push_i64(&mut self, v: i64) {
-        self.push_u8_array(v.to_le_bytes());
+    pub fn push_i64(&mut self, v: i64) -> VMResult<()> {
+        self.push_u8_array(v.to_le_bytes())
     }
     pub fn pop_i64(&mut self) -> i64 {
         i64::from_le_bytes(self.pop_u8_array::<8>())
@@ -526,12 +634,24 @@ impl Stack {
     pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
         &mut self.memory[reference.local_top..self.top + reference.local_size]
     }
-    pub fn local_get(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+    pub fn local_get(
+        &mut self,
+        reference: &LocalReference,
+        local_addr: usize,
+        size: usize,
+    ) -> VMResult<()> {
+        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(size), || {
+            VMResult::StackOverflow
+        }));
+        if new_top >= self.memory.len() {
+            return VMResult::StackOverflow;
+        }
         self.memory.copy_within(
             reference.local_top + local_addr..reference.local_top + local_addr + size,
             self.top,
         );
-        self.top += size;
+        self.top = new_top;
+        VMResult::Success(())
     }
     pub fn local_set(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
         self.top -= size;
@@ -547,14 +667,17 @@ impl Stack {
         param_size: usize,
         local_size: usize,
         return_addr: *const Instr,
-    ) -> LocalReference {
-        let local_top = self.top - param_size;
-        self.top += local_size;
-        self.push_slice(&(return_addr as usize).to_le_bytes());
-        LocalReference {
+    ) -> VMResult<LocalReference> {
+        let local_top = vm_try!(VMResult::from_option(
+            self.top.checked_sub(param_size),
+            || VMResult::StackOverflow
+        ));
+        vm_try!(self.add_top(local_size));
+        vm_try!(self.push_slice(&(return_addr as usize).to_le_bytes()));
+        VMResult::Success(LocalReference {
             local_top,
             local_size: param_size + local_size + std::mem::size_of_val(&return_addr),
-        }
+        })
     }
     pub fn function_return(
         &mut self,

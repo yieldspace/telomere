@@ -6,8 +6,8 @@ use tracing::trace;
 use crate::{
     binary::BinaryReader,
     common::{
-        BlockReturn, BlockType, CodeSection, Data, DataMode, DataSection, Elem, ElemMode,
-        ElementSection, Export, ExportDesc, ExportSection, Func, FuncIdx, FuncType,
+        BlockReturn, BlockType, CodeSection, Data, DataCountVerifier, DataMode, DataSection, Elem,
+        ElemMode, ElementSection, Export, ExportDesc, ExportSection, Func, FuncIdx, FuncType,
         FunctionSection, Global, GlobalIdx, GlobalSection, GlobalType, Import, ImportDesc,
         ImportSection, Instr, Limits, Locals, LoopParam, MemArg, MemIdx, MemType, MemorySection,
         Mut, Operand, RefType, ResultType, Table, TableIdx, TableSection, TableType, TypeIdx,
@@ -79,6 +79,12 @@ pub enum WasmParserError {
     InvalidMemIdx(u32),
     #[error("invalid memory size: {0:?}")]
     InvalidMemorySize(Limits),
+    #[error("invalid alignment: {0}")]
+    InvalidAlignment(u32),
+    #[error("invalid dataidx: {0}")]
+    InvalidDataIdx(u32),
+    #[error("invalid data section count")]
+    InvalidDataSectionCount,
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {
@@ -250,6 +256,25 @@ fn assert_memory(sec: &MemorySection) -> Result<()> {
     if sec.0.len() <= 0 {
         Err(WasmParserError::InvalidMemIdx(0))?;
     }
+    Ok(())
+}
+fn assert_data_idx(idx: u32, dcv: &mut DataCountVerifier) -> Result<()> {
+    match dcv {
+        DataCountVerifier::OnePass(count) => {
+            if *count <= idx {
+                Err(WasmParserError::InvalidDataIdx(idx))?;
+            }
+        }
+        DataCountVerifier::Lazy {
+            max_data_idx: Some(max_data_idx),
+        } => {
+            *max_data_idx = idx.max(*max_data_idx);
+        }
+        DataCountVerifier::Lazy { max_data_idx } => {
+            *max_data_idx = Some(idx);
+        }
+    }
+
     Ok(())
 }
 fn get_local_addr(ty: &ResultType, locals: &[Locals], idx: u32) -> Result<(ValType, u32)> {
@@ -653,8 +678,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         };
         Ok((len, t))
     }
-    fn parse_memarg(&mut self) -> Result<(usize, MemArg)> {
+    fn parse_memarg(&mut self, natural_align: u32) -> Result<(usize, MemArg)> {
         let (len, align) = self.parse_u32()?;
+        if align > natural_align {
+            Err(WasmParserError::InvalidAlignment(align))?;
+        }
         let (len2, offset) = self.parse_u32()?;
         Ok((len + len2, MemArg { align, offset }))
     }
@@ -663,6 +691,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         type_section: &TypeSection,
         function_section: &FunctionSection,
         memory_section: &MemorySection,
+        data_count_section: &mut DataCountVerifier,
         functype: &FuncType,
         locals: &[Locals],
         globals: &[Global],
@@ -730,6 +759,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     type_section,
                     function_section,
                     memory_section,
+                    data_count_section,
                     functype,
                     locals,
                     globals,
@@ -850,6 +880,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     type_section,
                     function_section,
                     memory_section,
+                    data_count_section,
                     functype,
                     locals,
                     globals,
@@ -970,6 +1001,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     type_section,
                     function_section,
                     memory_section,
+                    data_count_section,
                     functype,
                     locals,
                     globals,
@@ -985,7 +1017,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     instrs[index].operand = Operand {
                         jump_addr2: (
                             instrs.len() as u32,
-                            else_addr.unwrap_or_else(|| instrs.len() as u32),
+                            else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
                         ),
                     };
                     blocks.pop_front();
@@ -1096,10 +1128,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             }
             0x0B => {
                 trace!("parse_op_end");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_end });
-                    *unreachable = false;
-                }
+                instrs.push(Instr { op: vm::op_end });
+
                 (1, true)
             }
 
@@ -1484,7 +1514,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x28 => {
                 trace!("parse_op_i32_load");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(4)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_load,
@@ -1498,11 +1528,27 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
-
+            0x29 => {
+                trace!("parse_op_i64_load");
+                assert_memory(memory_section)?;
+                let (len, memarg) = self.parse_memarg(8)?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_load,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+                    types.push(ValType::I64);
+                }
+                (1 + len, false)
+            }
             0x2A => {
                 trace!("parse_op_f32_load");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(4)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_f32_load,
@@ -1519,7 +1565,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x2B => {
                 trace!("parse_op_f64_load");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(8)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_f64_load,
@@ -1536,7 +1582,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x2C => {
                 trace!("parse_op_i32_load8_s");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(1)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_load8_s,
@@ -1553,7 +1599,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x2D => {
                 trace!("parse_op_i32_load8_u");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(1)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_load8_u,
@@ -1570,7 +1616,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x2E => {
                 trace!("parse_op_i32_load16_s");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(2)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_load16_s,
@@ -1587,7 +1633,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x2F => {
                 trace!("parse_op_i32_load16_u");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(2)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_load16_u,
@@ -1604,7 +1650,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x30 => {
                 trace!("parse_op_i64_load8_s");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(1)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_load8_s,
@@ -1621,7 +1667,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x31 => {
                 trace!("parse_op_i64_load8_u");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(1)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_load8_u,
@@ -1638,7 +1684,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x32 => {
                 trace!("parse_op_i64_load16_s");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(2)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_load16_s,
@@ -1655,7 +1701,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x33 => {
                 trace!("parse_op_i64_load16_u");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(2)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_load16_u,
@@ -1672,7 +1718,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x34 => {
                 trace!("parse_op_i64_load32_s");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(4)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_load32_s,
@@ -1689,7 +1735,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x35 => {
                 trace!("parse_op_i64_load32_u");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(4)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_load32_u,
@@ -1706,7 +1752,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x36 => {
                 trace!("parse_op_i32_store");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(4)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_store,
@@ -1723,7 +1769,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x37 => {
                 trace!("parse_op_i64_store");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(8)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_store,
@@ -1737,10 +1783,44 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
+            0x38 => {
+                trace!("parse_op_f32_store");
+                assert_memory(memory_section)?;
+                let (len, memarg) = self.parse_memarg(4)?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f32_store,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+                }
+                (1 + len, false)
+            }
+            0x39 => {
+                trace!("parse_op_f64_store");
+                assert_memory(memory_section)?;
+                let (len, memarg) = self.parse_memarg(8)?;
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f64_store,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { memarg },
+                    });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(&types, &blocks)?;
+                }
+                (1 + len, false)
+            }
             0x3A => {
                 trace!("parse_op_i32_store8");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(1)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_store8,
@@ -1757,7 +1837,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x3B => {
                 trace!("parse_op_i32_store16");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(2)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_store16,
@@ -1774,7 +1854,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x3C => {
                 trace!("parse_op_i64_store8");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(1)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_store8,
@@ -1791,7 +1871,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x3D => {
                 trace!("parse_op_i64_store16");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(2)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_store16,
@@ -1808,7 +1888,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x3E => {
                 trace!("parse_op_i64_store32");
                 assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
+                let (len, memarg) = self.parse_memarg(4)?;
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_store32,
@@ -1836,23 +1916,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     });
                 }
                 (2, false)
-            }
-            0x39 => {
-                trace!("parse_op_f64_store");
-                assert_memory(memory_section)?;
-                let (len, memarg) = self.parse_memarg()?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_store,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(&types, &blocks)?;
-                }
-                (1 + len, false)
             }
             0x40 => {
                 trace!("parse_op_mem_grow");
@@ -2492,6 +2555,88 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0xFC => {
+                let (len, next) = self.parse_u32()?;
+                match next {
+                    8 => {
+                        let (len2, idx) = self.parse_u32()?;
+                        let op = self.reader.read_exact_one()?;
+                        if op != 0 {
+                            Err(WasmParserError::InvalidInstruction([
+                                0xFC, 8, idx as u8, op,
+                            ]))?;
+                        }
+                        trace!("op_mem_init");
+                        assert_memory(memory_section)?;
+                        assert_data_idx(idx, data_count_section)?;
+
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_mem_init,
+                            });
+                            instrs.push(Instr {
+                                operand: Operand { u32: idx },
+                            });
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_type_stack_size(&types, &blocks)?;
+                        }
+                        (2 + len + len2, false)
+                    }
+                    9 => {
+                        let (len2, idx) = self.parse_u32()?;
+                        trace!("op_data_drop");
+                        assert_memory(memory_section)?;
+                        assert_data_idx(idx, data_count_section)?;
+                        //FIXME: do nothing
+                        (1 + len + len2, false)
+                    }
+                    10 => {
+                        let op = self.reader.read_exact_one()?;
+                        if op != 0 {
+                            Err(WasmParserError::InvalidInstruction([0xFC, 10, op, 0x00]))?;
+                        }
+                        let op = self.reader.read_exact_one()?;
+                        if op != 0 {
+                            Err(WasmParserError::InvalidInstruction([0xFC, 10, 0x00, op]))?;
+                        }
+                        trace!("op_mem_copy");
+                        assert_memory(memory_section)?;
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_mem_copy,
+                            });
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_type_stack_size(&types, &blocks)?;
+                        }
+                        (3 + len, false)
+                    }
+                    11 => {
+                        let op = self.reader.read_exact_one()?;
+                        if op != 0 {
+                            Err(WasmParserError::InvalidInstruction([0xFC, 11, op, 0x00]))?;
+                        }
+                        assert_memory(memory_section)?;
+                        trace!("parse_op_mem_fill");
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_mem_fill,
+                            });
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_type_stack_size(&types, &blocks)?;
+                        }
+                        (2 + len, false)
+                    }
+                    _ => Err(WasmParserError::InvalidInstruction([
+                        0xFC, next as u8, 0x00, 0x00,
+                    ]))?,
+                }
+            }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
         })
     }
@@ -2500,6 +2645,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         type_section: &TypeSection,
         function_section: &FunctionSection,
         memory_section: &MemorySection,
+        data_count_section: &mut DataCountVerifier,
         functype: &FuncType,
         locals: &[Locals],
         globals: &[Global],
@@ -2517,6 +2663,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 type_section,
                 function_section,
                 memory_section,
+                data_count_section,
                 functype,
                 locals,
                 globals,
@@ -2542,6 +2689,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         global_section: &GlobalSection,
         table_section: &TableSection,
         memory_section: &MemorySection,
+        data_count_section: &mut DataCountVerifier,
         functype: &FuncType,
         typeidx: TypeIdx,
         size: u32,
@@ -2557,6 +2705,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             type_section,
             function_section,
             memory_section,
+            data_count_section,
             functype,
             &locals,
             &global_section.0,
@@ -2604,6 +2753,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         global_section: &GlobalSection,
         table_section: &TableSection,
         memory_section: &MemorySection,
+        data_count_section: &mut DataCountVerifier,
         funcidx: FuncIdx,
     ) -> Result<(usize, Func)> {
         trace!("parse_code: {funcidx:?}");
@@ -2620,6 +2770,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             global_section,
             table_section,
             memory_section,
+            data_count_section,
             functype,
             typeidx,
             size,
@@ -2769,6 +2920,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         global_section: &GlobalSection,
         table_section: &TableSection,
         memory_section: &MemorySection,
+        data_count_section: &mut DataCountVerifier,
         size: u32,
     ) -> Result<CodeSection> {
         let mut idx = 0;
@@ -2780,6 +2932,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 global_section,
                 table_section,
                 memory_section,
+                data_count_section,
                 FuncIdx(idx),
             )?;
             idx += 1;
@@ -2842,11 +2995,23 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let mut code_section: Option<CodeSection> = None;
         let mut import_section: Option<ImportSection> = None;
         let mut data_section: Option<DataSection> = None;
+        let mut data_count_verifier = DataCountVerifier::Lazy { max_data_idx: None };
+
         loop {
             let st = self.parse_section_type()?;
             let st = if let Some(st) = st {
                 st
             } else {
+                let data_section = data_section.unwrap_or_else(|| DataSection(vec![]));
+                if let DataCountVerifier::Lazy {
+                    max_data_idx: Some(max_data_idx),
+                } = data_count_verifier
+                {
+                    if max_data_idx as usize >= data_section.0.len() {
+                        Err(WasmParserError::InvalidDataSectionCount)?;
+                    }
+                }
+
                 return Ok(Module {
                     fts: type_section.unwrap_or_else(|| TypeSection(vec![])),
                     xs: function_section.unwrap_or_else(|| FunctionSection(vec![])),
@@ -2856,7 +3021,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     elems: element_section.unwrap_or_else(|| ElementSection(vec![])),
                     exs: export_section.unwrap_or_else(|| ExportSection(vec![])),
                     codes: code_section.unwrap_or_else(|| CodeSection(vec![])),
-                    data: data_section.unwrap_or_else(|| DataSection(vec![])),
+                    data: data_section,
                 });
             };
             match st {
@@ -2927,21 +3092,30 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             &global_section,
                             &table_section,
                             &memory_section.get_or_insert_with(|| MemorySection(vec![])),
+                            &mut data_count_verifier,
                             size,
                         )
                     })?);
                 }
                 WasmSectionType::Data => {
-                    data_section = Some(self.parse_section_body(|me, size| {
+                    let sec = self.parse_section_body(|me, size| {
                         me.parse_data_section(
                             memory_section.get_or_insert_with(|| MemorySection(vec![])),
                             size,
                         )
-                    })?);
+                    })?;
+
+                    data_section = Some(sec);
                 }
                 WasmSectionType::DataCount => {
-                    let (_, size) = self.parse_u32()?;
-                    self.skip_section(size)?;
+                    let count = self.parse_section_body(|me, size| {
+                        let (len, count) = me.parse_u32()?;
+                        if size as usize != len {
+                            Err(WasmParserError::InvalidSectionSize)?
+                        }
+                        Ok(count)
+                    })?;
+                    data_count_verifier = DataCountVerifier::OnePass(count);
                 }
             }
         }

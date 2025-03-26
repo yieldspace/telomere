@@ -70,8 +70,8 @@ fn run_wast(text: &str) {
                                     WasmValue::F32(actual),
                                 ) => {
                                     assert_eq!(
-                                        f32::from_bits(expected.bits),
-                                        *actual,
+                                        expected.bits,
+                                        actual.to_bits(),
                                         "{:?}",
                                         span.linecol_in(text)
                                     )
@@ -81,8 +81,8 @@ fn run_wast(text: &str) {
                                     WasmValue::F64(actual),
                                 ) => {
                                     assert_eq!(
-                                        f64::from_bits(expected.bits),
-                                        *actual,
+                                        expected.bits,
+                                        actual.to_bits(),
                                         "{:?}",
                                         span.linecol_in(text)
                                     )
@@ -168,9 +168,16 @@ fn run_wast(text: &str) {
                     todo!()
                 }
             },
-            _ => {
-                todo!()
+            WastDirective::Invoke(invoke) => {
+                let result = telomere::run_module_function(
+                    module.as_ref().unwrap(),
+                    instance.as_mut().unwrap(),
+                    invoke.name,
+                    &ResultValue::new(convert_args(&invoke.args)),
+                );
+                assert!(!result.is_err())
             }
+            _ => unimplemented!(),
         }
     }
 }
@@ -241,6 +248,39 @@ fn memory() {
 
 #[test]
 fn if_() {
-    tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
     run_test_file("if");
+}
+#[test]
+fn address() {
+    run_test_file("address");
+}
+#[test]
+fn align() {
+    run_test_file("align");
+}
+#[test]
+fn memory_copy() {
+    run_test_file("memory_copy");
+}
+#[test]
+fn memory_fill() {
+    run_test_file("memory_fill");
+}
+#[test]
+fn memory_trap() {
+    run_test_file("memory_trap");
+}
+
+#[test]
+fn memory_redundancy() {
+    run_test_file("memory_redundancy");
+}
+
+#[test]
+fn memory_size() {
+    run_test_file("memory_size");
+}
+#[test]
+fn memory_init() {
+    run_test_file("memory_init");
 }
