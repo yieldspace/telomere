@@ -8,6 +8,7 @@ pub enum VMResult<V> {
     TableIndexOutOfRange,
     CallIndirectInvalidType,
     TableUninitialized,
+    Unlinkable,
 }
 
 macro_rules! vm_try {
@@ -20,6 +21,7 @@ macro_rules! vm_try {
             VMResult::TableIndexOutOfRange => return VMResult::TableIndexOutOfRange,
             VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
             VMResult::TableUninitialized => return VMResult::TableUninitialized,
+            VMResult::Unlinkable => return VMResult::Unlinkable,
         }
     };
 }

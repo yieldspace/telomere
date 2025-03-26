@@ -1,10 +1,12 @@
+use std::slice::SliceIndex;
+
 use super::{VMResult, PAGE_SIZE};
 #[derive(Debug, Clone, Copy)]
 pub struct MemArg {
     pub align: u32,
     pub offset: u32,
 }
-pub struct Memory(pub Vec<u8>);
+pub struct Memory(Vec<u8>, u32);
 fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
     VMResult::from_option(
         memarg.offset.checked_add(offset).map(|v| v as usize),
@@ -12,6 +14,12 @@ fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
     )
 }
 impl Memory {
+    pub fn new(page_count: u32, max_page_size: u32) -> Self {
+        Self(vec![0; page_count as usize * PAGE_SIZE], max_page_size)
+    }
+    pub fn get_mut<I: SliceIndex<[u8]>>(&mut self, index: I) -> Option<&mut I::Output> {
+        self.0.get_mut(index)
+    }
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> VMResult<[u8; N]> {
         let mut arr = [0u8; N];
         let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
@@ -119,11 +127,17 @@ impl Memory {
     pub fn page_size(&self) -> u32 {
         (self.0.len() / PAGE_SIZE) as u32
     }
-    pub fn grow(&mut self, page_size_delta: u32) -> VMResult<()> {
-        // FIXME: check memory allocation and new length
-        self.0
-            .resize((self.page_size() + page_size_delta) as usize * PAGE_SIZE, 0);
-        VMResult::Success(())
+    pub fn grow(&mut self, page_size_delta: u32) -> VMResult<i32> {
+        let current_page_size = self.page_size();
+        let new_page_size = current_page_size + page_size_delta;
+
+        if self.1 >= new_page_size {
+            // FIXME: check memory allocation and new length
+            self.0.resize((new_page_size) as usize * PAGE_SIZE, 0);
+            VMResult::Success(current_page_size as i32)
+        } else {
+            VMResult::Success(-1)
+        }
     }
     pub fn fill(&mut self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
         let last = vm_try!(VMResult::from_option(ptr.checked_add(len), || {
