@@ -3,6 +3,7 @@ pub mod binary;
 pub mod common;
 pub mod parser;
 pub mod runtime;
+mod component;
 
 pub use binary::IoReadBinaryReader;
 pub use common::Instance;

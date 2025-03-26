@@ -4,6 +4,7 @@ use crate::parser::error::ParseError;
 pub type ParseResult<T> = Result<T, ParseError>;
 
 pub(crate) mod core;
+pub(crate) mod component;
 mod error;
 mod leb128;
 
