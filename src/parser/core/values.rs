@@ -30,7 +30,7 @@ pub fn parse_f64<R: BinaryReader>(reader: &mut R) -> Result<(usize, f64)> {
 pub fn parse_vec<R: BinaryReader, V>(reader: &mut R, mut f: impl FnMut(&mut R) -> Result<(usize, V)>,) -> Result<(usize, Vec<V>)> {
     let mut read_bytes = 0;
 
-    let (len_len, len) = parse_u32()?;
+    let (len_len, len) = parse_u32(reader)?;
     trace!("parse_vec: {len_len} {len}");
     read_bytes += len_len;
     let mut result = Vec::new();
