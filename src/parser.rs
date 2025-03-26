@@ -5,6 +5,7 @@ pub type ParseResult<T> = Result<T, ParseError>;
 
 pub(crate) mod core;
 mod error;
+mod leb128;
 
 pub trait BinaryParser<R>
 where
