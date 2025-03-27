@@ -1,7 +1,7 @@
 pub mod binary;
 #[macro_use]
 pub mod common;
-mod component;
+mod component_model;
 pub mod parser;
 pub mod runtime;
 

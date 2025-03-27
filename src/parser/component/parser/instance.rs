@@ -1,6 +1,6 @@
 use crate::assert_magic;
 use crate::binary::BinaryReader;
-use crate::component::{
+use crate::component_model::{
     CoreInstance, CoreInstanceInlineExport, CoreInstantiate, CoreInstantiateArg, CoreSort,
     InlineExport, Instance, Instantiate, InstantiateArg, Sort,
 };

@@ -1,3 +1,5 @@
+pub mod types;
+
 use crate::common::{Import, ImportDesc};
 
 pub struct Component {}

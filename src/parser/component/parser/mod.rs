@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component::{
+use crate::component_model::{
     Component, CoreAlias, CoreAliasTarget, CoreInstance, CoreInstanceInlineExport, CoreInstantiate,
     CoreInstantiateArg, CoreModuleDecl, CoreSort, CoreType,
 };

@@ -1,6 +1,6 @@
 use crate::assert_magic;
 use crate::binary::BinaryReader;
-use crate::component::{CoreAlias, CoreAliasTarget, CoreModuleDecl, CoreType};
+use crate::component_model::{CoreAlias, CoreAliasTarget, CoreModuleDecl, CoreType};
 use crate::parser::component::parser::instance::parse_core_sort;
 use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};

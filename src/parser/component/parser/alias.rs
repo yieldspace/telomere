@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component::{Alias, AliasTarget};
+use crate::component_model::{Alias, AliasTarget};
 use crate::parser::component::parser::instance::parse_sort;
 use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32};

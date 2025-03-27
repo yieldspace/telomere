@@ -17,5 +17,7 @@ wat = {version = "1.227.1", features = ["component-model"]}
 [features]
 default = ["interpreter", "component-model"]
 interpreter = []
+async = []
+import_export = []
 
 component-model = []
