@@ -3,7 +3,7 @@ use crate::component::{
     Component, CoreAlias, CoreAliasTarget, CoreInstance, CoreInstanceInlineExport, CoreInstantiate,
     CoreInstantiateArg, CoreModuleDecl, CoreSort, CoreType,
 };
-use crate::parser::component::parser::instance::parse_core_instance;
+use crate::parser::component::parser::instance::{parse_core_instance, parse_instance};
 use crate::parser::component::parser::types::parse_core_type;
 use crate::parser::component::section::ComponentSectionType;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
@@ -52,6 +52,8 @@ pub enum ComponentModelParserError {
     InvalidCoreModuleDecl(u8),
     #[error("invalid core alias target magic: {0:?}")]
     InvalidCoreAliasTargetMagic(u8),
+    #[error("invalid sort: {0:?}")]
+    InvalidSort(u8),
 }
 
 pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
@@ -75,15 +77,17 @@ pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
                 let module = parse_core_module(reader, size as usize)?;
             }
             ComponentSectionType::CoreInstance => {
-                let (_, instances) = parse_vec(reader, parse_core_instance)?;
+                let (_, instances) = parse_vec(reader, |v| v, parse_core_instance)?;
             }
             ComponentSectionType::CoreType => {
-                let (_, core_types) = parse_vec(reader, parse_core_type)?;
+                let (_, core_types) = parse_vec(reader, |v| v, parse_core_type)?;
             }
             ComponentSectionType::Component => {
                 let component = parse_component(reader)?;
             }
-            ComponentSectionType::Instance => {}
+            ComponentSectionType::Instance => {
+                let (_, instances) = parse_vec(reader, |v| v, parse_instance)?;
+            }
             ComponentSectionType::Alias => {}
             ComponentSectionType::Type => {}
             ComponentSectionType::Canon => {}

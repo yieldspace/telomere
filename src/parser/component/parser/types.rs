@@ -16,7 +16,7 @@ pub fn parse_core_type<R: BinaryReader>(
         0x50,
         ComponentModelParserError::InvalidCoreModuleTypeMagic
     );
-    let (len, decls) = parse_vec(reader, parse_core_module_decl)?;
+    let (len, decls) = parse_vec(reader, |v| v, parse_core_module_decl)?;
     Ok((len + 1, CoreType::CoreModuleType(decls)))
 }
 
