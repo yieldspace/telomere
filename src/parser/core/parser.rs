@@ -3252,6 +3252,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             };
             match st {
                 WasmSectionType::Custom => {
+                    trace!("custom section");
                     let (_, size) = self.parse_u32()?;
                     self.skip_section(size)?;
                 }
@@ -3341,7 +3342,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 WasmSectionType::Data => {
                     let sec =
                         self.parse_section_body(|me, size| me.parse_data_section(&mems, size))?;
-
+                    match data_count_verifier {
+                        DataCountVerifier::OnePass(v) if (v as usize) != sec.0.len() => {
+                            Err(WasmParserError::InvalidDataSectionCount)?
+                        }
+                        _ => {} // ok
+                    };
                     data_section = Some(sec);
                 }
                 WasmSectionType::DataCount => {

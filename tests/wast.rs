@@ -392,8 +392,14 @@ fn comments() {
 }
 #[test]
 fn conversions() {
+    run_test_file("conversions");
+}
+
+#[test]
+fn custom() {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
-    run_test_file("conversions");
+
+    run_test_file("custom");
 }
