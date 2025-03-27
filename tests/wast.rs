@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use telomere::{common::Instance, instantiate, Module, Registry, ResultValue, Store, WasmValue};
-use tracing::{error, Level};
+use tracing::error;
 use wast::{
     core::{NanPattern, WastRetCore},
     parser::ParseBuffer,
@@ -220,7 +220,7 @@ fn run_wast(text: &str) {
             WastDirective::Register {
                 span: _,
                 name,
-                module: id,
+                module: _id,
             } => {
                 //assert!(id.is_none());
                 registry.register(name, module.clone().unwrap(), instance.clone().unwrap());
