@@ -75,16 +75,13 @@ pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
                 let module = parse_core_module(reader, size as usize)?;
             }
             ComponentSectionType::CoreInstance => {
-                let mut view = reader.take(size as usize);
-                let (_, instances) = parse_vec(&mut view, parse_core_instance)?;
+                let (_, instances) = parse_vec(reader, parse_core_instance)?;
             }
             ComponentSectionType::CoreType => {
-                let mut view = reader.take(size as usize);
-                let (_, core_types) = parse_vec(&mut view, parse_core_type)?;
+                let (_, core_types) = parse_vec(reader, parse_core_type)?;
             }
             ComponentSectionType::Component => {
-                let mut view = reader.take(size as usize);
-                let component = parse_component(&mut view)?;
+                let component = parse_component(reader)?;
             }
             ComponentSectionType::Instance => {}
             ComponentSectionType::Alias => {}

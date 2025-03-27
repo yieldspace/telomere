@@ -87,7 +87,7 @@ pub enum Sort {
 }
 
 pub struct InlineExport {
-    pub name: todo!("export name"),
+    pub name: String,
     pub sort: Sort,
     pub sort_idx: usize,
 }

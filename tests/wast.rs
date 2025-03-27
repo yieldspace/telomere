@@ -1,3 +1,5 @@
+mod component_model;
+
 use std::path::PathBuf;
 
 use telomere::{

@@ -8,7 +8,9 @@ use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
-pub fn parse_instance<R: BinaryReader>(reader: &mut R) -> Result<(usize, Instance)> {}
+pub fn parse_instance<R: BinaryReader>(reader: &mut R) -> Result<(usize, Instance)> {
+    todo!()
+}
 
 pub fn parse_core_instance<R: BinaryReader>(reader: &mut R) -> Result<(usize, CoreInstance)> {
     match reader.read_exact_one()? {

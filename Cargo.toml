@@ -12,6 +12,7 @@ tracing = { version = "0.1.41" }
 [dev-dependencies]
 wast = { version = "226.0.0" }
 tracing-subscriber = { version = "0.3.19" }
+wat = {version = "1.227.1", features = ["component-model"]}
 
 [features]
 default = ["interpreter", "component-model"]
