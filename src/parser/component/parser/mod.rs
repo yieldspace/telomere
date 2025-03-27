@@ -10,10 +10,12 @@ use crate::parser::core::{parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::Leb128Parser;
 use crate::{Module, WasmParser, WasmParserError};
 use thiserror::Error;
+use crate::parser::component::parser::context::ParseContext;
 
 mod alias;
 mod instance;
 mod types;
+mod context;
 
 #[macro_export]
 macro_rules! assert_magic {
@@ -29,6 +31,8 @@ type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
 #[derive(Error, Debug)]
 pub enum ComponentModelParserError {
+    #[error("module can't set multiple times")]
+    MultipleModule,
     #[error("invalid magic: {0:?}")]
     InvalidMagic([u8; 4]),
     #[error("invalid version: {0:?}")]
@@ -59,7 +63,8 @@ pub enum ComponentModelParserError {
     InvalidAliasTarget(u8),
 }
 
-pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
+pub fn parse_component<R: BinaryReader>(reader: &mut R, parent: Option<&ParseContext>) -> Result<Component> {
+    let mut context = ParseContext::new();
     parse_magic(reader)?;
     parse_version(reader)?;
     parse_layer(reader)?;
@@ -86,7 +91,8 @@ pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
                 let (_, core_types) = parse_vec(reader, |v| v, parse_core_type)?;
             }
             ComponentSectionType::Component => {
-                let component = parse_component(reader)?;
+                let component = parse_component(reader, Some(&context))?;
+                // todo: add child
             }
             ComponentSectionType::Instance => {
                 let (_, instances) = parse_vec(reader, |v| v, parse_instance)?;
