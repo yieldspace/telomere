@@ -1,12 +1,14 @@
-use tracing::trace;
 use crate::binary::BinaryReader;
 use crate::parser::leb128::Leb128Parser;
 use crate::WasmParserError;
+use tracing::trace;
 
 pub type Result<R> = std::result::Result<R, WasmParserError>;
 
 pub fn parse_u32<R: BinaryReader>(reader: &mut R) -> Result<(usize, u32)> {
-    Leb128Parser::new(reader).parse_u32(size_of::<u32>() * 8).map_err(|e| e.into())
+    Leb128Parser::new(reader)
+        .parse_u32(size_of::<u32>() * 8)
+        .map_err(|e| e.into())
 }
 
 pub fn parse_i32<R: BinaryReader>(reader: &mut R) -> Result<(usize, i32)> {
@@ -27,7 +29,10 @@ pub fn parse_f64<R: BinaryReader>(reader: &mut R) -> Result<(usize, f64)> {
     Ok((8, f64::from_le_bytes(v)))
 }
 
-pub fn parse_vec<R: BinaryReader, V>(reader: &mut R, mut f: impl FnMut(&mut R) -> Result<(usize, V)>,) -> Result<(usize, Vec<V>)> {
+pub fn parse_vec<R: BinaryReader, V>(
+    reader: &mut R,
+    mut f: impl FnMut(&mut R) -> Result<(usize, V)>,
+) -> Result<(usize, Vec<V>)> {
     let mut read_bytes = 0;
 
     let (len_len, len) = parse_u32(reader)?;
