@@ -1,3 +1,4 @@
+
 use std::ops::Rem;
 
 use crate::{
@@ -313,8 +314,8 @@ pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
             .jump_table()
             .br((*tail_code).operand.u32 as usize)
             .unwrap_unchecked();
-        let tail_code = ctx.code().offset(addr as isize);
-        tail_code
+        
+        ctx.code().offset(addr as isize)
     } else {
         tail_code.offset(1)
     };
@@ -978,7 +979,7 @@ pub unsafe fn op_mem_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_unreachable(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
-    return VMResult::Unreachable;
+    VMResult::Unreachable
 }
 pub unsafe fn special_function_return(
     tail_code: *const Instr,

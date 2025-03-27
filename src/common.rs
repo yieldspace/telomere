@@ -290,7 +290,7 @@ pub struct ExecuteContext<'a> {
     pub memory: &'a mut Memory,
     pub store: &'a mut Store,
 }
-impl<'a> ExecuteContext<'a> {
+impl ExecuteContext<'_> {
     pub fn jump_table(&mut self) -> &mut JumpTable {
         unsafe { &mut self.local_state.last_mut().unwrap_unchecked().jump_table }
     }
@@ -311,6 +311,12 @@ pub struct LocalState<'a> {
 }
 #[derive(Debug)]
 pub struct JumpTable(Vec<u32>);
+impl Default for JumpTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JumpTable {
     pub fn new() -> Self {
         Self(Vec::new())
