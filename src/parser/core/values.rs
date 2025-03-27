@@ -24,7 +24,7 @@ pub fn parse_f32<R: BinaryReader>(reader: &mut R) -> Result<(usize, f32)> {
 
 pub fn parse_f64<R: BinaryReader>(reader: &mut R) -> Result<(usize, f64)> {
     let v = reader.read_exact::<8>()?;
-    Ok((4, f64::from_le_bytes(v)))
+    Ok((8, f64::from_le_bytes(v)))
 }
 
 pub fn parse_vec<R: BinaryReader, V>(reader: &mut R, mut f: impl FnMut(&mut R) -> Result<(usize, V)>,) -> Result<(usize, Vec<V>)> {
