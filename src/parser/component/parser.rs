@@ -1,10 +1,12 @@
-use thiserror::Error;
 use crate::binary::BinaryReader;
-use crate::common::Op;
-use crate::component::Component;
+use crate::component::{
+    Component, CoreInstance, CoreInstanceArg, CoreInstanceInlineExport, CoreInstantiate, CoreSort,
+};
 use crate::parser::component::section::ComponentSectionType;
+use crate::parser::core::{parse_name, parse_u32};
 use crate::parser::leb128::Leb128Parser;
 use crate::{Module, WasmParser, WasmParserError};
+use thiserror::Error;
 
 pub type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
@@ -24,9 +26,9 @@ pub enum ComponentModelParserError {
     InvalidSectionType(u8),
     #[error("invalid instance expression: {0:?}")]
     InvalidInstanceExpr(u8),
+    #[error("invalid instantiate arg magic: {0:?}")]
+    InvalidInstantiateArgMagic(u8),
 }
-
-
 
 pub struct ComponentModelParser<'a, R: BinaryReader> {
     reader: &'a mut R,
@@ -56,7 +58,9 @@ impl<'a, R: BinaryReader> ComponentModelParser<'a, R> {
                 ComponentSectionType::CoreModule => {
                     let module = self.parse_core_module(size as usize)?;
                 }
-                ComponentSectionType::CoreInstance => {}
+                ComponentSectionType::CoreInstance => {
+                    let instance = self.parse_core_instance(size as usize)?;
+                }
                 ComponentSectionType::CoreType => {}
                 ComponentSectionType::Component => {}
                 ComponentSectionType::Instance => {}
@@ -129,24 +133,67 @@ impl<'a, R: BinaryReader> ComponentModelParser<'a, R> {
         Ok(module)
     }
 
-    fn parse_core_instance(&mut self, size: usize) -> Result<()> {
+    fn parse_core_instance(&mut self, size: usize) -> Result<CoreInstance> {
         let mut view = self.reader.take(size);
         match self.reader.read_exact_one()? {
             0x00 => {
-                let (_, idx) = Leb128Parser::new(&mut view).parse_u32(size_of::<u32>() * 8)?;
+                let (_, idx) = parse_u32(&mut view)?;
                 // parse args
-                todo!()
+                let mut read = 0;
+                let mut args = Vec::new();
+                while read < size {
+                    let (name_len, name) = parse_name(&mut view)?;
+                    read += name_len;
+                    match view.read_exact_one()? {
+                        0x12 => {}
+                        magic => {
+                            return Err(ComponentModelParserError::InvalidInstantiateArgMagic(
+                                magic,
+                            ))
+                        }
+                    }
+                    read += 1;
+                    let (idx_len, instance_idx) = parse_u32(&mut view)?;
+                    read += idx_len;
+                    args.push(CoreInstanceArg {
+                        name,
+                        instance_idx: instance_idx as usize,
+                    })
+                }
+                Ok(CoreInstance::Instantiate(CoreInstantiate {
+                    module_idx: idx as usize,
+                    args,
+                }))
             }
             0x01 => {
                 // parse inline export
-                todo!()
+                let mut read = 0;
+                let mut inline_exports = Vec::new();
+                while read < size {
+                    let (name_len, name) = parse_name(&mut view)?;
+                    read += name_len;
+                    let sort = match view.read_exact_one()? {
+                        0x00 => CoreSort::Func,
+                        0x01 => CoreSort::Table,
+                        0x02 => CoreSort::Memory,
+                        0x03 => CoreSort::Global,
+                        0x10 => CoreSort::Type,
+                        0x11 => CoreSort::Module,
+                        0x12 => CoreSort::Instance,
+                        magic => return Err(ComponentModelParserError::InvalidInstanceExpr(magic)),
+                    };
+                    read += 1;
+                    let (idx_len, sort_idx) = parse_u32(&mut view)?;
+                    read += idx_len;
+                    inline_exports.push(CoreInstanceInlineExport {
+                        name,
+                        sort,
+                        sort_idx: sort_idx as usize,
+                    });
+                }
+                Ok(CoreInstance::InlineExport(inline_exports))
             }
             magic => Err(ComponentModelParserError::InvalidInstanceExpr(magic)),
         }
-    }
-
-    fn parse_u32(&mut self) -> Result<u32> {
-        let (_, value) = Leb128Parser::new(self.reader).parse_u32(size_of::<u32>() * 8)?;
-        Ok(value)
     }
 }

@@ -1,9 +1,9 @@
 pub mod binary;
 #[macro_use]
 pub mod common;
+mod component;
 pub mod parser;
 pub mod runtime;
-mod component;
 
 pub use binary::IoReadBinaryReader;
 pub use common::Instance;
