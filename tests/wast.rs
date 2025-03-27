@@ -217,7 +217,7 @@ fn run_wast(text: &str) {
                 assert!(result.is_err());
             }
             WastDirective::AssertTrap {
-                span: _,
+                span,
                 exec,
                 message: _,
             } => match exec {
@@ -231,10 +231,21 @@ fn run_wast(text: &str) {
                         v.name,
                         &ResultValue::new(convert_args(&v.args)),
                     );
-                    assert!(result.is_err())
+                    assert!(result.is_err(), "{:?}", span.linecol_in(text))
                 }
-                _ => {
-                    todo!()
+                wast::WastExecute::Wat(mut v) => {
+                    let source = v.encode().unwrap();
+                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+                    let mut parser = telomere::WasmParser::new(&mut reader);
+                    let m = parser.parse_module().unwrap();
+                    assert!(
+                        instantiate(&m, &mut store, &registry).is_err(),
+                        "{:?}",
+                        span.linecol_in(text)
+                    )
+                }
+                v => {
+                    todo!("{v:?}")
                 }
             },
             WastDirective::Invoke(invoke) => {
@@ -397,9 +408,13 @@ fn conversions() {
 
 #[test]
 fn custom() {
+    run_test_file("custom");
+}
+#[test]
+fn data() {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
 
-    run_test_file("custom");
+    run_test_file("data");
 }

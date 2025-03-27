@@ -1,17 +1,18 @@
 use std::io::Write;
 
-use super::{VMResult, WasmValue};
+use super::{ConstExpr, VMResult};
 
 pub struct GlobalStore(pub Vec<u8>);
 impl GlobalStore {
-    pub(crate) fn init(&mut self, init: &WasmValue) -> VMResult<u32> {
+    pub(crate) fn init(&mut self, init: &ConstExpr) -> VMResult<u32> {
         let addr: usize = self.0.len();
         match match init {
-            WasmValue::I32(v) => self.0.write_all(&v.to_le_bytes()),
-            WasmValue::I64(v) => self.0.write_all(&v.to_le_bytes()),
-            WasmValue::F32(v) => self.0.write_all(&v.to_le_bytes()),
-            WasmValue::F64(v) => self.0.write_all(&v.to_le_bytes()),
-            WasmValue::FuncRef(_) => todo!(),
+            ConstExpr::I32(v) => self.0.write_all(&v.to_le_bytes()),
+            ConstExpr::I64(v) => self.0.write_all(&v.to_le_bytes()),
+            ConstExpr::F32(v) => self.0.write_all(&v.to_le_bytes()),
+            ConstExpr::F64(v) => self.0.write_all(&v.to_le_bytes()),
+            ConstExpr::FuncRef(_) => todo!(),
+            ConstExpr::GlobalGet(_) => todo!()
         } {
             Ok(_) => VMResult::Success(addr as u32),
             Err(_) => panic!(), //FIXME:

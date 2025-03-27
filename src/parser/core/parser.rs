@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use thiserror::Error;
 use tracing::trace;
 
+use crate::common::ConstExpr;
 use crate::parser::leb128::Leb128Parser;
 use crate::{
     binary::BinaryReader,
@@ -11,7 +12,7 @@ use crate::{
         ElemMode, ElementSection, Export, ExportDesc, ExportSection, Func, FuncIdx, FuncType,
         FunctionSection, Global, GlobalIdx, GlobalType, Import, ImportDesc, ImportSection, Instr,
         Limits, Locals, LoopParam, MemArg, MemIdx, MemType, Mut, Operand, RefType, ResultType,
-        Table, TableIdx, TableType, TypeIdx, TypeSection, ValType, ValueSize, WasmValue,
+        Table, TableIdx, TableType, TypeIdx, TypeSection, ValType, ValueSize,
     },
     runtime::vm,
     Module,
@@ -264,7 +265,31 @@ fn get_local_addr(ty: &ResultType, locals: &[Locals], idx: u32) -> Result<(ValTy
     }
     Err(WasmParserError::InvalidLocalIndex(idx))
 }
+fn validate_offset_const_expr(globals: &[GlobalType], exprs: &[ConstExpr]) -> Result<()> {
+    if exprs.len() != 1 {
+        Err(WasmParserError::InvalidStackValTypeAny)?;
+    }
+    match exprs[0] {
+        ConstExpr::I32(_) => {}
+        ConstExpr::I64(_) => Err(WasmParserError::InvalidStackValType(
+            ValType::I32,
+            Some(ValType::I64),
+        ))?,
+        ConstExpr::GlobalGet(idx) => {
+            let gt = globals
+                .get(idx as usize)
+                .ok_or_else(|| WasmParserError::InvalidGlobalAccess)?;
+            if gt.1 != Mut::Const {
+                Err(WasmParserError::InvalidGlobalAccess)?;
+            }
+            assert_valtype(ValType::I32, Some(gt.0))?;
+            //TODO: index and value type validation
+        }
+        _ => todo!(),
+    }
 
+    Ok(())
+}
 enum BlockKind {
     Block,
     If,
@@ -376,28 +401,32 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         Ok((len, Table(tt)))
     }
 
-    fn parse_const_expr(&mut self) -> Result<(usize, Vec<WasmValue>)> {
+    fn parse_const_expr(&mut self) -> Result<(usize, Vec<ConstExpr>)> {
         let mut total_len = 0;
         let mut values = vec![];
         loop {
             let v = self.reader.read_exact_one()?;
             let (len, value) = match v {
                 0x0B => return Ok((1 + total_len, values)),
+                0x23 => {
+                    let (len, operand) = self.parse_u32()?;
+                    (1 + len, ConstExpr::GlobalGet(operand))
+                }
                 0x41 => {
                     let (len, operand) = self.parse_i32()?;
-                    (1 + len, WasmValue::I32(operand))
+                    (1 + len, ConstExpr::I32(operand))
                 }
                 0x42 => {
                     let (len, operand) = self.parse_i64()?;
-                    (1 + len, WasmValue::I64(operand))
+                    (1 + len, ConstExpr::I64(operand))
                 }
                 0x43 => {
                     let (len, operand) = self.parse_f32()?;
-                    (1 + len, WasmValue::F32(operand))
+                    (1 + len, ConstExpr::F32(operand))
                 }
                 0x44 => {
                     let (len, operand) = self.parse_f64()?;
-                    (1 + len, WasmValue::F64(operand))
+                    (1 + len, ConstExpr::F64(operand))
                 }
                 unknown => Err(WasmParserError::InvalidConstInstruction(unknown))?,
             };
@@ -421,11 +450,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         Ok((read_bytes, Export(name, desc)))
     }
 
-    fn parse_elem(&mut self, funcs: &[TypeIdx]) -> Result<(usize, Elem)> {
+    fn parse_elem(&mut self, globals: &[GlobalType], funcs: &[TypeIdx]) -> Result<(usize, Elem)> {
         let (len, kind) = self.parse_u32()?;
         let r = match kind {
             0 => {
                 let (len2, offset) = self.parse_const_expr()?;
+                validate_offset_const_expr(globals, &offset)?;
                 let (len3, funcidx) = self.parse_vec(Self::parse_u32)?;
                 for funcidx in &funcidx {
                     if funcs.get(*funcidx as usize).is_none() {
@@ -437,7 +467,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     Elem {
                         kind: RefType::FuncRef,
                         init: funcidx.to_vec(),
-                        mode: ElemMode::Active(TableIdx(0), offset[0]),
+                        mode: ElemMode::Active(TableIdx(0), offset),
                     },
                 )
             }
@@ -464,6 +494,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             2 => {
                 let (len2, tableidx) = self.parse_u32()?;
                 let (len3, offset) = self.parse_const_expr()?;
+                validate_offset_const_expr(globals, &offset)?;
                 let elemkind = self.reader.read_exact_one()?;
                 if elemkind != 0x00 {
                     Err(WasmParserError::InvalidElemKind(elemkind))?
@@ -479,7 +510,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     Elem {
                         kind: RefType::FuncRef,
                         init: funcidx.to_vec(),
-                        mode: ElemMode::Active(TableIdx(tableidx), offset[0]),
+                        mode: ElemMode::Active(TableIdx(tableidx), offset),
                     },
                 )
             }
@@ -2988,18 +3019,20 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         )?;
         Ok((len + size as usize, func))
     }
-    fn parse_data(&mut self, mems: &[MemType]) -> Result<(usize, Data)> {
+    fn parse_data(&mut self, globals: &[GlobalType], mems: &[MemType]) -> Result<(usize, Data)> {
         let (len, kind) = self.parse_u32()?;
         match kind {
             0x00 => {
                 assert_memory(mems)?;
                 let (len2, offset) = self.parse_const_expr()?;
+                validate_offset_const_expr(globals, &offset)?;
+
                 let (len3, bytes) = self.parse_vec(Self::parse_byte)?;
                 Ok((
                     len + len2 + len3,
                     Data {
                         init: bytes,
-                        mode: DataMode::Active(MemIdx(0), offset[0]),
+                        mode: DataMode::Active(MemIdx(0), offset),
                     },
                 ))
             }
@@ -3019,13 +3052,14 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     Err(WasmParserError::InvalidMemIdx(memidx))?;
                 }
                 let (len3, offset) = self.parse_const_expr()?;
+                validate_offset_const_expr(globals, &offset)?;
 
                 let (len4, bytes) = self.parse_vec(Self::parse_byte)?;
                 Ok((
                     len + len2 + len3 + len4,
                     Data {
                         init: bytes,
-                        mode: DataMode::Active(MemIdx(memidx), offset[0]),
+                        mode: DataMode::Active(MemIdx(memidx), offset),
                     },
                 ))
             }
@@ -3114,11 +3148,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     }
     fn parse_element_section(
         &mut self,
+        globals: &[GlobalType],
         functions: &[TypeIdx],
         size: u32,
     ) -> Result<ElementSection> {
         trace!("{:?}", functions);
-        let (len, elems) = self.parse_vec(|me| me.parse_elem(functions))?;
+        let (len, elems) = self.parse_vec(|me| me.parse_elem(globals, functions))?;
         if len != size as usize {
             Err(WasmParserError::InvalidSectionSize)?
         }
@@ -3169,8 +3204,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         Ok(CodeSection(icode))
     }
 
-    fn parse_data_section(&mut self, mems: &[MemType], size: u32) -> Result<DataSection> {
-        let (len, d) = self.parse_vec(|me| me.parse_data(mems))?;
+    fn parse_data_section(
+        &mut self,
+        globals: &[GlobalType],
+        mems: &[MemType],
+        size: u32,
+    ) -> Result<DataSection> {
+        let (len, d) = self.parse_vec(|me| me.parse_data(globals, mems))?;
         if len != size as usize {
             Err(WasmParserError::InvalidSectionSize)?
         }
@@ -3214,6 +3254,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let mut data_section: Option<DataSection> = None;
         let mut functions = vec![];
         let mut globals = vec![];
+        let mut imported_global_len = 0;
         let mut global_init = vec![];
         let mut tables = vec![];
         let mut mems = vec![];
@@ -3281,6 +3322,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             }
                         }
                     }
+                    imported_global_len = globals.len();
                     import_section = Some(section);
                 }
                 WasmSectionType::Function => {
@@ -3318,7 +3360,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     trace!("element section");
 
                     element_section = Some(self.parse_section_body(|me, size| {
-                        me.parse_element_section(&functions, size)
+                        me.parse_element_section(&globals[..imported_global_len], &functions, size)
                     })?);
                 }
                 WasmSectionType::Code => {
@@ -3340,8 +3382,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     })?);
                 }
                 WasmSectionType::Data => {
-                    let sec =
-                        self.parse_section_body(|me, size| me.parse_data_section(&mems, size))?;
+                    let sec = self.parse_section_body(|me, size| {
+                        me.parse_data_section(&globals[..imported_global_len], &mems, size)
+                    })?;
                     match data_count_verifier {
                         DataCountVerifier::OnePass(v) if (v as usize) != sec.0.len() => {
                             Err(WasmParserError::InvalidDataSectionCount)?

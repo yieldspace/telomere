@@ -141,10 +141,10 @@ pub enum RefType {
     FuncRef,
     ExternRef,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ElemMode {
     Passive,
-    Active(TableIdx, WasmValue),
+    Active(TableIdx, Vec<ConstExpr>),
     Declarative,
 }
 #[derive(Debug, Clone)]
@@ -155,10 +155,10 @@ pub struct Elem {
 }
 #[derive(Debug, Clone)]
 pub struct ElementSection(pub Vec<Elem>);
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum DataMode {
     Passive,
-    Active(MemIdx, WasmValue),
+    Active(MemIdx, Vec<ConstExpr>),
 }
 #[derive(Debug, Clone)]
 pub struct Data {
@@ -179,7 +179,7 @@ pub struct Module {
     pub imports: ImportSection,
     pub mems: Vec<MemType>,
     pub globals: Vec<GlobalType>,
-    pub global_init: Vec<WasmValue>,
+    pub global_init: Vec<ConstExpr>,
     pub exs: ExportSection,
     pub tables: Vec<TableType>,
     pub elems: ElementSection,
@@ -208,7 +208,7 @@ pub enum Mut {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlobalType(pub ValType, pub Mut);
 #[derive(Debug, Clone)]
-pub struct Global(pub GlobalType, pub Vec<WasmValue>);
+pub struct Global(pub GlobalType, pub Vec<ConstExpr>);
 #[derive(Clone)]
 pub struct Func {
     pub locals: Vec<Locals>,
@@ -277,6 +277,24 @@ pub enum WasmValue {
     //V128,
     FuncRef(u32),
     //ExternRef,
+}
+#[derive(Debug, Clone, Copy)]
+pub enum ConstExpr {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+    FuncRef(u32),
+    GlobalGet(u32),
+}
+impl ConstExpr {
+    pub fn to_offset(&self) -> u32 {
+        match self {
+            Self::I32(v) => *v as u32,
+            Self::I64(v) => *v as u32,
+            v => unreachable!("{:?}", v),
+        }
+    }
 }
 pub const PAGE_SIZE: usize = 64 * 1024;
 pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;

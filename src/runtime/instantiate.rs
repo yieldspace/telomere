@@ -2,9 +2,10 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     common::{
-        DataMode, ElemMode, ExportDesc, ImportDesc, Limits, Memory, TableInstance, PAGE_SIZE_MAX,
+        ConstExpr, DataMode, ElemMode, ExportDesc, ImportDesc, Limits, Memory, TableInstance,
+        PAGE_SIZE_MAX,
     },
-    Instance, Module, Registry, Store, VMResult, WasmValue,
+    Instance, Module, Registry, Store, VMResult,
 };
 
 use super::TABLE_UNINITIALIZED;
@@ -35,7 +36,25 @@ fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMRe
     }
     VMResult::Success(())
 }
-
+fn execute_const_expr(store: &mut Store, globals: &[u32], exprs: &[ConstExpr]) -> VMResult<u32> {
+    for expr in exprs {
+        return VMResult::Success(match expr {
+            ConstExpr::I32(v) => *v as u32,
+            ConstExpr::GlobalGet(idx) => {
+                let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
+                    VMResult::Unlinkable
+                })) as usize;
+                let mut buf = [0u8; 4];
+                buf.copy_from_slice(&store.globals.0[addr..addr + 4]);
+                u32::from_le_bytes(buf)
+            }
+            _ => {
+                todo!()
+            }
+        });
+    }
+    return VMResult::Unlinkable;
+}
 pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResult<Instance> {
     let mut memory: Option<Rc<RefCell<Memory>>> = None;
 
@@ -114,18 +133,12 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
             ))))
         }
     }
-    for init in &m.global_init {
-        globals.push(vm_try!(store.globals.init(init)));
-    }
+
     for d in &m.data.0 {
         match &d.mode {
             DataMode::Active(mem, offset) => {
                 assert_eq!(mem.0, 0);
-                let offset = match offset {
-                    WasmValue::I32(v) => *v as usize,
-                    WasmValue::I64(v) => *v as usize,
-                    _ => panic!(),
-                };
+                let offset = vm_try!(execute_const_expr(store, &globals, &offset)) as usize;
                 if let Some(memory) = &memory {
                     if let Some(slice) = memory.borrow_mut().get_mut(offset..offset + d.init.len())
                     {
@@ -142,25 +155,16 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
             }
         }
     }
-
-    let mut instance = Instance {
-        memory,
-        table: m
-            .tables
-            .iter()
-            .map(|v| TableInstance(*v, vec![TABLE_UNINITIALIZED; v.limits.min as usize]))
-            .collect(),
-        globals,
-    };
+    let mut table: Vec<TableInstance> = m
+        .tables
+        .iter()
+        .map(|v| TableInstance(*v, vec![TABLE_UNINITIALIZED; v.limits.min as usize]))
+        .collect();
     for elem in &m.elems.0 {
         match &elem.mode {
             ElemMode::Active(idx, offset) => {
-                let offset = match offset {
-                    WasmValue::I32(v) => *v as usize,
-                    WasmValue::I64(v) => *v as usize,
-                    _ => panic!(),
-                };
-                let instance = instance.table.get_mut(idx.0 as usize).unwrap();
+                let offset = vm_try!(execute_const_expr(store, &globals, &offset)) as usize;
+                let instance = table.get_mut(idx.0 as usize).unwrap();
                 if instance.0.reftype != elem.kind {
                     panic!("reftype mismatch")
                 }
@@ -178,5 +182,13 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
             }
         }
     }
+    for init in &m.global_init {
+        globals.push(vm_try!(store.globals.init(init)));
+    }
+    let instance = Instance {
+        memory,
+        table,
+        globals,
+    };
     VMResult::Success(instance)
 }
