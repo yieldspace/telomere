@@ -11,6 +11,7 @@ use crate::parser::leb128::Leb128Parser;
 use crate::{Module, WasmParser, WasmParserError};
 use thiserror::Error;
 
+mod alias;
 mod instance;
 mod types;
 
@@ -54,6 +55,8 @@ pub enum ComponentModelParserError {
     InvalidCoreAliasTargetMagic(u8),
     #[error("invalid sort: {0:?}")]
     InvalidSort(u8),
+    #[error("invalid alias target: {0:?}")]
+    InvalidAliasTarget(u8),
 }
 
 pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
@@ -88,7 +91,9 @@ pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
             ComponentSectionType::Instance => {
                 let (_, instances) = parse_vec(reader, |v| v, parse_instance)?;
             }
-            ComponentSectionType::Alias => {}
+            ComponentSectionType::Alias => {
+                let (_, aliases) = parse_vec(reader, |v| v, alias::parse_alias)?;
+            }
             ComponentSectionType::Type => {}
             ComponentSectionType::Canon => {}
             ComponentSectionType::Start => {}

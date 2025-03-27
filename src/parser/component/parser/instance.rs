@@ -1,6 +1,9 @@
 use crate::assert_magic;
 use crate::binary::BinaryReader;
-use crate::component::{CoreInstance, CoreInstanceInlineExport, CoreInstantiate, CoreInstantiateArg, CoreSort, InlineExport, Instance, Instantiate, InstantiateArg, Sort};
+use crate::component::{
+    CoreInstance, CoreInstanceInlineExport, CoreInstantiate, CoreInstantiateArg, CoreSort,
+    InlineExport, Instance, Instantiate, InstantiateArg, Sort,
+};
 use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
@@ -21,12 +24,9 @@ pub fn parse_instance<R: BinaryReader>(reader: &mut R) -> Result<(usize, Instanc
         }
         0x01 => {
             let (exports_len, exports) = parse_vec(reader, |v| v, parse_inline_export)?;
-            Ok((
-                1 + exports_len,
-                Instance::InlineExport(exports),
-            ))
+            Ok((1 + exports_len, Instance::InlineExport(exports)))
         }
-        _ => todo!()
+        _ => todo!(),
     }
 }
 
@@ -44,7 +44,7 @@ fn parse_instantiate_arg<R: BinaryReader>(reader: &mut R) -> Result<(usize, Inst
     ))
 }
 
-fn parse_sort<R: BinaryReader>(reader: &mut R) -> Result<(usize, Sort)> {
+pub(crate) fn parse_sort<R: BinaryReader>(reader: &mut R) -> Result<(usize, Sort)> {
     Ok(match reader.read_exact_one()? {
         0x00 => {
             let (cs_len, core_sort) = parse_core_sort(reader)?;

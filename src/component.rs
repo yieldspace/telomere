@@ -91,3 +91,15 @@ pub struct InlineExport {
     pub sort: Sort,
     pub sort_idx: usize,
 }
+
+pub struct Alias {
+    pub sort: Sort,
+    pub target: AliasTarget,
+}
+
+#[repr(u8)]
+pub enum AliasTarget {
+    Export(usize, String) = 0x00,
+    CoreExport(usize, String) = 0x01,
+    Outer(u32, usize) = 0x02,
+}
