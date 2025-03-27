@@ -1,4 +1,3 @@
-
 use std::ops::Rem;
 
 use crate::{
@@ -314,7 +313,7 @@ pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
             .jump_table()
             .br((*tail_code).operand.u32 as usize)
             .unwrap_unchecked();
-        
+
         ctx.code().offset(addr as isize)
     } else {
         tail_code.offset(1)
