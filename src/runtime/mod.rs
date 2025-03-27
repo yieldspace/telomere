@@ -2,7 +2,7 @@
 #[macro_use]
 mod trace;
 pub mod vm;
-//FIXME: 
+//FIXME:
 const TABLE_UNINITIALIZED: u32 = 0xFFFFFFFF;
 
 mod instantiate;
