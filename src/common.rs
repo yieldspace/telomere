@@ -122,7 +122,7 @@ impl ExportSection {
         self.0.iter().find(|it| it.0 == name).map(|it| it.1)
     }
 }
-
+#[derive(Clone)]
 pub struct CodeSection(pub Vec<Func>);
 impl CodeSection {
     pub fn get(&self, idx: FuncIdx) -> Option<&Func> {
@@ -141,26 +141,26 @@ pub enum RefType {
     FuncRef,
     ExternRef,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ElemMode {
     Passive,
     Active(TableIdx, WasmValue),
     Declarative,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Elem {
     pub kind: RefType,
     pub init: Vec<u32>,
     pub mode: ElemMode,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ElementSection(pub Vec<Elem>);
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum DataMode {
     Passive,
     Active(MemIdx, WasmValue),
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Data {
     pub init: Vec<u8>,
     pub mode: DataMode,
@@ -170,9 +170,9 @@ pub enum DataCountVerifier {
     Lazy { max_data_idx: Option<u32> },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataSection(pub Vec<Data>);
-
+#[derive(Clone)]
 pub struct Module {
     pub fts: TypeSection,
     pub functions: Vec<TypeIdx>,
@@ -186,7 +186,9 @@ pub struct Module {
     pub codes: CodeSection,
     pub data: DataSection,
 }
+#[derive(Debug, Clone)]
 pub struct TableInstance(pub TableType, pub Vec<u32>);
+#[derive(Clone)]
 pub struct Instance {
     pub memory: Option<Rc<RefCell<Memory>>>,
     pub table: Vec<TableInstance>,
@@ -207,7 +209,7 @@ pub enum Mut {
 pub struct GlobalType(pub ValType, pub Mut);
 #[derive(Debug, Clone)]
 pub struct Global(pub GlobalType, pub Vec<WasmValue>);
-#[derive()]
+#[derive(Clone)]
 pub struct Func {
     pub locals: Vec<Locals>,
     pub expr: Vec<Instr>,
@@ -259,6 +261,7 @@ pub union Operand {
 }
 
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
+#[derive(Clone, Copy)]
 pub union Instr {
     pub op: Op,
     pub operand: Operand,

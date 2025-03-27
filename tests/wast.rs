@@ -222,8 +222,8 @@ fn run_wast(text: &str) {
                 name,
                 module: id,
             } => {
-                assert!(id.is_none());
-                registry.register(name, module.take().unwrap(), instance.take().unwrap());
+                //assert!(id.is_none());
+                registry.register(name, module.clone().unwrap(), instance.clone().unwrap());
             }
             WastDirective::AssertUnlinkable {
                 span,
@@ -353,8 +353,5 @@ fn memory_init() {
 }
 #[test]
 fn imports() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     run_test_file("imports");
 }

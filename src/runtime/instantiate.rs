@@ -9,19 +9,25 @@ use crate::{
 
 use super::TABLE_UNINITIALIZED;
 
-fn validate_limit(import_limit: Limits, export_limit: Limits) -> VMResult<()> {
-    if import_limit.min > export_limit.min {
+fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMResult<()> {
+    if import_limit.min > real {
+        tracing::trace!("invalid import_limit min");
+
         return VMResult::Unlinkable;
     }
     match export_limit.max {
         None => {
             if import_limit.max.is_some() {
+                tracing::trace!("invalid import_limit max");
+
                 return VMResult::Unlinkable;
             }
         }
         Some(export_max) => {
             if let Some(import_max) = import_limit.max {
                 if export_max > import_max {
+                    tracing::trace!("invalid import_limit max");
+
                     return VMResult::Unlinkable;
                 }
             }
@@ -50,12 +56,16 @@ pub fn instantiate<'a>(m: &Module, store: &mut Store, registry: &Registry) -> VM
                 let export_ft_idx = ext_module.functions[funcidx.0 as usize];
                 let export_ft = ext_module.fts.get(export_ft_idx).unwrap();
                 if import_ft != export_ft {
+                    tracing::trace!("import function type");
+
                     return VMResult::Unlinkable;
                 }
             }
             (ImportDesc::GlobalType(import_gt), ExportDesc::Global(global_idx)) => {
                 let export_gt = ext_module.globals.get(global_idx.0 as usize).unwrap();
                 if import_gt != export_gt {
+                    tracing::trace!("import global type");
+
                     return VMResult::Unlinkable;
                 }
                 globals.push(ext_inst.globals[global_idx.0 as usize]);
@@ -65,19 +75,33 @@ pub fn instantiate<'a>(m: &Module, store: &mut Store, registry: &Registry) -> VM
                 tracing::trace!("{export_tt:?}");
 
                 if import_tt.reftype != export_tt.reftype {
+                    tracing::trace!("import table type");
+
                     return VMResult::Unlinkable;
                 }
-                vm_try!(validate_limit(import_tt.limits, export_tt.limits))
+                vm_try!(validate_limit(
+                    import_tt.limits,
+                    /*FIXME:*/ export_tt.limits.min,
+                    export_tt.limits
+                ))
             }
             (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
                 memory = ext_inst.memory.clone();
-                if memory.is_none() {
+                if let Some(memory) = &memory {
+                    vm_try!(validate_limit(
+                        mt.0,
+                        memory.borrow().page_size(),
+                        ext_module.mems[0].0
+                    ))
+                } else {
+                    tracing::trace!("invalid instance memory");
                     return VMResult::Unlinkable;
                 }
-                vm_try!(validate_limit(mt.0, ext_module.mems[0].0))
             }
             // TODO: import other type objects
             _ => {
+                tracing::trace!("import other type objects");
+
                 return VMResult::Unlinkable;
             }
         }

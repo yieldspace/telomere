@@ -196,11 +196,10 @@
   "incompatible import type"
 )
 
-;; FIXME: implementation bug
-;;(assert_unlinkable
-;;  (module (import "test" "global-i32" (func (result i32))))
-;;  "incompatible import type"
-;;)
+(assert_unlinkable
+  (module (import "test" "global-i32" (func (result i32))))
+  "incompatible import type"
+)
 (assert_unlinkable
   (module (import "test" "table-10-inf" (func)))
   "incompatible import type"
@@ -209,11 +208,10 @@
   (module (import "test" "memory-2-inf" (func)))
   "incompatible import type"
 )
-;; FIXME: implementation bug
-;;(assert_unlinkable
-;;  (module (import "spectest" "global_i32" (func)))
-;;  "incompatible import type"
-;;)
+(assert_unlinkable
+  (module (import "spectest" "global_i32" (func)))
+  "incompatible import type"
+)
 (assert_unlinkable
   (module (import "spectest" "table" (func)))
   "incompatible import type"
