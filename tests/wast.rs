@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use telomere::{common::Instance, instantiate, Module, Registry, ResultValue, Store, WasmValue};
-use tracing::error;
+use tracing::{error, Level};
 use wast::{
     core::{NanPattern, WastRetCore},
     parser::ParseBuffer,
@@ -84,7 +84,7 @@ fn run_wast(text: &str) {
                 results: expected,
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
-                    tracing::trace!("executing {}", v.name);
+                    tracing::trace!("executing {} {:?}", v.name, v.args);
                     let actual = telomere::run_module_function(
                         module.as_ref().unwrap(),
                         instance.as_mut().unwrap(),
@@ -114,6 +114,20 @@ fn run_wast(text: &str) {
                                     )
                                 }
                                 (
+                                    WastRetCore::F32(NanPattern::CanonicalNan),
+                                    WasmValue::F32(actual),
+                                ) => {
+                                    // TODO: is canonical nan?
+                                    assert!(actual.is_nan());
+                                }
+                                (
+                                    WastRetCore::F32(NanPattern::ArithmeticNan),
+                                    WasmValue::F32(actual),
+                                ) => {
+                                    // TODO: is arithmetic nan?
+                                    assert!(actual.is_nan());
+                                }
+                                (
                                     WastRetCore::F64(NanPattern::Value(expected)),
                                     WasmValue::F64(actual),
                                 ) => {
@@ -123,6 +137,20 @@ fn run_wast(text: &str) {
                                         "{:?}",
                                         span.linecol_in(text)
                                     )
+                                }
+                                (
+                                    WastRetCore::F64(NanPattern::CanonicalNan),
+                                    WasmValue::F64(actual),
+                                ) => {
+                                    // TODO: is canonical nan?
+                                    assert!(actual.is_nan());
+                                }
+                                (
+                                    WastRetCore::F64(NanPattern::ArithmeticNan),
+                                    WasmValue::F64(actual),
+                                ) => {
+                                    // TODO: is arithmetic nan?
+                                    assert!(actual.is_nan());
                                 }
                                 _ => {
                                     error!(
@@ -194,6 +222,8 @@ fn run_wast(text: &str) {
                 message: _,
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
+                    tracing::trace!("executing(trap) {} {:?}", v.name, v.args);
+
                     let result = telomere::run_module_function(
                         module.as_ref().unwrap(),
                         instance.as_mut().unwrap(),
@@ -359,4 +389,11 @@ fn imports() {
 #[test]
 fn comments() {
     run_test_file("comments");
+}
+#[test]
+fn conversions() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
+    run_test_file("conversions");
 }

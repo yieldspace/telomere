@@ -183,6 +183,167 @@ pub unsafe fn op_i32_wrap_i64(tail_code: *const Instr, ctx: &mut ExecuteContext)
     vm_try!(ctx.stack.push_i32(a as i32));
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_i32_trunc_f32_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    if (i32::MIN as f32) <= a && a < (i32::MAX as f32) {
+        vm_try!(ctx.stack.push_i32(a as i32));
+    } else {
+        return VMResult::InvalidOperand;
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i32_trunc_f32_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    if -1.0 < a && a < (u32::MAX as f32) {
+        vm_try!(ctx.stack.push_u32(a.trunc() as u32));
+    } else {
+        return VMResult::InvalidOperand;
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i32_trunc_f64_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f64().trunc();
+    if (i32::MIN as f64) <= a && a <= (i32::MAX as f64) {
+        vm_try!(ctx.stack.push_i32(a as i32));
+    } else {
+        return VMResult::InvalidOperand;
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i32_trunc_f64_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f64().trunc();
+    if -1.0 < a && a <= (u32::MAX as f64) {
+        vm_try!(ctx.stack.push_u32(a as u32));
+    } else {
+        return VMResult::InvalidOperand;
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_trunc_f32_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    if (i64::MIN as f32) <= a && a < (i64::MAX as f32) {
+        vm_try!(ctx.stack.push_i64(a as i64));
+    } else {
+        return VMResult::InvalidOperand;
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_trunc_f32_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    if -1.0 < a && a < (u64::MAX as f32) {
+        vm_try!(ctx.stack.push_u64(a.trunc() as u64));
+    } else {
+        return VMResult::InvalidOperand;
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_trunc_f64_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f64();
+    if (i64::MIN as f64) <= a && a < (i64::MAX as f64) {
+        vm_try!(ctx.stack.push_i64(a as i64));
+    } else {
+        return VMResult::InvalidOperand;
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_trunc_f64_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f64();
+    if -1. < a && a < (u64::MAX as f64) {
+        vm_try!(ctx.stack.push_u64(a as u64));
+    } else {
+        return VMResult::InvalidOperand;
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i32_trunc_sat_f32_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_i32(a.trunc() as i32));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i32_trunc_sat_f32_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_u32(a.trunc() as u32));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i32_trunc_sat_f64_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_i32(a.trunc() as i32));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i32_trunc_sat_f64_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_u32(a.trunc() as u32));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_trunc_sat_f32_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_i64(a.trunc() as i64));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_trunc_sat_f32_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_u64(a.trunc() as u64));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_trunc_sat_f64_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_i64(a.trunc() as i64));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_trunc_sat_f64_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_u64(a.trunc() as u64));
+    call_next(tail_code, 0, ctx)
+}
+
 pub unsafe fn op_i64_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     let b = ctx.stack.pop_i64();
@@ -209,8 +370,8 @@ pub unsafe fn op_f32_convert_i32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_i32(a as i32));
+    let a = ctx.stack.pop_i32();
+    vm_try!(ctx.stack.push_f32(a as f32));
     call_next(tail_code, 0, ctx)
 }
 
@@ -218,33 +379,37 @@ pub unsafe fn op_f32_convert_i32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_u32(a as u32));
+    let a = ctx.stack.pop_u32();
+    vm_try!(ctx.stack.push_f32(a as f32));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_f32_convert_i64_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_i64(a as i64));
+    let a = ctx.stack.pop_i64();
+    vm_try!(ctx.stack.push_f32(a as f32));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_f32_convert_i64_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a = ctx.stack.pop_f32();
-    vm_try!(ctx.stack.push_u64(a as u64));
+    let a = ctx.stack.pop_u64();
+    vm_try!(ctx.stack.push_f32(a as f32));
     call_next(tail_code, 0, ctx)
 }
-
+pub unsafe fn op_f32_demote_f64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_f32(a as f32));
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_f64_convert_i32_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_i32(a as i32));
+    let a = ctx.stack.pop_i32();
+    vm_try!(ctx.stack.push_f64(a as f64));
     call_next(tail_code, 0, ctx)
 }
 
@@ -252,27 +417,34 @@ pub unsafe fn op_f64_convert_i32_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_u32(a as u32));
+    let a = ctx.stack.pop_u32();
+    vm_try!(ctx.stack.push_f64(a as f64));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_f64_convert_i64_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_i64(a as i64));
+    let a = ctx.stack.pop_i64();
+    vm_try!(ctx.stack.push_f64(a as f64));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_f64_convert_i64_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a = ctx.stack.pop_f64();
-    vm_try!(ctx.stack.push_u64(a as u64));
+    let a = ctx.stack.pop_u64();
+    vm_try!(ctx.stack.push_f64(a as f64));
     call_next(tail_code, 0, ctx)
 }
-
+pub unsafe fn op_f64_promote_f32(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_f64(a.into()));
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_return(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = ctx.jump_table().ret();
     trace!("op_return: {addr}");
