@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{cell::RefCell, fmt::Debug, rc::Rc};
 #[macro_use]
 mod vm_result;
 pub use vm_result::VMResult;
@@ -6,7 +6,10 @@ mod memory;
 pub use memory::{MemArg, Memory};
 mod stack;
 pub use stack::{LocalReference, Stack};
-
+mod registry;
+pub use registry::Registry;
+mod store;
+pub use store::Store;
 #[derive(Debug, Clone, Copy)]
 pub struct TypeIdx(pub u32);
 #[derive(Debug, Clone, Copy)]
@@ -74,15 +77,13 @@ impl ResultType {
         self.0.iter()
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableType {
     pub reftype: RefType,
     pub limits: Limits,
 }
 #[derive(Debug)]
 pub struct Table(pub TableType);
-#[derive(Debug)]
-pub struct TableSection(pub Vec<Table>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncType(pub ResultType, pub ResultType);
@@ -113,11 +114,7 @@ pub struct ImportSection(pub Vec<Import>);
 
 #[derive(Debug, Clone)]
 pub struct FunctionSection(pub Vec<TypeIdx>);
-impl FunctionSection {
-    pub fn get(&self, idx: FuncIdx) -> Option<TypeIdx> {
-        self.0.get(idx.0 as usize).copied()
-    }
-}
+
 #[derive(Debug, Clone)]
 pub struct ExportSection(pub Vec<Export>);
 impl ExportSection {
@@ -125,52 +122,45 @@ impl ExportSection {
         self.0.iter().find(|it| it.0 == name).map(|it| it.1)
     }
 }
-#[derive(Debug, Clone)]
-pub struct GlobalSection(pub Vec<Global>);
-impl GlobalSection {
-    pub fn iter(&self) -> impl Iterator<Item = &Global> + use<'_> {
-        self.0.iter()
-    }
-}
+#[derive(Clone)]
 pub struct CodeSection(pub Vec<Func>);
 impl CodeSection {
     pub fn get(&self, idx: FuncIdx) -> Option<&Func> {
         self.0.get(idx.0 as usize)
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub min: u32,
     pub max: Option<u32>,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct MemType(pub Limits);
-pub struct MemorySection(pub Vec<MemType>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefType {
     FuncRef,
     ExternRef,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ElemMode {
     Passive,
     Active(TableIdx, WasmValue),
     Declarative,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Elem {
     pub kind: RefType,
     pub init: Vec<u32>,
     pub mode: ElemMode,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ElementSection(pub Vec<Elem>);
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum DataMode {
     Passive,
     Active(MemIdx, WasmValue),
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Data {
     pub init: Vec<u8>,
     pub mode: DataMode,
@@ -180,25 +170,29 @@ pub enum DataCountVerifier {
     Lazy { max_data_idx: Option<u32> },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DataSection(pub Vec<Data>);
-
+#[derive(Clone)]
 pub struct Module {
     pub fts: TypeSection,
-    pub xs: FunctionSection,
-    pub mems: MemorySection,
-    pub gs: GlobalSection,
+    pub functions: Vec<TypeIdx>,
+    pub imports: ImportSection,
+    pub mems: Vec<MemType>,
+    pub globals: Vec<GlobalType>,
+    pub global_init: Vec<WasmValue>,
     pub exs: ExportSection,
-    pub tables: TableSection,
+    pub tables: Vec<TableType>,
     pub elems: ElementSection,
     pub codes: CodeSection,
     pub data: DataSection,
 }
+#[derive(Debug, Clone)]
 pub struct TableInstance(pub TableType, pub Vec<u32>);
+#[derive(Clone)]
 pub struct Instance {
-    pub memory: Memory,
+    pub memory: Option<Rc<RefCell<Memory>>>,
     pub table: Vec<TableInstance>,
-    pub globals: Vec<u8>,
+    pub globals: Vec<u32>,
 }
 #[derive(Debug, Clone)]
 pub struct Locals {
@@ -211,11 +205,11 @@ pub enum Mut {
     Const = 0,
     Var = 1,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlobalType(pub ValType, pub Mut);
 #[derive(Debug, Clone)]
-pub struct Global(pub GlobalType, pub WasmValue);
-#[derive()]
+pub struct Global(pub GlobalType, pub Vec<WasmValue>);
+#[derive(Clone)]
 pub struct Func {
     pub locals: Vec<Locals>,
     pub expr: Vec<Instr>,
@@ -267,13 +261,14 @@ pub union Operand {
 }
 
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
+#[derive(Clone, Copy)]
 pub union Instr {
     pub op: Op,
     pub operand: Operand,
 }
 unsafe impl Send for Instr {}
 unsafe impl Sync for Instr {}
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum WasmValue {
     I32(i32),
     I64(i64),
@@ -289,9 +284,11 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct ExecuteContext<'a> {
     pub module: &'a Module,
     pub stack: &'a mut Stack,
-
-    pub instance: &'a mut Instance,
     pub local_state: Vec<LocalState<'a>>,
+    pub table: &'a mut [TableInstance],
+    pub globals: &'a mut [u32],
+    pub memory: &'a mut Memory,
+    pub store: &'a mut Store,
 }
 impl<'a> ExecuteContext<'a> {
     pub fn jump_table(&mut self) -> &mut JumpTable {

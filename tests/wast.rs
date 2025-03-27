@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
-use telomere::{common::Instance, instantiate, Module, ResultValue, WasmValue};
+use telomere::{common::Instance, instantiate, Module, Registry, ResultValue, Store, WasmValue};
 use tracing::error;
 use wast::{
     core::{NanPattern, WastRetCore},
     parser::ParseBuffer,
-    Wast, WastArg, WastRet,
+    Wast, WastArg, WastRet, Wat,
 };
 fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
     args.iter()
@@ -25,11 +25,47 @@ fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
         })
         .collect()
 }
+const SPECTEST_WAST: &str = r#"
+(module
+    (global (export "global_i32") i32 (i32.const 666))
+    (global (export "global_i64") i64 (i64.const 666))
+    (global (export "global_f32") f32 (f32.const 666.6))
+    (global (export "global_f64") f64 (f64.const 666.6))
+
+    (table (export "table") 10 20 funcref)
+
+    (memory (export "memory") 1 2)
+    
+    (func (export "print"))
+    (func (export "print_i32") (param i32))
+    (func (export "print_i64") (param i64))
+    (func (export "print_f32") (param f32))
+    (func (export "print_f64") (param f64))
+    (func (export "print_i32_f32") (param i32 f32))
+    (func (export "print_f64_f64") (param f64 f64))
+)
+"#;
+fn init_spectest(store: &mut Store, registry: &Registry) -> (Module, Instance) {
+    let buf = ParseBuffer::new(SPECTEST_WAST).unwrap();
+    let mut wat = wast::parser::parse::<Wat>(&buf).unwrap();
+    let source = wat.encode().unwrap();
+
+    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+    let mut parser = telomere::WasmParser::new(&mut reader);
+
+    let m = parser.parse_module().unwrap();
+    let instance = instantiate(&m, store, registry).unwrap();
+    (m, instance)
+}
 fn run_wast(text: &str) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
     let mut module: Option<Module> = None;
     let mut instance: Option<Instance> = None;
+    let mut store = Store::new();
+    let mut registry = Registry::new();
+    let st = init_spectest(&mut store, &registry);
+    registry.register("spectest", st.0, st.1);
     for directive in wast.directives {
         use wast::WastDirective;
         match directive {
@@ -39,7 +75,7 @@ fn run_wast(text: &str) {
                 let mut parser = telomere::WasmParser::new(&mut reader);
                 let m = parser.parse_module().unwrap();
                 tracing::trace!("{:?}", m.elems);
-                instance = Some(instantiate(&m).unwrap());
+                instance = Some(instantiate(&m, &mut store, &registry).unwrap());
                 module = Some(m);
             }
             WastDirective::AssertReturn {
@@ -52,6 +88,7 @@ fn run_wast(text: &str) {
                     let actual = telomere::run_module_function(
                         module.as_ref().unwrap(),
                         instance.as_mut().unwrap(),
+                        &mut store,
                         v.name,
                         &ResultValue::new(convert_args(&v.args)),
                     )
@@ -145,6 +182,7 @@ fn run_wast(text: &str) {
                 let result = telomere::run_module_function(
                     module.as_ref().unwrap(),
                     instance.as_mut().unwrap(),
+                    &mut store,
                     call.name,
                     &ResultValue::new(convert_args(&call.args)),
                 );
@@ -159,6 +197,7 @@ fn run_wast(text: &str) {
                     let result = telomere::run_module_function(
                         module.as_ref().unwrap(),
                         instance.as_mut().unwrap(),
+                        &mut store,
                         v.name,
                         &ResultValue::new(convert_args(&v.args)),
                     );
@@ -172,10 +211,38 @@ fn run_wast(text: &str) {
                 let result = telomere::run_module_function(
                     module.as_ref().unwrap(),
                     instance.as_mut().unwrap(),
+                    &mut store,
                     invoke.name,
                     &ResultValue::new(convert_args(&invoke.args)),
                 );
                 assert!(!result.is_err())
+            }
+            WastDirective::Register {
+                span: _,
+                name,
+                module: _id,
+            } => {
+                //assert!(id.is_none());
+                registry.register(name, module.clone().unwrap(), instance.clone().unwrap());
+            }
+            WastDirective::AssertUnlinkable {
+                span,
+                mut module,
+                message: _,
+            } => {
+                //TODO: Is there anything that wast fails to encode that could be binary?
+                if let Ok(source) = module.encode() {
+                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+                    let mut parser = telomere::WasmParser::new(&mut reader);
+                    let module = parser.parse_module().unwrap();
+
+                    // TODO: test error message
+                    assert!(
+                        instantiate(&module, &mut store, &registry).is_err(),
+                        "{:?}",
+                        span.linecol_in(text)
+                    )
+                }
             }
             _ => unimplemented!(),
         }
@@ -283,4 +350,8 @@ fn memory_size() {
 #[test]
 fn memory_init() {
     run_test_file("memory_init");
+}
+#[test]
+fn imports() {
+    run_test_file("imports");
 }

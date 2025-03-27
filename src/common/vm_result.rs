@@ -8,6 +8,7 @@ pub enum VMResult<V> {
     TableIndexOutOfRange,
     CallIndirectInvalidType,
     TableUninitialized,
+    Unlinkable,
 }
 
 macro_rules! vm_try {
@@ -20,6 +21,7 @@ macro_rules! vm_try {
             VMResult::TableIndexOutOfRange => return VMResult::TableIndexOutOfRange,
             VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
             VMResult::TableUninitialized => return VMResult::TableUninitialized,
+            VMResult::Unlinkable => return VMResult::Unlinkable,
         }
     };
 }
@@ -31,10 +33,30 @@ impl<V> VMResult<V> {
         }
     }
     pub fn unwrap(self) -> V {
-        if let VMResult::Success(v) = self {
-            return v;
+        match self {
+            VMResult::Success(v) => v,
+            VMResult::Unreachable => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: Unreachable",)
+            }
+            VMResult::StackOverflow => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: StackOverflow",)
+            }
+            VMResult::MemoryIndexOutOfRange => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: MemoryIndexOutOfRange",)
+            }
+            VMResult::TableIndexOutOfRange => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: TableIndexOutOfRange",)
+            }
+            VMResult::CallIndirectInvalidType => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: CallIndirectInvalidType",)
+            }
+            VMResult::TableUninitialized => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: TableUninitialized")
+            }
+            VMResult::Unlinkable => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: Unlinkable")
+            }
         }
-        panic!()
     }
     pub fn is_err(&self) -> bool {
         !matches!(self, VMResult::Success(_))
