@@ -24,7 +24,7 @@ pub fn parse_valtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, ValType)
 }
 
 pub fn parse_result_type<R: BinaryReader>(reader: &mut R) -> Result<(usize, ResultType)> {
-    let (len, v) = parse_vec(reader, parse_valtype)?;
+    let (len, v) = parse_vec(reader, |v| v, parse_valtype)?;
     Ok((len, ResultType(v)))
 }
 

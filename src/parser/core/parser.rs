@@ -17,6 +17,8 @@ use crate::{
     Module,
 };
 
+use super::{types, values};
+
 #[derive(Error, Debug)]
 pub enum WasmParserError {
     #[error("invalid magic: {0:?}")]
@@ -270,60 +272,52 @@ enum BlockKind {
 }
 impl<'a, R: BinaryReader> WasmParser<'a, R> {
     fn parse_u32(&mut self) -> Result<(usize, u32)> {
-        Leb128Parser::new(self.reader).parse_u32(std::mem::size_of::<u32>() * 8)
+        values::parse_u32(self.reader)
     }
     fn parse_i32(&mut self) -> Result<(usize, i32)> {
-        Leb128Parser::new(self.reader).parse_i32(std::mem::size_of::<i32>() * 8)
+        values::parse_i32(self.reader)
     }
     fn parse_i64(&mut self) -> Result<(usize, i64)> {
-        Leb128Parser::new(self.reader).parse_i64(std::mem::size_of::<i64>() * 8)
+        values::parse_i64(self.reader)
     }
     fn parse_f32(&mut self) -> Result<(usize, f32)> {
-        let v = self.reader.read_exact::<4>()?;
-        Ok((4, f32::from_le_bytes(v)))
+        values::parse_f32(self.reader)
     }
     fn parse_f64(&mut self) -> Result<(usize, f64)> {
-        let v = self.reader.read_exact::<8>()?;
-        Ok((8, f64::from_le_bytes(v)))
+        values::parse_f64(self.reader)
     }
     fn parse_vec<V>(
         &mut self,
-        mut f: impl FnMut(&mut Self) -> Result<(usize, V)>,
+        f: impl FnMut(&mut Self) -> Result<(usize, V)>,
     ) -> Result<(usize, Vec<V>)> {
-        let mut read_bytes = 0;
-
-        let (len_len, len) = self.parse_u32()?;
-        trace!("parse_vec: {len_len} {len}");
-        read_bytes += len_len;
-        let mut result = Vec::new();
-        for _i in 0..len {
-            let (len, v) = f(self)?;
-            result.push(v);
-            read_bytes += len;
-        }
-        Ok((read_bytes, result))
+        values::parse_vec(self, |me| me.reader, f)
     }
     fn parse_byte(&mut self) -> Result<(usize, u8)> {
-        Ok((1, self.reader.read_exact_one()?))
+        values::parse_byte(self.reader)
     }
     fn parse_name(&mut self) -> Result<(usize, String)> {
-        let (len, name) = self.parse_vec(Self::parse_byte)?;
-        Ok((
-            len,
-            String::from_utf8(name).map_err(|_| WasmParserError::InvalidNameEncoding)?,
-        ))
+        values::parse_name(self.reader)
     }
-    fn skip_section(&mut self, size: u32) -> Result<()> {
-        for _idx in 0..size {
-            self.reader.read_exact_one()?;
-        }
-        Ok(())
+    fn parse_valtype(&mut self) -> Result<(usize, ValType)> {
+        types::parse_valtype(self.reader)
     }
-
+    fn parse_functype(&mut self) -> Result<(usize, FuncType)> {
+        types::parse_functype(self.reader)
+    }
+    fn parse_global_type(&mut self) -> Result<(usize, GlobalType)> {
+        types::parse_global_type(self.reader)
+    }
+    fn parse_table_type(&mut self) -> Result<(usize, TableType)> {
+        types::parse_table_type(self.reader)
+    }
+    fn parse_memtype(&mut self) -> Result<(usize, MemType)> {
+        types::parse_memtype(self.reader)
+    }
     fn parse_typeidx(&mut self) -> Result<(usize, TypeIdx)> {
         let (len, v) = self.parse_u32()?;
         Ok((len, TypeIdx(v)))
     }
+
     fn parse_import_desc(&mut self, type_section: &TypeSection) -> Result<(usize, ImportDesc)> {
         let ty = self.reader.read_exact_one()?;
         Ok(match ty {
@@ -355,42 +349,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let (len3, desc) = self.parse_import_desc(type_section)?;
         Ok((len + len2 + len3, Import { desc, module, name }))
     }
-    fn parse_valtype(&mut self) -> Result<(usize, ValType)> {
-        let v = self.reader.read_exact_one()?;
-        let ty = match v {
-            0x7f => ValType::I32,
-            0x7e => ValType::I64,
-            0x7d => ValType::F32,
-            0x7c => ValType::F64,
-            0x7b => ValType::V128,
-            0x70 => ValType::FuncRef,
-            0x6f => ValType::ExternRef,
-            unknown => Err(WasmParserError::InvalidValueType(unknown))?,
-        };
-        Ok((1, ty))
-    }
-    fn parse_result_type(&mut self) -> Result<(usize, ResultType)> {
-        let (len, v) = self.parse_vec(Self::parse_valtype)?;
-        Ok((len, ResultType(v)))
-    }
-
-    fn parse_functype(&mut self) -> Result<(usize, FuncType)> {
-        let mut read_bytes = 0;
-        let signature = self.reader.read_exact_one()?;
-        trace!("parse_functype: {signature}");
-        read_bytes += 1;
-        if signature != 0x60 {
-            Err(WasmParserError::InvalidFunctionTypeSignature(signature))?
+    fn skip_section(&mut self, size: u32) -> Result<()> {
+        for _idx in 0..size {
+            self.reader.read_exact_one()?;
         }
-        let (len, input) = self.parse_result_type()?;
-        trace!("parse_functype: {len} {input:?}");
-
-        read_bytes += len;
-        let (len, output) = self.parse_result_type()?;
-        read_bytes += len;
-        trace!("parse_functype: {len} {output:?}");
-
-        Ok((read_bytes, FuncType(input, output)))
+        Ok(())
     }
     fn parse_exportdesc(&mut self) -> Result<(usize, ExportDesc)> {
         let mut read_bytes = 0;
@@ -408,35 +371,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         Ok((read_bytes, desc))
     }
 
-    fn parse_ref_type(&mut self) -> Result<(usize, RefType)> {
-        let v = self.reader.read_exact_one()?;
-        Ok((
-            1,
-            match v {
-                0x70 => RefType::FuncRef,
-                0x6f => RefType::ExternRef,
-                unknown => Err(WasmParserError::InvalidValueType(unknown))?,
-            },
-        ))
-    }
-    fn parse_table_type(&mut self) -> Result<(usize, TableType)> {
-        let (len, reftype) = self.parse_ref_type()?;
-        let (len2, limits) = self.parse_limits()?;
-        Ok((len + len2, TableType { reftype, limits }))
-    }
     fn parse_table(&mut self) -> Result<(usize, Table)> {
         let (len, tt) = self.parse_table_type()?;
         Ok((len, Table(tt)))
-    }
-
-    fn parse_global_type(&mut self) -> Result<(usize, GlobalType)> {
-        let (len, vt) = self.parse_valtype()?;
-        let m = match self.reader.read_exact_one()? {
-            0x00 => Mut::Const,
-            0x01 => Mut::Var,
-            unknown => Err(WasmParserError::InvalidMut(unknown))?,
-        };
-        Ok((1 + len, GlobalType(vt, m)))
     }
 
     fn parse_const_expr(&mut self) -> Result<(usize, Vec<WasmValue>)> {
@@ -573,44 +510,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         };
         Ok(r)
     }
-    fn parse_limits(&mut self) -> Result<(usize, Limits)> {
-        match self.reader.read_exact_one()? {
-            0x00 => {
-                let (len, min) = self.parse_u32()?;
-                Ok((1 + len, Limits { min, max: None }))
-            }
-            0x01 => {
-                let (len, min) = self.parse_u32()?;
-                let (len2, max) = self.parse_u32()?;
 
-                Ok((
-                    1 + len + len2,
-                    Limits {
-                        min,
-                        max: Some(max),
-                    },
-                ))
-            }
-            _ => todo!(),
-        }
-    }
-    fn parse_memtype(&mut self) -> Result<(usize, MemType)> {
-        let (len, limits) = self.parse_limits()?;
-        if limits
-            .max
-            .map(|max| limits.min > max)
-            .unwrap_or_else(|| false)
-        {
-            Err(WasmParserError::InvalidMemorySize(limits))?
-        }
-        if limits.min > 65536 {
-            Err(WasmParserError::InvalidMemorySize(limits))?
-        }
-        if limits.max.map(|max| max > 65536).unwrap_or_else(|| false) {
-            Err(WasmParserError::InvalidMemorySize(limits))?
-        }
-        Ok((len, MemType(limits)))
-    }
     fn parse_locals(&mut self) -> Result<(usize, Locals)> {
         let (len, n) = self.parse_u32()?;
         let (len2, t) = self.parse_valtype()?;
