@@ -34,11 +34,11 @@ pub fn parse_functype<R: BinaryReader>(reader: &mut R) -> Result<(usize, FuncTyp
     if signature != 0x60 {
         Err(WasmParserError::InvalidFunctionTypeSignature(signature))?
     }
-    let (len, input) = parse_result_type()?;
+    let (len, input) = parse_result_type(reader)?;
     trace!("parse_functype: {len} {input:?}");
 
     read_bytes += len;
-    let (len, output) = parse_result_type()?;
+    let (len, output) = parse_result_type(reader)?;
     read_bytes += len;
     trace!("parse_functype: {len} {output:?}");
 
@@ -66,12 +66,12 @@ pub fn parse_table_type<R: BinaryReader>(reader: &mut R) -> Result<(usize, Table
 pub fn parse_limits<R: BinaryReader>(reader: &mut R) -> Result<(usize, Limits)> {
     match reader.read_exact_one()? {
         0x00 => {
-            let (len, min) = parse_u32()?;
+            let (len, min) = parse_u32(reader)?;
             Ok((1 + len, Limits { min, max: None }))
         }
         0x01 => {
-            let (len, min) = parse_u32()?;
-            let (len2, max) = parse_u32()?;
+            let (len, min) = parse_u32(reader)?;
+            let (len2, max) = parse_u32(reader)?;
 
             Ok((
                 1 + len + len2,
@@ -86,7 +86,7 @@ pub fn parse_limits<R: BinaryReader>(reader: &mut R) -> Result<(usize, Limits)> 
 }
 
 pub fn parse_global_type<R: BinaryReader>(reader: &mut R) -> Result<(usize, GlobalType)> {
-    let (len, vt) = parse_valtype()?;
+    let (len, vt) = parse_valtype(reader)?;
     let m = match reader.read_exact_one()? {
         0x00 => Mut::Const,
         0x01 => Mut::Var,
