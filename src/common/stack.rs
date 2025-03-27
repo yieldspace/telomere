@@ -18,8 +18,7 @@ pub struct LocalReference {
 }
 impl Stack {
     pub fn new(size: usize) -> Self {
-        let mut vec = Vec::with_capacity(size);
-        vec.resize(size, 0);
+        let vec = vec![0; size];
         Stack {
             memory: vec.into_boxed_slice(),
             top: 0,
@@ -73,8 +72,8 @@ impl Stack {
     }
     pub fn drop(&mut self, n: usize) -> &[u8] {
         self.sub_top(n);
-        let slice = &self.memory[self.top..self.top + n];
-        slice
+
+        (&self.memory[self.top..self.top + n]) as _
     }
     pub fn push_u32(&mut self, v: u32) -> VMResult<()> {
         self.push_u8_array(v.to_le_bytes())

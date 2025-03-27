@@ -36,7 +36,7 @@ fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMRe
     VMResult::Success(())
 }
 
-pub fn instantiate<'a>(m: &Module, store: &mut Store, registry: &Registry) -> VMResult<Instance> {
+pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResult<Instance> {
     let mut memory: Option<Rc<RefCell<Memory>>> = None;
 
     let mut globals = vec![];
