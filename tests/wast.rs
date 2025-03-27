@@ -355,3 +355,8 @@ fn memory_init() {
 fn imports() {
     run_test_file("imports");
 }
+
+#[test]
+fn comments() {
+    run_test_file("comments");
+}
