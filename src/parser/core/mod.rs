@@ -1,8 +1,7 @@
 mod parser;
-mod values;
 mod types;
+mod values;
 
 pub use parser::WasmParser;
 pub use parser::WasmParserError;
 pub use values::*;
-pub use types::*;

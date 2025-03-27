@@ -1,8 +1,10 @@
-use tracing::trace;
 use crate::binary::BinaryReader;
-use crate::common::{FuncType, GlobalType, Limits, MemType, Mut, RefType, ResultType, TableType, ValType};
+use crate::common::{
+    FuncType, GlobalType, Limits, MemType, Mut, RefType, ResultType, TableType, ValType,
+};
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::WasmParserError;
+use tracing::trace;
 
 pub type Result<R> = std::result::Result<R, WasmParserError>;
 
@@ -22,7 +24,7 @@ pub fn parse_valtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, ValType)
 }
 
 pub fn parse_result_type<R: BinaryReader>(reader: &mut R) -> Result<(usize, ResultType)> {
-    let (len, v) = parse_vec(reader, parse_valtype)?;
+    let (len, v) = parse_vec(reader, |v| v, parse_valtype)?;
     Ok((len, ResultType(v)))
 }
 

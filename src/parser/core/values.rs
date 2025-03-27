@@ -1,12 +1,12 @@
-use tracing::trace;
 use crate::binary::BinaryReader;
 use crate::parser::leb128::Leb128Parser;
 use crate::WasmParserError;
+use tracing::trace;
 
 pub type Result<R> = std::result::Result<R, WasmParserError>;
 
 pub fn parse_u32<R: BinaryReader>(reader: &mut R) -> Result<(usize, u32)> {
-    Leb128Parser::new(reader).parse_u32(size_of::<u32>() * 8).map_err(|e| e.into())
+    Leb128Parser::new(reader).parse_u32(std::mem::size_of::<u32>() * 8)
 }
 
 pub fn parse_i32<R: BinaryReader>(reader: &mut R) -> Result<(usize, i32)> {
@@ -27,15 +27,22 @@ pub fn parse_f64<R: BinaryReader>(reader: &mut R) -> Result<(usize, f64)> {
     Ok((8, f64::from_le_bytes(v)))
 }
 
-pub fn parse_vec<R: BinaryReader, V>(reader: &mut R, mut f: impl FnMut(&mut R) -> Result<(usize, V)>,) -> Result<(usize, Vec<V>)> {
+pub fn parse_vec<A, R: BinaryReader, V, E>(
+    env: &mut A,
+    reader: impl FnOnce(&mut A) -> &mut R,
+    mut f: impl FnMut(&mut A) -> std::result::Result<(usize, V), E>,
+) -> std::result::Result<(usize, Vec<V>), E>
+where
+    E: From<WasmParserError>,
+{
     let mut read_bytes = 0;
 
-    let (len_len, len) = parse_u32(reader)?;
+    let (len_len, len) = parse_u32(reader(env))?;
     trace!("parse_vec: {len_len} {len}");
     read_bytes += len_len;
     let mut result = Vec::new();
     for _i in 0..len {
-        let (len, v) = f(reader)?;
+        let (len, v) = f(env)?;
         result.push(v);
         read_bytes += len;
     }
@@ -47,7 +54,7 @@ pub fn parse_byte<R: BinaryReader>(reader: &mut R) -> Result<(usize, u8)> {
 }
 
 pub fn parse_name<R: BinaryReader>(reader: &mut R) -> Result<(usize, String)> {
-    let (len, name) = parse_vec(reader, parse_byte)?;
+    let (len, name) = parse_vec(reader, |v| v, parse_byte)?;
     Ok((
         len,
         String::from_utf8(name).map_err(|_| WasmParserError::InvalidNameEncoding)?,
