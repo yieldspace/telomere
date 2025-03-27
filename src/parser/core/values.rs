@@ -9,6 +9,24 @@ pub fn parse_u32<R: BinaryReader>(reader: &mut R) -> Result<(usize, u32)> {
     Leb128Parser::new(reader).parse_u32(size_of::<u32>() * 8).map_err(|e| e.into())
 }
 
+pub fn parse_i32<R: BinaryReader>(reader: &mut R) -> Result<(usize, i32)> {
+    Leb128Parser::new(reader).parse_i32(std::mem::size_of::<i32>() * 8)
+}
+
+pub fn parse_i64<R: BinaryReader>(reader: &mut R) -> Result<(usize, i64)> {
+    Leb128Parser::new(reader).parse_i64(std::mem::size_of::<i64>() * 8)
+}
+
+pub fn parse_f32<R: BinaryReader>(reader: &mut R) -> Result<(usize, f32)> {
+    let v = reader.read_exact::<4>()?;
+    Ok((4, f32::from_le_bytes(v)))
+}
+
+pub fn parse_f64<R: BinaryReader>(reader: &mut R) -> Result<(usize, f64)> {
+    let v = reader.read_exact::<8>()?;
+    Ok((4, f64::from_le_bytes(v)))
+}
+
 pub fn parse_vec<R: BinaryReader, V>(reader: &mut R, mut f: impl FnMut(&mut R) -> Result<(usize, V)>,) -> Result<(usize, Vec<V>)> {
     let mut read_bytes = 0;
 
