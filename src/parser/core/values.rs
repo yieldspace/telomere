@@ -8,7 +8,6 @@ pub type Result<R> = std::result::Result<R, WasmParserError>;
 pub fn parse_u32<R: BinaryReader>(reader: &mut R) -> Result<(usize, u32)> {
     Leb128Parser::new(reader)
         .parse_u32(std::mem::size_of::<u32>() * 8)
-        .map_err(|e| e)
 }
 
 pub fn parse_i32<R: BinaryReader>(reader: &mut R) -> Result<(usize, i32)> {
