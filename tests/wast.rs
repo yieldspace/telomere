@@ -412,10 +412,6 @@ fn custom() {
 }
 #[test]
 fn data() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
-
     run_test_file("data");
 }
 /*
@@ -428,3 +424,7 @@ fn elem() {
     run_test_file("bulk");
 }
 */
+#[test]
+fn endianness() {
+    run_test_file("endianness");
+}

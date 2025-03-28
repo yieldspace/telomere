@@ -2222,6 +2222,66 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x72 => {
+                trace!("parse_op_i32_or");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_or });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x73 => {
+                trace!("parse_op_i32_xor");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_xor });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x74 => {
+                trace!("parse_op_i32_shl");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_shl });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x75 => {
+                trace!("parse_op_i32_shr_s");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_shr_s });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x76 => {
+                trace!("parse_op_i32_shr_u");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_shr_u });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x7A => {
                 trace!("parse_op_i64_ctz");
                 if !*unreachable {
@@ -2260,6 +2320,78 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 trace!("parse_op_i64_mul");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_mul });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x83 => {
+                trace!("parse_op_i64_and");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_and });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x84 => {
+                trace!("parse_op_i64_or");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_or });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x85 => {
+                trace!("parse_op_i64_xor");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_xor });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x86 => {
+                trace!("parse_op64_shl");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_shl });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x87=> {
+                trace!("parse_op_i64_shr_s");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_shr_s });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x88 => {
+                trace!("parse_op_i64_shr_u");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_shr_u });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
