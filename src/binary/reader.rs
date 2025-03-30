@@ -23,9 +23,14 @@ pub trait BinaryReader {
     {
         Ok(self.read_exact::<1>()?[0])
     }
+
+    fn read_count(&self) -> usize
+    where
+        Self: Sized;
 }
 pub struct IoReadBinaryReader<R: Read> {
     read: R,
+    count: usize,
 }
 
 impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
@@ -35,6 +40,7 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
     {
         let mut buf = [0u8; N];
         let len = self.read.read(&mut buf)?;
+        self.count += len;
         Ok((len, buf))
     }
 
@@ -46,9 +52,45 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
         self.read.read_exact(&mut buf)?;
         Ok(buf)
     }
+
+    fn read_count(&self) -> usize
+    where
+        Self: Sized,
+    {
+        self.count
+    }
 }
 impl<R: Read> From<R> for IoReadBinaryReader<R> {
     fn from(read: R) -> Self {
-        Self { read }
+        Self { read, count: 0 }
+    }
+}
+
+#[macro_export]
+macro_rules! with_count {
+    ($reader:expr, $b:block) => {{
+        let start_count = $reader.read_count();
+        let result = $b;
+        let end_count = $reader.read_count();
+        let count = end_count - start_count;
+        (count, result)
+    }};
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_count() {
+        use super::*;
+        use std::io::Cursor;
+
+        let data = [1, 2, 3, 4, 5];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+
+        let (count, _) = with_count!(reader, {
+            let _ = reader.read::<2>().unwrap();
+            1
+        });
+        assert_eq!(count, 2);
     }
 }
