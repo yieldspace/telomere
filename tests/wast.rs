@@ -572,3 +572,7 @@ fn load() {
 fn local_get() {
     run_test_file("local_get");
 }
+#[test]
+fn local_set() {
+    run_test_file("local_set");
+}
