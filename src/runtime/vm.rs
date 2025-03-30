@@ -149,6 +149,37 @@ pub unsafe fn op_f32_div(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_f32_min(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    trace!("op_f32_min");
+    let b = ctx.stack.pop_f32();
+    let a = ctx.stack.pop_f32();
+    let r = if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else if a == 0. && b == 0. && (a.is_sign_negative() || b.is_sign_negative()) {
+        f32::from_bits(2147483648)
+    } else {
+        f32::min(a, b)
+    };
+    vm_try!(ctx.stack.push_f32(r));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f32_max(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    trace!("op_f32_max");
+    let b = ctx.stack.pop_f32();
+    let a = ctx.stack.pop_f32();
+
+    let r = if a.is_nan() || b.is_nan() {
+        f32::NAN
+    } else if a == 0. && b == 0. && (a.is_sign_positive() || b.is_sign_positive()) {
+        0.0
+    } else {
+        f32::max(a, b)
+    };
+    vm_try!(ctx.stack.push_f32(r));
+
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_f64_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_add");
     let b = ctx.stack.pop_f64();
@@ -907,6 +938,26 @@ pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 pub unsafe fn op_f32_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
     vm_try!(ctx.stack.push_f32(-a));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f32_ceil(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_f32(a.ceil()));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f32_floor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_f32(a.floor()));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f32_trunc(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_f32(a.trunc()));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f32_nearest(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_f32(a.round_ties_even()));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_f64_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {

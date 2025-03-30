@@ -2455,6 +2455,50 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x8D => {
+                trace!("parse_op_f32_ceil");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_ceil });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
+            0x8E => {
+                trace!("parse_op_f32_floor");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_floor });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
+            0x8F => {
+                trace!("parse_op_f32_trunc");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_trunc });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
+            0x90 => {
+                trace!("parse_op_f32_nearest");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_nearest });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
             0x91 => {
                 trace!("parse_op_f32_sqrt");
                 if !*unreachable {
@@ -2508,6 +2552,30 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 trace!("parse_op_f32_div");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_div });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
+            0x96 => {
+                trace!("parse_op_f32_min");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_min });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
+            0x97 => {
+                trace!("parse_op_f32_max");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_max });
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;

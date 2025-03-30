@@ -139,14 +139,14 @@ fn run_wast(text: &str) {
                                     WasmValue::F32(actual),
                                 ) => {
                                     // TODO: is canonical nan?
-                                    assert!(actual.is_nan());
+                                    assert!(actual.is_nan(), "{:?}", span.linecol_in(text));
                                 }
                                 (
                                     WastRetCore::F32(NanPattern::ArithmeticNan),
                                     WasmValue::F32(actual),
                                 ) => {
                                     // TODO: is arithmetic nan?
-                                    assert!(actual.is_nan());
+                                    assert!(actual.is_nan(), "{:?}", span.linecol_in(text));
                                 }
                                 (
                                     WastRetCore::F64(NanPattern::Value(expected)),
@@ -195,13 +195,7 @@ fn run_wast(text: &str) {
                 } => {
                     if let Some(id) = id {
                         let (module, instance) = registry.get(id.name()).unwrap();
-                        get_global(
-                            module,
-                            &instance,
-                            &mut store,
-                            global,
-                        )
-                        .unwrap();
+                        get_global(module, &instance, &mut store, global).unwrap();
                     } else {
                         get_global(
                             &module.as_ref().unwrap(),
@@ -476,4 +470,8 @@ fn endianness() {
 #[test]
 fn exports() {
     run_test_file("exports");
+}
+#[test]
+fn f32() {
+    run_test_file("f32");
 }
