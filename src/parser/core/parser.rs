@@ -2124,6 +2124,18 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x60 => {
+                trace!("parse_op_f32_ge");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_ge });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x61 => {
                 trace!("parse_op_f64_eq");
                 if !*unreachable {

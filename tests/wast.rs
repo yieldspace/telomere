@@ -479,3 +479,7 @@ fn f32() {
 fn f32_bitwise() {
     run_test_file("f32_bitwise");
 }
+#[test]
+fn f32_cmp() {
+    run_test_file("f32_cmp");
+}
