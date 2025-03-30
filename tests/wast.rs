@@ -551,3 +551,7 @@ fn inline_module() {
 fn int_exprs() {
     run_test_file("int_exprs");
 }
+/*#[test]
+fn labels() {
+    run_test_file("labels");
+}*/
