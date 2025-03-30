@@ -555,3 +555,7 @@ fn int_exprs() {
 fn labels() {
     run_test_file("labels");
 }*/
+#[test]
+fn left_to_right() {
+    run_test_file("left-to-right");
+}
