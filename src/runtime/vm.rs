@@ -180,6 +180,15 @@ pub unsafe fn op_f32_max(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_f32_copysign(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    trace!("op_f32_copysign");
+    let b = ctx.stack.pop_f32();
+    let a = ctx.stack.pop_f32();
+
+    vm_try!(ctx.stack.push_f32(a.copysign(b)));
+
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_f64_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_add");
     let b = ctx.stack.pop_f64();
@@ -934,6 +943,11 @@ pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     trace!("op_i64_store32: {:?} offset={} value={v}", memarg, offset);
     vm_try!(ctx.memory.write_u32(memarg, offset, v as u32));
     call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_f32_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push_f32(a.abs()));
+    call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_f32_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();

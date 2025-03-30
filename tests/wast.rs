@@ -475,3 +475,7 @@ fn exports() {
 fn f32() {
     run_test_file("f32");
 }
+#[test]
+fn f32_bitwise() {
+    run_test_file("f32_bitwise");
+}

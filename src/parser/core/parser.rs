@@ -2444,6 +2444,17 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x8B => {
+                trace!("parse_op_f32_abs");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_abs });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
             0x8C => {
                 trace!("parse_op_f32_neg");
                 if !*unreachable {
@@ -2576,6 +2587,18 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 trace!("parse_op_f32_max");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_max });
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_valtype(ValType::F32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F32);
+                }
+                (1, false)
+            }
+            0x98 => {
+                trace!("parse_op_f32_copysign");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f32_copysign });
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
