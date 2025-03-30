@@ -576,3 +576,7 @@ fn local_get() {
 fn local_set() {
     run_test_file("local_set");
 }
+#[test]
+fn local_tee() {
+    run_test_file("local_tee");
+}
