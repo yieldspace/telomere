@@ -502,6 +502,9 @@ fn fac() {
 
 #[test]
 fn float_exprs() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("float_exprs");
+}
+#[test]
+fn float_literals() {
+    run_test_file("float_literals");
 }
