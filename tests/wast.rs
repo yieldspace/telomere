@@ -563,3 +563,8 @@ fn left_to_right() {
 fn linking() {
     run_test_file("linking");
 }*/
+
+#[test]
+fn load() {
+    run_test_file("load");
+}
