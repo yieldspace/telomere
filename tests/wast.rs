@@ -537,6 +537,10 @@ fn global() {
 }
 #[test]
 fn i32() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("i32");
+}
+#[test]
+fn i64() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
+    run_test_file("i64");
 }

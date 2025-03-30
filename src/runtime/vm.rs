@@ -1,4 +1,4 @@
-use std::ops::{BitXor, Rem};
+use std::ops::BitXor;
 
 use crate::{
     common::{
@@ -1178,6 +1178,27 @@ pub unsafe fn op_i32_div_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     trace!("op_i32_div_u: {a} {b} => {r}");
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_i64_div_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a = ctx.stack.pop_i64();
+    let b = ctx.stack.pop_i64();
+
+    let r = vm_try!(VMResult::from_option(b.checked_div(a), || {
+        VMResult::InvalidOperand
+    }));
+    vm_try!(ctx.stack.push_i64(r));
+    trace!("op_i64_div_s: {a} {b} => {r}");
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_div_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a = ctx.stack.pop_u64();
+    let b = ctx.stack.pop_u64();
+    let r = vm_try!(VMResult::from_option(b.checked_div(a), || {
+        VMResult::InvalidOperand
+    }));
+    vm_try!(ctx.stack.push_u64(r));
+    trace!("op_i64_div_u: {a} {b} => {r}");
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_i64_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
@@ -1221,6 +1242,25 @@ pub unsafe fn op_i32_rem_u(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
         VMResult::InvalidOperand
     }));
     vm_try!(ctx.stack.push_u32(r));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_rem_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_i64();
+    let a = ctx.stack.pop_i64();
+    if b == 0 {
+        return VMResult::InvalidOperand;
+    }
+    vm_try!(ctx.stack.push_i64(a.wrapping_rem(b)));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_rem_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u64();
+    let a = ctx.stack.pop_u64();
+    let r = vm_try!(VMResult::from_option(a.checked_rem(b), || {
+        VMResult::InvalidOperand
+    }));
+    vm_try!(ctx.stack.push_u64(r));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_i32_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1278,6 +1318,22 @@ pub unsafe fn op_i32_rotr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let a = ctx.stack.pop_u32();
 
     vm_try!(ctx.stack.push_u32(a.rotate_right(b)));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_rotl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u64();
+    let a = ctx.stack.pop_u64();
+
+    vm_try!(ctx.stack.push_u64(a.rotate_left(b as u32)));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_rotr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u64();
+    let a = ctx.stack.pop_u64();
+
+    vm_try!(ctx.stack.push_u64(a.rotate_right(b as u32)));
 
     call_next(tail_code, 0, ctx)
 }
@@ -1364,6 +1420,14 @@ pub unsafe fn op_i64_gt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let a = ctx.stack.pop_u64();
 
     vm_try!(ctx.stack.push_u32(if a > b { 1 } else { 0 }));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_le_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_i64();
+    let a = ctx.stack.pop_i64();
+
+    vm_try!(ctx.stack.push_u32(if a <= b { 1 } else { 0 }));
 
     call_next(tail_code, 0, ctx)
 }
