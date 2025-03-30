@@ -1288,7 +1288,7 @@ const VM_END: Instr = Instr {
 };
 pub fn run_module_function(
     m: &Module,
-    instance: &mut Instance,
+    instance: &Instance,
     store: &mut Store,
     name: &str,
     args: &ResultValue,
@@ -1333,6 +1333,7 @@ pub fn run_module_function(
             table,
             globals,
         } = instance;
+        let mut memory = memory.clone();
         let memory_ref_mut = memory.as_mut().map(|v| v.borrow_mut());
         if let Some(mut memory) = memory_ref_mut {
             let mut ctx = ExecuteContext {
@@ -1377,6 +1378,32 @@ pub fn run_module_function(
                 .collect::<Vec<_>>();
         result.reverse();
         VMResult::Success(ResultValue(result))
+    } else {
+        unimplemented!()
+    }
+}
+pub fn get_global(
+    m: &Module,
+    instance: &Instance,
+    store: &mut Store,
+    name: &str,
+) -> VMResult<WasmValue> {
+    if let Some(ExportDesc::Global(idx)) = m.exs.find(name) {
+        let addr = instance.globals[idx.0 as usize] as usize;
+        let gt = m.globals[idx.0 as usize];
+        VMResult::Success(match gt.0 {
+            ValType::I32 => {
+                let mut buf = [0u8; 4];
+                buf.copy_from_slice(&store.globals.0[addr..addr + 4]);
+                WasmValue::I32(i32::from_le_bytes(buf))
+            }
+            ValType::I64 => {
+                let mut buf = [0u8; 8];
+                buf.copy_from_slice(&store.globals.0[addr..addr + 8]);
+                WasmValue::I64(i64::from_le_bytes(buf))
+            }
+            _ => todo!(),
+        })
     } else {
         unimplemented!()
     }

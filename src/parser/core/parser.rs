@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use thiserror::Error;
 use tracing::trace;
@@ -88,6 +88,10 @@ pub enum WasmParserError {
     InvalidDataIdx(u32),
     #[error("invalid data section count")]
     InvalidDataSectionCount,
+    #[error("unknown export")]
+    UnknownExport,
+    #[error("duplicated export")]
+    DuplicatedExport(String),
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {
@@ -380,16 +384,42 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
         Ok(())
     }
-    fn parse_exportdesc(&mut self) -> Result<(usize, ExportDesc)> {
+    fn parse_exportdesc(
+        &mut self,
+        functions: &[TypeIdx],
+        globals: &[GlobalType],
+        tables: &[TableType],
+        mems: &[MemType],
+    ) -> Result<(usize, ExportDesc)> {
         let mut read_bytes = 0;
         let (len, ty) = self.parse_byte()?;
         read_bytes += len;
         let (len, idx) = self.parse_u32()?;
         let desc = match ty {
-            0x00 => ExportDesc::Func(FuncIdx(idx)),
-            0x01 => ExportDesc::Table(TableIdx(idx)),
-            0x02 => ExportDesc::Mem(MemIdx(idx)),
-            0x03 => ExportDesc::Global(GlobalIdx(idx)),
+            0x00 => {
+                if functions.get(idx as usize).is_none() {
+                    return Err(WasmParserError::UnknownExport);
+                }
+                ExportDesc::Func(FuncIdx(idx))
+            }
+            0x01 => {
+                if tables.get(idx as usize).is_none() {
+                    return Err(WasmParserError::UnknownExport);
+                }
+                ExportDesc::Table(TableIdx(idx))
+            }
+            0x02 => {
+                if mems.get(idx as usize).is_none() {
+                    return Err(WasmParserError::UnknownExport);
+                }
+                ExportDesc::Mem(MemIdx(idx))
+            }
+            0x03 => {
+                if globals.get(idx as usize).is_none() {
+                    return Err(WasmParserError::UnknownExport);
+                }
+                ExportDesc::Global(GlobalIdx(idx))
+            }
             unknown => Err(WasmParserError::InvalidExportDesc(unknown))?,
         };
         read_bytes += len;
@@ -441,11 +471,17 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         Ok((len + len2, Global(gt, init)))
     }
 
-    fn parse_export(&mut self) -> Result<(usize, Export)> {
+    fn parse_export(
+        &mut self,
+        functions: &[TypeIdx],
+        globals: &[GlobalType],
+        tables: &[TableType],
+        mems: &[MemType],
+    ) -> Result<(usize, Export)> {
         let mut read_bytes = 0;
         let (len, name) = self.parse_name()?;
         read_bytes += len;
-        let (len, desc) = self.parse_exportdesc()?;
+        let (len, desc) = self.parse_exportdesc(functions, globals, tables, mems)?;
         read_bytes += len;
         Ok((read_bytes, Export(name, desc)))
     }
@@ -2261,7 +2297,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x75 => {
                 trace!("parse_op_i32_shr_s");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_shr_s });
+                    instrs.push(Instr {
+                        op: vm::op_i32_shr_s,
+                    });
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -2273,7 +2311,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x76 => {
                 trace!("parse_op_i32_shr_u");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_shr_u });
+                    instrs.push(Instr {
+                        op: vm::op_i32_shr_u,
+                    });
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -2376,10 +2416,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
-            0x87=> {
+            0x87 => {
                 trace!("parse_op_i64_shr_s");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_shr_s });
+                    instrs.push(Instr {
+                        op: vm::op_i64_shr_s,
+                    });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -2391,7 +2433,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x88 => {
                 trace!("parse_op_i64_shr_u");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_shr_u });
+                    instrs.push(Instr {
+                        op: vm::op_i64_shr_u,
+                    });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -3271,8 +3315,22 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
         Ok(memories)
     }
-    fn parse_export_section(&mut self, size: u32) -> Result<ExportSection> {
-        let (len, exports) = self.parse_vec(&Self::parse_export)?;
+    fn parse_export_section(
+        &mut self,
+        functions: &[TypeIdx],
+        globals: &[GlobalType],
+        tables: &[TableType],
+        mems: &[MemType],
+        size: u32,
+    ) -> Result<ExportSection> {
+        let (len, exports) =
+            self.parse_vec(|me| me.parse_export(functions, globals, tables, mems))?;
+        let mut set = HashSet::new();
+        for export in &exports {
+            if !set.insert(&export.0) {
+                Err(WasmParserError::DuplicatedExport(export.0.clone()))?
+            }
+        }
         if len != size as usize {
             Err(WasmParserError::InvalidSectionSize)?
         }
@@ -3482,7 +3540,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     }
                 }
                 WasmSectionType::Export => {
-                    export_section = Some(self.parse_section_body(Self::parse_export_section)?);
+                    export_section = Some(self.parse_section_body(|me, size| {
+                        me.parse_export_section(&functions, &globals, &tables, &mems, size)
+                    })?);
                 }
                 WasmSectionType::Start => {
                     let (_, size) = self.parse_u32()?;

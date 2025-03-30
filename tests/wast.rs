@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use telomere::{common::Instance, instantiate, Module, Registry, ResultValue, Store, WasmValue};
+use telomere::{
+    common::Instance, get_global, instantiate, Module, Registry, ResultValue, Store, WasmValue,
+};
 use tracing::{error, Level};
 use wast::{
     core::{NanPattern, WastRetCore},
@@ -70,12 +72,18 @@ fn run_wast(text: &str) {
         use wast::WastDirective;
         match directive {
             WastDirective::Module(mut m) => {
+                let name = m.name();
+
                 let source = m.encode().unwrap();
                 let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                 let mut parser = telomere::WasmParser::new(&mut reader);
                 let m = parser.parse_module().unwrap();
                 tracing::trace!("{:?}", m.elems);
-                instance = Some(instantiate(&m, &mut store, &registry).unwrap());
+                let inst = instantiate(&m, &mut store, &registry).unwrap();
+                if let Some(name) = name {
+                    registry.register(name.name(), m.clone(), inst.clone());
+                }
+                instance = Some(inst);
                 module = Some(m);
             }
             WastDirective::AssertReturn {
@@ -85,14 +93,27 @@ fn run_wast(text: &str) {
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
                     tracing::trace!("executing {} {:?}", v.name, v.args);
-                    let actual = telomere::run_module_function(
-                        module.as_ref().unwrap(),
-                        instance.as_mut().unwrap(),
-                        &mut store,
-                        v.name,
-                        &ResultValue::new(convert_args(&v.args)),
-                    )
-                    .unwrap();
+                    let actual = if let Some(id) = v.module {
+                        let (module, instance) = registry.get(id.name()).unwrap();
+                        telomere::run_module_function(
+                            module,
+                            instance,
+                            &mut store,
+                            v.name,
+                            &ResultValue::new(convert_args(&v.args)),
+                        )
+                        .unwrap()
+                    } else {
+                        telomere::run_module_function(
+                            module.as_ref().unwrap(),
+                            instance.as_mut().unwrap(),
+                            &mut store,
+                            v.name,
+                            &ResultValue::new(convert_args(&v.args)),
+                        )
+                        .unwrap()
+                    };
+
                     for (expected, actual) in expected.iter().zip(actual.iter()) {
                         if let WastRet::Core(expected) = expected {
                             match (expected, actual) {
@@ -167,7 +188,31 @@ fn run_wast(text: &str) {
                         }
                     }
                 }
-                _ => unimplemented!(),
+                wast::WastExecute::Get {
+                    span: _,
+                    module: id,
+                    global,
+                } => {
+                    if let Some(id) = id {
+                        let (module, instance) = registry.get(id.name()).unwrap();
+                        get_global(
+                            module,
+                            &instance,
+                            &mut store,
+                            global,
+                        )
+                        .unwrap();
+                    } else {
+                        get_global(
+                            &module.as_ref().unwrap(),
+                            &instance.as_ref().unwrap(),
+                            &mut store,
+                            global,
+                        )
+                        .unwrap();
+                    }
+                }
+                unknown => unimplemented!("{:?}", unknown),
             },
             WastDirective::AssertMalformed {
                 span,
@@ -427,4 +472,8 @@ fn elem() {
 #[test]
 fn endianness() {
     run_test_file("endianness");
+}
+#[test]
+fn exports() {
+    run_test_file("exports");
 }

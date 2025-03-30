@@ -303,8 +303,8 @@ pub struct ExecuteContext<'a> {
     pub module: &'a Module,
     pub stack: &'a mut Stack,
     pub local_state: Vec<LocalState<'a>>,
-    pub table: &'a mut [TableInstance],
-    pub globals: &'a mut [u32],
+    pub table: &'a [TableInstance],
+    pub globals: &'a [u32],
     pub memory: &'a mut Memory,
     pub store: &'a mut Store,
 }

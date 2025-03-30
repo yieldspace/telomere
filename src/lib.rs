@@ -15,5 +15,6 @@ pub use common::WasmValue;
 pub use parser::core::WasmParser;
 pub use parser::core::WasmParserError;
 pub use runtime::instantiate;
+pub use runtime::vm::get_global;
 pub use runtime::vm::run_module_function;
 pub use runtime::vm::ResultValue;

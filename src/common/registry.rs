@@ -16,7 +16,7 @@ impl Registry {
     pub fn new() -> Self {
         Self(HashMap::new())
     }
-    pub(crate) fn get(&self, name: &str) -> Option<&(Module, Instance)> {
+    pub fn get(&self, name: &str) -> Option<&(Module, Instance)> {
         self.0.get(name)
     }
 }
