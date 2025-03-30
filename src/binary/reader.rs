@@ -40,7 +40,7 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
     {
         let mut buf = [0u8; N];
         let len = self.read.read(&mut buf)?;
-        self.count += N;
+        self.count += len;
         Ok((len, buf))
     }
 
@@ -50,7 +50,6 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
     {
         let mut buf = [0u8; N];
         self.read.read_exact(&mut buf)?;
-        self.count += N;
         Ok(buf)
     }
 
