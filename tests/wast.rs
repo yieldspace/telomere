@@ -568,3 +568,7 @@ fn linking() {
 fn load() {
     run_test_file("load");
 }
+#[test]
+fn local_get() {
+    run_test_file("local_get");
+}
