@@ -533,8 +533,10 @@ fn func_ptrs() {
 }
 #[test]
 fn global() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     run_test_file("global");
+}
+#[test]
+fn i32() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
+    run_test_file("i32");
 }

@@ -2053,6 +2053,20 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x4E => {
+                trace!("parse_op_i32_ge_s");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_ge_s,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x4F => {
                 trace!("parse_op_i32_ge_u");
                 if !*unreachable {
@@ -2393,6 +2407,17 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x6A => {
+                trace!("parse_op_i32_add");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i32_add });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x6B => {
                 trace!("parse_op_i32_sub");
                 if !*unreachable {
@@ -2417,6 +2442,20 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x6D => {
+                trace!("parse_op_i32_div_s");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_div_s,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x6E => {
                 trace!("parse_op_i32_div_u");
                 if !*unreachable {
@@ -2431,13 +2470,16 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
-            0x6A => {
-                trace!("parse_op_i32_add");
+            0x6F => {
+                trace!("parse_op_i32_rem_s");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_add });
+                    instrs.push(Instr {
+                        op: vm::op_i32_rem_s,
+                    });
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
+
                     types.push(ValType::I32);
                 }
                 (1, false)
@@ -2532,10 +2574,60 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x77 => {
+                trace!("parse_op_i32_rotl");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_rotl,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x78 => {
+                trace!("parse_op_i32_rotr");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_rotr,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x79 => {
+                trace!("parse_op_i64_clz");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_clz });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
             0x7A => {
                 trace!("parse_op_i64_ctz");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_ctz });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I64);
+                }
+                (1, false)
+            }
+            0x7B => {
+                trace!("parse_op_i64_popcnt");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_i64_popcnt });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
 
@@ -3489,6 +3581,56 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         0xFC, next as u8, 0x00, 0x00,
                     ]))?,
                 }
+            }
+            0xC0 => {
+                trace!("parse_op_i32_extend8_s");
+                if !*unreachable {
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    types.push(ValType::I32);
+                    instrs.push(Instr { op: vm::op_i32_extend8_s });
+                }
+                (1, false)
+            }
+            0xC1 => {
+                trace!("parse_op_i32_extend16_s");
+                if !*unreachable {
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    types.push(ValType::I32);
+                    instrs.push(Instr { op: vm::op_i32_extend16_s });
+                }
+                (1, false)
+            }
+            0xC2 => {
+                trace!("parse_op_i64_extend8_s");
+                if !*unreachable {
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    types.push(ValType::I64);
+                    instrs.push(Instr { op: vm::op_i64_extend8_s });
+                }
+                (1, false)
+            }
+            0xC3 => {
+                trace!("parse_op_i64_extend16_s");
+                if !*unreachable {
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    types.push(ValType::I64);
+                    instrs.push(Instr { op: vm::op_i64_extend16_s });
+                }
+                (1, false)
+            }
+            0xC4 => {
+                trace!("parse_op_i64_extend32_s");
+                if !*unreachable {
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    types.push(ValType::I64);
+                    instrs.push(Instr { op: vm::op_i64_extend32_s });
+                }
+                (1, false)
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
         })
