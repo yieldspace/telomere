@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use telomere::{
-    common::Instance, get_global, instantiate, Module, Registry, ResultValue, Store, WasmValue,
+    common::InstanceAddr, get_global, instantiate, Registry, ResultValue, Store, WasmValue,
 };
 use tracing::{error, Level};
 use wast::{
@@ -19,7 +19,7 @@ fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
                 wast::core::WastArgCore::F64(f64) => WasmValue::F64(f64::from_bits(f64.bits)),
                 wast::core::WastArgCore::V128(_) => todo!(),
                 wast::core::WastArgCore::RefNull(_) => todo!(),
-                wast::core::WastArgCore::RefExtern(v) => WasmValue::ExternRef(*v as u64),
+                wast::core::WastArgCore::RefExtern(v) => WasmValue::ExternRef(*v),
                 wast::core::WastArgCore::RefHost(_) => todo!(),
             },
             wast::WastArg::Component(_) => todo!(),
@@ -47,7 +47,7 @@ const SPECTEST_WAST: &str = r#"
     (func (export "print_f64_f64") (param f64 f64))
 )
 "#;
-fn init_spectest(store: &mut Store, registry: &Registry) -> (Module, Instance) {
+fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceAddr {
     let buf = ParseBuffer::new(SPECTEST_WAST).unwrap();
     let mut wat = wast::parser::parse::<Wat>(&buf).unwrap();
     let source = wat.encode().unwrap();
@@ -56,18 +56,17 @@ fn init_spectest(store: &mut Store, registry: &Registry) -> (Module, Instance) {
     let mut parser = telomere::WasmParser::new(&mut reader);
 
     let m = parser.parse_module().unwrap();
-    let instance = instantiate(&m, store, registry).unwrap();
-    (m, instance)
+    let ret = instantiate(m, store, registry).unwrap();
+    ret
 }
 fn run_wast(text: &str) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
-    let mut module: Option<Module> = None;
-    let mut instance: Option<Instance> = None;
+    let mut instance: Option<InstanceAddr> = None;
     let mut store = Store::new();
     let mut registry = Registry::new();
     let st = init_spectest(&mut store, &registry);
-    registry.register("spectest", st.0, st.1);
+    registry.register("spectest", st);
     for directive in wast.directives {
         use wast::WastDirective;
         match directive {
@@ -79,12 +78,11 @@ fn run_wast(text: &str) {
                 let mut parser = telomere::WasmParser::new(&mut reader);
                 let m = parser.parse_module().unwrap();
                 tracing::trace!("{:?}", m.elems);
-                let inst = instantiate(&m, &mut store, &registry).unwrap();
+                let inst = instantiate(m, &mut store, &registry).unwrap();
                 if let Some(name) = name {
-                    registry.register(name.name(), m.clone(), inst.clone());
+                    registry.register(name.name(), inst);
                 }
                 instance = Some(inst);
-                module = Some(m);
             }
             WastDirective::AssertReturn {
                 span,
@@ -92,11 +90,15 @@ fn run_wast(text: &str) {
                 results: expected,
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
-                    tracing::trace!("executing {} {:?}", v.name, v.args);
+                    tracing::trace!(
+                        "executing {} {:?} @ {:?}",
+                        v.name,
+                        v.args,
+                        v.span.linecol_in(text)
+                    );
                     let actual = if let Some(id) = v.module {
-                        let (module, instance) = registry.get(id.name()).unwrap();
+                        let instance = registry.get(id.name()).unwrap();
                         telomere::run_module_function(
-                            module,
                             instance,
                             &mut store,
                             v.name,
@@ -105,8 +107,7 @@ fn run_wast(text: &str) {
                         .unwrap()
                     } else {
                         telomere::run_module_function(
-                            module.as_ref().unwrap(),
-                            instance.as_mut().unwrap(),
+                            instance.unwrap(),
                             &mut store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
@@ -178,7 +179,7 @@ fn run_wast(text: &str) {
                                 }
                                 (WastRetCore::RefExtern(Some(v)), WasmValue::ExternRef(vv)) => {
                                     // ok
-                                    assert_eq!(*v as u64, *vv)
+                                    assert_eq!(v, vv)
                                 }
                                 _ => {
                                     error!(
@@ -201,16 +202,10 @@ fn run_wast(text: &str) {
                     global,
                 } => {
                     if let Some(id) = id {
-                        let (module, instance) = registry.get(id.name()).unwrap();
-                        get_global(module, &instance, &mut store, global).unwrap();
+                        let instance = registry.get(id.name()).unwrap();
+                        get_global(instance, &mut store, global).unwrap();
                     } else {
-                        get_global(
-                            &module.as_ref().unwrap(),
-                            &instance.as_ref().unwrap(),
-                            &mut store,
-                            global,
-                        )
-                        .unwrap();
+                        get_global(instance.unwrap(), &mut store, global).unwrap();
                     }
                 }
                 unknown => unimplemented!("{:?}", unknown),
@@ -254,8 +249,7 @@ fn run_wast(text: &str) {
                 message: _,
             } => {
                 let result = telomere::run_module_function(
-                    module.as_ref().unwrap(),
-                    instance.as_mut().unwrap(),
+                    instance.unwrap(),
                     &mut store,
                     call.name,
                     &ResultValue::new(convert_args(&call.args)),
@@ -268,16 +262,31 @@ fn run_wast(text: &str) {
                 message: _,
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
-                    tracing::trace!("executing(trap) {} {:?}", v.name, v.args);
-
-                    let result = telomere::run_module_function(
-                        module.as_ref().unwrap(),
-                        instance.as_mut().unwrap(),
-                        &mut store,
+                    tracing::trace!(
+                        "executing(trap) {} {:?} @ {:?}",
                         v.name,
-                        &ResultValue::new(convert_args(&v.args)),
+                        v.args,
+                        span.linecol_in(text)
                     );
-                    assert!(result.is_err(), "{:?}", span.linecol_in(text))
+
+                    if let Some(id) = v.module {
+                        let instance = registry.get(id.name()).unwrap();
+                        let result = telomere::run_module_function(
+                            instance,
+                            &mut store,
+                            v.name,
+                            &ResultValue::new(convert_args(&v.args)),
+                        );
+                        assert!(result.is_err(), "{:?}", span.linecol_in(text))
+                    } else {
+                        let result = telomere::run_module_function(
+                            instance.unwrap(),
+                            &mut store,
+                            v.name,
+                            &ResultValue::new(convert_args(&v.args)),
+                        );
+                        assert!(result.is_err(), "{:?}", span.linecol_in(text))
+                    }
                 }
                 wast::WastExecute::Wat(mut v) => {
                     let source = v.encode().unwrap();
@@ -285,7 +294,7 @@ fn run_wast(text: &str) {
                     let mut parser = telomere::WasmParser::new(&mut reader);
                     let m = parser.parse_module().unwrap();
                     assert!(
-                        instantiate(&m, &mut store, &registry).is_err(),
+                        instantiate(m, &mut store, &registry).is_err(),
                         "{:?}",
                         span.linecol_in(text)
                     )
@@ -296,8 +305,7 @@ fn run_wast(text: &str) {
             },
             WastDirective::Invoke(invoke) => {
                 let result = telomere::run_module_function(
-                    module.as_ref().unwrap(),
-                    instance.as_mut().unwrap(),
+                    instance.unwrap(),
                     &mut store,
                     invoke.name,
                     &ResultValue::new(convert_args(&invoke.args)),
@@ -310,7 +318,7 @@ fn run_wast(text: &str) {
                 module: _id,
             } => {
                 //assert!(id.is_none());
-                registry.register(name, module.clone().unwrap(), instance.clone().unwrap());
+                registry.register(name, instance.clone().unwrap());
             }
             WastDirective::AssertUnlinkable {
                 span,
@@ -325,7 +333,7 @@ fn run_wast(text: &str) {
 
                     // TODO: test error message
                     assert!(
-                        instantiate(&module, &mut store, &registry).is_err(),
+                        instantiate(module, &mut store, &registry).is_err(),
                         "{:?}",
                         span.linecol_in(text)
                     )
@@ -561,12 +569,11 @@ fn labels() {
 fn left_to_right() {
     run_test_file("left-to-right");
 }
-/*
-FIXME: implementation bug
+
 #[test]
 fn linking() {
     run_test_file("linking");
-}*/
+}
 
 #[test]
 fn load() {
@@ -595,3 +602,10 @@ fn names() {
 fn obsolete_keywords() {
     run_test_file("obsolete-keywords");
 }
+/*#[test]
+fn ref_func() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
+    run_test_file("ref_func");
+}*/

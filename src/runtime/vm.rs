@@ -2,10 +2,9 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        ExecuteContext, ExportDesc, FuncIdx, Instance, Instr, JumpTable, LocalState, Memory, Stack,
-        TypeIdx, VMResult, ValType, WasmValue,
+        ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable, LocalState, Memory,
+        Stack, VMResult, ValType, WasmValue,
     },
-    parser::Module,
     Store,
 };
 
@@ -21,7 +20,7 @@ impl ResultValue {
 }
 
 #[inline(always)]
-unsafe fn call_next(
+pub(crate) unsafe fn call_next(
     tail_code: *const Instr,
     consumed: isize,
     ctx: &mut ExecuteContext,
@@ -553,8 +552,8 @@ pub unsafe fn op_f64_promote_f32(
 pub unsafe fn op_return(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = ctx.jump_table().ret();
     trace!("op_return: {addr}");
-
-    let tail_code = ctx.code().offset(addr as isize);
+    let code = ctx.code();
+    let tail_code = code.offset(addr as isize);
     call_next(tail_code, 0, ctx)
 }
 
@@ -657,23 +656,27 @@ const MAX_CALL_STACK: usize = 10000;
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
-unsafe fn internal_op_call(
+pub(crate) unsafe fn internal_op_call(
     return_addr: *const Instr,
-    funcidx: u32,
+    funcaddr: u32,
     ctx: &mut ExecuteContext,
 ) -> VMResult<*const Instr> {
     if ctx.local_state.len() > MAX_CALL_STACK {
         return VMResult::StackOverflow;
     }
     //FIXME: unwrap
-    let code = ctx.module.codes.get(FuncIdx(funcidx)).unwrap_unchecked();
-    let typeidx = ctx
-        .module
-        .functions
-        .get(funcidx as usize)
-        .unwrap_unchecked();
-    let ft = ctx.module.fts.get(*typeidx).unwrap_unchecked();
 
+    let funcinst = &ctx.store.funcs.0[funcaddr as usize];
+    let instance_addr = funcinst.instance_addr;
+    let instance = &ctx.store.instances[instance_addr as usize];
+    let module_addr = instance.module_addr;
+    let module = &ctx.store.modules[module_addr as usize];
+    let typeidx = module
+        .functions
+        .get(funcinst.funcidx as usize)
+        .unwrap_unchecked();
+    let ft = &module.function_types[typeidx.0 as usize];
+    let code = &funcinst.body;
     let mut jump_table = JumpTable::new();
     jump_table.push(code.expr.len() as u32 - 2);
 
@@ -687,7 +690,8 @@ unsafe fn internal_op_call(
     }
     let local_reference = vm_try!(ctx.stack.function_call(param_size, local_size, return_addr));
     trace!(
-        "op_call: {funcidx} {local_size} {:?} {:?} {:?}",
+        "op_call_internal: {} @ {instance_addr}({module_addr})  {funcaddr} {local_size} {:?} {:?} {:?}",
+        funcinst.funcidx,
         ft,
         code.locals,
         local_reference
@@ -695,15 +699,16 @@ unsafe fn internal_op_call(
     ctx.local_state.push(LocalState {
         local_reference,
         jump_table,
-        code: &code.expr,
+        code_addr: funcaddr,
+        instance_addr: funcinst.instance_addr,
     });
     VMResult::Success(code.expr.as_ptr())
 }
 
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let funcidx = (*tail_code).operand.u32;
-
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcidx, ctx));
+    let funcaddr = ctx.instance().funcs[funcidx as usize];
+    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx));
     call_next(ptr, 0, ctx)
 }
 
@@ -714,27 +719,35 @@ unsafe fn internal_op_call_indirect(
 ) -> VMResult<*const Instr> {
     let i = ctx.stack.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
-    let table = vm_try!(VMResult::from_option(ctx.table.get(tableidx), || {
+    let table_addr = *vm_try!(VMResult::from_option(
+        ctx.instance().tables.get(tableidx),
+        || { VMResult::TableIndexOutOfRange }
+    ));
+    let table = &mut ctx.store.tables[table_addr as usize];
+    let func_addr = *vm_try!(VMResult::from_option(table.1.get(i as usize), || {
         VMResult::TableIndexOutOfRange
     }));
-    let funcidx = *vm_try!(VMResult::from_option(table.1.get(i as usize), || {
-        VMResult::TableIndexOutOfRange
-    }));
-    if funcidx == TABLE_UNINITIALIZED {
+    trace!("internal_op_call_indirect: {tableidx} {table_addr} {func_addr} {table:?}");
+    if func_addr == TABLE_UNINITIALIZED {
         return VMResult::TableUninitialized;
     }
-    let actual_typeidx = ctx.module.functions.get(funcidx as usize).unwrap(); //FIXME:
-    let actual_ft = ctx.module.fts.get(*actual_typeidx).unwrap(); //FIXME:
+
+    let funcinst = &ctx.store.funcs.0[func_addr as usize];
+    let instance = &ctx.store.instances[funcinst.instance_addr as usize];
+    let module = &ctx.store.modules[instance.module_addr as usize];
+    let actual_typeidx = module.functions.get(funcinst.funcidx as usize).unwrap();
+    let actual_ft = &module.function_types[actual_typeidx.0 as usize];
     let expected_typeidx = (*tail_code.offset(1)).operand.u32;
     let expected_ft = ctx
-        .module
-        .fts
-        .get(TypeIdx(expected_typeidx))
-        .unwrap_unchecked();
+        .module()
+        .function_types
+        .get(expected_typeidx as usize)
+        .unwrap();
+    trace!("{:?} {:?}", actual_ft, expected_ft);
     if actual_ft != expected_ft {
         return VMResult::CallIndirectInvalidType;
     }
-    let ptr = vm_try!(internal_op_call(tail_code.offset(2), funcidx, ctx));
+    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, ctx));
     VMResult::Success(ptr)
 }
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -803,32 +816,42 @@ pub unsafe fn op_local_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 }
 pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.globals[idx] as usize;
+    let addr = ctx.instance().globals[idx] as usize;
     vm_try!(ctx.stack.push_slice(&ctx.store.globals.0[addr..addr + 4]));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.globals[idx] as usize;
+    let addr = ctx.instance().globals[idx] as usize;
     vm_try!(ctx.stack.push_slice(&ctx.store.globals.0[addr..addr + 8]));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.globals[idx] as usize;
+    let addr = ctx.instance().globals[idx] as usize;
     ctx.store.globals.0[addr..addr + 4].copy_from_slice(&ctx.stack.pop_u8_array::<4>());
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.globals[idx] as usize;
+    let addr = ctx.instance().globals[idx] as usize;
     ctx.store.globals.0[addr..addr + 8].copy_from_slice(&ctx.stack.pop_u8_array::<8>());
     call_next(tail_code, 1, ctx)
+}
+macro_rules! memory_try {
+    ($ctx: expr) => {
+        if let Some(v) = $ctx.memory() {
+            v
+        } else {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+    };
 }
 pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_u32(memarg, offset));
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_u32(memarg, offset));
     vm_try!(ctx.stack.push_u32(v));
     trace!("op_i32_load: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -836,7 +859,8 @@ pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_u64(memarg, offset));
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_u64(memarg, offset));
     vm_try!(ctx.stack.push_u64(v));
     trace!("op_i64_load: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -844,7 +868,8 @@ pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_f32(memarg, offset));
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_f32(memarg, offset));
     vm_try!(ctx.stack.push_f32(v));
     trace!("op_f32_load: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -852,7 +877,8 @@ pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_f64(memarg, offset));
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_f64(memarg, offset));
     vm_try!(ctx.stack.push_f64(v));
     trace!("op_f64_load: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -860,7 +886,8 @@ pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_u8(memarg, offset)) as u32;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_u8(memarg, offset)) as u32;
     vm_try!(ctx.stack.push_u32(v));
     trace!("op_i32_load8_u: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -868,7 +895,8 @@ pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_i8(memarg, offset)) as i32;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_i8(memarg, offset)) as i32;
     vm_try!(ctx.stack.push_i32(v));
     trace!("op_i32_load8_s: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -876,7 +904,8 @@ pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_i16(memarg, offset)) as i32;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_i16(memarg, offset)) as i32;
     vm_try!(ctx.stack.push_i32(v));
     trace!("op_i32_load8_s: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -884,7 +913,8 @@ pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_u16(memarg, offset)) as u32;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_u16(memarg, offset)) as u32;
     vm_try!(ctx.stack.push_u32(v));
     trace!("op_i32_load8_s: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -892,7 +922,8 @@ pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_i8(memarg, offset)) as i64;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_i8(memarg, offset)) as i64;
     vm_try!(ctx.stack.push_i64(v));
     trace!("op_i64_load8_s: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -900,7 +931,8 @@ pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_u8(memarg, offset)) as u64;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_u8(memarg, offset)) as u64;
     vm_try!(ctx.stack.push_u64(v));
     trace!("op_i64_load8_u: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -908,7 +940,8 @@ pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_i16(memarg, offset)) as i64;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_i16(memarg, offset)) as i64;
     vm_try!(ctx.stack.push_i64(v));
     trace!("op_i64_load16_s: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -916,7 +949,8 @@ pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_u16(memarg, offset)) as u64;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_u16(memarg, offset)) as u64;
     vm_try!(ctx.stack.push_u64(v));
     trace!("op_i64_load16_u: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -924,7 +958,8 @@ pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_i32(memarg, offset)) as i64;
+    let memory = memory_try!(ctx);
+    let v = vm_try!(memory.borrow().read_i32(memarg, offset)) as i64;
     vm_try!(ctx.stack.push_i64(v));
     trace!("op_i64_load32_s: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -932,7 +967,9 @@ pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let v = vm_try!(ctx.memory.read_u32(memarg, offset)) as u64;
+    let memory = memory_try!(ctx);
+
+    let v = vm_try!(memory.borrow().read_u32(memarg, offset)) as u64;
     vm_try!(ctx.stack.push_u64(v));
     trace!("op_i64_load32_u: {:?} {} => {v}", memarg, offset);
     call_next(tail_code, 1, ctx)
@@ -942,7 +979,8 @@ pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let v = ctx.stack.pop_u32();
     let offset = ctx.stack.pop_u32();
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_u32(memarg, offset, v));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_u32(memarg, offset, v));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -950,7 +988,8 @@ pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let v = ctx.stack.pop_u64();
     let offset = ctx.stack.pop_u32();
     trace!("op_i64_store: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_u64(memarg, offset, v));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_u64(memarg, offset, v));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -958,7 +997,8 @@ pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let v = ctx.stack.pop_f32();
     let offset = ctx.stack.pop_u32();
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_f32(memarg, offset, v));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_f32(memarg, offset, v));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -966,7 +1006,8 @@ pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let v = ctx.stack.pop_f64();
     let offset = ctx.stack.pop_u32();
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_f64(memarg, offset, v));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_f64(memarg, offset, v));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -974,7 +1015,8 @@ pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let v = ctx.stack.pop_u32();
     let offset = ctx.stack.pop_u32();
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_u8(memarg, offset, v as u8));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_u8(memarg, offset, v as u8));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -982,7 +1024,8 @@ pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let v = ctx.stack.pop_u32();
     let offset = ctx.stack.pop_u32();
     trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_u16(memarg, offset, v as u16));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_u16(memarg, offset, v as u16));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -990,7 +1033,8 @@ pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let v = ctx.stack.pop_u64();
     let offset = ctx.stack.pop_u32();
     trace!("op_i64_store8: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_u8(memarg, offset, v as u8));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_u8(memarg, offset, v as u8));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -998,7 +1042,8 @@ pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let v = ctx.stack.pop_u64();
     let offset = ctx.stack.pop_u32();
     trace!("op_i64_store16: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_u16(memarg, offset, v as u16));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_u16(memarg, offset, v as u16));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1006,7 +1051,8 @@ pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let v = ctx.stack.pop_u64();
     let offset = ctx.stack.pop_u32();
     trace!("op_i64_store32: {:?} offset={} value={v}", memarg, offset);
-    vm_try!(ctx.memory.write_u32(memarg, offset, v as u32));
+    let memory = memory_try!(ctx);
+    vm_try!(memory.borrow_mut().write_u32(memarg, offset, v as u32));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_f32_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1557,13 +1603,15 @@ pub unsafe fn op_i32_ge_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    vm_try!(ctx.stack.push_u32(ctx.memory.page_size()));
+    let memory = memory_try!(ctx);
+
+    vm_try!(ctx.stack.push_u32(memory.borrow().page_size()));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let page_size_delta = ctx.stack.pop_u32();
-
-    let res = vm_try!(ctx.memory.grow(page_size_delta));
+    let memory = memory_try!(ctx);
+    let res = vm_try!(memory.borrow_mut().grow(page_size_delta));
     vm_try!(ctx.stack.push_i32(res));
     call_next(tail_code, 0, ctx)
 }
@@ -1572,10 +1620,12 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let n = ctx.stack.pop_u32();
     let s = ctx.stack.pop_u32();
     let d = ctx.stack.pop_u32();
-    let data = vm_try!(VMResult::from_option(
-        ctx.module.data.0.get(idx as usize),
-        || { VMResult::MemoryIndexOutOfRange }
-    ));
+    let module_addr = ctx.instance().module_addr;
+
+    let m = &ctx.store.modules[module_addr as usize];
+    let data = vm_try!(VMResult::from_option(m.data.get(idx as usize), || {
+        VMResult::MemoryIndexOutOfRange
+    }));
     let last = vm_try!(VMResult::from_option(s.checked_add(n), || {
         VMResult::MemoryIndexOutOfRange
     }));
@@ -1583,21 +1633,31 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
         data.init.get(s as usize..last as usize),
         || { VMResult::MemoryIndexOutOfRange }
     ));
-    vm_try!(ctx.memory.init(d, data));
+    let memory = if let Some(v) = ctx.instance().memory.clone() {
+        v
+    } else {
+        return VMResult::MemoryIndexOutOfRange;
+    };
+
+    vm_try!(memory.borrow_mut().init(d, data));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.memory.copy(dst, src, len));
+    let memory = memory_try!(ctx);
+
+    vm_try!(memory.borrow_mut().copy(dst, src, len));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_mem_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();
     let ptr = ctx.stack.pop_u32();
-    vm_try!(ctx.memory.fill(ptr, len, data));
+    let memory = memory_try!(ctx);
+
+    vm_try!(memory.borrow_mut().fill(ptr, len, data));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_unreachable(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1632,6 +1692,18 @@ pub unsafe fn op_i64_extend32_s(tail_code: *const Instr, ctx: &mut ExecuteContex
     let v = i32::from_le_bytes([v as u8, (v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]);
     vm_try!(ctx.stack.push_i64(v.into()));
     call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_ref_is_null(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    if ctx.stack.pop_u32() == 0 {
+        vm_try!(ctx.stack.push_u32(1));
+    } else {
+        vm_try!(ctx.stack.push_u32(0));
+    }
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    vm_try!(ctx.stack.push_u32((*tail_code).operand.u32));
+    call_next(tail_code, 1, ctx)
 }
 pub unsafe fn special_function_return(
     tail_code: *const Instr,
@@ -1672,41 +1744,41 @@ pub unsafe fn special_function_vm_end(
 ) -> VMResult<()> {
     VMResult::Success(())
 }
-pub unsafe fn special_function_host_call(
-    tail_code: *const Instr,
-    ctx: &mut ExecuteContext,
-) -> VMResult<()> {
-    trace!("host call");
-    //TODO: make host call
-    let tail_code = ctx.stack.function_return(
-        &ctx.local_reference(),
-        (*tail_code).operand.drop_size as usize,
-    );
 
-    ctx.local_state.pop();
-    call_next(tail_code, 0, ctx)
-}
-const VM_END: Instr = Instr {
+pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
 pub fn run_module_function(
-    m: &Module,
-    instance: &Instance,
+    instance: InstanceAddr,
     store: &mut Store,
     name: &str,
     args: &ResultValue,
 ) -> VMResult<ResultValue> {
-    if let Some(ExportDesc::Func(idx)) = m.exs.find(name) {
-        let code = m.codes.get(idx).unwrap();
+    let Instance {
+        module_addr,
+        memory: _,
+        tables: _,
+        globals: _,
+        funcs,
+    } = &store.instances[instance.0 as usize];
+    let module_inst = &store.modules[*module_addr as usize];
+    if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
+        let code_addr = funcs[idx.0 as usize];
+        let funcinst = &store.funcs.0[code_addr as usize];
         let mut stack = Stack::new(128 * 1024);
-        let tidx = m.functions.get(idx.0 as usize).unwrap();
-        let ft = m.fts.get(*tidx).unwrap();
+        let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
+        let ft = module_inst
+            .function_types
+            .get(tidx.0 as usize)
+            .unwrap()
+            .clone();
 
         let mut param_size = 0usize;
         for t in ft.0.iter() {
             param_size += t.stack_size().usize();
         }
         let mut local_size = 0usize;
+        let code = &funcinst.body;
         for local in &code.locals {
             local_size += local.n as usize * local.t.stack_size().usize();
         }
@@ -1716,61 +1788,31 @@ pub fn run_module_function(
                 WasmValue::I64(i64) => stack.push_i64(*i64),
                 WasmValue::F32(v) => stack.push_f32(*v),
                 WasmValue::F64(v) => stack.push_f64(*v),
-                WasmValue::ExternRef(v) => stack.push_u64(*v),
+                WasmValue::ExternRef(v) => stack.push_u32(*v),
 
                 _ => unimplemented!(),
             });
         }
+
+        tracing::trace!("run_module_function: {name} {local_size} {:?}", code.locals,);
         let local_reference =
             vm_try!(stack.function_call(param_size, local_size, &VM_END as *const Instr));
-
-        tracing::trace!(
-            "run_module_function: {name} {local_size} {:?} {:?}",
-            code.locals,
-            m.globals
-        );
-
         let mut jump_table = JumpTable::new();
         jump_table.push((code.expr.len() - 2) as u32);
-        let mut default_memory = Memory::new(0, 0);
-        let Instance {
-            memory,
-            table,
-            globals,
-        } = instance;
-        let mut memory = memory.clone();
-        let memory_ref_mut = memory.as_mut().map(|v| v.borrow_mut());
-        if let Some(mut memory) = memory_ref_mut {
-            let mut ctx = ExecuteContext {
-                module: m,
-                stack: &mut stack,
-                local_state: vec![LocalState {
-                    code: &code.expr,
-                    jump_table,
-                    local_reference,
-                }],
-                memory: &mut memory,
-                globals,
-                table,
-                store,
-            };
-            vm_try!(unsafe { call_next(code.expr.as_ptr(), 0, &mut ctx) });
-        } else {
-            let mut ctx = ExecuteContext {
-                module: m,
-                stack: &mut stack,
-                local_state: vec![LocalState {
-                    code: &code.expr,
-                    jump_table,
-                    local_reference,
-                }],
-                memory: &mut default_memory,
-                globals,
-                table,
-                store,
-            };
-            vm_try!(unsafe { call_next(code.expr.as_ptr(), 0, &mut ctx) });
-        }
+
+        let ptr = code.expr.as_ptr();
+        let mut ctx = ExecuteContext {
+            stack: &mut stack,
+            local_state: vec![LocalState {
+                jump_table,
+                local_reference,
+                code_addr,
+                instance_addr: funcinst.instance_addr,
+            }],
+            store,
+        };
+        vm_try!(unsafe { call_next(ptr, 0, &mut ctx) });
+
         let mut result =
             ft.1.stack_pop_iter()
                 .map(|t| match t {
@@ -1779,7 +1821,7 @@ pub fn run_module_function(
                     ValType::F32 => WasmValue::F32(stack.pop_f32()),
                     ValType::F64 => WasmValue::F64(stack.pop_f64()),
                     ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
-                    ValType::ExternRef => WasmValue::ExternRef(stack.pop_u64()),
+                    ValType::ExternRef => WasmValue::ExternRef(stack.pop_u32()),
                     ValType::V128 => todo!(),
                 })
                 .collect::<Vec<_>>();
@@ -1789,15 +1831,12 @@ pub fn run_module_function(
         unimplemented!()
     }
 }
-pub fn get_global(
-    m: &Module,
-    instance: &Instance,
-    store: &mut Store,
-    name: &str,
-) -> VMResult<WasmValue> {
-    if let Some(ExportDesc::Global(idx)) = m.exs.find(name) {
+pub fn get_global(instance: InstanceAddr, store: &mut Store, name: &str) -> VMResult<WasmValue> {
+    let instance = &store.instances[instance.0 as usize];
+    let module_inst = &store.modules[instance.module_addr as usize];
+    if let Some(ExportDesc::Global(idx)) = module_inst.exports.find(name) {
         let addr = instance.globals[idx.0 as usize] as usize;
-        let gt = m.globals[idx.0 as usize];
+        let gt = module_inst.globals[idx.0 as usize];
         VMResult::Success(match gt.0 {
             ValType::I32 => {
                 let mut buf = [0u8; 4];

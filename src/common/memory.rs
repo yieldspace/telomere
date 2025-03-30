@@ -23,7 +23,7 @@ impl Memory {
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> VMResult<[u8; N]> {
         let mut arr = [0u8; N];
         let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
-            VMResult::StackOverflow
+            VMResult::MemoryIndexOutOfRange
         }));
         arr.copy_from_slice(vm_try!(VMResult::from_option(
             self.0.get(offset..last),

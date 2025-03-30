@@ -3,7 +3,7 @@ use std::collections::{HashSet, VecDeque};
 use thiserror::Error;
 use tracing::trace;
 
-use crate::common::ConstExpr;
+use crate::common::{ConstExpr, ElemInit};
 use crate::parser::leb128::Leb128Parser;
 use crate::{
     binary::BinaryReader,
@@ -145,21 +145,6 @@ fn assert_type_stack_size(
         Ok(())
     } else {
         Err(WasmParserError::InvalidStackValTypeAny)
-    }
-}
-fn create_call_imported_function_code(rt: &ResultType) -> Func {
-    Func {
-        locals: vec![],
-        expr: vec![
-            Instr {
-                op: vm::special_function_host_call,
-            },
-            Instr {
-                operand: Operand {
-                    drop_size: rt.iter().map(|v| v.stack_size().u32()).sum(),
-                },
-            },
-        ],
     }
 }
 fn validate_br_table_types(
@@ -478,6 +463,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     let (len, t) = self.parse_reftype()?;
                     (1 + len, ConstExpr::RefNull(t))
                 }
+                0xD2 => {
+                    let (len, idx) = self.parse_u32()?;
+                    (1 + len, ConstExpr::FuncRef(idx))
+                }
                 unknown => Err(WasmParserError::InvalidConstInstruction(unknown))?,
             };
             total_len += len;
@@ -529,7 +518,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     len + len2 + len3,
                     Elem {
                         kind: RefType::FuncRef,
-                        init: funcidx.to_vec(),
+                        init: ElemInit::FuncIdx(funcidx.to_vec()),
                         mode: ElemMode::Active(TableIdx(0), offset),
                     },
                 )
@@ -549,14 +538,14 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     len + 1 + len3,
                     Elem {
                         kind: RefType::FuncRef,
-                        init: funcidx.to_vec(),
+                        init: ElemInit::FuncIdx(funcidx.to_vec()),
                         mode: ElemMode::Passive,
                     },
                 )
             }
             2 => {
                 let (len2, tableidx) = self.parse_u32()?;
-                validate_table(tables, 0)?;
+                validate_table(tables, tableidx)?;
                 let (len3, offset) = self.parse_const_expr()?;
                 validate_offset_const_expr(globals, &offset)?;
                 let elemkind = self.reader.read_exact_one()?;
@@ -573,7 +562,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     len + len2 + len3 + 1 + len5,
                     Elem {
                         kind: RefType::FuncRef,
-                        init: funcidx.to_vec(),
+                        init: ElemInit::FuncIdx(funcidx.to_vec()),
                         mode: ElemMode::Active(TableIdx(tableidx), offset),
                     },
                 )
@@ -593,13 +582,64 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     len + 1 + len3,
                     Elem {
                         kind: RefType::FuncRef,
-                        init: funcidx.to_vec(),
+                        init: ElemInit::FuncIdx(funcidx.to_vec()),
                         mode: ElemMode::Declarative,
                     },
                 )
             }
-            4..7 => {
-                todo!()
+            4 => {
+                validate_table(tables, 0)?;
+                let (len2, offset) = self.parse_const_expr()?;
+                validate_offset_const_expr(globals, &offset)?;
+                let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
+                (
+                    len + len2 + len3,
+                    Elem {
+                        kind: RefType::FuncRef,
+                        init: ElemInit::ConstExpr(init),
+                        mode: ElemMode::Active(TableIdx(0), offset),
+                    },
+                )
+            }
+            5 => {
+                let (len2, rt) = self.parse_reftype()?;
+                let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
+                (
+                    len + len2 + len3,
+                    Elem {
+                        kind: rt,
+                        init: ElemInit::ConstExpr(init),
+                        mode: ElemMode::Passive,
+                    },
+                )
+            }
+            6 => {
+                let (len2, tableidx) = self.parse_u32()?;
+                validate_table(tables, tableidx)?;
+                let (len3, offset) = self.parse_const_expr()?;
+                validate_offset_const_expr(globals, &offset)?;
+                let (len4, rt) = self.parse_reftype()?;
+                let (len5, init) = self.parse_vec(Self::parse_const_expr)?;
+                (
+                    len + len2 + len3 + len4 + len5,
+                    Elem {
+                        kind: rt,
+                        init: ElemInit::ConstExpr(init),
+                        mode: ElemMode::Active(TableIdx(tableidx), offset),
+                    },
+                )
+            }
+            7 => {
+                let (len2, rt) = self.parse_reftype()?;
+                let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
+                (
+                    len + len2 + len3,
+                    Elem {
+                        kind: rt,
+                        init: ElemInit::ConstExpr(init),
+                        mode: ElemMode::Declarative,
+                    },
+                )
             }
             unknown => Err(WasmParserError::InvalidElementSectionType(unknown))?,
         };
@@ -1456,6 +1496,24 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
+            /*0x26 => {
+                trace!("parse_op_table_set");
+                let (len, idx) = self.parse_u32()?;
+                if !*unreachable {
+                    let ty = tables
+                        .get(idx as usize)
+                        .ok_or(WasmParserError::InvalidTableIndex(idx))?;
+                    assert_valtype(ty.reftype.into(), types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    instrs.push(Instr{
+                        op: vm::op_table_set
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { u32: idx },
+                    });
+                }
+                (1 + len, false)
+            }*/
             0x28 => {
                 trace!("parse_op_i32_load");
                 assert_memory(mems)?;
@@ -2627,7 +2685,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x7B => {
                 trace!("parse_op_i64_popcnt");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_popcnt });
+                    instrs.push(Instr {
+                        op: vm::op_i64_popcnt,
+                    });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
 
@@ -2673,7 +2733,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x7F => {
                 trace!("parse_op_i64_div_s");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_div_s });
+                    instrs.push(Instr {
+                        op: vm::op_i64_div_s,
+                    });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -2685,7 +2747,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x80 => {
                 trace!("parse_op_i64_div_u");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_div_u });
+                    instrs.push(Instr {
+                        op: vm::op_i64_div_u,
+                    });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -2697,7 +2761,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x81 => {
                 trace!("parse_op_i64_rem_s");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_rem_s });
+                    instrs.push(Instr {
+                        op: vm::op_i64_rem_s,
+                    });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -2709,7 +2775,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x82 => {
                 trace!("parse_op_i64_rem_u");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_rem_u });
+                    instrs.push(Instr {
+                        op: vm::op_i64_rem_u,
+                    });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -3664,7 +3732,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
                     types.push(ValType::I32);
-                    instrs.push(Instr { op: vm::op_i32_extend8_s });
+                    instrs.push(Instr {
+                        op: vm::op_i32_extend8_s,
+                    });
                 }
                 (1, false)
             }
@@ -3674,7 +3744,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
                     types.push(ValType::I32);
-                    instrs.push(Instr { op: vm::op_i32_extend16_s });
+                    instrs.push(Instr {
+                        op: vm::op_i32_extend16_s,
+                    });
                 }
                 (1, false)
             }
@@ -3684,7 +3756,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
                     types.push(ValType::I64);
-                    instrs.push(Instr { op: vm::op_i64_extend8_s });
+                    instrs.push(Instr {
+                        op: vm::op_i64_extend8_s,
+                    });
                 }
                 (1, false)
             }
@@ -3694,7 +3768,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
                     types.push(ValType::I64);
-                    instrs.push(Instr { op: vm::op_i64_extend16_s });
+                    instrs.push(Instr {
+                        op: vm::op_i64_extend16_s,
+                    });
                 }
                 (1, false)
             }
@@ -3704,9 +3780,42 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
                     types.push(ValType::I64);
-                    instrs.push(Instr { op: vm::op_i64_extend32_s });
+                    instrs.push(Instr {
+                        op: vm::op_i64_extend32_s,
+                    });
                 }
                 (1, false)
+            }
+            0xD1 => {
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_ref_is_null,
+                    });
+                    if let Some(v) = types.pop() {
+                        if !matches!(v, ValType::ExternRef | ValType::FuncRef) {
+                            Err(WasmParserError::InvalidStackValTypeAny)?;
+                        }
+                    } else {
+                        Err(WasmParserError::InvalidStackValTypeAny)?;
+                    }
+                    assert_type_stack_size(types, blocks)?;
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0xD2 => {
+                let (len, idx) = self.parse_u32()?;
+
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_ref_func,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { u32: idx },
+                    });
+                    types.push(ValType::FuncRef);
+                }
+                (1 + len, false)
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
         })
@@ -4022,12 +4131,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let mut idx = 0;
         let mut icode = vec![];
         for import in &imports.0 {
-            if let ImportDesc::TypeIdx(tidx) = import.desc {
-                let ft = type_section
-                    .get(tidx)
-                    .ok_or(WasmParserError::InvalidTypeIdx(tidx))?;
-
-                icode.push(create_call_imported_function_code(&ft.1));
+            if let ImportDesc::TypeIdx(_tidx) = import.desc {
                 idx += 1;
             }
         }
@@ -4101,6 +4205,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let mut code_section: Option<CodeSection> = None;
         let mut import_section: Option<ImportSection> = None;
         let mut data_section: Option<DataSection> = None;
+        let mut start: Option<FuncIdx> = None;
         let mut functions = vec![];
         let mut globals = vec![];
         let mut imported_global_len = 0;
@@ -4138,6 +4243,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     exs: export_section.unwrap_or_else(|| ExportSection(vec![])),
                     codes: code_section.unwrap_or_else(|| CodeSection(vec![])),
                     data: data_section,
+                    start,
                 });
             };
             match st {
@@ -4205,8 +4311,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     })?);
                 }
                 WasmSectionType::Start => {
-                    let (_, size) = self.parse_u32()?;
-                    self.skip_section(size)?;
+                    start = Some(self.parse_section_body(|me, size| {
+                        let (len, start) = me.parse_u32()?;
+                        if len != size as usize {
+                            return Err(WasmParserError::InvalidSectionSize);
+                        }
+                        Ok(FuncIdx(start))
+                    })?);
                 }
                 WasmSectionType::Element => {
                     trace!("element section");

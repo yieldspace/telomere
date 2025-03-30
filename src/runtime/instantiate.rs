@@ -2,10 +2,13 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     common::{
-        ConstExpr, DataMode, ElemMode, ExportDesc, ImportDesc, Limits, Memory, TableInstance,
-        PAGE_SIZE_MAX,
+        ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, ExportDesc, FunctionInstance,
+        ImportDesc, InstanceAddr, JumpTable, Limits, LocalState, Memory, ModuleInstance,
+        TableInstance, PAGE_SIZE_MAX,
     },
-    Instance, Module, Registry, Store, VMResult,
+    run_module_function,
+    runtime::vm,
+    Instance, Module, Registry, Stack, Store, VMResult,
 };
 
 use super::TABLE_UNINITIALIZED;
@@ -55,30 +58,54 @@ fn execute_const_expr(store: &mut Store, globals: &[u32], exprs: &[ConstExpr]) -
     }
     return VMResult::Unlinkable;
 }
-pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResult<Instance> {
+pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
+    let mod_addr = store.modules.len() as u32;
+    let inst_addr = store.instances.len() as u32;
     let mut memory: Option<Rc<RefCell<Memory>>> = None;
-
     let mut globals = vec![];
-    for import in &m.imports.0 {
+    let mut funcs: Vec<u32> = vec![];
+    let mut tables = vec![];
+    let Module {
+        fts,
+        functions,
+        imports,
+        mems,
+        globals: m_globals,
+        global_init,
+        exs,
+        tables: m_tables,
+        elems: m_elems,
+        codes,
+        data,
+        start,
+    } = m;
+    for import in &imports.0 {
         tracing::trace!("{import:?}");
-        let (ext_module, ext_inst) =
-            vm_try!(VMResult::from_option(registry.get(&import.module), || {
-                VMResult::Unlinkable
-            }));
+        let ext_inst_addr = vm_try!(VMResult::from_option(registry.get(&import.module), || {
+            VMResult::Unlinkable
+        }));
+        let ext_inst = &store.instances[ext_inst_addr.0 as usize];
+        let ext_module = &store.modules[ext_inst.module_addr as usize];
         let export = vm_try!(VMResult::from_option(
-            ext_module.exs.find(&import.name),
+            ext_module.exports.find(&import.name),
             || { VMResult::Unlinkable }
         ));
         match (&import.desc, export) {
             (ImportDesc::TypeIdx(tidx), ExportDesc::Func(funcidx)) => {
-                let import_ft = m.fts.get(*tidx).unwrap();
+                let import_ft = fts.get(*tidx).unwrap();
                 let export_ft_idx = ext_module.functions[funcidx.0 as usize];
-                let export_ft = ext_module.fts.get(export_ft_idx).unwrap();
+                let export_ft = ext_module
+                    .function_types
+                    .get(export_ft_idx.0 as usize)
+                    .unwrap();
                 if import_ft != export_ft {
                     tracing::trace!("import function type");
-
                     return VMResult::Unlinkable;
                 }
+                let funcaddr = ext_inst.funcs[funcidx.0 as usize];
+                let funcidx = funcs.len();
+                funcs.push(funcaddr);
+                tracing::trace!("linking: {mod_addr} {funcidx} => {funcaddr}")
             }
             (ImportDesc::GlobalType(import_gt), ExportDesc::Global(global_idx)) => {
                 let export_gt = ext_module.globals.get(global_idx.0 as usize).unwrap();
@@ -102,7 +129,8 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
                     import_tt.limits,
                     /*FIXME:*/ export_tt.limits.min,
                     export_tt.limits
-                ))
+                ));
+                tables.push(ext_inst.tables[idx.0 as usize]);
             }
             (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
                 memory = ext_inst.memory.clone();
@@ -126,7 +154,7 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
         }
     }
     if memory.is_none() {
-        if let Some(mem) = m.mems.first() {
+        if let Some(mem) = mems.first() {
             memory = Some(Rc::new(RefCell::new(Memory::new(
                 mem.0.min,
                 (mem.0.max).unwrap_or(PAGE_SIZE_MAX as u32),
@@ -134,7 +162,7 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
         }
     }
 
-    for d in &m.data.0 {
+    for d in &data.0 {
         match &d.mode {
             DataMode::Active(mem, offset) => {
                 assert_eq!(mem.0, 0);
@@ -155,40 +183,123 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
             }
         }
     }
-    let mut table: Vec<TableInstance> = m
-        .tables
+
+    for init in &global_init {
+        globals.push(vm_try!(store.globals.init(init, &globals, &m_globals)));
+    }
+    let mut funcaddr = store.funcs.0.len();
+    let mut s_funcs = vec![];
+    for func in codes.0.into_iter() {
+        let funcidx = funcs.len() as u32;
+        funcs.push(funcaddr as u32);
+        s_funcs.push(FunctionInstance {
+            instance_addr: inst_addr,
+            funcidx,
+            body: func,
+        });
+
+        tracing::trace!("linking: {mod_addr} {funcidx} => {funcaddr}");
+        funcaddr += 1;
+    }
+    store.funcs.0.append(&mut s_funcs);
+
+    let table_instances: Vec<TableInstance> = m_tables
         .iter()
         .map(|v| TableInstance(*v, vec![TABLE_UNINITIALIZED; v.limits.min as usize]))
         .collect();
-    for elem in &m.elems.0 {
-        match &elem.mode {
-            ElemMode::Active(idx, offset) => {
-                let offset = vm_try!(execute_const_expr(store, &globals, &offset)) as usize;
-                let instance = table.get_mut(idx.0 as usize).unwrap();
-                if instance.0.reftype != elem.kind {
-                    panic!("reftype mismatch")
-                }
-                let expected_len = offset + elem.init.len();
-                if instance.1.len() < expected_len {
-                    instance.1.resize(expected_len, TABLE_UNINITIALIZED);
-                }
+    let mut table_addr = store.tables.len() as u32;
+    let mut s_tables = vec![];
 
-                for (idx, e) in elem.init.iter().enumerate() {
-                    instance.1[offset + idx] = *e;
+    for table in table_instances {
+        tables.push(table_addr);
+        s_tables.push(table);
+        table_addr += 1;
+    }
+    store.tables.append(&mut s_tables);
+    let res = (|| {
+        for elem in m_elems.0 {
+            match elem.mode {
+                ElemMode::Active(idx, offset) => match elem.init {
+                    ElemInit::FuncIdx(idxs) => {
+                        let offset = vm_try!(execute_const_expr(store, &globals, &offset)) as usize;
+                        let table_addr = tables[idx.0 as usize] as usize;
+                        let instance = if table_addr < store.tables.len() {
+                            &mut store.tables[table_addr as usize]
+                        } else {
+                            &mut s_tables[table_addr - store.tables.len()]
+                        };
+                        if instance.0.reftype != elem.kind {
+                            panic!("reftype mismatch")
+                        }
+                        if offset + idxs.len() > instance.1.len() {
+                            return VMResult::TableIndexOutOfRange;
+                        }
+                        for (idx, funcidx) in idxs.iter().enumerate() {
+                            instance.1[offset + idx] = funcs[*funcidx as usize];
+                            trace!("table[{}] = {}", offset + idx, funcs[*funcidx as usize]);
+                        }
+                    }
+                    _ => todo!(),
+                },
+                _ => {
+                    // do nothing
                 }
-            }
-            _ => {
-                // do nothing
             }
         }
-    }
-    for init in &m.global_init {
-        globals.push(vm_try!(store.globals.init(init, &globals, &m.globals)));
-    }
+        VMResult::Success(())
+    })();
+
+    tracing::trace!("instance funcs: {funcs:?}");
+
+    store.modules.push(ModuleInstance {
+        function_types: fts.0,
+        functions,
+        data: data.0,
+        exports: exs,
+        tables: m_tables,
+        globals: m_globals,
+        mems,
+    });
     let instance = Instance {
+        module_addr: mod_addr,
         memory,
-        table,
+        tables,
         globals,
+        funcs,
     };
-    VMResult::Success(instance)
+    let addr = InstanceAddr(inst_addr);
+    if let Some(start) = start {
+        let mut stack = Stack::new(128 * 1024);
+
+        let funcaddr = instance.funcs[start.0 as usize];
+        store.instances.push(instance);
+        vm_try!(res);
+
+        let funcinst = &store.funcs.0[funcaddr as usize];
+        let code = &funcinst.body;
+        let mut jump_table = JumpTable::new();
+        jump_table.push((code.expr.len() - 2) as u32);
+        let mut local_size = 0usize;
+        for local in &code.locals {
+            local_size += local.n as usize * local.t.stack_size().usize();
+        }
+        let local_reference = vm_try!(stack.function_call(0, local_size, &vm::VM_END));
+        let ptr = code.expr.as_ptr();
+
+        let mut ctx = ExecuteContext {
+            stack: &mut stack,
+            local_state: vec![LocalState {
+                jump_table,
+                local_reference,
+                code_addr: funcaddr,
+                instance_addr: funcinst.instance_addr,
+            }],
+            store,
+        };
+        vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
+    } else {
+        store.instances.push(instance);
+        vm_try!(res);
+    }
+    VMResult::Success(addr)
 }

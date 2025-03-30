@@ -9,6 +9,9 @@ pub use stack::{LocalReference, Stack};
 mod registry;
 pub use registry::Registry;
 mod store;
+pub(crate) use store::FunctionInstance;
+pub(crate) use store::ModuleInstance;
+
 pub use store::Store;
 #[derive(Debug, Clone, Copy)]
 pub struct TypeIdx(pub u32);
@@ -57,10 +60,10 @@ impl ValueSize {
 impl ValType {
     pub fn stack_size(&self) -> ValueSize {
         match self {
-            ValType::ExternRef => ValueSize::Byte8,
+            ValType::ExternRef => ValueSize::Byte4,
             ValType::F32 => ValueSize::Byte4,
             ValType::F64 => ValueSize::Byte8,
-            ValType::FuncRef => ValueSize::Byte8,
+            ValType::FuncRef => ValueSize::Byte4,
             ValType::I32 => ValueSize::Byte4,
             ValType::I64 => ValueSize::Byte8,
             ValType::V128 => ValueSize::Byte16,
@@ -156,9 +159,14 @@ pub enum ElemMode {
     Declarative,
 }
 #[derive(Debug, Clone)]
+pub enum ElemInit {
+    FuncIdx(Vec<u32>),
+    ConstExpr(Vec<Vec<ConstExpr>>),
+}
+#[derive(Debug, Clone)]
 pub struct Elem {
     pub kind: RefType,
-    pub init: Vec<u32>,
+    pub init: ElemInit,
     pub mode: ElemMode,
 }
 #[derive(Debug, Clone)]
@@ -193,14 +201,20 @@ pub struct Module {
     pub elems: ElementSection,
     pub codes: CodeSection,
     pub data: DataSection,
+    pub start: Option<FuncIdx>,
 }
 #[derive(Debug, Clone)]
 pub struct TableInstance(pub TableType, pub Vec<u32>);
 #[derive(Clone)]
 pub struct Instance {
+    pub module_addr: u32,
     pub memory: Option<Rc<RefCell<Memory>>>,
-    pub table: Vec<TableInstance>,
+    // idx -> addr
     pub globals: Vec<u32>,
+    // idx -> addr
+    pub funcs: Vec<u32>,
+    // idx -> addr
+    pub tables: Vec<u32>,
 }
 #[derive(Debug, Clone)]
 pub struct Locals {
@@ -284,7 +298,7 @@ pub enum WasmValue {
     F64(f64),
     //V128,
     FuncRef(u32),
-    ExternRef(u64),
+    ExternRef(u32),
 }
 #[derive(Debug, Clone, Copy)]
 pub enum ConstExpr {
@@ -309,12 +323,9 @@ pub const PAGE_SIZE: usize = 64 * 1024;
 pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 
 pub struct ExecuteContext<'a> {
-    pub module: &'a Module,
     pub stack: &'a mut Stack,
-    pub local_state: Vec<LocalState<'a>>,
-    pub table: &'a [TableInstance],
-    pub globals: &'a [u32],
-    pub memory: &'a mut Memory,
+    pub local_state: Vec<LocalState>,
+    //pub funcs: &'a [u32],
     pub store: &'a mut Store,
 }
 impl ExecuteContext<'_> {
@@ -322,19 +333,37 @@ impl ExecuteContext<'_> {
         unsafe { &mut self.local_state.last_mut().unwrap_unchecked().jump_table }
     }
     pub fn code(&self) -> *const Instr {
-        unsafe { self.local_state.last().unwrap_unchecked().code.as_ptr() }
+        unsafe {
+            self.store.funcs.0[self.local_state.last().unwrap_unchecked().code_addr as usize]
+                .body
+                .expr
+                .as_ptr()
+        }
+    }
+    pub fn module(&self) -> &ModuleInstance {
+        &self.store.modules[self.instance().module_addr as usize]
+    }
+    pub fn instance(&self) -> &Instance {
+        unsafe {
+            &self.store.instances[self.local_state.last().unwrap_unchecked().instance_addr as usize]
+        }
     }
     pub fn local_reference(&self) -> LocalReference {
         unsafe { self.local_state.last().unwrap_unchecked().local_reference }
     }
+    pub fn memory(&mut self) -> Option<Rc<RefCell<Memory>>> {
+        self.instance().memory.clone()
+    }
 }
-pub struct LocalState<'a> {
+pub struct LocalState {
     // TODO: We should resolve jump address during instantiate time
     pub jump_table: JumpTable,
     // TODO: We should write this to stack and holds current only.
     pub local_reference: LocalReference,
     // TODO: We should write this to stack and holds current code or may avoid this?
-    pub code: &'a [Instr],
+    pub code_addr: u32,
+    // TODO: We should write this to stack and holds current code or may avoid this?
+    pub instance_addr: u32,
 }
 #[derive(Debug)]
 pub struct JumpTable(Vec<u32>);
@@ -361,3 +390,5 @@ impl JumpTable {
         self.0.pop();
     }
 }
+#[derive(Debug, Clone, Copy)]
+pub struct InstanceAddr(pub(crate) u32);
