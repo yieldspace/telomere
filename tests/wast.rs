@@ -508,3 +508,7 @@ fn float_exprs() {
 fn float_literals() {
     run_test_file("float_literals");
 }
+#[test]
+fn float_memory() {
+    run_test_file("float_memory");
+}
