@@ -516,3 +516,7 @@ fn float_memory() {
 fn float_misc() {
     run_test_file("float_misc");
 }
+#[test]
+fn forward() {
+    run_test_file("forward");
+}
