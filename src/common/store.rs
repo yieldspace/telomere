@@ -1,7 +1,8 @@
 use std::io::Write;
 
 use super::{
-    ConstExpr, Data, ExportSection, Func, FuncType, GlobalType, Instance, MemType, Memory, TableInstance, TableType, TypeIdx, VMResult
+    ConstExpr, Data, ExportSection, Func, FuncType, GlobalType, Instance, MemType, Memory,
+    TableInstance, TableType, TypeIdx, VMResult,
 };
 
 pub struct GlobalStore(pub Vec<u8>);
@@ -73,7 +74,7 @@ impl Store {
             modules: vec![],
             instances: vec![],
             tables: vec![],
-            memory: vec![]
+            memory: vec![],
         }
     }
 }

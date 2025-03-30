@@ -1,4 +1,3 @@
-use std::{cell::RefCell, fmt::Debug, rc::Rc};
 #[macro_use]
 mod vm_result;
 pub use vm_result::VMResult;
@@ -144,11 +143,11 @@ pub enum RefType {
     FuncRef,
     ExternRef,
 }
-impl Into<ValType> for RefType {
-    fn into(self) -> ValType {
-        match self {
-            Self::ExternRef => ValType::ExternRef,
-            Self::FuncRef => ValType::FuncRef,
+impl From<RefType> for ValType {
+    fn from(val: RefType) -> Self {
+        match val {
+            RefType::ExternRef => ValType::ExternRef,
+            RefType::FuncRef => ValType::FuncRef,
         }
     }
 }

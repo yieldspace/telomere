@@ -56,8 +56,8 @@ fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceAddr {
     let mut parser = telomere::WasmParser::new(&mut reader);
 
     let m = parser.parse_module().unwrap();
-    let ret = instantiate(m, store, registry).unwrap();
-    ret
+
+    instantiate(m, store, registry).unwrap()
 }
 fn run_wast(text: &str) {
     let buf = ParseBuffer::new(text).unwrap();
@@ -318,7 +318,7 @@ fn run_wast(text: &str) {
                 module: _id,
             } => {
                 //assert!(id.is_none());
-                registry.register(name, instance.clone().unwrap());
+                registry.register(name, instance.unwrap());
             }
             WastDirective::AssertUnlinkable {
                 span,
@@ -602,10 +602,10 @@ fn names() {
 fn obsolete_keywords() {
     run_test_file("obsolete-keywords");
 }
-/*#[test]
+#[test]
 fn ref_func() {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
     run_test_file("ref_func");
-}*/
+}

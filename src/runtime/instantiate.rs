@@ -1,12 +1,9 @@
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     common::{
         ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, ExportDesc, FunctionInstance,
         ImportDesc, InstanceAddr, JumpTable, Limits, LocalState, Memory, ModuleInstance,
         TableInstance, PAGE_SIZE_MAX,
     },
-    run_module_function,
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
 };
@@ -56,7 +53,7 @@ fn execute_const_expr(store: &mut Store, globals: &[u32], exprs: &[ConstExpr]) -
             }
         });
     }
-    return VMResult::Unlinkable;
+    VMResult::Unlinkable
 }
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
@@ -169,11 +166,10 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         match &d.mode {
             DataMode::Active(mem, offset) => {
                 assert_eq!(mem.0, 0);
-                let offset = vm_try!(execute_const_expr(store, &globals, &offset)) as usize;
+                let offset = vm_try!(execute_const_expr(store, &globals, offset)) as usize;
                 if let Some(memory) = &memory {
                     let memory = &mut store.memory[*memory as usize];
-                    if let Some(slice) = memory.get_mut(offset..offset + d.init.len())
-                    {
+                    if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
                         slice.copy_from_slice(&d.init);
                     } else {
                         return VMResult::MemoryIndexOutOfRange;
@@ -228,7 +224,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                         let offset = vm_try!(execute_const_expr(store, &globals, &offset)) as usize;
                         let table_addr = tables[idx.0 as usize] as usize;
                         let instance = if table_addr < store.tables.len() {
-                            &mut store.tables[table_addr as usize]
+                            &mut store.tables[table_addr]
                         } else {
                             &mut s_tables[table_addr - store.tables.len()]
                         };

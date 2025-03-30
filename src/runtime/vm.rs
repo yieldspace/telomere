@@ -2,8 +2,8 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable, LocalState, Memory,
-        Stack, VMResult, ValType, WasmValue,
+        ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable, LocalState, Stack,
+        VMResult, ValType, WasmValue,
     },
     Store,
 };
@@ -1608,7 +1608,7 @@ pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
         vm_try!(ctx.stack.push_u32(memory.page_size()));
         call_next(tail_code, 0, ctx)
     } else {
-        return VMResult::MemoryIndexOutOfRange;
+        VMResult::MemoryIndexOutOfRange
     }
 }
 pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1636,7 +1636,7 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
         data.init.get(s as usize..last as usize),
         || { VMResult::MemoryIndexOutOfRange }
     ));
-    let memory = if let Some(v) = ctx.instance().memory.clone() {
+    let memory = if let Some(v) = ctx.instance().memory {
         &mut ctx.store.memory[v as usize]
     } else {
         return VMResult::MemoryIndexOutOfRange;
