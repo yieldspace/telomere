@@ -499,3 +499,9 @@ fn f64_cmp() {
 fn fac() {
     run_test_file("fac");
 }
+
+#[test]
+fn float_exprs() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
+    run_test_file("float_exprs");
+}

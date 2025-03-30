@@ -1292,13 +1292,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x1B => {
                 trace!("parse_op_select");
                 if !*unreachable {
+                    assert_valtype(ValType::I32, types.pop())?;
                     let x = if let Some(first) = types.pop() {
                         assert_valtype(first, types.pop())?;
                         first
                     } else {
                         Err(WasmParserError::InvalidStackValTypeAny)?
                     };
-                    assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
                     types.push(x);
                     instrs.push(Instr { op: vm::op_select });
@@ -2025,9 +2025,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x51 => {
                 trace!("parse_op_i64_eq");
                 if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_eq,
-                    });
+                    instrs.push(Instr { op: vm::op_i64_eq });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -2039,9 +2037,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x52 => {
                 trace!("parse_op_i64_ne");
                 if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_ne,
-                    });
+                    instrs.push(Instr { op: vm::op_i64_ne });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
