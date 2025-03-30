@@ -591,3 +591,7 @@ fn names() {
     run_test_file("names");
 }
 */
+#[test]
+fn obsolete_keywords() {
+    run_test_file("obsolete-keywords");
+}
