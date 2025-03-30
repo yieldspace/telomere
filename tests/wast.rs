@@ -559,3 +559,7 @@ fn labels() {
 fn left_to_right() {
     run_test_file("left-to-right");
 }
+/*#[test]
+fn linking() {
+    run_test_file("linking");
+}*/
