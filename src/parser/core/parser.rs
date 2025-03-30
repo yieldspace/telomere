@@ -2022,11 +2022,67 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x51 => {
+                trace!("parse_op_i64_eq");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_eq,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x52 => {
+                trace!("parse_op_i64_ne");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_ne,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x53 => {
+                trace!("parse_op_i64_lt_s");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_lt_s,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x54 => {
                 trace!("parse_op_i64_lt_u");
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_lt_u,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x55 => {
+                trace!("parse_op_i64_gt_s");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_gt_s,
                     });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;
@@ -2050,11 +2106,53 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x57 => {
+                trace!("parse_op_i64_le_s");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_le_u,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x58 => {
                 trace!("parse_op_i64_le_u");
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i64_le_u,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x59 => {
+                trace!("parse_op_i64_ge_s");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_ge_u,
+                    });
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_valtype(ValType::I64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x5A => {
+                trace!("parse_op_i64_ge_u");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i64_ge_u,
                     });
                     assert_valtype(ValType::I64, types.pop())?;
                     assert_valtype(ValType::I64, types.pop())?;

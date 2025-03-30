@@ -495,3 +495,7 @@ fn f64_bitwise() {
 fn f64_cmp() {
     run_test_file("f64_cmp");
 }
+#[test]
+fn fac() {
+    run_test_file("fac");
+}

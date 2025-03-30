@@ -1261,11 +1261,43 @@ pub unsafe fn op_i64_eqz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_i64_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u64();
+    let a = ctx.stack.pop_u64();
+
+    vm_try!(ctx.stack.push_u32(if a == b { 1 } else { 0 }));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u64();
+    let a = ctx.stack.pop_u64();
+
+    vm_try!(ctx.stack.push_u32(if a != b { 1 } else { 0 }));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_lt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_i64();
+    let a = ctx.stack.pop_i64();
+
+    vm_try!(ctx.stack.push_u32(if a < b { 1 } else { 0 }));
+
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_i64_lt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u64();
     let a = ctx.stack.pop_u64();
 
     vm_try!(ctx.stack.push_u32(if a < b { 1 } else { 0 }));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_gt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_i64();
+    let a = ctx.stack.pop_i64();
+
+    vm_try!(ctx.stack.push_u32(if a > b { 1 } else { 0 }));
 
     call_next(tail_code, 0, ctx)
 }
@@ -1282,6 +1314,22 @@ pub unsafe fn op_i64_le_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let a = ctx.stack.pop_u64();
 
     vm_try!(ctx.stack.push_u32(if a <= b { 1 } else { 0 }));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_ge_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_i64();
+    let a = ctx.stack.pop_i64();
+
+    vm_try!(ctx.stack.push_u32(if a >= b { 1 } else { 0 }));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i64_ge_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u64();
+    let a = ctx.stack.pop_u64();
+
+    vm_try!(ctx.stack.push_u32(if a >= b { 1 } else { 0 }));
 
     call_next(tail_code, 0, ctx)
 }
