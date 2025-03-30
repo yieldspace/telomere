@@ -1083,15 +1083,39 @@ pub unsafe fn op_f32_ge(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_f64_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a = ctx.stack.pop_f64();
     let b = ctx.stack.pop_f64();
+    let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_u32(if a == b { 1 } else { 0 }));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_ne(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_f64();
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_u32(if a != b { 1 } else { 0 }));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_lt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_f64();
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_u32(if a < b { 1 } else { 0 }));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_gt(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_f64();
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_u32(if a > b { 1 } else { 0 }));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_f64_le(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_f64();
     let a = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push_u32(if a <= b { 1 } else { 0 }));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_f64_ge(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_f64();
+    let a = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push_u32(if a >= b { 1 } else { 0 }));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_i32_ctz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {

@@ -2148,10 +2148,58 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x62 => {
+                trace!("parse_op_f64_ne");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f64_ne });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x63 => {
+                trace!("parse_op_f64_lt");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f64_lt });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x64 => {
+                trace!("parse_op_f64_gt");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f64_gt });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
             0x65 => {
                 trace!("parse_op_f64_le");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_le });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x66 => {
+                trace!("parse_op_f64_ge");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f64_ge });
                     assert_valtype(ValType::F64, types.pop())?;
                     assert_valtype(ValType::F64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
