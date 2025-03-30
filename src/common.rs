@@ -208,7 +208,8 @@ pub struct TableInstance(pub TableType, pub Vec<u32>);
 #[derive(Clone)]
 pub struct Instance {
     pub module_addr: u32,
-    pub memory: Option<Rc<RefCell<Memory>>>,
+    //  -> addr
+    pub memory: Option<u32>,
     // idx -> addr
     pub globals: Vec<u32>,
     // idx -> addr
@@ -351,8 +352,10 @@ impl ExecuteContext<'_> {
     pub fn local_reference(&self) -> LocalReference {
         unsafe { self.local_state.last().unwrap_unchecked().local_reference }
     }
-    pub fn memory(&mut self) -> Option<Rc<RefCell<Memory>>> {
-        self.instance().memory.clone()
+    pub fn memory(&mut self) -> Option<&mut Memory> {
+        self.instance()
+            .memory
+            .and_then(|v| self.store.memory.get_mut(v as usize))
     }
 }
 pub struct LocalState {

@@ -1,8 +1,7 @@
 use std::io::Write;
 
 use super::{
-    ConstExpr, Data, ExportSection, Func, FuncType, GlobalType, Instance, MemType, TableInstance,
-    TableType, TypeIdx, VMResult,
+    ConstExpr, Data, ExportSection, Func, FuncType, GlobalType, Instance, MemType, Memory, TableInstance, TableType, TypeIdx, VMResult
 };
 
 pub struct GlobalStore(pub Vec<u8>);
@@ -58,6 +57,7 @@ pub struct Store {
     pub modules: Vec<ModuleInstance>,
     pub instances: Vec<Instance>,
     pub tables: Vec<TableInstance>,
+    pub memory: Vec<Memory>,
 }
 impl Default for Store {
     fn default() -> Self {
@@ -73,6 +73,7 @@ impl Store {
             modules: vec![],
             instances: vec![],
             tables: vec![],
+            memory: vec![]
         }
     }
 }

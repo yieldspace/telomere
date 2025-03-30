@@ -61,7 +61,8 @@ fn execute_const_expr(store: &mut Store, globals: &[u32], exprs: &[ConstExpr]) -
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
     let inst_addr = store.instances.len() as u32;
-    let mut memory: Option<Rc<RefCell<Memory>>> = None;
+    // -> addr
+    let mut memory: Option<u32> = None;
     let mut globals = vec![];
     let mut funcs: Vec<u32> = vec![];
     let mut tables = vec![];
@@ -133,11 +134,12 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 tables.push(ext_inst.tables[idx.0 as usize]);
             }
             (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                memory = ext_inst.memory.clone();
-                if let Some(memory) = &memory {
+                memory = ext_inst.memory;
+                if let Some(memory_addr) = &memory {
+                    let memory = &store.memory[*memory_addr as usize];
                     vm_try!(validate_limit(
                         mt.0,
-                        memory.borrow().page_size(),
+                        memory.page_size(),
                         ext_module.mems[0].0
                     ))
                 } else {
@@ -155,10 +157,11 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     }
     if memory.is_none() {
         if let Some(mem) = mems.first() {
-            memory = Some(Rc::new(RefCell::new(Memory::new(
+            memory = Some(store.memory.len() as u32);
+            store.memory.push(Memory::new(
                 mem.0.min,
                 (mem.0.max).unwrap_or(PAGE_SIZE_MAX as u32),
-            ))))
+            ));
         }
     }
 
@@ -168,7 +171,8 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 assert_eq!(mem.0, 0);
                 let offset = vm_try!(execute_const_expr(store, &globals, &offset)) as usize;
                 if let Some(memory) = &memory {
-                    if let Some(slice) = memory.borrow_mut().get_mut(offset..offset + d.init.len())
+                    let memory = &mut store.memory[*memory as usize];
+                    if let Some(slice) = memory.get_mut(offset..offset + d.init.len())
                     {
                         slice.copy_from_slice(&d.init);
                     } else {
