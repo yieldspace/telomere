@@ -2481,7 +2481,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x8D => {
                 trace!("parse_op_f32_ceil");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_ceil });
+                    instrs.push(Instr {
+                        op: vm::op_f32_ceil,
+                    });
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
 
@@ -2492,7 +2494,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x8E => {
                 trace!("parse_op_f32_floor");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_floor });
+                    instrs.push(Instr {
+                        op: vm::op_f32_floor,
+                    });
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
 
@@ -2503,7 +2507,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x8F => {
                 trace!("parse_op_f32_trunc");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_trunc });
+                    instrs.push(Instr {
+                        op: vm::op_f32_trunc,
+                    });
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
 
@@ -2514,7 +2520,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x90 => {
                 trace!("parse_op_f32_nearest");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_nearest });
+                    instrs.push(Instr {
+                        op: vm::op_f32_nearest,
+                    });
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
 
@@ -2610,7 +2618,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x98 => {
                 trace!("parse_op_f32_copysign");
                 if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_copysign });
+                    instrs.push(Instr {
+                        op: vm::op_f32_copysign,
+                    });
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_valtype(ValType::F32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
@@ -2619,10 +2629,87 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0x99 => {
+                trace!("parse_op_f64_abs");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f64_abs });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
             0x9A => {
                 trace!("parse_op_f64_neg");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_neg });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+            0x9B => {
+                trace!("parse_op_f64_ceil");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f64_ceil,
+                    });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+            0x9C => {
+                trace!("parse_op_f64_floor");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f64_floor,
+                    });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+            0x9D => {
+                trace!("parse_op_f64_trunc");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f64_trunc,
+                    });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+            0x9E => {
+                trace!("parse_op_f64_nearest");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f64_nearest,
+                    });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+
+            0x9F => {
+                trace!("parse_op_f64_sqrt");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f64_sqrt,
+                    });
                     assert_valtype(ValType::F64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
 
@@ -2658,6 +2745,56 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 trace!("parse_op_f64_mul");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_mul });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+            0xA3 => {
+                trace!("parse_op_f64_div");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f64_div });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+            0xA4 => {
+                trace!("parse_op_f64_min");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f64_min });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+            0xA5 => {
+                trace!("parse_op_f64_max");
+                if !*unreachable {
+                    instrs.push(Instr { op: vm::op_f64_max });
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_valtype(ValType::F64, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::F64);
+                }
+                (1, false)
+            }
+            0xA6 => {
+                trace!("parse_op_f64_copysign");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_f64_copysign,
+                    });
                     assert_valtype(ValType::F64, types.pop())?;
                     assert_valtype(ValType::F64, types.pop())?;
                     assert_type_stack_size(types, blocks)?;

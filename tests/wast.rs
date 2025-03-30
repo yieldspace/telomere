@@ -483,3 +483,7 @@ fn f32_bitwise() {
 fn f32_cmp() {
     run_test_file("f32_cmp");
 }
+#[test]
+fn f64() {
+    run_test_file("f64");
+}
