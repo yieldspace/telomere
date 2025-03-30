@@ -547,3 +547,7 @@ fn i64() {
 fn inline_module() {
     run_test_file("inline_module");
 }
+#[test]
+fn int_exprs() {
+    run_test_file("int_exprs");
+}
