@@ -275,16 +275,17 @@ fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
     }
     Ok(())
 }
-fn validate_offset_const_expr(globals: &[GlobalType], exprs: &[ConstExpr]) -> Result<()> {
+fn validate_const_expr_type(
+    globals: &[GlobalType],
+    exprs: &[ConstExpr],
+    expected: ValType,
+) -> Result<()> {
     if exprs.len() != 1 {
         Err(WasmParserError::InvalidStackValTypeAny)?;
     }
     match exprs[0] {
-        ConstExpr::I32(_) => {}
-        ConstExpr::I64(_) => Err(WasmParserError::InvalidStackValType(
-            ValType::I32,
-            Some(ValType::I64),
-        ))?,
+        ConstExpr::I32(_) => assert_valtype(expected, Some(ValType::I32))?,
+        ConstExpr::I64(_) => assert_valtype(expected, Some(ValType::I64))?,
         ConstExpr::GlobalGet(idx) => {
             let gt = globals
                 .get(idx as usize)
@@ -292,13 +293,19 @@ fn validate_offset_const_expr(globals: &[GlobalType], exprs: &[ConstExpr]) -> Re
             if gt.1 != Mut::Const {
                 Err(WasmParserError::InvalidGlobalAccess)?;
             }
-            assert_valtype(ValType::I32, Some(gt.0))?;
+            assert_valtype(expected, Some(gt.0))?;
             //TODO: index and value type validation
         }
-        _ => todo!(),
+        ConstExpr::RefNull(t) => assert_valtype(expected, Some(t.into()))?,
+        ConstExpr::F32(_) => assert_valtype(expected, Some(ValType::F32))?,
+        ConstExpr::F64(_) => assert_valtype(expected, Some(ValType::F64))?,
+        ConstExpr::FuncRef(_) => assert_valtype(expected, Some(ValType::FuncRef))?,
     }
 
     Ok(())
+}
+fn validate_offset_const_expr(globals: &[GlobalType], exprs: &[ConstExpr]) -> Result<()> {
+    validate_const_expr_type(globals, exprs, ValType::I32)
 }
 enum BlockKind {
     Block,
@@ -335,6 +342,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     }
     fn parse_valtype(&mut self) -> Result<(usize, ValType)> {
         types::parse_valtype(self.reader)
+    }
+    fn parse_reftype(&mut self) -> Result<(usize, RefType)> {
+        types::parse_ref_type(self.reader)
     }
     fn parse_functype(&mut self) -> Result<(usize, FuncType)> {
         types::parse_functype(self.reader)
@@ -464,6 +474,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     let (len, operand) = self.parse_f64()?;
                     (1 + len, ConstExpr::F64(operand))
                 }
+                0xD0 => {
+                    let (len, t) = self.parse_reftype()?;
+                    (1 + len, ConstExpr::RefNull(t))
+                }
                 unknown => Err(WasmParserError::InvalidConstInstruction(unknown))?,
             };
             total_len += len;
@@ -471,9 +485,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
     }
 
-    fn parse_global(&mut self) -> Result<(usize, Global)> {
+    fn parse_global(&mut self, globals: &[GlobalType]) -> Result<(usize, Global)> {
         let (len, gt) = self.parse_global_type()?;
         let (len2, init) = self.parse_const_expr()?;
+        validate_const_expr_type(globals, &init, gt.0)?;
         Ok((len + len2, Global(gt, init)))
     }
 
@@ -1973,6 +1988,34 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_i32_lt_u,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x4A => {
+                trace!("parse_op_i32_gt_s");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_gt_s,
+                    });
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+
+                    types.push(ValType::I32);
+                }
+                (1, false)
+            }
+            0x4B => {
+                trace!("parse_op_i32_gt_u");
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_i32_gt_u,
                     });
                     assert_valtype(ValType::I32, types.pop())?;
                     assert_valtype(ValType::I32, types.pop())?;
@@ -3697,8 +3740,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
         Ok(tables)
     }
-    fn parse_global_section(&mut self, size: u32) -> Result<Vec<Global>> {
-        let (len, globals) = self.parse_vec(&Self::parse_global)?;
+    fn parse_global_section(&mut self, globals: &[GlobalType], size: u32) -> Result<Vec<Global>> {
+        let (len, globals) = self.parse_vec(|me| me.parse_global(globals))?;
         if len != size as usize {
             Err(WasmParserError::InvalidSectionSize)?
         }
@@ -3931,7 +3974,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     }
                 }
                 WasmSectionType::Global => {
-                    let local_globals = self.parse_section_body(Self::parse_global_section)?;
+                    let local_globals = self
+                        .parse_section_body(|me, size| me.parse_global_section(&globals, size))?;
                     for global in local_globals {
                         globals.push(global.0);
                         global_init.push(global.1[0]);

@@ -141,6 +141,14 @@ pub enum RefType {
     FuncRef,
     ExternRef,
 }
+impl Into<ValType> for RefType {
+    fn into(self) -> ValType {
+        match self {
+            Self::ExternRef => ValType::ExternRef,
+            Self::FuncRef => ValType::FuncRef,
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub enum ElemMode {
     Passive,
@@ -276,7 +284,7 @@ pub enum WasmValue {
     F64(f64),
     //V128,
     FuncRef(u32),
-    //ExternRef,
+    ExternRef(u64),
 }
 #[derive(Debug, Clone, Copy)]
 pub enum ConstExpr {
@@ -285,6 +293,7 @@ pub enum ConstExpr {
     F32(f32),
     F64(f64),
     FuncRef(u32),
+    RefNull(RefType),
     GlobalGet(u32),
 }
 impl ConstExpr {

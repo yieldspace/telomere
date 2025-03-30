@@ -1394,7 +1394,26 @@ pub unsafe fn op_i32_lt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_i32_gt_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_i32();
+    let a = ctx.stack.pop_i32();
+    let r = if a > b { 1 } else { 0 };
+    trace!("op_i32_gt_s: {a} {b} => {r}");
 
+    vm_try!(ctx.stack.push_u32(r));
+
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn op_i32_gt_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u32();
+    let a = ctx.stack.pop_u32();
+    let r = if a > b { 1 } else { 0 };
+    trace!("op_i32_gt_u: {a} {b} => {r}");
+
+    vm_try!(ctx.stack.push_u32(r));
+
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_i32_ge_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u32();
     let a = ctx.stack.pop_u32();
@@ -1535,6 +1554,8 @@ pub fn run_module_function(
                 WasmValue::I64(i64) => stack.push_i64(*i64),
                 WasmValue::F32(v) => stack.push_f32(*v),
                 WasmValue::F64(v) => stack.push_f64(*v),
+                WasmValue::ExternRef(v) => stack.push_u64(*v),
+
                 _ => unimplemented!(),
             });
         }
@@ -1595,7 +1616,9 @@ pub fn run_module_function(
                     ValType::I64 => WasmValue::I64(stack.pop_i64()),
                     ValType::F32 => WasmValue::F32(stack.pop_f32()),
                     ValType::F64 => WasmValue::F64(stack.pop_f64()),
-                    _ => unimplemented!(),
+                    ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
+                    ValType::ExternRef => WasmValue::ExternRef(stack.pop_u64()),
+                    ValType::V128 => todo!(),
                 })
                 .collect::<Vec<_>>();
         result.reverse();

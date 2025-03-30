@@ -19,7 +19,7 @@ fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
                 wast::core::WastArgCore::F64(f64) => WasmValue::F64(f64::from_bits(f64.bits)),
                 wast::core::WastArgCore::V128(_) => todo!(),
                 wast::core::WastArgCore::RefNull(_) => todo!(),
-                wast::core::WastArgCore::RefExtern(_) => todo!(),
+                wast::core::WastArgCore::RefExtern(v) => WasmValue::ExternRef(*v as u64),
                 wast::core::WastArgCore::RefHost(_) => todo!(),
             },
             wast::WastArg::Component(_) => todo!(),
@@ -172,6 +172,13 @@ fn run_wast(text: &str) {
                                 ) => {
                                     // TODO: is arithmetic nan?
                                     assert!(actual.is_nan());
+                                }
+                                (WastRetCore::RefNull(_), WasmValue::ExternRef(0)) => {
+                                    // ok
+                                }
+                                (WastRetCore::RefExtern(Some(v)), WasmValue::ExternRef(vv)) => {
+                                    // ok
+                                    assert_eq!(*v as u64, *vv)
                                 }
                                 _ => {
                                     error!(
@@ -523,4 +530,11 @@ fn forward() {
 #[test]
 fn func_ptrs() {
     run_test_file("func_ptrs");
+}
+#[test]
+fn global() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
+    run_test_file("global");
 }

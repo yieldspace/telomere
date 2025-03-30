@@ -183,7 +183,7 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
         }
     }
     for init in &m.global_init {
-        globals.push(vm_try!(store.globals.init(init)));
+        globals.push(vm_try!(store.globals.init(init, &globals, &m.globals)));
     }
     let instance = Instance {
         memory,
