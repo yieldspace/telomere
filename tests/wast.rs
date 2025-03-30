@@ -541,6 +541,9 @@ fn i32() {
 }
 #[test]
 fn i64() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("i64");
+}
+#[test]
+fn inline_module() {
+    run_test_file("inline_module");
 }
