@@ -512,3 +512,7 @@ fn float_literals() {
 fn float_memory() {
     run_test_file("float_memory");
 }
+#[test]
+fn float_misc() {
+    run_test_file("float_misc");
+}
