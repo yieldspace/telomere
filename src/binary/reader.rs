@@ -56,7 +56,7 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
 
     fn read_count(&self) -> usize
     where
-        Self: Sized
+        Self: Sized,
     {
         self.count
     }
@@ -69,15 +69,13 @@ impl<R: Read> From<R> for IoReadBinaryReader<R> {
 
 #[macro_export]
 macro_rules! with_count {
-    ($reader:expr, $b:block) => {
-        {
-            let start_count = $reader.read_count();
-            let result = $b;
-            let end_count = $reader.read_count();
-            let count = end_count - start_count;
-            (count, result)
-        }
-    };
+    ($reader:expr, $b:block) => {{
+        let start_count = $reader.read_count();
+        let result = $b;
+        let end_count = $reader.read_count();
+        let count = end_count - start_count;
+        (count, result)
+    }};
 }
 
 #[cfg(test)]
