@@ -551,7 +551,9 @@ fn inline_module() {
 fn int_exprs() {
     run_test_file("int_exprs");
 }
-/*#[test]
+/*
+TODO: library bug?
+#[test]
 fn labels() {
     run_test_file("labels");
 }*/
@@ -559,7 +561,9 @@ fn labels() {
 fn left_to_right() {
     run_test_file("left-to-right");
 }
-/*#[test]
+/*
+FIXME: implementation bug
+#[test]
 fn linking() {
     run_test_file("linking");
 }*/
@@ -580,3 +584,10 @@ fn local_set() {
 fn local_tee() {
     run_test_file("local_tee");
 }
+/*
+library limitation
+#[test]
+fn names() {
+    run_test_file("names");
+}
+*/
