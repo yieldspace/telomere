@@ -520,3 +520,7 @@ fn float_misc() {
 fn forward() {
     run_test_file("forward");
 }
+#[test]
+fn func_ptrs() {
+    run_test_file("func_ptrs");
+}

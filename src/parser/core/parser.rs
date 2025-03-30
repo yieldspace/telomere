@@ -269,6 +269,12 @@ fn get_local_addr(ty: &ResultType, locals: &[Locals], idx: u32) -> Result<(ValTy
     }
     Err(WasmParserError::InvalidLocalIndex(idx))
 }
+fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
+    if idx as usize >= tables.len() {
+        return Err(WasmParserError::InvalidTableIndex(idx));
+    }
+    Ok(())
+}
 fn validate_offset_const_expr(globals: &[GlobalType], exprs: &[ConstExpr]) -> Result<()> {
     if exprs.len() != 1 {
         Err(WasmParserError::InvalidStackValTypeAny)?;
@@ -486,10 +492,16 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         Ok((read_bytes, Export(name, desc)))
     }
 
-    fn parse_elem(&mut self, globals: &[GlobalType], funcs: &[TypeIdx]) -> Result<(usize, Elem)> {
+    fn parse_elem(
+        &mut self,
+        globals: &[GlobalType],
+        funcs: &[TypeIdx],
+        tables: &[TableType],
+    ) -> Result<(usize, Elem)> {
         let (len, kind) = self.parse_u32()?;
         let r = match kind {
             0 => {
+                validate_table(tables, 0)?;
                 let (len2, offset) = self.parse_const_expr()?;
                 validate_offset_const_expr(globals, &offset)?;
                 let (len3, funcidx) = self.parse_vec(Self::parse_u32)?;
@@ -529,6 +541,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             }
             2 => {
                 let (len2, tableidx) = self.parse_u32()?;
+                validate_table(tables, 0)?;
                 let (len3, offset) = self.parse_const_expr()?;
                 validate_offset_const_expr(globals, &offset)?;
                 let elemkind = self.reader.read_exact_one()?;
@@ -3556,7 +3569,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         data_count_section: &mut DataCountVerifier,
         funcidx: FuncIdx,
     ) -> Result<(usize, Func)> {
-        trace!("parse_code: {funcidx:?}");
         let (len, size) = self.parse_u32()?;
         let typeidx = *functions
             .get(funcidx.0 as usize)
@@ -3564,6 +3576,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let functype = type_section
             .get(typeidx)
             .ok_or(WasmParserError::InvalidTypeIdx(typeidx))?;
+        trace!("parse_code: {funcidx:?} {typeidx:?} {functype:?}");
+
         let func = self.parse_code_inner(
             type_section,
             functions,
@@ -3722,10 +3736,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         &mut self,
         globals: &[GlobalType],
         functions: &[TypeIdx],
+        tables: &[TableType],
         size: u32,
     ) -> Result<ElementSection> {
         trace!("{:?}", functions);
-        let (len, elems) = self.parse_vec(|me| me.parse_elem(globals, functions))?;
+        let (len, elems) = self.parse_vec(|me| me.parse_elem(globals, functions, tables))?;
         if len != size as usize {
             Err(WasmParserError::InvalidSectionSize)?
         }
@@ -3752,6 +3767,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     .ok_or(WasmParserError::InvalidTypeIdx(tidx))?;
 
                 icode.push(create_call_imported_function_code(&ft.1));
+                idx += 1;
             }
         }
 
@@ -3934,11 +3950,16 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     trace!("element section");
 
                     element_section = Some(self.parse_section_body(|me, size| {
-                        me.parse_element_section(&globals[..imported_global_len], &functions, size)
+                        me.parse_element_section(
+                            &globals[..imported_global_len],
+                            &functions,
+                            &tables,
+                            size,
+                        )
                     })?);
                 }
                 WasmSectionType::Code => {
-                    let type_section = type_section.as_ref().unwrap();
+                    let type_section = type_section.get_or_insert_with(|| TypeSection(vec![]));
                     let imports = import_section.get_or_insert_with(|| ImportSection(vec![]));
 
                     code_section = Some(self.parse_section_body(|me, size| {
