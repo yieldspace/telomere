@@ -59,7 +59,7 @@ fn execute_offset_const_expr(
     }
     VMResult::Unlinkable
 }
-fn execute_elem_init_const_expr(
+pub fn execute_elem_init_const_expr(
     global_store: &GlobalStore,
     globals: &[u32],
     funcs: &[u32],

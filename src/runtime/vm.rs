@@ -8,7 +8,7 @@ use crate::{
     Store,
 };
 
-use super::TABLE_UNINITIALIZED;
+use super::{instantiate::execute_elem_init_const_expr, TABLE_UNINITIALIZED};
 pub struct ResultValue(Vec<WasmValue>);
 impl ResultValue {
     pub fn new(args: Vec<WasmValue>) -> Self {
@@ -882,6 +882,7 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
         instances,
         tables,
         modules,
+        globals: global_store,
         ..
     } = store;
     let instance = &mut instances[instance_addr];
@@ -891,18 +892,28 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     if !matches!(elem.mode, ElemMode::Passive) {
         return VMResult::TableIndexOutOfRange;
     }
+    let dst_table = &mut tables[dst_table_addr];
+    let dst = vm_try!(VMResult::from_option(
+        dst_table.1.get_mut(dst..dst + len),
+        || { VMResult::TableIndexOutOfRange }
+    ));
     match &elem.init {
         ElemInit::FuncIdx(idxs) => {
-            let dst_table = &mut tables[dst_table_addr];
-            let dst = vm_try!(VMResult::from_option(
-                dst_table.1.get_mut(dst..dst + len),
-                || { VMResult::TableIndexOutOfRange }
-            ));
-            for (i, funcidx) in idxs[src..].iter().enumerate() {
+            for (i, funcidx) in idxs[src..src+len].iter().enumerate() {
                 dst[i] = instance.funcs[*funcidx as usize];
             }
         }
-        _ => todo!(),
+        ElemInit::ConstExpr(exprs) => {
+            for (i, expr) in exprs[src..src+len].iter().enumerate() {
+                dst[i] = vm_try!(execute_elem_init_const_expr(
+                    global_store,
+                    &instance.globals,
+                    &instance.funcs,
+                    expr,
+                    dst_table.0.reftype.into(),
+                ));
+            }
+        }
     }
 
     call_next(tail_code, 2, ctx)

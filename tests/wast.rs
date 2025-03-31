@@ -619,7 +619,9 @@ fn obsolete_keywords() {
 }
 #[test]
 fn ref_func() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
     run_test_file("ref_func");
 }
 #[test]
@@ -711,5 +713,12 @@ FIXME: あとでやる
 #[test]
 fn table_sub() {
     run_test_file("table-sub");
+}
+*/
+/*
+FIXME: element のdrop無理すぎる。あとでやる。
+#[test]
+fn table_init() {
+    run_test_file("table_init");
 }
 */

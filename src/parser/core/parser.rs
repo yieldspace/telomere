@@ -97,6 +97,8 @@ pub enum WasmParserError {
     StartFunction,
     #[error("size minimum must not be greater than maximum")]
     InvalidLimit,
+    #[error("unknown element")]
+    UnknownElement,
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {
@@ -3846,8 +3848,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     12 => {
                         let (len2, elemidx) = self.parse_u32()?;
                         let (len3, tableidx) = self.parse_u32()?;
+                        let elem = elems
+                            .get(elemidx as usize)
+                            .ok_or_else(|| WasmParserError::UnknownElement)?;
 
-                        validate_active_elem(tables, tableidx, elems[elemidx as usize].kind)?;
+                        validate_active_elem(tables, tableidx, elem.kind)?;
                         trace!("parse_op_table_init");
                         if !*unreachable {
                             instrs.push(Instr {
@@ -3865,6 +3870,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             assert_type_stack_size(types, blocks)?;
                         }
                         (1 + len + len2 + len3, false)
+                    }
+                    13 => {
+                        let (len2, elemidx) = self.parse_u32()?;
+                        if elems.get(elemidx as usize).is_none() {
+                            Err(WasmParserError::UnknownElement)?;
+                        }
+                        (1 + len + len2, false)
                     }
                     14 => {
                         let (len2, tableidx) = self.parse_u32()?;
