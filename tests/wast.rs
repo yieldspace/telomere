@@ -648,3 +648,7 @@ fn stack() {
 fn start() {
     run_test_file("start");
 }
+#[test]
+fn store() {
+    run_test_file("store");
+}
