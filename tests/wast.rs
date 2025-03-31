@@ -709,16 +709,34 @@ fn table_set() {
     run_test_file("table_set");
 }
 /*
-FIXME: あとでやる
+TODO: あとでやる
 #[test]
 fn table_sub() {
     run_test_file("table-sub");
 }
 */
 /*
-FIXME: element のdrop無理すぎる。あとでやる。
+TODO: element のdrop無理すぎる。あとでやる。
+
 #[test]
 fn table_init() {
     run_test_file("table_init");
 }
 */
+/*
+TODO:
+
+#[test]
+fn table_grow() {
+    run_test_file("table_grow");
+}
+
+#[test]
+fn table_fill() {
+    run_test_file("table_fill");
+}
+#[test]
+fn table_size() {
+    run_test_file("table_size");
+}
+    */
