@@ -652,3 +652,7 @@ fn start() {
 fn store() {
     run_test_file("store");
 }
+#[test]
+fn switch() {
+    run_test_file("switch");
+}
