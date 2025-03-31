@@ -704,3 +704,10 @@ fn table_get() {
 fn table_set() {
     run_test_file("table_set");
 }
+/*
+FIXME: あとでやる
+#[test]
+fn table_sub() {
+    run_test_file("table-sub");
+}
+*/
