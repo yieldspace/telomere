@@ -640,3 +640,7 @@ fn select() {
 fn skip_stack_guard_page() {
     run_test_file("skip-stack-guard-page");
 }
+#[test]
+fn stack() {
+    run_test_file("stack");
+}
