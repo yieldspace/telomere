@@ -866,6 +866,29 @@ pub unsafe fn op_table_set(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     inst.1[i as usize] = val;
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let len = ctx.stack.pop_u32() as usize;
+    let src = ctx.stack.pop_u32() as usize;
+    let dst = ctx.stack.pop_u32() as usize;
+    let dst_table_idx = (*tail_code).operand.u32 as usize;
+    let src_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
+
+    let src_table_addr = ctx.instance().tables[src_table_idx] as usize;
+    let dst_table_addr = ctx.instance().tables[dst_table_idx] as usize;
+    let src_table = &ctx.store.tables[src_table_addr].1;
+    let src_ptr = vm_try!(VMResult::from_option(src_table.get(src..src + len), || {
+        VMResult::TableIndexOutOfRange
+    }))
+    .as_ptr();
+    let dst_table = &mut ctx.store.tables[dst_table_addr].1;
+    let dst_ptr = vm_try!(VMResult::from_option(
+        dst_table.get_mut(dst..dst + len),
+        || { VMResult::TableIndexOutOfRange }
+    ))
+    .as_mut_ptr();
+    std::ptr::copy(src_ptr, dst_ptr, len);
+    call_next(tail_code, 2, ctx)
+}
 macro_rules! memory_try {
     ($ctx: expr) => {
         if let Some(v) = $ctx.memory() {
@@ -1682,6 +1705,7 @@ pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     vm_try!(memory.copy(dst, src, len));
     call_next(tail_code, 0, ctx)
 }
+
 pub unsafe fn op_mem_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();

@@ -3813,6 +3813,28 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         }
                         (2 + len, false)
                     }
+                    14 => {
+                        let (len2, tableidx) = self.parse_u32()?;
+                        let (len3, tableidx2) = self.parse_u32()?;
+                        
+                        trace!("parse_op_table_copy");
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_table_copy,
+                            });
+                            instrs.push(Instr {
+                                operand: Operand { u32: tableidx },
+                            });
+                            instrs.push(Instr {
+                                operand: Operand { u32: tableidx2 },
+                            });
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_type_stack_size(types, blocks)?;
+                        }
+                        (1 + len + len2 + len3, false)
+                    }
                     _ => Err(WasmParserError::InvalidInstruction([
                         0xFC, next as u8, 0x00, 0x00,
                     ]))?,

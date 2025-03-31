@@ -261,7 +261,11 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                         }
                         for (idx, funcidx) in idxs.iter().enumerate() {
                             instance.1[offset + idx] = funcs[*funcidx as usize];
-                            trace!("table[{}] = {}", offset + idx, funcs[*funcidx as usize]);
+                            tracing::trace!(
+                                "table[{}] = {}",
+                                offset + idx,
+                                funcs[*funcidx as usize]
+                            );
                         }
                     }
                     ElemInit::ConstExpr(idxs) => {
@@ -280,6 +284,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                                 instance.0.reftype,
                             ));
                             instance.1[offset + idx] = addr;
+                            tracing::trace!("table[{}] = {}", offset + idx, addr);
                         }
                     }
                 },

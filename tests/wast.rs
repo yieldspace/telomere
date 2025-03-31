@@ -692,3 +692,8 @@ fn unwind() {
 fn table() {
     run_test_file("table");
 }
+#[test]
+fn table_copy() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
+    run_test_file("table_copy");
+}
