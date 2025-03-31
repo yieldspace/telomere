@@ -694,6 +694,9 @@ fn table() {
 }
 #[test]
 fn table_copy() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("table_copy");
+}
+#[test]
+fn table_get() {
+    run_test_file("table_get");
 }
