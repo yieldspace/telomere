@@ -684,3 +684,7 @@ fn unreached_invalid() {
 fn unreached_valid() {
     run_test_file("unreached-valid");
 }
+#[test]
+fn unwind() {
+    run_test_file("unwind");
+}
