@@ -93,6 +93,8 @@ pub enum WasmParserError {
     DuplicatedExport(String),
     #[error("invalid result arity")]
     InvalidResultArity,
+    #[error("start function")]
+    StartFunction,
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {
@@ -4409,6 +4411,20 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 WasmSectionType::Start => {
                     start = Some(self.parse_section_body(|me, size| {
                         let (len, start) = me.parse_u32()?;
+                        if let Some(tidx) = functions.get(start as usize) {
+                            if let Some(sec) = &type_section {
+                                let ft = sec
+                                    .get(*tidx)
+                                    .ok_or_else(|| WasmParserError::InvalidTypeIdx(*tidx))?;
+                                if ft != &FuncType(ResultType(vec![]), ResultType(vec![])) {
+                                    return Err(WasmParserError::StartFunction);
+                                }
+                            } else {
+                                return Err(WasmParserError::InvalidFuncIdx(FuncIdx(start)));
+                            }
+                        } else {
+                            return Err(WasmParserError::InvalidFuncIdx(FuncIdx(start)));
+                        }
                         if len != size as usize {
                             return Err(WasmParserError::InvalidSectionSize);
                         }

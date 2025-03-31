@@ -644,3 +644,7 @@ fn skip_stack_guard_page() {
 fn stack() {
     run_test_file("stack");
 }
+#[test]
+fn start() {
+    run_test_file("start");
+}
