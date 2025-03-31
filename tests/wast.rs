@@ -628,3 +628,7 @@ fn ref_is_null() {
 fn ref_null() {
     run_test_file("ref_null");
 }
+#[test]
+fn return_() {
+    run_test_file("return");
+}
