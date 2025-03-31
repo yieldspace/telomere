@@ -191,6 +191,9 @@ fn run_wast(text: &str) {
                                     // ok
                                     assert_eq!(v + 0x40000000, *vv)
                                 }
+                                (WastRetCore::RefNull(_), WasmValue::FuncRef(0)) => {
+                                    // ok
+                                }
                                 _ => {
                                     error!(
                                         "{:?} {:?} {:?}",
@@ -620,4 +623,8 @@ fn ref_func() {
 #[test]
 fn ref_is_null() {
     run_test_file("ref_is_null");
+}
+#[test]
+fn ref_null() {
+    run_test_file("ref_null");
 }
