@@ -700,3 +700,7 @@ fn table_copy() {
 fn table_get() {
     run_test_file("table_get");
 }
+#[test]
+fn table_set() {
+    run_test_file("table_set");
+}
