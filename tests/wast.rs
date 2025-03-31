@@ -668,3 +668,8 @@ fn traps() {
 fn type_() {
     run_test_file("type");
 }
+#[test]
+fn unreachable() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
+    run_test_file("unreachable");
+}
