@@ -1322,17 +1322,18 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x10 => {
                 trace!("parse_op_call");
                 let (len, idx) = self.parse_u32()?;
+                let typeidx = functions
+                    .get(idx as usize)
+                    .ok_or(WasmParserError::InvalidFuncIdx(FuncIdx(idx)))?;
+                let ty = type_section
+                    .get(*typeidx)
+                    .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_call });
                     instrs.push(Instr {
                         operand: Operand { u32: idx },
                     });
-                    let typeidx = functions
-                        .get(idx as usize)
-                        .ok_or(WasmParserError::InvalidFuncIdx(FuncIdx(idx)))?;
-                    let ty = type_section
-                        .get(*typeidx)
-                        .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
+
                     for ty in ty.0.stack_pop_iter() {
                         assert_valtype(*ty, types.pop())?;
                     }
@@ -1450,9 +1451,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             0x20 => {
                 let (len, idx) = self.parse_u32()?;
                 trace!("parse_op_local_get: {:?} {locals:?} {idx}", functype.0);
+                let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
 
                 if !*unreachable {
-                    let (ty, addr) = get_local_addr(&functype.0, locals, idx)?;
                     match ty.stack_size() {
                         ValueSize::Byte4 => instrs.push(Instr {
                             op: vm::op_local_get4,
@@ -1518,10 +1519,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 trace!("parse_op_global_get");
 
                 let (len, idx) = self.parse_u32()?;
+                let ty = globals
+                    .get(idx as usize)
+                    .ok_or(WasmParserError::InvalidGlobalAccess)?;
                 if !*unreachable {
-                    let ty = globals
-                        .get(idx as usize)
-                        .ok_or(WasmParserError::InvalidGlobalAccess)?;
                     match ty.0.stack_size() {
                         ValueSize::Byte4 => instrs.push(Instr {
                             op: vm::op_global_get4,
