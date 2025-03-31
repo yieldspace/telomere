@@ -656,3 +656,7 @@ fn store() {
 fn switch() {
     run_test_file("switch");
 }
+#[test]
+fn token() {
+    run_test_file("token");
+}
