@@ -660,3 +660,7 @@ fn switch() {
 fn token() {
     run_test_file("token");
 }
+#[test]
+fn traps() {
+    run_test_file("traps");
+}
