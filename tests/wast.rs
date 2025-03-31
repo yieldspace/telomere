@@ -5,7 +5,7 @@ use telomere::{
 };
 use tracing::{error, Level};
 use wast::{
-    core::{NanPattern, WastRetCore},
+    core::{AbstractHeapType, HeapType, NanPattern, WastRetCore},
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
@@ -18,8 +18,18 @@ fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
                 wast::core::WastArgCore::F32(f32) => WasmValue::F32(f32::from_bits(f32.bits)),
                 wast::core::WastArgCore::F64(f64) => WasmValue::F64(f64::from_bits(f64.bits)),
                 wast::core::WastArgCore::V128(_) => todo!(),
-                wast::core::WastArgCore::RefNull(_) => todo!(),
-                wast::core::WastArgCore::RefExtern(v) => WasmValue::ExternRef(*v),
+                wast::core::WastArgCore::RefNull(rt) => match rt {
+                    HeapType::Abstract {
+                        shared: _,
+                        ty: AbstractHeapType::Func,
+                    } => WasmValue::FuncRef(0),
+                    HeapType::Abstract {
+                        shared: _,
+                        ty: AbstractHeapType::Extern,
+                    } => WasmValue::ExternRef(0),
+                    unknown => todo!("{unknown:?}"),
+                },
+                wast::core::WastArgCore::RefExtern(v) => WasmValue::ExternRef(*v + 0x40000000),
                 wast::core::WastArgCore::RefHost(_) => todo!(),
             },
             wast::WastArg::Component(_) => todo!(),
@@ -179,7 +189,7 @@ fn run_wast(text: &str) {
                                 }
                                 (WastRetCore::RefExtern(Some(v)), WasmValue::ExternRef(vv)) => {
                                     // ok
-                                    assert_eq!(v, vv)
+                                    assert_eq!(v + 0x40000000, *vv)
                                 }
                                 _ => {
                                     error!(
@@ -231,10 +241,7 @@ fn run_wast(text: &str) {
                 mut module,
                 message: _,
             } => {
-                tracing::trace!(
-                    "AssertInvalid @ {:?}",
-                    span.linecol_in(text)
-                );
+                tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 //TODO: Is there anything that wast fails to encode that could be binary?
                 if let Ok(source) = module.encode() {
                     let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
@@ -608,8 +615,9 @@ fn obsolete_keywords() {
 }
 #[test]
 fn ref_func() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     run_test_file("ref_func");
+}
+#[test]
+fn ref_is_null() {
+    run_test_file("ref_is_null");
 }

@@ -1511,6 +1511,25 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
+            0x25 => {
+                trace!("parse_op_table_get");
+                let (len, idx) = self.parse_u32()?;
+                if !*unreachable {
+                    let ty = tables
+                        .get(idx as usize)
+                        .ok_or(WasmParserError::InvalidTableIndex(idx))?;
+                    assert_valtype(ValType::I32, types.pop())?;
+                    assert_type_stack_size(types, blocks)?;
+                    types.push(ty.reftype.into());
+                    instrs.push(Instr {
+                        op: vm::op_table_get,
+                    });
+                    instrs.push(Instr {
+                        operand: Operand { u32: idx },
+                    });
+                }
+                (1 + len, false)
+            }
             0x26 => {
                 trace!("parse_op_table_set");
                 let (len, idx) = self.parse_u32()?;
@@ -3802,7 +3821,21 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1, false)
             }
+            0xD0 => {
+                trace!("parse_op_ref_null");
+                let (len, t) = self.parse_reftype()?;
+
+                if !*unreachable {
+                    instrs.push(Instr {
+                        op: vm::op_ref_null,
+                    });
+                    types.push(t.into());
+                }
+                (1 + len, false)
+            }
             0xD1 => {
+                trace!("parse_op_ref_is_null");
+
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_ref_is_null,
@@ -3820,6 +3853,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 (1, false)
             }
             0xD2 => {
+                trace!("parse_op_ref_func");
+
                 let (len, idx) = self.parse_u32()?;
                 if functions.get(idx as usize).is_none() || idx == funcidx.0 {
                     Err(WasmParserError::InvalidFuncIdx(FuncIdx(idx)))?

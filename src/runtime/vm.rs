@@ -838,16 +838,32 @@ pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     ctx.store.globals.0[addr..addr + 8].copy_from_slice(&ctx.stack.pop_u8_array::<8>());
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32 as usize;
+    let addr = ctx.instance().tables[idx] as usize;
+    let inst = &mut ctx.store.tables[addr];
+    let i = ctx.stack.pop_u32();
+    if i as usize >= inst.1.len() {
+        return VMResult::TableIndexOutOfRange;
+    }
+    let val = inst.1[i as usize];
+    trace!("op_table_get: {idx} {addr} {i} {val}");
+
+    vm_try!(ctx.stack.push_u32(val));
+    call_next(tail_code, 1, ctx)
+}
 pub unsafe fn op_table_set(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
     let addr = ctx.instance().tables[idx] as usize;
     let inst = &mut ctx.store.tables[addr];
     let val = ctx.stack.pop_u32();
     let i = ctx.stack.pop_u32();
-    if i as usize >= inst.1.len(){
+    trace!("op_table_set: {idx} {addr} {i} {val}");
+
+    if i as usize >= inst.1.len() {
         return VMResult::TableIndexOutOfRange;
     }
-    inst.1[i as usize]  = val;
+    inst.1[i as usize] = val;
     call_next(tail_code, 1, ctx)
 }
 macro_rules! memory_try {
@@ -1708,6 +1724,10 @@ pub unsafe fn op_i64_extend32_s(tail_code: *const Instr, ctx: &mut ExecuteContex
     vm_try!(ctx.stack.push_i64(v.into()));
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_ref_null(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    vm_try!(ctx.stack.push_u32(0));
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn op_ref_is_null(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     if ctx.stack.pop_u32() == 0 {
         vm_try!(ctx.stack.push_u32(1));
@@ -1805,8 +1825,7 @@ pub fn run_module_function(
                 WasmValue::F32(v) => stack.push_f32(*v),
                 WasmValue::F64(v) => stack.push_f64(*v),
                 WasmValue::ExternRef(v) => stack.push_u32(*v),
-
-                _ => unimplemented!(),
+                WasmValue::FuncRef(v) => stack.push_u32(*v),
             });
         }
 
