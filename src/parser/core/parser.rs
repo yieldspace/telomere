@@ -95,6 +95,8 @@ pub enum WasmParserError {
     InvalidResultArity,
     #[error("start function")]
     StartFunction,
+    #[error("size minimum must not be greater than maximum")]
+    InvalidLimit,
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {

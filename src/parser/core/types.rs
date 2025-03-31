@@ -74,7 +74,9 @@ pub fn parse_limits<R: BinaryReader>(reader: &mut R) -> Result<(usize, Limits)> 
         0x01 => {
             let (len, min) = parse_u32(reader)?;
             let (len2, max) = parse_u32(reader)?;
-
+            if min > max {
+                Err(WasmParserError::InvalidLimit)?
+            }
             Ok((
                 1 + len + len2,
                 Limits {
@@ -99,13 +101,7 @@ pub fn parse_global_type<R: BinaryReader>(reader: &mut R) -> Result<(usize, Glob
 
 pub fn parse_memtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, MemType)> {
     let (len, limits) = parse_limits(reader)?;
-    if limits
-        .max
-        .map(|max| limits.min > max)
-        .unwrap_or_else(|| false)
-    {
-        Err(WasmParserError::InvalidMemorySize(limits))?
-    }
+
     if limits.min > 65536 {
         Err(WasmParserError::InvalidMemorySize(limits))?
     }

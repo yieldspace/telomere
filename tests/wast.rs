@@ -688,3 +688,7 @@ fn unreached_valid() {
 fn unwind() {
     run_test_file("unwind");
 }
+#[test]
+fn table() {
+    run_test_file("table");
+}
