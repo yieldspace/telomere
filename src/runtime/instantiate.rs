@@ -1,7 +1,7 @@
 use crate::{
     common::{
         ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, ExportDesc, FunctionInstance,
-        ImportDesc, InstanceAddr, JumpTable, Limits, LocalState, Memory, ModuleInstance,
+        ImportDesc, InstanceAddr, JumpTable, Limits, LocalState, Memory, ModuleInstance, RefType,
         TableInstance, PAGE_SIZE_MAX,
     },
     runtime::vm,
@@ -36,7 +36,11 @@ fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMRe
     }
     VMResult::Success(())
 }
-fn execute_const_expr(store: &mut Store, globals: &[u32], exprs: &[ConstExpr]) -> VMResult<u32> {
+fn execute_offset_const_expr(
+    store: &mut Store,
+    globals: &[u32],
+    exprs: &[ConstExpr],
+) -> VMResult<u32> {
     for expr in exprs {
         return VMResult::Success(match expr {
             ConstExpr::I32(v) => *v as u32,
@@ -54,6 +58,28 @@ fn execute_const_expr(store: &mut Store, globals: &[u32], exprs: &[ConstExpr]) -
         });
     }
     VMResult::Unlinkable
+}
+fn execute_elem_init_const_expr(
+    funcs: &[u32],
+    exprs: &[ConstExpr],
+    expected: RefType,
+) -> VMResult<u32> {
+    if exprs.len() != 1 {
+        return VMResult::Unlinkable;
+    }
+    match exprs[0] {
+        ConstExpr::FuncRef(idx) => {
+            if expected != RefType::FuncRef {
+                return VMResult::Unlinkable;
+            }
+            if let Some(addr) = funcs.get(idx as usize) {
+                return VMResult::Success(*addr);
+            } else {
+                return VMResult::InvalidOperand;
+            }
+        }
+        _ => todo!(),
+    }
 }
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
@@ -166,7 +192,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         match &d.mode {
             DataMode::Active(mem, offset) => {
                 assert_eq!(mem.0, 0);
-                let offset = vm_try!(execute_const_expr(store, &globals, offset)) as usize;
+                let offset = vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
                 if let Some(memory) = &memory {
                     let memory = &mut store.memory[*memory as usize];
                     if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
@@ -184,9 +210,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         }
     }
 
-    for init in &global_init {
-        globals.push(vm_try!(store.globals.init(init, &globals, &m_globals)));
-    }
     let mut funcaddr = store.funcs.0.len();
     let mut s_funcs = vec![];
     for func in codes.0.into_iter() {
@@ -202,7 +225,11 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         funcaddr += 1;
     }
     store.funcs.0.append(&mut s_funcs);
-
+    for init in &global_init {
+        globals.push(vm_try!(store
+            .globals
+            .init(init, &globals, &funcs, &m_globals)));
+    }
     let table_instances: Vec<TableInstance> = m_tables
         .iter()
         .map(|v| TableInstance(*v, vec![TABLE_UNINITIALIZED; v.limits.min as usize]))
@@ -221,13 +248,11 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             match elem.mode {
                 ElemMode::Active(idx, offset) => match elem.init {
                     ElemInit::FuncIdx(idxs) => {
-                        let offset = vm_try!(execute_const_expr(store, &globals, &offset)) as usize;
+                        let offset =
+                            vm_try!(execute_offset_const_expr(store, &globals, &offset)) as usize;
                         let table_addr = tables[idx.0 as usize] as usize;
-                        let instance = if table_addr < store.tables.len() {
-                            &mut store.tables[table_addr]
-                        } else {
-                            &mut s_tables[table_addr - store.tables.len()]
-                        };
+                        let instance = &mut store.tables[table_addr];
+
                         if instance.0.reftype != elem.kind {
                             panic!("reftype mismatch")
                         }
@@ -239,7 +264,24 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                             trace!("table[{}] = {}", offset + idx, funcs[*funcidx as usize]);
                         }
                     }
-                    _ => todo!(),
+                    ElemInit::ConstExpr(idxs) => {
+                        let offset =
+                            vm_try!(execute_offset_const_expr(store, &globals, &offset)) as usize;
+                        let table_addr = tables[idx.0 as usize] as usize;
+
+                        let instance = &mut store.tables[table_addr];
+                        if offset + idxs.len() > instance.1.len() {
+                            return VMResult::TableIndexOutOfRange;
+                        }
+                        for (idx, idx_expr) in idxs.iter().enumerate() {
+                            let addr = vm_try!(execute_elem_init_const_expr(
+                                &funcs,
+                                &idx_expr,
+                                instance.0.reftype,
+                            ));
+                            instance.1[offset + idx] = addr;
+                        }
+                    }
                 },
                 _ => {
                     // do nothing

@@ -231,6 +231,10 @@ fn run_wast(text: &str) {
                 mut module,
                 message: _,
             } => {
+                tracing::trace!(
+                    "AssertInvalid @ {:?}",
+                    span.linecol_in(text)
+                );
                 //TODO: Is there anything that wast fails to encode that could be binary?
                 if let Ok(source) = module.encode() {
                     let mut reader = telomere::IoReadBinaryReader::from(&source[..]);

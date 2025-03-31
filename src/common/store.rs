@@ -11,16 +11,26 @@ impl GlobalStore {
         &mut self,
         init: &ConstExpr,
         globals: &[u32],
+        funcs: &[u32],
         gts: &[GlobalType],
     ) -> VMResult<u32> {
         let addr: usize = self.0.len();
+        tracing::trace!("global init: {init:?}");
+
         match match init {
             ConstExpr::I32(v) => self.0.write_all(&v.to_le_bytes()),
             ConstExpr::I64(v) => self.0.write_all(&v.to_le_bytes()),
             ConstExpr::F32(v) => self.0.write_all(&v.to_le_bytes()),
             ConstExpr::F64(v) => self.0.write_all(&v.to_le_bytes()),
             ConstExpr::RefNull(_t) => self.0.write_all(&u32::to_le_bytes(0)),
-            ConstExpr::FuncRef(v) => self.0.write_all(&u32::to_le_bytes(*v)),
+            ConstExpr::FuncRef(v) => {
+                let addr = funcs.get(*v as usize);
+                if let Some(addr) = addr {
+                    self.0.write_all(&addr.to_le_bytes())
+                } else {
+                    return VMResult::InvalidOperand;
+                }
+            }
             ConstExpr::GlobalGet(idx) => {
                 let idx = *idx as usize;
                 let addr = globals[idx] as usize;

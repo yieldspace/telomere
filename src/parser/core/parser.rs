@@ -262,6 +262,7 @@ fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
 }
 fn validate_const_expr_type(
     globals: &[GlobalType],
+    funcs: &[TypeIdx],
     exprs: &[ConstExpr],
     expected: ValType,
 ) -> Result<()> {
@@ -284,13 +285,18 @@ fn validate_const_expr_type(
         ConstExpr::RefNull(t) => assert_valtype(expected, Some(t.into()))?,
         ConstExpr::F32(_) => assert_valtype(expected, Some(ValType::F32))?,
         ConstExpr::F64(_) => assert_valtype(expected, Some(ValType::F64))?,
-        ConstExpr::FuncRef(_) => assert_valtype(expected, Some(ValType::FuncRef))?,
+        ConstExpr::FuncRef(idx) => {
+            if funcs.get(idx as usize).is_none() {
+                return Err(WasmParserError::InvalidFuncIdx(FuncIdx(idx)));
+            }
+            assert_valtype(expected, Some(ValType::FuncRef))?
+        }
     }
 
     Ok(())
 }
 fn validate_offset_const_expr(globals: &[GlobalType], exprs: &[ConstExpr]) -> Result<()> {
-    validate_const_expr_type(globals, exprs, ValType::I32)
+    validate_const_expr_type(globals, &[], exprs, ValType::I32)
 }
 enum BlockKind {
     Block,
@@ -474,10 +480,15 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
     }
 
-    fn parse_global(&mut self, globals: &[GlobalType]) -> Result<(usize, Global)> {
+    fn parse_global(
+        &mut self,
+        globals: &[GlobalType],
+        funcs: &[TypeIdx],
+    ) -> Result<(usize, Global)> {
         let (len, gt) = self.parse_global_type()?;
         let (len2, init) = self.parse_const_expr()?;
-        validate_const_expr_type(globals, &init, gt.0)?;
+        validate_const_expr_type(globals, funcs, &init, gt.0)?;
+        tracing::trace!("parse_global: {init:?}");
         Ok((len + len2, Global(gt, init)))
     }
 
@@ -685,6 +696,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         &mut self,
         type_section: &TypeSection,
         functions: &[TypeIdx],
+        funcidx: FuncIdx,
         mems: &[MemType],
         data_count_section: &mut DataCountVerifier,
         functype: &FuncType,
@@ -750,6 +762,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 let len2 = self.parse_instrs(
                     type_section,
                     functions,
+                    funcidx,
                     mems,
                     data_count_section,
                     functype,
@@ -868,6 +881,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 let len2 = self.parse_instrs(
                     type_section,
                     functions,
+                    funcidx,
                     mems,
                     data_count_section,
                     functype,
@@ -986,6 +1000,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 let len2 = self.parse_instrs(
                     type_section,
                     functions,
+                    funcidx,
                     mems,
                     data_count_section,
                     functype,
@@ -1496,7 +1511,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
                 (1 + len, false)
             }
-            /*0x26 => {
+            0x26 => {
                 trace!("parse_op_table_set");
                 let (len, idx) = self.parse_u32()?;
                 if !*unreachable {
@@ -1504,16 +1519,17 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         .get(idx as usize)
                         .ok_or(WasmParserError::InvalidTableIndex(idx))?;
                     assert_valtype(ty.reftype.into(), types.pop())?;
+                    assert_valtype(ValType::I32, types.pop())?;
                     assert_type_stack_size(types, blocks)?;
-                    instrs.push(Instr{
-                        op: vm::op_table_set
+                    instrs.push(Instr {
+                        op: vm::op_table_set,
                     });
                     instrs.push(Instr {
                         operand: Operand { u32: idx },
                     });
                 }
                 (1 + len, false)
-            }*/
+            }
             0x28 => {
                 trace!("parse_op_i32_load");
                 assert_memory(mems)?;
@@ -3805,7 +3821,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             }
             0xD2 => {
                 let (len, idx) = self.parse_u32()?;
-
+                if functions.get(idx as usize).is_none() || idx == funcidx.0 {
+                    Err(WasmParserError::InvalidFuncIdx(FuncIdx(idx)))?
+                }
                 if !*unreachable {
                     instrs.push(Instr {
                         op: vm::op_ref_func,
@@ -3825,6 +3843,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         &mut self,
         type_section: &TypeSection,
         functions: &[TypeIdx],
+        funcidx: FuncIdx,
         mems: &[MemType],
         data_count_section: &mut DataCountVerifier,
         functype: &FuncType,
@@ -3843,6 +3862,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             let (len, end) = self.parse_inst(
                 type_section,
                 functions,
+                funcidx,
                 mems,
                 data_count_section,
                 functype,
@@ -3868,6 +3888,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         &mut self,
         type_section: &TypeSection,
         functions: &[TypeIdx],
+        funcidx: FuncIdx,
         globals: &[GlobalType],
         tables: &[TableType],
         mems: &[MemType],
@@ -3886,6 +3907,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let len2 = self.parse_instrs(
             type_section,
             functions,
+            funcidx,
             mems,
             data_count_section,
             functype,
@@ -3951,6 +3973,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let func = self.parse_code_inner(
             type_section,
             functions,
+            funcidx,
             globals,
             table_section,
             mems,
@@ -4015,7 +4038,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         } else {
             return Ok(None);
         };
-        trace!("{kind}");
+        trace!("parse_section_type: {kind}");
         use WasmSectionType::*;
         Ok(Some(match kind {
             0 => Custom,
@@ -4067,8 +4090,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
         Ok(tables)
     }
-    fn parse_global_section(&mut self, globals: &[GlobalType], size: u32) -> Result<Vec<Global>> {
-        let (len, globals) = self.parse_vec(|me| me.parse_global(globals))?;
+    fn parse_global_section(
+        &mut self,
+        globals: &[GlobalType],
+        funcs: &[TypeIdx],
+        size: u32,
+    ) -> Result<Vec<Global>> {
+        let (len, globals) = self.parse_vec(|me| me.parse_global(globals, funcs))?;
         if len != size as usize {
             Err(WasmParserError::InvalidSectionSize)?
         }
@@ -4298,8 +4326,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     }
                 }
                 WasmSectionType::Global => {
-                    let local_globals = self
-                        .parse_section_body(|me, size| me.parse_global_section(&globals, size))?;
+                    let local_globals = self.parse_section_body(|me, size| {
+                        me.parse_global_section(&globals, &functions, size)
+                    })?;
                     for global in local_globals {
                         globals.push(global.0);
                         global_init.push(global.1[0]);

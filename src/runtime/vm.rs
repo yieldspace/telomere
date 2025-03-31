@@ -838,6 +838,18 @@ pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     ctx.store.globals.0[addr..addr + 8].copy_from_slice(&ctx.stack.pop_u8_array::<8>());
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_table_set(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32 as usize;
+    let addr = ctx.instance().tables[idx] as usize;
+    let inst = &mut ctx.store.tables[addr];
+    let val = ctx.stack.pop_u32();
+    let i = ctx.stack.pop_u32();
+    if i as usize >= inst.1.len(){
+        return VMResult::TableIndexOutOfRange;
+    }
+    inst.1[i as usize]  = val;
+    call_next(tail_code, 1, ctx)
+}
 macro_rules! memory_try {
     ($ctx: expr) => {
         if let Some(v) = $ctx.memory() {
@@ -1705,7 +1717,8 @@ pub unsafe fn op_ref_is_null(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    vm_try!(ctx.stack.push_u32((*tail_code).operand.u32));
+    let funcidx = (*tail_code).operand.u32;
+    vm_try!(ctx.stack.push_u32(ctx.instance().funcs[funcidx as usize]));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn special_function_return(
