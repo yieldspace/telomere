@@ -632,3 +632,8 @@ fn ref_null() {
 fn return_() {
     run_test_file("return");
 }
+#[test]
+fn select() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
+    run_test_file("select");
+}

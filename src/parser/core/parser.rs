@@ -1,5 +1,4 @@
 use std::collections::{HashSet, VecDeque};
-
 use thiserror::Error;
 use tracing::trace;
 
@@ -92,6 +91,8 @@ pub enum WasmParserError {
     UnknownExport,
     #[error("duplicated export")]
     DuplicatedExport(String),
+    #[error("invalid result arity")]
+    InvalidResultArity,
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {
@@ -1382,6 +1383,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     } else {
                         Err(WasmParserError::InvalidStackValTypeAny)?
                     };
+                    if matches!(x, ValType::ExternRef | ValType::FuncRef) {
+                        Err(WasmParserError::InvalidStackValTypeAny)?
+                    }
                     assert_type_stack_size(types, blocks)?;
                     types.push(x);
                     instrs.push(Instr { op: vm::op_select });
@@ -1392,6 +1396,34 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     });
                 }
                 (1, false)
+            }
+            0x1C => {
+                let (len, mut operand) = self.parse_vec(Self::parse_valtype)?;
+                trace!("parse_op_select_with_param: {operand:?}");
+                if !*unreachable {
+                    if operand.len() != 1 {
+                        Err(WasmParserError::InvalidResultArity)?;
+                    }
+                    assert_valtype(ValType::I32, types.pop())?;
+                    for ty in &operand {
+                        assert_valtype(*ty, types.pop())?;
+                    }
+                    for ty in &operand {
+                        assert_valtype(*ty, types.pop())?;
+                    }
+                    assert_type_stack_size(types, blocks)?;
+                    operand.reverse();
+                    let mut bytes = 0;
+                    for ty in operand {
+                        bytes += ty.stack_size().u32();
+                        types.push(ty);
+                    }
+                    instrs.push(Instr { op: vm::op_select });
+                    instrs.push(Instr {
+                        operand: Operand { select: bytes },
+                    });
+                }
+                (1 + len, false)
             }
             0x20 => {
                 let (len, idx) = self.parse_u32()?;
