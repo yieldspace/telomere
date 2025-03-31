@@ -634,6 +634,9 @@ fn return_() {
 }
 #[test]
 fn select() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("select");
+}
+#[test]
+fn skip_stack_guard_page() {
+    run_test_file("skip-stack-guard-page");
 }
