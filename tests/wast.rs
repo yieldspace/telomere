@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 
-use telomere::{common::Instance, instantiate, Module, Registry, ResultValue, Store, WasmValue};
-use tracing::error;
+use telomere::{
+    common::InstanceAddr, get_global, instantiate, Registry, ResultValue, Store, WasmValue,
+};
+use tracing::{error, Level};
 use wast::{
-    core::{NanPattern, WastRetCore},
+    core::{AbstractHeapType, HeapType, NanPattern, WastRetCore},
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
@@ -16,8 +18,18 @@ fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
                 wast::core::WastArgCore::F32(f32) => WasmValue::F32(f32::from_bits(f32.bits)),
                 wast::core::WastArgCore::F64(f64) => WasmValue::F64(f64::from_bits(f64.bits)),
                 wast::core::WastArgCore::V128(_) => todo!(),
-                wast::core::WastArgCore::RefNull(_) => todo!(),
-                wast::core::WastArgCore::RefExtern(_) => todo!(),
+                wast::core::WastArgCore::RefNull(rt) => match rt {
+                    HeapType::Abstract {
+                        shared: _,
+                        ty: AbstractHeapType::Func,
+                    } => WasmValue::FuncRef(0),
+                    HeapType::Abstract {
+                        shared: _,
+                        ty: AbstractHeapType::Extern,
+                    } => WasmValue::ExternRef(0),
+                    unknown => todo!("{unknown:?}"),
+                },
+                wast::core::WastArgCore::RefExtern(v) => WasmValue::ExternRef(*v + 0x40000000),
                 wast::core::WastArgCore::RefHost(_) => todo!(),
             },
             wast::WastArg::Component(_) => todo!(),
@@ -45,7 +57,7 @@ const SPECTEST_WAST: &str = r#"
     (func (export "print_f64_f64") (param f64 f64))
 )
 "#;
-fn init_spectest(store: &mut Store, registry: &Registry) -> (Module, Instance) {
+fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceAddr {
     let buf = ParseBuffer::new(SPECTEST_WAST).unwrap();
     let mut wat = wast::parser::parse::<Wat>(&buf).unwrap();
     let source = wat.encode().unwrap();
@@ -54,29 +66,33 @@ fn init_spectest(store: &mut Store, registry: &Registry) -> (Module, Instance) {
     let mut parser = telomere::WasmParser::new(&mut reader);
 
     let m = parser.parse_module().unwrap();
-    let instance = instantiate(&m, store, registry).unwrap();
-    (m, instance)
+
+    instantiate(m, store, registry).unwrap()
 }
 fn run_wast(text: &str) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
-    let mut module: Option<Module> = None;
-    let mut instance: Option<Instance> = None;
+    let mut instance: Option<InstanceAddr> = None;
     let mut store = Store::new();
     let mut registry = Registry::new();
     let st = init_spectest(&mut store, &registry);
-    registry.register("spectest", st.0, st.1);
+    registry.register("spectest", st);
     for directive in wast.directives {
         use wast::WastDirective;
         match directive {
             WastDirective::Module(mut m) => {
+                let name = m.name();
+
                 let source = m.encode().unwrap();
                 let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                 let mut parser = telomere::WasmParser::new(&mut reader);
                 let m = parser.parse_module().unwrap();
                 tracing::trace!("{:?}", m.elems);
-                instance = Some(instantiate(&m, &mut store, &registry).unwrap());
-                module = Some(m);
+                let inst = instantiate(m, &mut store, &registry).unwrap();
+                if let Some(name) = name {
+                    registry.register(name.name(), inst);
+                }
+                instance = Some(inst);
             }
             WastDirective::AssertReturn {
                 span,
@@ -84,15 +100,31 @@ fn run_wast(text: &str) {
                 results: expected,
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
-                    tracing::trace!("executing {}", v.name);
-                    let actual = telomere::run_module_function(
-                        module.as_ref().unwrap(),
-                        instance.as_mut().unwrap(),
-                        &mut store,
+                    tracing::trace!(
+                        "executing {} {:?} @ {:?}",
                         v.name,
-                        &ResultValue::new(convert_args(&v.args)),
-                    )
-                    .unwrap();
+                        v.args,
+                        v.span.linecol_in(text)
+                    );
+                    let actual = if let Some(id) = v.module {
+                        let instance = registry.get(id.name()).unwrap();
+                        telomere::run_module_function(
+                            instance,
+                            &mut store,
+                            v.name,
+                            &ResultValue::new(convert_args(&v.args)),
+                        )
+                        .unwrap()
+                    } else {
+                        telomere::run_module_function(
+                            instance.unwrap(),
+                            &mut store,
+                            v.name,
+                            &ResultValue::new(convert_args(&v.args)),
+                        )
+                        .unwrap()
+                    };
+
                     for (expected, actual) in expected.iter().zip(actual.iter()) {
                         if let WastRet::Core(expected) = expected {
                             match (expected, actual) {
@@ -114,6 +146,20 @@ fn run_wast(text: &str) {
                                     )
                                 }
                                 (
+                                    WastRetCore::F32(NanPattern::CanonicalNan),
+                                    WasmValue::F32(actual),
+                                ) => {
+                                    // TODO: is canonical nan?
+                                    assert!(actual.is_nan(), "{:?}", span.linecol_in(text));
+                                }
+                                (
+                                    WastRetCore::F32(NanPattern::ArithmeticNan),
+                                    WasmValue::F32(actual),
+                                ) => {
+                                    // TODO: is arithmetic nan?
+                                    assert!(actual.is_nan(), "{:?}", span.linecol_in(text));
+                                }
+                                (
                                     WastRetCore::F64(NanPattern::Value(expected)),
                                     WasmValue::F64(actual),
                                 ) => {
@@ -123,6 +169,30 @@ fn run_wast(text: &str) {
                                         "{:?}",
                                         span.linecol_in(text)
                                     )
+                                }
+                                (
+                                    WastRetCore::F64(NanPattern::CanonicalNan),
+                                    WasmValue::F64(actual),
+                                ) => {
+                                    // TODO: is canonical nan?
+                                    assert!(actual.is_nan());
+                                }
+                                (
+                                    WastRetCore::F64(NanPattern::ArithmeticNan),
+                                    WasmValue::F64(actual),
+                                ) => {
+                                    // TODO: is arithmetic nan?
+                                    assert!(actual.is_nan());
+                                }
+                                (WastRetCore::RefNull(_), WasmValue::ExternRef(0)) => {
+                                    // ok
+                                }
+                                (WastRetCore::RefExtern(Some(v)), WasmValue::ExternRef(vv)) => {
+                                    // ok
+                                    assert_eq!(v + 0x40000000, *vv)
+                                }
+                                (WastRetCore::RefNull(_), WasmValue::FuncRef(0)) => {
+                                    // ok
                                 }
                                 _ => {
                                     error!(
@@ -139,7 +209,19 @@ fn run_wast(text: &str) {
                         }
                     }
                 }
-                _ => unimplemented!(),
+                wast::WastExecute::Get {
+                    span: _,
+                    module: id,
+                    global,
+                } => {
+                    if let Some(id) = id {
+                        let instance = registry.get(id.name()).unwrap();
+                        get_global(instance, &mut store, global).unwrap();
+                    } else {
+                        get_global(instance.unwrap(), &mut store, global).unwrap();
+                    }
+                }
+                unknown => unimplemented!("{:?}", unknown),
             },
             WastDirective::AssertMalformed {
                 span,
@@ -162,6 +244,7 @@ fn run_wast(text: &str) {
                 mut module,
                 message: _,
             } => {
+                tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 //TODO: Is there anything that wast fails to encode that could be binary?
                 if let Ok(source) = module.encode() {
                     let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
@@ -180,8 +263,7 @@ fn run_wast(text: &str) {
                 message: _,
             } => {
                 let result = telomere::run_module_function(
-                    module.as_ref().unwrap(),
-                    instance.as_mut().unwrap(),
+                    instance.unwrap(),
                     &mut store,
                     call.name,
                     &ResultValue::new(convert_args(&call.args)),
@@ -189,28 +271,55 @@ fn run_wast(text: &str) {
                 assert!(result.is_err());
             }
             WastDirective::AssertTrap {
-                span: _,
+                span,
                 exec,
                 message: _,
             } => match exec {
                 wast::WastExecute::Invoke(v) => {
-                    let result = telomere::run_module_function(
-                        module.as_ref().unwrap(),
-                        instance.as_mut().unwrap(),
-                        &mut store,
+                    tracing::trace!(
+                        "executing(trap) {} {:?} @ {:?}",
                         v.name,
-                        &ResultValue::new(convert_args(&v.args)),
+                        v.args,
+                        span.linecol_in(text)
                     );
-                    assert!(result.is_err())
+
+                    if let Some(id) = v.module {
+                        let instance = registry.get(id.name()).unwrap();
+                        let result = telomere::run_module_function(
+                            instance,
+                            &mut store,
+                            v.name,
+                            &ResultValue::new(convert_args(&v.args)),
+                        );
+                        assert!(result.is_err(), "{:?}", span.linecol_in(text))
+                    } else {
+                        let result = telomere::run_module_function(
+                            instance.unwrap(),
+                            &mut store,
+                            v.name,
+                            &ResultValue::new(convert_args(&v.args)),
+                        );
+                        assert!(result.is_err(), "{:?}", span.linecol_in(text))
+                    }
                 }
-                _ => {
-                    todo!()
+                wast::WastExecute::Wat(mut v) => {
+                    let source = v.encode().unwrap();
+                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+                    let mut parser = telomere::WasmParser::new(&mut reader);
+                    let m = parser.parse_module().unwrap();
+                    assert!(
+                        instantiate(m, &mut store, &registry).is_err(),
+                        "{:?}",
+                        span.linecol_in(text)
+                    )
+                }
+                v => {
+                    todo!("{v:?}")
                 }
             },
             WastDirective::Invoke(invoke) => {
                 let result = telomere::run_module_function(
-                    module.as_ref().unwrap(),
-                    instance.as_mut().unwrap(),
+                    instance.unwrap(),
                     &mut store,
                     invoke.name,
                     &ResultValue::new(convert_args(&invoke.args)),
@@ -223,7 +332,7 @@ fn run_wast(text: &str) {
                 module: _id,
             } => {
                 //assert!(id.is_none());
-                registry.register(name, module.clone().unwrap(), instance.clone().unwrap());
+                registry.register(name, instance.unwrap());
             }
             WastDirective::AssertUnlinkable {
                 span,
@@ -238,7 +347,7 @@ fn run_wast(text: &str) {
 
                     // TODO: test error message
                     assert!(
-                        instantiate(&module, &mut store, &registry).is_err(),
+                        instantiate(module, &mut store, &registry).is_err(),
                         "{:?}",
                         span.linecol_in(text)
                     )
@@ -355,3 +464,279 @@ fn memory_init() {
 fn imports() {
     run_test_file("imports");
 }
+
+#[test]
+fn comments() {
+    run_test_file("comments");
+}
+#[test]
+fn conversions() {
+    run_test_file("conversions");
+}
+
+#[test]
+fn custom() {
+    run_test_file("custom");
+}
+#[test]
+fn data() {
+    run_test_file("data");
+}
+/*
+#[test]
+fn bulk() {
+    run_test_file("bulk");
+}
+    */
+#[test]
+fn elem() {
+    run_test_file("elem");
+}
+
+#[test]
+fn endianness() {
+    run_test_file("endianness");
+}
+#[test]
+fn exports() {
+    run_test_file("exports");
+}
+#[test]
+fn f32() {
+    run_test_file("f32");
+}
+#[test]
+fn f32_bitwise() {
+    run_test_file("f32_bitwise");
+}
+#[test]
+fn f32_cmp() {
+    run_test_file("f32_cmp");
+}
+#[test]
+fn f64() {
+    run_test_file("f64");
+}
+#[test]
+fn f64_bitwise() {
+    run_test_file("f64_bitwise");
+}
+#[test]
+fn f64_cmp() {
+    run_test_file("f64_cmp");
+}
+#[test]
+fn fac() {
+    run_test_file("fac");
+}
+
+#[test]
+fn float_exprs() {
+    run_test_file("float_exprs");
+}
+#[test]
+fn float_literals() {
+    run_test_file("float_literals");
+}
+#[test]
+fn float_memory() {
+    run_test_file("float_memory");
+}
+#[test]
+fn float_misc() {
+    run_test_file("float_misc");
+}
+#[test]
+fn forward() {
+    run_test_file("forward");
+}
+#[test]
+fn func_ptrs() {
+    run_test_file("func_ptrs");
+}
+#[test]
+fn global() {
+    run_test_file("global");
+}
+#[test]
+fn i32() {
+    run_test_file("i32");
+}
+#[test]
+fn i64() {
+    run_test_file("i64");
+}
+#[test]
+fn inline_module() {
+    run_test_file("inline_module");
+}
+#[test]
+fn int_exprs() {
+    run_test_file("int_exprs");
+}
+/*
+TODO: library bug?
+#[test]
+fn labels() {
+    run_test_file("labels");
+}*/
+#[test]
+fn left_to_right() {
+    run_test_file("left-to-right");
+}
+
+#[test]
+fn linking() {
+    run_test_file("linking");
+}
+
+#[test]
+fn load() {
+    run_test_file("load");
+}
+#[test]
+fn local_get() {
+    run_test_file("local_get");
+}
+#[test]
+fn local_set() {
+    run_test_file("local_set");
+}
+#[test]
+fn local_tee() {
+    run_test_file("local_tee");
+}
+/*
+library limitation
+#[test]
+fn names() {
+    run_test_file("names");
+}
+*/
+#[test]
+fn obsolete_keywords() {
+    run_test_file("obsolete-keywords");
+}
+#[test]
+fn ref_func() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
+    run_test_file("ref_func");
+}
+#[test]
+fn ref_is_null() {
+    run_test_file("ref_is_null");
+}
+#[test]
+fn ref_null() {
+    run_test_file("ref_null");
+}
+#[test]
+fn return_() {
+    run_test_file("return");
+}
+#[test]
+fn select() {
+    run_test_file("select");
+}
+#[test]
+fn skip_stack_guard_page() {
+    run_test_file("skip-stack-guard-page");
+}
+#[test]
+fn stack() {
+    run_test_file("stack");
+}
+#[test]
+fn start() {
+    run_test_file("start");
+}
+#[test]
+fn store() {
+    run_test_file("store");
+}
+#[test]
+fn switch() {
+    run_test_file("switch");
+}
+#[test]
+fn token() {
+    run_test_file("token");
+}
+#[test]
+fn traps() {
+    run_test_file("traps");
+}
+#[test]
+fn type_() {
+    run_test_file("type");
+}
+#[test]
+fn unreachable() {
+    run_test_file("unreachable");
+}
+
+/*
+FIXME: 型検査機を書き直さないと無理!あとでやる。
+#[test]
+fn unreached_invalid() {
+    run_test_file("unreached-invalid");
+}
+*/
+#[test]
+fn unreached_valid() {
+    run_test_file("unreached-valid");
+}
+#[test]
+fn unwind() {
+    run_test_file("unwind");
+}
+#[test]
+fn table() {
+    run_test_file("table");
+}
+#[test]
+fn table_copy() {
+    run_test_file("table_copy");
+}
+#[test]
+fn table_get() {
+    run_test_file("table_get");
+}
+#[test]
+fn table_set() {
+    run_test_file("table_set");
+}
+/*
+TODO: あとでやる
+#[test]
+fn table_sub() {
+    run_test_file("table-sub");
+}
+*/
+/*
+TODO: element のdrop無理すぎる。あとでやる。
+
+#[test]
+fn table_init() {
+    run_test_file("table_init");
+}
+*/
+/*
+TODO:
+
+#[test]
+fn table_grow() {
+    run_test_file("table_grow");
+}
+
+#[test]
+fn table_fill() {
+    run_test_file("table_fill");
+}
+#[test]
+fn table_size() {
+    run_test_file("table_size");
+}
+    */

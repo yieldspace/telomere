@@ -1,10 +1,11 @@
-use std::{cell::RefCell, rc::Rc};
-
 use crate::{
     common::{
-        DataMode, ElemMode, ExportDesc, ImportDesc, Limits, Memory, TableInstance, PAGE_SIZE_MAX,
+        store::GlobalStore, ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, ExportDesc,
+        FunctionInstance, ImportDesc, InstanceAddr, JumpTable, Limits, LocalState, Memory,
+        ModuleInstance, RefType, TableInstance, PAGE_SIZE_MAX,
     },
-    Instance, Module, Registry, Store, VMResult, WasmValue,
+    runtime::vm,
+    Instance, Module, Registry, Stack, Store, VMResult,
 };
 
 use super::TABLE_UNINITIALIZED;
@@ -35,31 +36,126 @@ fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMRe
     }
     VMResult::Success(())
 }
+fn execute_offset_const_expr(
+    store: &mut Store,
+    globals: &[u32],
+    exprs: &[ConstExpr],
+) -> VMResult<u32> {
+    for expr in exprs {
+        return VMResult::Success(match expr {
+            ConstExpr::I32(v) => *v as u32,
+            ConstExpr::GlobalGet(idx) => {
+                let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
+                    VMResult::Unlinkable
+                })) as usize;
+                let mut buf = [0u8; 4];
+                buf.copy_from_slice(&store.globals.0[addr..addr + 4]);
+                u32::from_le_bytes(buf)
+            }
+            _ => {
+                todo!()
+            }
+        });
+    }
+    VMResult::Unlinkable
+}
+pub fn execute_elem_init_const_expr(
+    global_store: &GlobalStore,
+    globals: &[u32],
+    funcs: &[u32],
+    exprs: &[ConstExpr],
+    expected: RefType,
+) -> VMResult<u32> {
+    if exprs.len() != 1 {
+        return VMResult::Unlinkable;
+    }
+    tracing::trace!("execute_elem_init_const_expr: {funcs:?} {exprs:?}");
+    match &exprs[0] {
+        ConstExpr::FuncRef(idx) => {
+            if expected != RefType::FuncRef {
+                return VMResult::Unlinkable;
+            }
 
-pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResult<Instance> {
-    let mut memory: Option<Rc<RefCell<Memory>>> = None;
+            if let Some(addr) = funcs.get(*idx as usize) {
+                VMResult::Success(*addr)
+            } else {
+                tracing::trace!("InvalidOperand");
 
-    let mut globals = vec![];
-    for import in &m.imports.0 {
-        tracing::trace!("{import:?}");
-        let (ext_module, ext_inst) =
-            vm_try!(VMResult::from_option(registry.get(&import.module), || {
+                VMResult::InvalidOperand
+            }
+        }
+        ConstExpr::RefNull(RefType::FuncRef) => {
+            if expected != RefType::FuncRef {
+                return VMResult::Unlinkable;
+            }
+            VMResult::Success(0)
+        }
+        ConstExpr::RefNull(RefType::ExternRef) => {
+            if expected != RefType::ExternRef {
+                return VMResult::Unlinkable;
+            }
+            VMResult::Success(0)
+        }
+        ConstExpr::GlobalGet(idx) => {
+            let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
                 VMResult::Unlinkable
-            }));
+            })) as usize;
+            let mut buf = [0u8; 4];
+            buf.copy_from_slice(&global_store.0[addr..addr + 4]);
+            VMResult::Success(u32::from_le_bytes(buf))
+        }
+        unknown => todo!("{unknown:?}"),
+    }
+}
+pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
+    let mod_addr = store.modules.len() as u32;
+    let inst_addr = store.instances.len() as u32;
+    // -> addr
+    let mut memory: Option<u32> = None;
+    let mut globals = vec![];
+    let mut funcs: Vec<u32> = vec![];
+    let mut tables = vec![];
+    let Module {
+        fts,
+        functions,
+        imports,
+        mems,
+        globals: m_globals,
+        global_init,
+        exs,
+        tables: m_tables,
+        elems: m_elems,
+        codes,
+        data,
+        start,
+    } = m;
+    for import in &imports.0 {
+        tracing::trace!("{import:?}");
+        let ext_inst_addr = vm_try!(VMResult::from_option(registry.get(&import.module), || {
+            VMResult::Unlinkable
+        }));
+        let ext_inst = &store.instances[ext_inst_addr.0 as usize];
+        let ext_module = &store.modules[ext_inst.module_addr as usize];
         let export = vm_try!(VMResult::from_option(
-            ext_module.exs.find(&import.name),
+            ext_module.exports.find(&import.name),
             || { VMResult::Unlinkable }
         ));
         match (&import.desc, export) {
             (ImportDesc::TypeIdx(tidx), ExportDesc::Func(funcidx)) => {
-                let import_ft = m.fts.get(*tidx).unwrap();
+                let import_ft = fts.get(*tidx).unwrap();
                 let export_ft_idx = ext_module.functions[funcidx.0 as usize];
-                let export_ft = ext_module.fts.get(export_ft_idx).unwrap();
+                let export_ft = ext_module
+                    .function_types
+                    .get(export_ft_idx.0 as usize)
+                    .unwrap();
                 if import_ft != export_ft {
                     tracing::trace!("import function type");
-
                     return VMResult::Unlinkable;
                 }
+                let funcaddr = ext_inst.funcs[funcidx.0 as usize];
+                let funcidx = funcs.len();
+                funcs.push(funcaddr);
+                tracing::trace!("linking: {mod_addr} {funcidx} => {funcaddr}")
             }
             (ImportDesc::GlobalType(import_gt), ExportDesc::Global(global_idx)) => {
                 let export_gt = ext_module.globals.get(global_idx.0 as usize).unwrap();
@@ -83,14 +179,16 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
                     import_tt.limits,
                     /*FIXME:*/ export_tt.limits.min,
                     export_tt.limits
-                ))
+                ));
+                tables.push(ext_inst.tables[idx.0 as usize]);
             }
             (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                memory = ext_inst.memory.clone();
-                if let Some(memory) = &memory {
+                memory = ext_inst.memory;
+                if let Some(memory_addr) = &memory {
+                    let memory = &store.memory[*memory_addr as usize];
                     vm_try!(validate_limit(
                         mt.0,
-                        memory.borrow().page_size(),
+                        memory.page_size(),
                         ext_module.mems[0].0
                     ))
                 } else {
@@ -107,28 +205,23 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
         }
     }
     if memory.is_none() {
-        if let Some(mem) = m.mems.first() {
-            memory = Some(Rc::new(RefCell::new(Memory::new(
+        if let Some(mem) = mems.first() {
+            memory = Some(store.memory.len() as u32);
+            store.memory.push(Memory::new(
                 mem.0.min,
                 (mem.0.max).unwrap_or(PAGE_SIZE_MAX as u32),
-            ))))
+            ));
         }
     }
-    for init in &m.global_init {
-        globals.push(vm_try!(store.globals.init(init)));
-    }
-    for d in &m.data.0 {
+
+    for d in &data.0 {
         match &d.mode {
             DataMode::Active(mem, offset) => {
                 assert_eq!(mem.0, 0);
-                let offset = match offset {
-                    WasmValue::I32(v) => *v as usize,
-                    WasmValue::I64(v) => *v as usize,
-                    _ => panic!(),
-                };
+                let offset = vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
                 if let Some(memory) = &memory {
-                    if let Some(slice) = memory.borrow_mut().get_mut(offset..offset + d.init.len())
-                    {
+                    let memory = &mut store.memory[*memory as usize];
+                    if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
                         slice.copy_from_slice(&d.init);
                     } else {
                         return VMResult::MemoryIndexOutOfRange;
@@ -143,40 +236,156 @@ pub fn instantiate(m: &Module, store: &mut Store, registry: &Registry) -> VMResu
         }
     }
 
-    let mut instance = Instance {
-        memory,
-        table: m
-            .tables
-            .iter()
-            .map(|v| TableInstance(*v, vec![TABLE_UNINITIALIZED; v.limits.min as usize]))
-            .collect(),
-        globals,
-    };
-    for elem in &m.elems.0 {
-        match &elem.mode {
-            ElemMode::Active(idx, offset) => {
-                let offset = match offset {
-                    WasmValue::I32(v) => *v as usize,
-                    WasmValue::I64(v) => *v as usize,
-                    _ => panic!(),
-                };
-                let instance = instance.table.get_mut(idx.0 as usize).unwrap();
-                if instance.0.reftype != elem.kind {
-                    panic!("reftype mismatch")
-                }
-                let expected_len = offset + elem.init.len();
-                if instance.1.len() < expected_len {
-                    instance.1.resize(expected_len, TABLE_UNINITIALIZED);
-                }
+    let mut funcaddr = store.funcs.0.len();
+    let mut s_funcs = vec![];
+    for func in codes.0.into_iter() {
+        let funcidx = funcs.len() as u32;
+        funcs.push(funcaddr as u32);
+        s_funcs.push(FunctionInstance {
+            instance_addr: inst_addr,
+            funcidx,
+            body: func,
+        });
 
-                for (idx, e) in elem.init.iter().enumerate() {
-                    instance.1[offset + idx] = *e;
+        tracing::trace!("linking: {mod_addr} {funcidx} => {funcaddr}");
+        funcaddr += 1;
+    }
+    store.funcs.0.append(&mut s_funcs);
+    for init in &global_init {
+        globals.push(vm_try!(store
+            .globals
+            .init(init, &globals, &funcs, &m_globals)));
+    }
+    let table_instances: Vec<TableInstance> = m_tables
+        .iter()
+        .map(|v| TableInstance(*v, vec![TABLE_UNINITIALIZED; v.limits.min as usize]))
+        .collect();
+    let mut table_addr = store.tables.len() as u32;
+    let mut s_tables = vec![];
+
+    for table in table_instances {
+        tables.push(table_addr);
+        s_tables.push(table);
+        table_addr += 1;
+    }
+    store.tables.append(&mut s_tables);
+    tracing::trace!("funcs: {funcs:?}");
+
+    let res = (|| {
+        tracing::trace!("funcs2: {funcs:?}");
+        for elem in &m_elems.0 {
+            tracing::trace!("funcs3: {funcs:?}");
+            match &elem.mode {
+                ElemMode::Active(idx, offset) => match &elem.init {
+                    ElemInit::FuncIdx(idxs) => {
+                        let offset =
+                            vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
+                        let table_addr = tables[idx.0 as usize] as usize;
+                        let instance = &mut store.tables[table_addr];
+
+                        if instance.0.reftype != elem.kind {
+                            panic!("reftype mismatch")
+                        }
+                        if offset + idxs.len() > instance.1.len() {
+                            return VMResult::TableIndexOutOfRange;
+                        }
+                        for (idx, funcidx) in idxs.iter().enumerate() {
+                            instance.1[offset + idx] = funcs[*funcidx as usize];
+                            tracing::trace!(
+                                "table[{}] = {}",
+                                offset + idx,
+                                funcs[*funcidx as usize]
+                            );
+                        }
+                    }
+                    ElemInit::ConstExpr(idxs) => {
+                        let offset =
+                            vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
+                        let table_addr = tables[idx.0 as usize] as usize;
+                        let Store {
+                            globals: global_store,
+                            tables,
+                            ..
+                        } = store;
+                        let instance = &mut tables[table_addr];
+                        if offset + idxs.len() > instance.1.len() {
+                            return VMResult::TableIndexOutOfRange;
+                        }
+                        tracing::trace!("funcs4: {funcs:?}");
+
+                        for (idx, idx_expr) in idxs.iter().enumerate() {
+                            let addr = vm_try!(execute_elem_init_const_expr(
+                                global_store,
+                                &globals,
+                                &funcs,
+                                idx_expr,
+                                instance.0.reftype,
+                            ));
+                            instance.1[offset + idx] = addr;
+                            tracing::trace!("table[{}] = {}", offset + idx, addr);
+                        }
+                    }
+                },
+                _ => {
+                    // do nothing
                 }
-            }
-            _ => {
-                // do nothing
             }
         }
+        VMResult::Success(())
+    })();
+
+    tracing::trace!("instance funcs: {funcs:?}");
+
+    store.modules.push(ModuleInstance {
+        function_types: fts.0,
+        functions,
+        data: data.0,
+        exports: exs,
+        tables: m_tables,
+        globals: m_globals,
+        elem: m_elems.0,
+        mems,
+    });
+    let instance = Instance {
+        module_addr: mod_addr,
+        memory,
+        tables,
+        globals,
+        funcs,
+    };
+    let addr = InstanceAddr(inst_addr);
+    if let Some(start) = start {
+        let mut stack = Stack::new(128 * 1024);
+
+        let funcaddr = instance.funcs[start.0 as usize];
+        store.instances.push(instance);
+        vm_try!(res);
+
+        let funcinst = &store.funcs.0[funcaddr as usize];
+        let code = &funcinst.body;
+        let mut jump_table = JumpTable::new();
+        jump_table.push((code.expr.len() - 2) as u32);
+        let mut local_size = 0usize;
+        for local in &code.locals {
+            local_size += local.n as usize * local.t.stack_size().usize();
+        }
+        let local_reference = vm_try!(stack.function_call(0, local_size, &vm::VM_END));
+        let ptr = code.expr.as_ptr();
+
+        let mut ctx = ExecuteContext {
+            stack: &mut stack,
+            local_state: vec![LocalState {
+                jump_table,
+                local_reference,
+                code_addr: funcaddr,
+                instance_addr: funcinst.instance_addr,
+            }],
+            store,
+        };
+        vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
+    } else {
+        store.instances.push(instance);
+        vm_try!(res);
     }
-    VMResult::Success(instance)
+    VMResult::Success(addr)
 }
