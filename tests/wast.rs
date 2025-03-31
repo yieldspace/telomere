@@ -664,3 +664,7 @@ fn token() {
 fn traps() {
     run_test_file("traps");
 }
+#[test]
+fn type_() {
+    run_test_file("type");
+}
