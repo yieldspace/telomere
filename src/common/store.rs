@@ -1,8 +1,7 @@
 use std::io::Write;
 
 use super::{
-    ConstExpr, Data, ExportSection, Func, FuncType, GlobalType, Instance, MemType, Memory,
-    TableInstance, TableType, TypeIdx, VMResult,
+    ConstExpr, Data, Elem, ExportSection, Func, FuncType, GlobalType, Instance, MemType, Memory, TableInstance, TableType, TypeIdx, VMResult
 };
 
 pub struct GlobalStore(pub Vec<u8>);
@@ -60,6 +59,7 @@ pub struct ModuleInstance {
     pub functions: Vec<TypeIdx>,
     pub function_types: Vec<FuncType>,
     pub data: Vec<Data>,
+    pub elem: Vec<Elem>,
     pub mems: Vec<MemType>,
 }
 pub struct Store {

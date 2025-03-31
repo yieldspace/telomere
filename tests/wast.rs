@@ -487,11 +487,12 @@ fn data() {
 fn bulk() {
     run_test_file("bulk");
 }
+    */
 #[test]
 fn elem() {
-    run_test_file("bulk");
+    run_test_file("elem");
 }
-*/
+
 #[test]
 fn endianness() {
     run_test_file("endianness");
@@ -618,6 +619,7 @@ fn obsolete_keywords() {
 }
 #[test]
 fn ref_func() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("ref_func");
 }
 #[test]

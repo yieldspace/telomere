@@ -7,7 +7,7 @@ mod stack;
 pub use stack::{LocalReference, Stack};
 mod registry;
 pub use registry::Registry;
-mod store;
+pub(crate) mod store;
 pub(crate) use store::FunctionInstance;
 pub(crate) use store::ModuleInstance;
 

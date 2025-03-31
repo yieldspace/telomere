@@ -1,8 +1,8 @@
 use crate::{
     common::{
-        ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, ExportDesc, FunctionInstance,
-        ImportDesc, InstanceAddr, JumpTable, Limits, LocalState, Memory, ModuleInstance, RefType,
-        TableInstance, PAGE_SIZE_MAX,
+        store::GlobalStore, ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, ExportDesc,
+        FunctionInstance, ImportDesc, InstanceAddr, JumpTable, Limits, LocalState, Memory,
+        ModuleInstance, RefType, TableInstance, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -60,6 +60,8 @@ fn execute_offset_const_expr(
     VMResult::Unlinkable
 }
 fn execute_elem_init_const_expr(
+    global_store: &GlobalStore,
+    globals: &[u32],
     funcs: &[u32],
     exprs: &[ConstExpr],
     expected: RefType,
@@ -67,18 +69,42 @@ fn execute_elem_init_const_expr(
     if exprs.len() != 1 {
         return VMResult::Unlinkable;
     }
-    match exprs[0] {
+    tracing::trace!("execute_elem_init_const_expr: {funcs:?} {exprs:?}");
+    match &exprs[0] {
         ConstExpr::FuncRef(idx) => {
             if expected != RefType::FuncRef {
                 return VMResult::Unlinkable;
             }
-            if let Some(addr) = funcs.get(idx as usize) {
+            
+            if let Some(addr) = funcs.get(*idx as usize) {
                 return VMResult::Success(*addr);
             } else {
+                tracing::trace!("InvalidOperand");
+
                 return VMResult::InvalidOperand;
             }
         }
-        _ => todo!(),
+        ConstExpr::RefNull(RefType::FuncRef) => {
+            if expected != RefType::FuncRef {
+                return VMResult::Unlinkable;
+            }
+            VMResult::Success(0)
+        }
+        ConstExpr::RefNull(RefType::ExternRef) => {
+            if expected != RefType::ExternRef {
+                return VMResult::Unlinkable;
+            }
+            VMResult::Success(0)
+        }
+        ConstExpr::GlobalGet(idx) => {
+            let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
+                VMResult::Unlinkable
+            })) as usize;
+            let mut buf = [0u8; 4];
+            buf.copy_from_slice(&global_store.0[addr..addr + 4]);
+            VMResult::Success(u32::from_le_bytes(buf))
+        }
+        unknown => todo!("{unknown:?}"),
     }
 }
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
@@ -243,10 +269,14 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         table_addr += 1;
     }
     store.tables.append(&mut s_tables);
+    tracing::trace!("funcs: {funcs:?}");
+
     let res = (|| {
-        for elem in m_elems.0 {
-            match elem.mode {
-                ElemMode::Active(idx, offset) => match elem.init {
+        tracing::trace!("funcs2: {funcs:?}");
+        for elem in &m_elems.0 {
+            tracing::trace!("funcs3: {funcs:?}");
+            match &elem.mode {
+                ElemMode::Active(idx, offset) => match &elem.init {
                     ElemInit::FuncIdx(idxs) => {
                         let offset =
                             vm_try!(execute_offset_const_expr(store, &globals, &offset)) as usize;
@@ -272,13 +302,19 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                         let offset =
                             vm_try!(execute_offset_const_expr(store, &globals, &offset)) as usize;
                         let table_addr = tables[idx.0 as usize] as usize;
-
-                        let instance = &mut store.tables[table_addr];
+                        let Store {
+                            globals: global_store, tables, ..
+                        } = store;
+                        let instance = &mut tables[table_addr];
                         if offset + idxs.len() > instance.1.len() {
                             return VMResult::TableIndexOutOfRange;
                         }
+                        tracing::trace!("funcs4: {funcs:?}");
+
                         for (idx, idx_expr) in idxs.iter().enumerate() {
                             let addr = vm_try!(execute_elem_init_const_expr(
+                                global_store,
+                                &globals,
                                 &funcs,
                                 &idx_expr,
                                 instance.0.reftype,
@@ -305,6 +341,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         exports: exs,
         tables: m_tables,
         globals: m_globals,
+        elem: m_elems.0,
         mems,
     });
     let instance = Instance {

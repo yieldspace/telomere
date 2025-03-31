@@ -265,6 +265,13 @@ fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
     }
     Ok(())
 }
+fn validate_active_elem(tables: &[TableType], table_idx: u32, rt: RefType) -> Result<()> {
+    let tt = tables
+        .get(table_idx as usize)
+        .ok_or_else(|| WasmParserError::InvalidTableIndex(table_idx))?;
+    assert_valtype(tt.reftype.into(), Some(rt.into()))?;
+    Ok(())
+}
 fn validate_const_expr_type(
     globals: &[GlobalType],
     funcs: &[TypeIdx],
@@ -530,6 +537,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         Err(WasmParserError::InvalidFuncIdx(FuncIdx(*funcidx)))?;
                     }
                 }
+                validate_active_elem(tables, 0, RefType::FuncRef)?;
                 (
                     len + len2 + len3,
                     Elem {
@@ -574,6 +582,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         Err(WasmParserError::InvalidFuncIdx(FuncIdx(*funcidx)))?;
                     }
                 }
+                validate_active_elem(tables, tableidx, RefType::FuncRef)?;
+
                 (
                     len + len2 + len3 + 1 + len5,
                     Elem {
@@ -608,6 +618,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 let (len2, offset) = self.parse_const_expr()?;
                 validate_offset_const_expr(globals, &offset)?;
                 let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
+                for expr in &init {
+                    validate_const_expr_type(globals, funcs, &expr, ValType::FuncRef)?;
+                }
+                validate_active_elem(tables, 0, RefType::FuncRef)?;
+
                 (
                     len + len2 + len3,
                     Elem {
@@ -620,6 +635,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             5 => {
                 let (len2, rt) = self.parse_reftype()?;
                 let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
+                for expr in &init {
+                    validate_const_expr_type(globals, funcs, &expr, rt.into())?;
+                }
                 (
                     len + len2 + len3,
                     Elem {
@@ -636,6 +654,11 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 validate_offset_const_expr(globals, &offset)?;
                 let (len4, rt) = self.parse_reftype()?;
                 let (len5, init) = self.parse_vec(Self::parse_const_expr)?;
+                for expr in &init {
+                    validate_const_expr_type(globals, funcs, &expr, rt.into())?;
+                }
+                validate_active_elem(tables, 0, rt)?;
+
                 (
                     len + len2 + len3 + len4 + len5,
                     Elem {
@@ -648,6 +671,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             7 => {
                 let (len2, rt) = self.parse_reftype()?;
                 let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
+                for expr in &init {
+                    validate_const_expr_type(globals, funcs, &expr, rt.into())?;
+                }
                 (
                     len + len2 + len3,
                     Elem {
@@ -708,6 +734,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         locals: &[Locals],
         globals: &[GlobalType],
         tables: &[TableType],
+        elems: &[Elem],
         instrs: &mut Vec<Instr>,
         types: &mut Vec<ValType>,
         blocks: &mut VecDeque<(BlockKind, BlockType, u32)>,
@@ -774,6 +801,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     locals,
                     globals,
                     tables,
+                    elems,
                     instrs,
                     types,
                     blocks,
@@ -897,6 +925,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     locals,
                     globals,
                     tables,
+                    elems,
                     instrs,
                     types,
                     blocks,
@@ -1016,6 +1045,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     locals,
                     globals,
                     tables,
+                    elems,
                     instrs,
                     types,
                     blocks,
@@ -3813,10 +3843,33 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         }
                         (2 + len, false)
                     }
+                    12 => {
+                        let (len2, elemidx) = self.parse_u32()?;
+                        let (len3, tableidx) = self.parse_u32()?;
+
+                        validate_active_elem(tables, tableidx, elems[elemidx as usize].kind)?;
+                        trace!("parse_op_table_init");
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_table_init,
+                            });
+                            instrs.push(Instr {
+                                operand: Operand { u32: elemidx },
+                            });
+                            instrs.push(Instr {
+                                operand: Operand { u32: tableidx },
+                            });
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_valtype(ValType::I32, types.pop())?;
+                            assert_type_stack_size(types, blocks)?;
+                        }
+                        (1 + len + len2 + len3, false)
+                    }
                     14 => {
                         let (len2, tableidx) = self.parse_u32()?;
                         let (len3, tableidx2) = self.parse_u32()?;
-                        
+
                         trace!("parse_op_table_copy");
                         if !*unreachable {
                             instrs.push(Instr {
@@ -3964,6 +4017,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         locals: &[Locals],
         globals: &[GlobalType],
         tables: &[TableType],
+        elems: &[Elem],
         instrs: &mut Vec<Instr>,
         types: &mut Vec<ValType>,
         blocks: &mut VecDeque<(BlockKind, BlockType, u32)>,
@@ -3983,6 +4037,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 locals,
                 globals,
                 tables,
+                elems,
                 instrs,
                 types,
                 blocks,
@@ -4006,6 +4061,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         globals: &[GlobalType],
         tables: &[TableType],
         mems: &[MemType],
+        elems: &[Elem],
         data_count_section: &mut DataCountVerifier,
         functype: &FuncType,
         typeidx: TypeIdx,
@@ -4028,6 +4084,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             &locals,
             globals,
             tables,
+            elems,
             &mut instrs,
             &mut types,
             &mut block_types_idxs,
@@ -4072,6 +4129,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         globals: &[GlobalType],
         table_section: &[TableType],
         mems: &[MemType],
+        elems: &[Elem],
         data_count_section: &mut DataCountVerifier,
         funcidx: FuncIdx,
     ) -> Result<(usize, Func)> {
@@ -4091,6 +4149,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             globals,
             table_section,
             mems,
+            elems,
             data_count_section,
             functype,
             typeidx,
@@ -4267,6 +4326,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         globals: &[GlobalType],
         tables: &[TableType],
         mems: &[MemType],
+        elems: &[Elem],
         data_count_section: &mut DataCountVerifier,
         size: u32,
     ) -> Result<CodeSection> {
@@ -4286,6 +4346,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 globals,
                 tables,
                 mems,
+                elems,
                 data_count_section,
                 FuncIdx(idx),
             )?;
@@ -4491,6 +4552,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 WasmSectionType::Code => {
                     let type_section = type_section.get_or_insert_with(|| TypeSection(vec![]));
                     let imports = import_section.get_or_insert_with(|| ImportSection(vec![]));
+                    let elems = element_section.get_or_insert_with(|| ElementSection(vec![]));
 
                     code_section = Some(self.parse_section_body(|me, size| {
                         Self::parse_code_section(
@@ -4501,6 +4563,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             &globals,
                             &tables,
                             &mems,
+                            &elems.0,
                             &mut data_count_verifier,
                             size,
                         )

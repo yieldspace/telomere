@@ -2,8 +2,8 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable, LocalState, Stack,
-        VMResult, ValType, WasmValue,
+        ElemInit, ElemMode, ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable,
+        LocalState, Stack, VMResult, ValType, WasmValue,
     },
     Store,
 };
@@ -865,6 +865,47 @@ pub unsafe fn op_table_set(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     }
     inst.1[i as usize] = val;
     call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let len = ctx.stack.pop_u32() as usize;
+    let src = ctx.stack.pop_u32() as usize;
+    let dst = ctx.stack.pop_u32() as usize;
+    let src_elem_idx = (*tail_code).operand.u32 as usize;
+    let dst_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
+
+    let ExecuteContext {
+        local_state, store, ..
+    } = ctx;
+    let ls = local_state.last().unwrap_unchecked();
+    let instance_addr = ls.instance_addr as usize;
+    let Store {
+        instances,
+        tables,
+        modules,
+        ..
+    } = store;
+    let instance = &mut instances[instance_addr];
+    let dst_table_addr = instance.tables[dst_table_idx] as usize;
+
+    let elem = &modules[instance.module_addr as usize].elem[src_elem_idx];
+    if !matches!(elem.mode, ElemMode::Passive) {
+        return VMResult::TableIndexOutOfRange;
+    }
+    match &elem.init {
+        ElemInit::FuncIdx(idxs) => {
+            let dst_table = &mut tables[dst_table_addr];
+            let dst = vm_try!(VMResult::from_option(
+                dst_table.1.get_mut(dst..dst + len),
+                || { VMResult::TableIndexOutOfRange }
+            ));
+            for (i, funcidx) in idxs[src..].iter().enumerate() {
+                dst[i] = instance.funcs[*funcidx as usize];
+            }
+        }
+        _ => todo!(),
+    }
+
+    call_next(tail_code, 2, ctx)
 }
 pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32() as usize;
