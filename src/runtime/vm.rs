@@ -899,18 +899,18 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     ));
     match &elem.init {
         ElemInit::FuncIdx(idxs) => {
-            for (i, funcidx) in idxs[src..src+len].iter().enumerate() {
+            for (i, funcidx) in idxs[src..src + len].iter().enumerate() {
                 dst[i] = instance.funcs[*funcidx as usize];
             }
         }
         ElemInit::ConstExpr(exprs) => {
-            for (i, expr) in exprs[src..src+len].iter().enumerate() {
+            for (i, expr) in exprs[src..src + len].iter().enumerate() {
                 dst[i] = vm_try!(execute_elem_init_const_expr(
                     global_store,
                     &instance.globals,
                     &instance.funcs,
                     expr,
-                    dst_table.0.reftype.into(),
+                    dst_table.0.reftype,
                 ));
             }
         }

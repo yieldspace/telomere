@@ -270,7 +270,7 @@ fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
 fn validate_active_elem(tables: &[TableType], table_idx: u32, rt: RefType) -> Result<()> {
     let tt = tables
         .get(table_idx as usize)
-        .ok_or_else(|| WasmParserError::InvalidTableIndex(table_idx))?;
+        .ok_or(WasmParserError::InvalidTableIndex(table_idx))?;
     assert_valtype(tt.reftype.into(), Some(rt.into()))?;
     Ok(())
 }
@@ -621,7 +621,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 validate_offset_const_expr(globals, &offset)?;
                 let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
                 for expr in &init {
-                    validate_const_expr_type(globals, funcs, &expr, ValType::FuncRef)?;
+                    validate_const_expr_type(globals, funcs, expr, ValType::FuncRef)?;
                 }
                 validate_active_elem(tables, 0, RefType::FuncRef)?;
 
@@ -638,7 +638,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 let (len2, rt) = self.parse_reftype()?;
                 let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
                 for expr in &init {
-                    validate_const_expr_type(globals, funcs, &expr, rt.into())?;
+                    validate_const_expr_type(globals, funcs, expr, rt.into())?;
                 }
                 (
                     len + len2 + len3,
@@ -657,7 +657,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 let (len4, rt) = self.parse_reftype()?;
                 let (len5, init) = self.parse_vec(Self::parse_const_expr)?;
                 for expr in &init {
-                    validate_const_expr_type(globals, funcs, &expr, rt.into())?;
+                    validate_const_expr_type(globals, funcs, expr, rt.into())?;
                 }
                 validate_active_elem(tables, 0, rt)?;
 
@@ -674,7 +674,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 let (len2, rt) = self.parse_reftype()?;
                 let (len3, init) = self.parse_vec(Self::parse_const_expr)?;
                 for expr in &init {
-                    validate_const_expr_type(globals, funcs, &expr, rt.into())?;
+                    validate_const_expr_type(globals, funcs, expr, rt.into())?;
                 }
                 (
                     len + len2 + len3,
@@ -3850,7 +3850,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         let (len3, tableidx) = self.parse_u32()?;
                         let elem = elems
                             .get(elemidx as usize)
-                            .ok_or_else(|| WasmParserError::UnknownElement)?;
+                            .ok_or(WasmParserError::UnknownElement)?;
 
                         validate_active_elem(tables, tableidx, elem.kind)?;
                         trace!("parse_op_table_init");
@@ -4533,7 +4533,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             if let Some(sec) = &type_section {
                                 let ft = sec
                                     .get(*tidx)
-                                    .ok_or_else(|| WasmParserError::InvalidTypeIdx(*tidx))?;
+                                    .ok_or(WasmParserError::InvalidTypeIdx(*tidx))?;
                                 if ft != &FuncType(ResultType(vec![]), ResultType(vec![])) {
                                     return Err(WasmParserError::StartFunction);
                                 }

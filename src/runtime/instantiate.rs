@@ -75,13 +75,13 @@ pub fn execute_elem_init_const_expr(
             if expected != RefType::FuncRef {
                 return VMResult::Unlinkable;
             }
-            
+
             if let Some(addr) = funcs.get(*idx as usize) {
-                return VMResult::Success(*addr);
+                VMResult::Success(*addr)
             } else {
                 tracing::trace!("InvalidOperand");
 
-                return VMResult::InvalidOperand;
+                VMResult::InvalidOperand
             }
         }
         ConstExpr::RefNull(RefType::FuncRef) => {
@@ -279,7 +279,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 ElemMode::Active(idx, offset) => match &elem.init {
                     ElemInit::FuncIdx(idxs) => {
                         let offset =
-                            vm_try!(execute_offset_const_expr(store, &globals, &offset)) as usize;
+                            vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
                         let table_addr = tables[idx.0 as usize] as usize;
                         let instance = &mut store.tables[table_addr];
 
@@ -300,10 +300,12 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     }
                     ElemInit::ConstExpr(idxs) => {
                         let offset =
-                            vm_try!(execute_offset_const_expr(store, &globals, &offset)) as usize;
+                            vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
                         let table_addr = tables[idx.0 as usize] as usize;
                         let Store {
-                            globals: global_store, tables, ..
+                            globals: global_store,
+                            tables,
+                            ..
                         } = store;
                         let instance = &mut tables[table_addr];
                         if offset + idxs.len() > instance.1.len() {
@@ -316,7 +318,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                                 global_store,
                                 &globals,
                                 &funcs,
-                                &idx_expr,
+                                idx_expr,
                                 instance.0.reftype,
                             ));
                             instance.1[offset + idx] = addr;
