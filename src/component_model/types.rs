@@ -1,4 +1,4 @@
-use crate::component_model::id::TypeId;
+use crate::component_model::id::{FuncId, TypeId};
 use crate::component_model::{Alias, CoreType};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
@@ -70,8 +70,8 @@ pub enum ValType {
 }
 
 pub enum ResourceType {
-    Resource(Option<usize>),
-    ResourceWithAsyncCallback(usize, Option<usize>),
+    Resource(Option<FuncId>),
+    ResourceWithAsyncCallback(FuncId, Option<FuncId>),
 }
 
 pub struct FuncType {

@@ -10,11 +10,11 @@ use crate::component_model::types::{
 use crate::parser::component::parser::alias::parse_alias;
 use crate::parser::component::parser::context::ParseContext;
 use crate::parser::component::parser::core::parse_core_type;
-use crate::parser::component::parser::id::parse_type_id;
+use crate::parser::component::parser::id::{parse_func_id, parse_type_id};
 use crate::parser::component::parser::import_export::{
     parse_export_name_dash, parse_import_name_dash,
 };
-use crate::parser::component::parser::ComponentModelParserError;
+use crate::parser::component::parser::{parse_option, ComponentModelParserError};
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
 use crate::{assert_magic, with_count};
@@ -49,9 +49,6 @@ const_type!([0x42], INSTANCE_TYPE);
 const_type!([0x3f, 0x7f], RESOURCE_TYPE);
 const_type!([0x3e, 0x7f], RESOURCE_TYPE_WITH_ASYNC_CALLBACK);
 
-#[cfg(feature = "async")]
-const PRIM_VALTYPE_ERROR_CONTEXT: i32 = compile_i32([0x64]);
-
 fn is_type_opcode(opcode: i32) -> bool {
     opcode <= -1
 }
@@ -67,23 +64,6 @@ where
         0x00 => Ok((1, None)),
         0x01 => {
             let (len, v) = f(ctx.reader)?;
-            Ok((len + 1, Some(v)))
-        }
-        x => Err(ComponentModelParserError::InvalidOptionMagic(x)),
-    }
-}
-
-fn parse_option<R: BinaryReader, V, E>(
-    ctx: &mut ParseContext<R>,
-    mut f: impl FnMut(&mut ParseContext<R>) -> std::result::Result<(usize, V), E>,
-) -> Result<(usize, Option<V>)>
-where
-    ComponentModelParserError: From<E>,
-{
-    match ctx.reader.read_exact_one()? {
-        0x00 => Ok((1, None)),
-        0x01 => {
-            let (len, v) = f(ctx)?;
             Ok((len + 1, Some(v)))
         }
         x => Err(ComponentModelParserError::InvalidOptionMagic(x)),
@@ -164,28 +144,8 @@ pub fn parse_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, 
             Type::DefVal(DefValType::Future(t))
         }
         FUNC_TYPE => {
-            let (_, ps) = parse_vec(ctx, |v| v.reader, parse_label_valtype)?;
-            let rs = {
-                match ctx.reader.read_exact_one()?.count(&mut counter) {
-                    0x00 => {
-                        let t = parse_valtype(ctx)?.count(&mut counter);
-                        Some(t)
-                    }
-                    0x01 => match ctx.reader.read_exact_one()?.count(&mut counter) {
-                        0x00 => None,
-                        x => {
-                            return Err(ComponentModelParserError::TypeError(format!(
-                                "Invalid function result type: {x}"
-                            )));
-                        }
-                    },
-                    x => {
-                        return Err(ComponentModelParserError::TypeError(format!(
-                            "Invalid function result type: {x}"
-                        )));
-                    }
-                }
-            };
+            let ps = parse_vec(ctx, |v| v.reader, parse_label_valtype)?.count(&mut counter);
+            let rs = parse_resultlist(ctx)?.count(&mut counter);
             Type::Func(FuncType {
                 params: ps,
                 result: rs,
@@ -200,18 +160,13 @@ pub fn parse_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, 
             Type::Instance(InstanceType(id))
         }
         RESOURCE_TYPE => {
-            // todo id
-            let idx = parse_core_option(ctx, parse_u32)?.count(&mut counter);
-            Type::Resource(ResourceType::Resource(idx.map(|v| v as usize)))
+            let idx = parse_option(ctx, parse_func_id)?.count(&mut counter);
+            Type::Resource(ResourceType::Resource(idx))
         }
         RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
-            // todo id
-            let idx = parse_u32(ctx.reader)?.count(&mut counter);
-            let cb = parse_core_option(ctx, parse_u32)?.count(&mut counter);
-            Type::Resource(ResourceType::ResourceWithAsyncCallback(
-                idx as usize,
-                cb.map(|v| v as usize),
-            ))
+            let idx = parse_func_id(ctx)?.count(&mut counter);
+            let cb = parse_option(ctx, parse_func_id)?.count(&mut counter);
+            Type::Resource(ResourceType::ResourceWithAsyncCallback(idx, cb))
         }
         n => {
             return Err(ComponentModelParserError::TypeError(format!(
@@ -220,6 +175,32 @@ pub fn parse_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, 
         }
     };
     Ok((counter.get_count(), ty))
+}
+
+pub fn parse_resultlist(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> Result<(usize, Option<ValType>)> {
+    let mut counter = Counter::new();
+    let t = match ctx.reader.read_exact_one()?.count(&mut counter) {
+        0x00 => {
+            let t = parse_valtype(ctx)?.count(&mut counter);
+            Some(t)
+        }
+        0x01 => match ctx.reader.read_exact_one()?.count(&mut counter) {
+            0x00 => None,
+            x => {
+                return Err(ComponentModelParserError::TypeError(format!(
+                    "Invalid function result type: {x}"
+                )));
+            }
+        },
+        x => {
+            return Err(ComponentModelParserError::TypeError(format!(
+                "Invalid function result type: {x}"
+            )));
+        }
+    };
+    Ok((counter.get_count(), t))
 }
 
 pub fn parse_primvaltype<R: BinaryReader>(

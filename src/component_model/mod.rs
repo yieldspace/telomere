@@ -1,3 +1,4 @@
+mod canon;
 pub mod id;
 pub mod types;
 
@@ -8,6 +9,7 @@ use crate::component_model::id::{
 };
 use crate::component_model::types::Type;
 use crate::Module;
+pub use canon::*;
 
 pub struct Component {
     pub modules: Vec<Module>,

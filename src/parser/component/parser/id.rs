@@ -1,5 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::id::{ComponentId, CoreSortId, InstanceId, ModuleId, SortId, TypeId};
+use crate::component_model::id::{
+    ComponentId, CoreSortId, FuncId, InstanceId, ModuleId, SortId, TypeId,
+};
 use crate::component_model::{CoreSort, SortType};
 use crate::parser::component::parser::context::ParseContext;
 use crate::parser::component::parser::ComponentModelParserError;
@@ -66,4 +68,8 @@ pub fn parse_type_id<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usiz
     let (len, id) = parse_i32(ctx.reader)?;
     assert!(id >= 0);
     Ok((len, TypeId(id)))
+}
+
+pub fn parse_func_id<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, FuncId)> {
+    todo!()
 }

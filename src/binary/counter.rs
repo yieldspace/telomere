@@ -15,6 +15,7 @@ pub trait Countable<T> {
 }
 
 impl<T> Countable<T> for (usize, T) {
+    #[inline(always)]
     fn count(self, counter: &mut Counter) -> T {
         let (count, value) = self;
         counter.0 += count;

@@ -10,6 +10,7 @@ use crate::{Module, WasmParser, WasmParserError};
 use thiserror::Error;
 
 mod alias;
+mod canon;
 mod context;
 mod core;
 mod id;
@@ -120,7 +121,9 @@ pub fn parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<Com
             ComponentSectionType::Type => {
                 let (_, types) = parse_vec(ctx, |v| v.reader, types::parse_type)?;
             }
-            ComponentSectionType::Canon => {}
+            ComponentSectionType::Canon => {
+                let (_, canons) = parse_vec(ctx, |v| v.reader, canon::parse_canon)?;
+            }
             ComponentSectionType::Start => {}
             ComponentSectionType::Import => {}
             ComponentSectionType::Export => {}
@@ -193,4 +196,21 @@ pub fn parse_core_module<R: BinaryReader>(reader: &mut R, size: usize) -> Result
     let mut core_module = WasmParser::new(&mut core_reader);
     let module = core_module.parse_module()?;
     Ok(module)
+}
+
+pub fn parse_option<R: BinaryReader, V, E>(
+    ctx: &mut ParseContext<R>,
+    mut f: impl FnMut(&mut ParseContext<R>) -> std::result::Result<(usize, V), E>,
+) -> Result<(usize, Option<V>)>
+where
+    ComponentModelParserError: From<E>,
+{
+    match ctx.reader.read_exact_one()? {
+        0x00 => Ok((1, None)),
+        0x01 => {
+            let (len, v) = f(ctx)?;
+            Ok((len + 1, Some(v)))
+        }
+        x => Err(ComponentModelParserError::InvalidOptionMagic(x)),
+    }
 }
