@@ -1,3 +1,3 @@
 mod parser;
 mod section;
-pub use parser::parse_component;
+pub use parser::{parse_component, ParseContext};

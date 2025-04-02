@@ -1,8 +1,28 @@
+pub mod id;
 pub mod types;
 
 use crate::common::{Import, ImportDesc};
+use crate::component_model::id::{
+    ComponentId, CoreFuncId, CoreGlobalId, CoreInstanceId, CoreMemoryId, CoreModuleId, CoreTableId,
+    CoreTypeId, FuncId, InstanceId, ModuleId, SortId, TypeId,
+};
+use crate::component_model::types::Type;
+use crate::Module;
 
-pub struct Component {}
+pub struct Component {
+    pub modules: Vec<Module>,
+    pub core_instances: Vec<CoreInstance>,
+    pub core_types: Vec<CoreType>,
+    pub components: Vec<Component>,
+    pub instances: Vec<Instance>,
+    pub aliases: Vec<Alias>,
+    pub types: Vec<Type>,
+    // canons
+    // start
+    // import
+    // export
+    // value
+}
 
 pub enum CoreInstance {
     Instantiate(CoreInstantiate),
@@ -10,23 +30,23 @@ pub enum CoreInstance {
 }
 
 pub struct CoreInstantiate {
-    pub module_idx: usize,
+    pub module_idx: ModuleId,
     pub args: Vec<CoreInstantiateArg>,
 }
 
 pub struct CoreInstantiateArg {
     pub name: String,
-    pub instance_idx: usize,
+    pub instance_idx: InstanceId,
 }
 
 pub struct CoreInstanceInlineExport {
     pub name: String,
     pub sort: CoreSort,
-    pub sort_idx: usize,
+    pub sort_idx: SortId,
 }
 
 #[repr(u8)]
-pub enum CoreSort {
+pub enum CoreSortType {
     Func = 0x00,
     Table = 0x01,
     Memory = 0x02,
@@ -36,7 +56,21 @@ pub enum CoreSort {
     Instance = 0x12,
 }
 
+pub enum CoreSort {
+    Func(CoreFuncId),
+    Table(CoreTableId),
+    Memory(CoreMemoryId),
+    Global(CoreGlobalId),
+    Type(CoreTypeId),
+    Module(CoreModuleId),
+    Instance(CoreInstanceId),
+}
+
 pub enum CoreType {
+    #[cfg(feature = "wasm3")]
+    CoreRecType,
+    #[cfg(feature = "wasm3")]
+    Sub(Vec<CoreTypeId>, todo!("comptype")),
     CoreModuleType(Vec<CoreModuleDecl>),
 }
 
@@ -57,9 +91,8 @@ pub struct CoreAlias {
     pub target: CoreAliasTarget,
 }
 
-pub struct CoreAliasTarget {
-    pub ct: u32,
-    pub idx: u32,
+pub enum CoreAliasTarget {
+    Outer(u32, usize),
 }
 
 pub enum Instance {
@@ -68,18 +101,17 @@ pub enum Instance {
 }
 
 pub struct Instantiate {
-    pub component_idx: usize,
+    pub component_idx: ComponentId,
     pub args: Vec<InstantiateArg>,
 }
 
 pub struct InstantiateArg {
     pub name: String,
     pub sort: Sort,
-    pub sort_idx: usize,
 }
 
 #[repr(u8)]
-pub enum Sort {
+pub enum SortType {
     Core(CoreSort) = 0x00,
     Func = 0x01,
     Value = 0x02,
@@ -88,20 +120,28 @@ pub enum Sort {
     Instance = 0x05,
 }
 
+pub enum Sort {
+    Core(CoreSort, usize),
+    Func(FuncId, usize),
+    Value,
+    Type(TypeId, usize),
+    Component(ComponentId, usize),
+    Instance(InstanceId, usize),
+}
+
 pub struct InlineExport {
     pub name: String,
     pub sort: Sort,
-    pub sort_idx: usize,
 }
 
 pub struct Alias {
-    pub sort: Sort,
+    // pub sort: Sort,
     pub target: AliasTarget,
 }
 
 #[repr(u8)]
 pub enum AliasTarget {
-    Export(usize, String) = 0x00,
-    CoreExport(usize, String) = 0x01,
-    Outer(u32, usize) = 0x02,
+    Export(Sort, String) = 0x00,
+    CoreExport(Sort, String) = 0x01,
+    Outer(u32, Sort) = 0x02,
 }

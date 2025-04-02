@@ -1,4 +1,7 @@
+use crate::component_model::id::TypeId;
 use crate::component_model::{Alias, CoreType};
+use crate::parser::leb128::compile_i32;
+use num_derive::FromPrimitive;
 
 pub enum Type {
     DefVal(DefValType),
@@ -8,36 +11,38 @@ pub enum Type {
     Resource(ResourceType),
 }
 
+#[derive(FromPrimitive)]
+#[repr(i32)]
 pub enum PrimValType {
-    Bool = 0x7f,
-    S8 = 0x7e,
-    U8 = 0x7d,
-    S16 = 0x7c,
-    U16 = 0x7b,
-    S32 = 0x7a,
-    U32 = 0x79,
-    S64 = 0x78,
-    U64 = 0x77,
-    F32 = 0x76,
-    F64 = 0x75,
-    Char = 0x74,
-    String = 0x73,
+    Bool = compile_i32([0x7f]),
+    S8 = compile_i32([0x7e]),
+    U8 = compile_i32([0x7d]),
+    S16 = compile_i32([0x7c]),
+    U16 = compile_i32([0x7b]),
+    S32 = compile_i32([0x7a]),
+    U32 = compile_i32([0x79]),
+    S64 = compile_i32([0x78]),
+    U64 = compile_i32([0x77]),
+    F32 = compile_i32([0x76]),
+    F64 = compile_i32([0x75]),
+    Char = compile_i32([0x74]),
+    String = compile_i32([0x73]),
     #[cfg(feature = "async")]
-    ErrorContext = 0x64,
+    ErrorContext = compile_i32([0x64]),
 }
 
 pub enum DefValType {
     Primitive(PrimValType),
     Record(Vec<LabelValType>),
     Variant(Vec<Case>),
-    List(Vec<ValType>, Option<usize>),
+    List(ValType, Option<usize>),
     Tuple(Vec<ValType>),
     Flags(Vec<Label>),
     Enum(Vec<Label>),
     Option(ValType),
     Result(Option<ValType>, Option<ValType>),
-    Own(usize),
-    Borrow(usize),
+    Own(TypeId),
+    Borrow(TypeId),
     #[cfg(feature = "async")]
     Stream(Option<ValType>),
     #[cfg(feature = "async")]
@@ -45,22 +50,22 @@ pub enum DefValType {
 }
 
 pub struct LabelValType {
-    label: Label,
-    t: ValType,
+    pub label: Label,
+    pub t: ValType,
 }
 
 pub struct Case {
-    label: Label,
-    t: Option<ValType>,
+    pub label: Label,
+    pub t: Option<ValType>,
 }
 
 pub struct Label {
-    len: usize,
-    label: String, // TODO: check label format https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#import-and-export-definitions
+    pub len: usize,
+    pub label: String, // TODO: check label format https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#import-and-export-definitions
 }
 
 pub enum ValType {
-    TypeId(usize),
+    TypeId(TypeId),
     Primitive(PrimValType),
 }
 
@@ -70,8 +75,8 @@ pub enum ResourceType {
 }
 
 pub struct FuncType {
-    params: Vec<LabelValType>,
-    result: Option<ValType>,
+    pub params: Vec<LabelValType>,
+    pub result: Option<ValType>,
 }
 
 pub struct ComponentType(pub Vec<ComponentDecl>);
@@ -91,16 +96,16 @@ pub enum InstanceDecl {
 }
 
 pub struct ImportDecl {
-    name: String,
-    ed: ExterDesc,
+    pub name: String,
+    pub ed: ExternDesc,
 }
 
 pub struct ExportDecl {
-    name: String,
-    ed: ExterDesc,
+    pub name: String,
+    pub ed: ExternDesc,
 }
 
-pub enum ExterDesc {
+pub enum ExternDesc {
     Core(usize),
     Func(usize),
     #[cfg(feature = "import_export")]
@@ -111,7 +116,7 @@ pub enum ExterDesc {
 }
 
 pub enum TypeBound {
-    Eq(usize),
+    Eq(TypeId),
     Sub,
 }
 
@@ -119,4 +124,16 @@ pub enum TypeBound {
 pub enum ValueBound {
     Eq(usize),
     Type(ValType),
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::component_model::types::PrimValType;
+    use crate::parser::leb128::compile_i32;
+    use num_traits::FromPrimitive;
+
+    #[test]
+    fn test_prim() {
+        assert_eq!(compile_i32([0x7f]), PrimValType::Bool as i32);
+    }
 }

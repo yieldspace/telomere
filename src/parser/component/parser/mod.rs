@@ -1,21 +1,22 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Component, CoreAlias, CoreAliasTarget, CoreInstance, CoreInstanceInlineExport, CoreInstantiate,
-    CoreInstantiateArg, CoreModuleDecl, CoreSort, CoreType,
-};
-use crate::parser::component::parser::instance::{parse_core_instance, parse_instance};
-use crate::parser::component::parser::types::parse_core_type;
+use crate::component_model::Component;
+pub use crate::parser::component::parser::context::ParseContext;
+use crate::parser::component::parser::core::{parse_core_instance, parse_core_type};
+use crate::parser::component::parser::instance::parse_instance;
 use crate::parser::component::section::ComponentSectionType;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::Leb128Parser;
 use crate::{Module, WasmParser, WasmParserError};
 use thiserror::Error;
-use crate::parser::component::parser::context::ParseContext;
 
 mod alias;
-mod instance;
-mod types;
 mod context;
+mod core;
+mod id;
+mod import_export;
+mod instance;
+mod sort;
+mod types;
 
 #[macro_export]
 macro_rules! assert_magic {
@@ -61,46 +62,64 @@ pub enum ComponentModelParserError {
     InvalidSort(u8),
     #[error("invalid alias target: {0:?}")]
     InvalidAliasTarget(u8),
+    #[error("invalid module id: {0:?}")]
+    InvalidModuleId(u32),
+    #[error("invalid instance id: {0:?}")]
+    InvalidInstanceId(u32),
+    #[error("invalid component id: {0:?}")]
+    InvalidComponentId(u32),
+    #[error("invalid prim val type: {0:?}")]
+    InvalidPrimValType(u8),
+    #[error("type error: {0:?}")]
+    TypeError(String),
+    #[error("invalid option magic: {0:?}")]
+    InvalidOptionMagic(u8),
+    #[error("invalid case magic: {0:?}")]
+    InvalidCaseMagic(u8),
+    #[error("invalid import name magic: {0:?}")]
+    InvalidImportNameMagic(u8),
+    #[error("invalid extern desc magic: {0:?}")]
+    InvalidExternDescMagic(u8),
 }
 
-pub fn parse_component<R: BinaryReader>(reader: &mut R, parent: Option<&ParseContext>) -> Result<Component> {
-    let mut context = ParseContext::new();
-    parse_magic(reader)?;
-    parse_version(reader)?;
-    parse_layer(reader)?;
+pub fn parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<Component> {
+    parse_magic(ctx.reader)?;
+    parse_version(ctx.reader)?;
+    parse_layer(ctx.reader)?;
     loop {
-        let section_type = if let Some(st) = parse_section_type(reader)? {
+        let section_type = if let Some(st) = parse_section_type(ctx.reader)? {
             st
         } else {
             break;
         };
-        let (_, size) = Leb128Parser::new(reader).parse_u32(size_of::<u32>() * 8)?;
+        let (_, size) = parse_u32(ctx.reader)?;
         match section_type {
             ComponentSectionType::Custom => {
                 for _ in 0..size {
-                    reader.read_exact_one()?;
+                    ctx.reader.read_exact_one()?;
                 }
             }
             ComponentSectionType::CoreModule => {
-                let module = parse_core_module(reader, size as usize)?;
+                let module = parse_core_module(ctx.reader, size as usize)?;
             }
             ComponentSectionType::CoreInstance => {
-                let (_, instances) = parse_vec(reader, |v| v, parse_core_instance)?;
+                let (_, instances) = parse_vec(ctx, |v| v.reader, parse_core_instance)?;
             }
             ComponentSectionType::CoreType => {
-                let (_, core_types) = parse_vec(reader, |v| v, parse_core_type)?;
+                let (_, core_types) = parse_vec(ctx, |v| v.reader, parse_core_type)?;
             }
             ComponentSectionType::Component => {
-                let component = parse_component(reader, Some(&context))?;
-                // todo: add child
+                let component = parse_component(ctx)?;
             }
             ComponentSectionType::Instance => {
-                let (_, instances) = parse_vec(reader, |v| v, parse_instance)?;
+                let (_, instances) = parse_vec(ctx, |v| v.reader, parse_instance)?;
             }
             ComponentSectionType::Alias => {
-                let (_, aliases) = parse_vec(reader, |v| v, alias::parse_alias)?;
+                let (_, aliases) = parse_vec(ctx, |v| v.reader, alias::parse_alias)?;
             }
-            ComponentSectionType::Type => {}
+            ComponentSectionType::Type => {
+                let (_, types) = parse_vec(ctx, |v| v.reader, types::parse_type)?;
+            }
             ComponentSectionType::Canon => {}
             ComponentSectionType::Start => {}
             ComponentSectionType::Import => {}
@@ -108,7 +127,15 @@ pub fn parse_component<R: BinaryReader>(reader: &mut R, parent: Option<&ParseCon
             ComponentSectionType::Value => {}
         }
     }
-    Ok(Component {})
+    Ok(Component {
+        modules: vec![],
+        core_instances: vec![],
+        core_types: vec![],
+        components: vec![],
+        instances: vec![],
+        aliases: vec![],
+        types: vec![],
+    })
 }
 
 pub fn parse_magic<R: BinaryReader>(reader: &mut R) -> Result<()> {

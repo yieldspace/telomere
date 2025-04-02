@@ -311,9 +311,9 @@ impl<R: BinaryReader> BinaryReader for LimitingBinaryReader<'_, R> {
 #[macro_export]
 macro_rules! with_count {
     ($reader:expr, $b:block) => {{
-        let start_count = $reader.read_count();
+        let start_count = { $reader.read_count().clone() };
         let result = $b;
-        let end_count = $reader.read_count();
+        let end_count = { $reader.read_count().clone() };
         let count = end_count - start_count;
         (count, result)
     }};

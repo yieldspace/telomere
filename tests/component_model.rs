@@ -6,7 +6,8 @@ fn test_empty_component() {
     "#;
     let binary = wat::parse_str(component).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
-    telomere::parser::component::parse_component(&mut reader, None).unwrap();
+    let mut ctx = telomere::parser::component::ParseContext::new(&mut reader);
+    telomere::parser::component::parse_component(&mut ctx).unwrap();
 }
 
 #[test]
@@ -21,5 +22,6 @@ fn test_with_core_wasm() {
     "#;
     let binary = wat::parse_str(component).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
-    telomere::parser::component::parse_component(&mut reader, None).unwrap();
+    let mut ctx = telomere::parser::component::ParseContext::new(&mut reader);
+    telomere::parser::component::parse_component(&mut ctx).unwrap();
 }
