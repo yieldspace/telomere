@@ -174,7 +174,7 @@ pub fn parse_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, 
             )));
         }
     };
-    Ok((counter.get_count(), ty))
+    Ok((counter.count(), ty))
 }
 
 pub fn parse_resultlist(
@@ -200,7 +200,7 @@ pub fn parse_resultlist(
             )));
         }
     };
-    Ok((counter.get_count(), t))
+    Ok((counter.count(), t))
 }
 
 pub fn parse_primvaltype<R: BinaryReader>(
@@ -247,11 +247,11 @@ fn parse_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, V
     let value = parse_i32(ctx.reader)?.count(&mut counter);
     if is_type_opcode(value) {
         Ok((
-            counter.get_count(),
+            counter.count(),
             ValType::Primitive(PrimValType::from_i32(value).unwrap()),
         ))
     } else {
-        Ok((counter.get_count(), ValType::TypeId(TypeId(value))))
+        Ok((counter.count(), ValType::TypeId(TypeId(value))))
     }
 }
 
@@ -322,7 +322,7 @@ fn parse_import_decl(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize
     }))
 }
 
-fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, ExternDesc)> {
+pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, ExternDesc)> {
     Ok(with_count!(ctx.reader, {
         match ctx.reader.read_exact_one()? {
             0x00 => {
@@ -370,7 +370,7 @@ fn parse_typebound(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, 
         0x01 => TypeBound::Sub,
         _ => todo!(),
     };
-    Ok((counter.get_count(), r))
+    Ok((counter.count(), r))
 }
 
 #[cfg(feature = "import_export")]

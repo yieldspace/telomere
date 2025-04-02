@@ -1,5 +1,6 @@
 mod canon;
 pub mod id;
+mod import_export;
 pub mod types;
 
 use crate::common::{Import, ImportDesc};
@@ -10,6 +11,7 @@ use crate::component_model::id::{
 use crate::component_model::types::Type;
 use crate::Module;
 pub use canon::*;
+pub use import_export::*;
 
 pub struct Component {
     pub modules: Vec<Module>,

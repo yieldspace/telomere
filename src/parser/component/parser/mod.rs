@@ -124,10 +124,18 @@ pub fn parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<Com
             ComponentSectionType::Canon => {
                 let (_, canons) = parse_vec(ctx, |v| v.reader, canon::parse_canon)?;
             }
-            ComponentSectionType::Start => {}
-            ComponentSectionType::Import => {}
-            ComponentSectionType::Export => {}
-            ComponentSectionType::Value => {}
+            ComponentSectionType::Start => {
+                unimplemented!()
+            }
+            ComponentSectionType::Import => {
+                let (_, imports) = parse_vec(ctx, |v| v.reader, import_export::parse_import)?;
+            }
+            ComponentSectionType::Export => {
+                let (_, exports) = parse_vec(ctx, |v| v.reader, import_export::parse_export)?;
+            }
+            ComponentSectionType::Value => {
+                unimplemented!()
+            }
         }
     }
     Ok(Component {
