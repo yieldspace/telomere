@@ -7,7 +7,7 @@ use crate::component_model::{
 };
 use crate::parser::component::parser::context::ParseContext;
 use crate::parser::component::parser::id::{
-    parse_core_module_id, parse_instance_id, parse_sort_id,
+    parse_core_module_id, parse_instance_idx, parse_sort_idx,
 };
 use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
@@ -50,7 +50,7 @@ fn parse_core_instantiate_arg<R: BinaryReader>(
         0x12,
         ComponentModelParserError::InvalidInstantiateArgMagic
     );
-    let (idx_len, instance_idx) = parse_instance_id(ctx)?;
+    let (idx_len, instance_idx) = parse_instance_idx(ctx)?;
     Ok((
         name_len + 1 + idx_len,
         CoreInstantiateArg { name, instance_idx },
@@ -62,7 +62,7 @@ fn parse_core_instance_inline_export<R: BinaryReader>(
 ) -> Result<(usize, CoreInstanceInlineExport)> {
     let (name_len, name) = parse_name(ctx.reader)?;
     let (_, sort) = parse_core_sort(ctx)?;
-    // let (idx_len, sort_idx) = parse_sort_id(ctx)?;
+    // let (idx_len, sort_idx) = parse_sort_idx(ctx)?;
     // Ok((
     //     name_len + 1 + idx_len,
     //     CoreInstanceInlineExport {

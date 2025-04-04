@@ -6,7 +6,7 @@ pub mod types;
 
 use crate::common::{Import, ImportDesc};
 use crate::component_model::id::{
-    ComponentId, CoreFuncId, CoreGlobalId, CoreInstanceIdx, CoreMemoryId, CoreModuleIdx,
+    ComponentIdx, CoreFuncId, CoreGlobalId, CoreInstanceIdx, CoreMemoryId, CoreModuleIdx,
     CoreTableId, CoreTypeIdx, FuncId, InstanceIdx, SortId, TypeId,
 };
 use crate::component_model::types::Type;
@@ -112,7 +112,7 @@ pub enum Instance {
 
 #[derive(Debug)]
 pub struct Instantiate {
-    pub component_idx: ComponentId,
+    pub component_idx: ComponentIdx,
     pub args: Vec<InstantiateArg>,
 }
 
@@ -139,7 +139,7 @@ pub enum Sort {
     Func(FuncId, usize),
     Value,
     Type(TypeId, usize),
-    Component(ComponentId, usize),
+    Component(ComponentIdx, usize),
     Instance(InstanceIdx, usize),
 }
 
@@ -158,7 +158,7 @@ pub struct Alias {
 #[derive(Debug)]
 #[repr(u8)]
 pub enum AliasTarget {
-    Export(Sort, String) = 0x00,
-    CoreExport(Sort, String) = 0x01,
-    Outer(u32, Sort) = 0x02,
+    Export(Sort, InstanceIdx, String) = 0x00,
+    CoreExport(Sort, CoreInstanceIdx, String) = 0x01,
+    Outer(u32, Sort, u32) = 0x02,
 }

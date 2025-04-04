@@ -1,6 +1,8 @@
-use crate::binary::BinaryReader;
+use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::{Alias, AliasTarget};
 use crate::parser::component::parser::context::ParseContext;
+use crate::parser::component::parser::core::parse_core_instance_idx;
+use crate::parser::component::parser::id::parse_instance_idx;
 use crate::parser::component::parser::instance::parse_sort;
 use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32};
@@ -8,35 +10,36 @@ use crate::parser::core::{parse_name, parse_u32};
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
 pub fn parse_alias<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, Alias)> {
-    let (sort_len, sort) = parse_sort(ctx)?;
-    match ctx.reader.read_exact_one()? {
+    let mut counter = Counter::new();
+    let sort = parse_sort(ctx)?.count(&mut counter);
+    match ctx.reader.read_exact_one()?.count(&mut counter) {
         0x00 => {
-            let (idx_len, idx) = parse_u32(ctx.reader)?;
-            let (name_len, name) = parse_name(ctx.reader)?;
+            let idx = parse_instance_idx(ctx)?.count(&mut counter);
+            let name = parse_name(ctx.reader)?.count(&mut counter);
             Ok((
-                sort_len + 1 + idx_len + name_len,
+                counter.count(),
                 Alias {
-                    target: AliasTarget::Export(sort, name),
+                    target: AliasTarget::Export(sort, idx, name),
                 },
             ))
         }
         0x01 => {
-            let (idx_len, idx) = parse_u32(ctx.reader)?;
-            let (name_len, name) = parse_name(ctx.reader)?;
+            let idx = parse_core_instance_idx(ctx)?.count(&mut counter);
+            let name = parse_name(ctx.reader)?.count(&mut counter);
             Ok((
-                sort_len + 1 + idx_len + name_len,
+                counter.count(),
                 Alias {
-                    target: AliasTarget::CoreExport(sort, name),
+                    target: AliasTarget::CoreExport(sort, idx, name),
                 },
             ))
         }
         0x02 => {
-            let (ct_len, ct) = parse_u32(ctx.reader)?;
-            let (idx_len, idx) = parse_u32(ctx.reader)?;
+            let ct = parse_u32(ctx.reader)?.count(&mut counter);
+            let idx = parse_u32(ctx.reader)?.count(&mut counter);
             Ok((
-                sort_len + 1 + ct_len + idx_len,
+                counter.count(),
                 Alias {
-                    target: AliasTarget::Outer(ct, sort),
+                    target: AliasTarget::Outer(ct, sort, idx),
                 },
             ))
         }

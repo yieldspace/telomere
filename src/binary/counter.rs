@@ -1,4 +1,4 @@
-pub struct Counter(pub usize);
+pub struct Counter(usize);
 
 impl Counter {
     pub fn new() -> Self {

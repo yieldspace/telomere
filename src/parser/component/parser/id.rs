@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::id::{
-    ComponentId, CoreModuleIdx, CoreSortId, FuncId, InstanceIdx, SortId, TypeId,
+    ComponentIdx, CoreModuleIdx, CoreSortId, FuncId, InstanceIdx, SortId, TypeId,
 };
 use crate::component_model::{CoreSort, SortType};
 use crate::parser::component::parser::context::ParseContext;
@@ -23,7 +23,7 @@ pub fn parse_core_module_id<R: BinaryReader>(
     }
 }
 
-pub fn parse_instance_id<R: BinaryReader>(
+pub fn parse_instance_idx<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> Result<(usize, InstanceIdx)> {
     let (len, id) = parse_u32(ctx.reader)?;
@@ -37,19 +37,21 @@ pub fn parse_instance_id<R: BinaryReader>(
     }
 }
 
-pub fn parse_component_id<R: BinaryReader>(
+pub fn parse_component_idx<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
-) -> Result<(usize, ComponentId)> {
+) -> Result<(usize, ComponentIdx)> {
     let (len, id) = parse_u32(ctx.reader)?;
-    // if let Some(id) = ctx.get_component_id(id) {
-    //     Ok((len, id))
-    // } else {
-    //     Err(ComponentModelParserError::InvalidComponentId(id))
-    // }
-    todo!()
+    if let Some(idx) = ctx.sort.get_component_idx(id as usize) {
+        Ok((len, idx))
+    } else {
+        Err(ComponentModelParserError::InvalidIdx(
+            "Component".to_string(),
+            id,
+        ))
+    }
 }
 
-pub fn parse_core_sort_id<R: BinaryReader>(
+pub fn parse_core_sort_idx<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
     sort: &CoreSort,
 ) -> Result<(usize, CoreSortId)> {
@@ -66,16 +68,16 @@ pub fn parse_core_sort_id<R: BinaryReader>(
     // }
 }
 
-pub fn parse_sort_id<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, SortId)> {
+pub fn parse_sort_idx<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, SortId)> {
     todo!()
 }
 
-pub fn parse_type_id<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, TypeId)> {
+pub fn parse_type_idx<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, TypeId)> {
     let (len, id) = parse_i32(ctx.reader)?;
     assert!(id >= 0);
     Ok((len, TypeId(id)))
 }
 
-pub fn parse_func_id<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, FuncId)> {
+pub fn parse_func_idx<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, FuncId)> {
     todo!()
 }

@@ -1,4 +1,4 @@
-use crate::component_model::{CoreInstance, CoreType, Instance};
+use crate::component_model::{Component, CoreInstance, CoreType, Instance};
 use crate::Module;
 use std::sync::Weak;
 
@@ -57,9 +57,7 @@ pub enum SortId {
 }
 
 #[derive(Debug)]
-pub struct ComponentId {
-    pub value: usize,
-}
+pub struct ComponentIdx(pub Weak<Component>);
 
 #[derive(Debug)]
 pub struct TypeId(pub i32);

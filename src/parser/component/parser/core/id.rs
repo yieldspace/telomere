@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::id::{CoreFuncId, CoreMemoryId, CoreTableId};
+use crate::component_model::id::{CoreFuncId, CoreInstanceIdx, CoreMemoryId, CoreTableId};
 use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::component::ParseContext;
 
@@ -20,5 +20,11 @@ pub fn parse_core_func_id(
 pub fn parse_core_table_id(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(usize, CoreTableId)> {
+    todo!()
+}
+
+pub fn parse_core_instance_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> Result<(usize, CoreInstanceIdx)> {
     todo!()
 }

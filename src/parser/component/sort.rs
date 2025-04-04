@@ -1,4 +1,6 @@
-use crate::component_model::id::{CoreInstanceIdx, CoreModuleIdx, CoreTypeIdx, InstanceIdx};
+use crate::component_model::id::{
+    ComponentIdx, CoreInstanceIdx, CoreModuleIdx, CoreTypeIdx, InstanceIdx,
+};
 use crate::component_model::types::Type;
 use crate::component_model::{
     Alias, CanonicalFuncKind, Component, ComponentExport, ComponentImport, CoreInstance, CoreType,
@@ -36,21 +38,6 @@ impl<'a> SortMap<'a> {
             canons: vec![],
             imports: vec![],
             exports: vec![],
-        }
-    }
-
-    pub fn get_component(&self) -> Component {
-        Component {
-            modules: self.modules.clone(),
-            core_instances: self.core_instances.clone(),
-            core_types: self.core_types.clone(),
-            components: self.components.clone(),
-            instances: self.instances.clone(),
-            aliases: self.aliases.clone(),
-            types: self.types.clone(),
-            canons: self.canons.clone(),
-            imports: self.imports.clone(),
-            exports: self.exports.clone(),
         }
     }
 
@@ -116,5 +103,11 @@ impl<'a> SortMap<'a> {
         self.instances
             .get(id)
             .map(|i| InstanceIdx(Arc::downgrade(i)))
+    }
+
+    pub fn get_component_idx(&self, id: usize) -> Option<ComponentIdx> {
+        self.components
+            .get(id)
+            .map(|i| ComponentIdx(Arc::downgrade(i)))
     }
 }

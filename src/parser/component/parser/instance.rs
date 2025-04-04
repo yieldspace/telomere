@@ -1,25 +1,26 @@
 use crate::assert_magic;
-use crate::binary::BinaryReader;
-use crate::component_model::id::ComponentId;
+use crate::binary::{BinaryReader, Countable, Counter};
+use crate::component_model::id::ComponentIdx;
 use crate::component_model::{
     CoreInstance, CoreInstanceInlineExport, CoreInstantiate, CoreInstantiateArg, CoreSort,
     InlineExport, Instance, Instantiate, InstantiateArg, Sort, SortType,
 };
 use crate::parser::component::parser::context::ParseContext;
 use crate::parser::component::parser::core::parse_core_sort;
-use crate::parser::component::parser::id::parse_component_id;
+use crate::parser::component::parser::id::parse_component_idx;
 use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
 pub fn parse_instance<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, Instance)> {
-    match ctx.reader.read_exact_one()? {
+    let mut counter = Counter::new();
+    match ctx.reader.read_exact_one()?.count(&mut counter) {
         0x00 => {
-            let (idx_len, component_idx) = parse_component_id(ctx)?;
-            let (args_len, args) = parse_vec(ctx, |v| v.reader, parse_instantiate_arg)?;
+            let component_idx = parse_component_idx(ctx)?.count(&mut counter);
+            let args = parse_vec(ctx, |v| v.reader, parse_instantiate_arg)?.count(&mut counter);
             Ok((
-                1 + idx_len + args_len,
+                counter.count(),
                 Instance::Instantiate(Instantiate {
                     component_idx,
                     args,
@@ -27,8 +28,8 @@ pub fn parse_instance<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usi
             ))
         }
         0x01 => {
-            let (exports_len, exports) = parse_vec(ctx, |v| v.reader, parse_inline_export)?;
-            Ok((1 + exports_len, Instance::InlineExport(exports)))
+            let exports = parse_vec(ctx, |v| v.reader, parse_inline_export)?.count(&mut counter);
+            Ok((counter.count(), Instance::InlineExport(exports)))
         }
         _ => todo!(),
     }

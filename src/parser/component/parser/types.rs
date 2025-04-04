@@ -10,7 +10,7 @@ use crate::component_model::types::{
 use crate::parser::component::parser::alias::parse_alias;
 use crate::parser::component::parser::context::ParseContext;
 use crate::parser::component::parser::core::parse_core_type;
-use crate::parser::component::parser::id::{parse_func_id, parse_type_id};
+use crate::parser::component::parser::id::{parse_func_idx, parse_type_idx};
 use crate::parser::component::parser::import_export::{
     parse_export_name_dash, parse_import_name_dash,
 };
@@ -126,11 +126,11 @@ pub fn parse_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, 
             Type::DefVal(DefValType::Result(t, u))
         }
         DEFVALTYPE_OWN => {
-            let id = parse_type_id(ctx)?.count(&mut counter);
+            let id = parse_type_idx(ctx)?.count(&mut counter);
             Type::DefVal(DefValType::Own(id))
         }
         DEFVALTYPE_BORROW => {
-            let id = parse_type_id(ctx)?.count(&mut counter);
+            let id = parse_type_idx(ctx)?.count(&mut counter);
             Type::DefVal(DefValType::Borrow(id))
         }
         #[cfg(feature = "async")]
@@ -160,12 +160,12 @@ pub fn parse_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, 
             Type::Instance(InstanceType(id))
         }
         RESOURCE_TYPE => {
-            let idx = parse_option(ctx, parse_func_id)?.count(&mut counter);
+            let idx = parse_option(ctx, parse_func_idx)?.count(&mut counter);
             Type::Resource(ResourceType::Resource(idx))
         }
         RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
-            let idx = parse_func_id(ctx)?.count(&mut counter);
-            let cb = parse_option(ctx, parse_func_id)?.count(&mut counter);
+            let idx = parse_func_idx(ctx)?.count(&mut counter);
+            let cb = parse_option(ctx, parse_func_idx)?.count(&mut counter);
             Type::Resource(ResourceType::ResourceWithAsyncCallback(idx, cb))
         }
         n => {
@@ -364,7 +364,7 @@ fn parse_typebound(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, 
     let mut counter = Counter::new();
     let r = match ctx.reader.read_exact_one()?.count(&mut counter) {
         0x00 => {
-            let idx = parse_type_id(ctx)?.count(&mut counter);
+            let idx = parse_type_idx(ctx)?.count(&mut counter);
             TypeBound::Eq(idx)
         }
         0x01 => TypeBound::Sub,
