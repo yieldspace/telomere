@@ -1,54 +1,53 @@
 mod canon;
+mod component;
 pub mod id;
 mod import_export;
 pub mod types;
 
 use crate::common::{Import, ImportDesc};
 use crate::component_model::id::{
-    ComponentId, CoreFuncId, CoreGlobalId, CoreInstanceId, CoreMemoryId, CoreModuleId, CoreTableId,
-    CoreTypeId, FuncId, InstanceId, ModuleId, SortId, TypeId,
+    ComponentId, CoreFuncId, CoreGlobalId, CoreInstanceIdx, CoreMemoryId, CoreModuleIdx,
+    CoreTableId, CoreTypeIdx, FuncId, InstanceIdx, SortId, TypeId,
 };
 use crate::component_model::types::Type;
 use crate::Module;
 pub use canon::*;
+pub use component::*;
 pub use import_export::*;
+use std::fmt::{Debug, Formatter};
 
-pub struct Component {
-    pub modules: Vec<Module>,
-    pub core_instances: Vec<CoreInstance>,
-    pub core_types: Vec<CoreType>,
-    pub components: Vec<Component>,
-    pub instances: Vec<Instance>,
-    pub aliases: Vec<Alias>,
-    pub types: Vec<Type>,
-    // canons
-    // start
-    // import
-    // export
-    // value
+impl Debug for Module {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Module {core module}")
+    }
 }
 
+#[derive(Debug)]
 pub enum CoreInstance {
     Instantiate(CoreInstantiate),
     InlineExport(Vec<CoreInstanceInlineExport>),
 }
 
+#[derive(Debug)]
 pub struct CoreInstantiate {
-    pub module_idx: ModuleId,
+    pub module_idx: CoreModuleIdx,
     pub args: Vec<CoreInstantiateArg>,
 }
 
+#[derive(Debug)]
 pub struct CoreInstantiateArg {
     pub name: String,
-    pub instance_idx: InstanceId,
+    pub instance_idx: InstanceIdx,
 }
 
+#[derive(Debug)]
 pub struct CoreInstanceInlineExport {
     pub name: String,
     pub sort: CoreSort,
     pub sort_idx: SortId,
 }
 
+#[derive(Debug)]
 #[repr(u8)]
 pub enum CoreSortType {
     Func = 0x00,
@@ -60,24 +59,27 @@ pub enum CoreSortType {
     Instance = 0x12,
 }
 
+#[derive(Debug)]
 pub enum CoreSort {
     Func(CoreFuncId),
     Table(CoreTableId),
     Memory(CoreMemoryId),
     Global(CoreGlobalId),
-    Type(CoreTypeId),
-    Module(CoreModuleId),
-    Instance(CoreInstanceId),
+    Type(CoreTypeIdx),
+    Module(CoreModuleIdx),
+    Instance(CoreInstanceIdx),
 }
 
+#[derive(Debug)]
 pub enum CoreType {
     #[cfg(feature = "wasm3")]
     CoreRecType,
     #[cfg(feature = "wasm3")]
-    Sub(Vec<CoreTypeId>, todo!("comptype")),
+    Sub(Vec<CoreTypeIdx>, todo!("comptype")),
     CoreModuleType(Vec<CoreModuleDecl>),
 }
 
+#[derive(Debug)]
 pub enum CoreModuleDecl {
     Import(Import),
     Type(CoreType),
@@ -85,35 +87,42 @@ pub enum CoreModuleDecl {
     ExportDecl(CoreExportDecl),
 }
 
+#[derive(Debug)]
 pub struct CoreExportDecl {
     name: String,
     import_desc: ImportDesc,
 }
 
+#[derive(Debug)]
 pub struct CoreAlias {
     pub sort: CoreSort,
     pub target: CoreAliasTarget,
 }
 
+#[derive(Debug)]
 pub enum CoreAliasTarget {
     Outer(u32, usize),
 }
 
+#[derive(Debug)]
 pub enum Instance {
     Instantiate(Instantiate),
     InlineExport(Vec<InlineExport>),
 }
 
+#[derive(Debug)]
 pub struct Instantiate {
     pub component_idx: ComponentId,
     pub args: Vec<InstantiateArg>,
 }
 
+#[derive(Debug)]
 pub struct InstantiateArg {
     pub name: String,
     pub sort: Sort,
 }
 
+#[derive(Debug)]
 #[repr(u8)]
 pub enum SortType {
     Core(CoreSort) = 0x00,
@@ -124,25 +133,29 @@ pub enum SortType {
     Instance = 0x05,
 }
 
+#[derive(Debug)]
 pub enum Sort {
     Core(CoreSort, usize),
     Func(FuncId, usize),
     Value,
     Type(TypeId, usize),
     Component(ComponentId, usize),
-    Instance(InstanceId, usize),
+    Instance(InstanceIdx, usize),
 }
 
+#[derive(Debug)]
 pub struct InlineExport {
     pub name: String,
     pub sort: Sort,
 }
 
+#[derive(Debug)]
 pub struct Alias {
     // pub sort: Sort,
     pub target: AliasTarget,
 }
 
+#[derive(Debug)]
 #[repr(u8)]
 pub enum AliasTarget {
     Export(Sort, String) = 0x00,

@@ -3,6 +3,7 @@ use crate::component_model::{Alias, CoreType};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
 
+#[derive(Debug)]
 pub enum Type {
     DefVal(DefValType),
     Func(FuncType),
@@ -11,7 +12,7 @@ pub enum Type {
     Resource(ResourceType),
 }
 
-#[derive(FromPrimitive)]
+#[derive(Debug, FromPrimitive)]
 #[repr(i32)]
 pub enum PrimValType {
     Bool = compile_i32([0x7f]),
@@ -31,6 +32,7 @@ pub enum PrimValType {
     ErrorContext = compile_i32([0x64]),
 }
 
+#[derive(Debug)]
 pub enum DefValType {
     Primitive(PrimValType),
     Record(Vec<LabelValType>),
@@ -49,45 +51,55 @@ pub enum DefValType {
     Future(Option<ValType>),
 }
 
+#[derive(Debug)]
 pub struct LabelValType {
     pub label: Label,
     pub t: ValType,
 }
 
+#[derive(Debug)]
 pub struct Case {
     pub label: Label,
     pub t: Option<ValType>,
 }
 
+#[derive(Debug)]
 pub struct Label {
     pub len: usize,
     pub label: String, // TODO: check label format https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#import-and-export-definitions
 }
 
+#[derive(Debug)]
 pub enum ValType {
     TypeId(TypeId),
     Primitive(PrimValType),
 }
 
+#[derive(Debug)]
 pub enum ResourceType {
     Resource(Option<FuncId>),
     ResourceWithAsyncCallback(FuncId, Option<FuncId>),
 }
 
+#[derive(Debug)]
 pub struct FuncType {
     pub params: Vec<LabelValType>,
     pub result: Option<ValType>,
 }
 
+#[derive(Debug)]
 pub struct ComponentType(pub Vec<ComponentDecl>);
 
+#[derive(Debug)]
 pub enum ComponentDecl {
     Import(ImportDecl),
     Instance(InstanceDecl),
 }
 
+#[derive(Debug)]
 pub struct InstanceType(pub Vec<InstanceDecl>);
 
+#[derive(Debug)]
 pub enum InstanceDecl {
     CoreType(CoreType),
     Type(Type),
@@ -95,16 +107,19 @@ pub enum InstanceDecl {
     ExportDecl(ExportDecl),
 }
 
+#[derive(Debug)]
 pub struct ImportDecl {
     pub name: String,
     pub ed: ExternDesc,
 }
 
+#[derive(Debug)]
 pub struct ExportDecl {
     pub name: String,
     pub ed: ExternDesc,
 }
 
+#[derive(Debug)]
 pub enum ExternDesc {
     Core(usize),
     Func(usize),
@@ -115,11 +130,13 @@ pub enum ExternDesc {
     Instance(usize),
 }
 
+#[derive(Debug)]
 pub enum TypeBound {
     Eq(TypeId),
     Sub,
 }
 
+#[derive(Debug)]
 #[cfg(feature = "import_export")]
 pub enum ValueBound {
     Eq(usize),
@@ -130,7 +147,6 @@ pub enum ValueBound {
 mod tests {
     use crate::component_model::types::PrimValType;
     use crate::parser::leb128::compile_i32;
-    use num_traits::FromPrimitive;
 
     #[test]
     fn test_prim() {

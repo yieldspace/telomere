@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::id::{
-    ComponentId, CoreSortId, FuncId, InstanceId, ModuleId, SortId, TypeId,
+    ComponentId, CoreModuleIdx, CoreSortId, FuncId, InstanceIdx, SortId, TypeId,
 };
 use crate::component_model::{CoreSort, SortType};
 use crate::parser::component::parser::context::ParseContext;
@@ -9,26 +9,32 @@ use crate::parser::core::{parse_i32, parse_u32};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
-pub fn parse_module_id<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, ModuleId)> {
+pub fn parse_core_module_id<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
+) -> Result<(usize, CoreModuleIdx)> {
     let (len, id) = parse_u32(ctx.reader)?;
-    // if let Some(id) = ctx.get_module_id(id) {
-    //     Ok((len, id))
-    // } else {
-    //     Err(ComponentModelParserError::InvalidModuleId(id))
-    // }
-    todo!()
+    if let Some(idx) = ctx.sort.get_core_module_idx(id as usize) {
+        Ok((len, idx))
+    } else {
+        Err(ComponentModelParserError::InvalidIdx(
+            "Module".to_string(),
+            id,
+        ))
+    }
 }
 
 pub fn parse_instance_id<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
-) -> Result<(usize, InstanceId)> {
+) -> Result<(usize, InstanceIdx)> {
     let (len, id) = parse_u32(ctx.reader)?;
-    // if let Some(id) = ctx.get_instance_id(id) {
-    //     Ok((len, id))
-    // } else {
-    //     Err(ComponentModelParserError::InvalidInstanceId(id))
-    // }
-    todo!()
+    if let Some(idx) = ctx.sort.get_instance_idx(id as usize) {
+        Ok((len, idx))
+    } else {
+        Err(ComponentModelParserError::InvalidIdx(
+            "Instance".to_string(),
+            id,
+        ))
+    }
 }
 
 pub fn parse_component_id<R: BinaryReader>(

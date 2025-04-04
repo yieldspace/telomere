@@ -57,18 +57,25 @@ pub const fn compile_i32<const N: usize>(bytes: [u8; N]) -> i32 {
     let mut result = 0;
     let mut read_bytes: usize = 0;
     let mut i = 0;
-    while i < N {
-        let byte = bytes[i];
+    let mut byte: u8;
+
+    loop {
+        byte = bytes[i];
         result |= ((byte & 0x7F) as i32) << (read_bytes * 7);
         read_bytes += 1;
         if byte & 0x80 == 0 {
             break;
         }
-        if is_signed && (read_bytes * 7) >= bit_size {
+        if (read_bytes * 7) >= bit_size {
             panic!("InvalidLeb128Encoding")
         }
         i += 1;
     }
+
+    if is_signed && (read_bytes * 7) < bit_size && (byte & 0x40) != 0 {
+        result |= (!0i32) << read_bytes * 7;
+    }
+
     result
 }
 
@@ -90,8 +97,8 @@ mod tests {
 
     #[test]
     fn test_compile_i32() {
-        let data = [0x3f, 0x7f];
+        let data = [0x77];
         let k = compile_i32(data);
-        assert_eq!(k, 63);
+        assert_eq!(k, -9);
     }
 }

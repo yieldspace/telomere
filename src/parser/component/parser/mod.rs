@@ -4,10 +4,12 @@ pub use crate::parser::component::parser::context::ParseContext;
 use crate::parser::component::parser::core::{parse_core_instance, parse_core_type};
 use crate::parser::component::parser::instance::parse_instance;
 use crate::parser::component::section::ComponentSectionType;
-use crate::parser::core::{parse_name, parse_u32, parse_vec};
-use crate::parser::leb128::Leb128Parser;
+use crate::parser::component::sort::SortMap;
+use crate::parser::core::{parse_u32, parse_vec};
 use crate::{Module, WasmParser, WasmParserError};
+use std::sync::{Arc, Weak};
 use thiserror::Error;
+use tracing::trace;
 
 mod alias;
 mod canon;
@@ -16,7 +18,6 @@ mod core;
 mod id;
 mod import_export;
 mod instance;
-mod sort;
 mod types;
 
 #[macro_export]
@@ -63,6 +64,8 @@ pub enum ComponentModelParserError {
     InvalidSort(u8),
     #[error("invalid alias target: {0:?}")]
     InvalidAliasTarget(u8),
+    #[error("invalid {0} idx: {1:?}")]
+    InvalidIdx(String, u32),
     #[error("invalid module id: {0:?}")]
     InvalidModuleId(u32),
     #[error("invalid instance id: {0:?}")]
@@ -83,7 +86,14 @@ pub enum ComponentModelParserError {
     InvalidExternDescMagic(u8),
 }
 
-pub fn parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<Component> {
+pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
+    let sort_map = SortMap::new(None);
+    let mut ctx = ParseContext::new(reader, sort_map);
+    _parse_component(&mut ctx)?;
+    Ok(Component::from(ctx.sort))
+}
+
+pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()> {
     parse_magic(ctx.reader)?;
     parse_version(ctx.reader)?;
     parse_layer(ctx.reader)?;
@@ -101,52 +111,105 @@ pub fn parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<Com
                 }
             }
             ComponentSectionType::CoreModule => {
-                let module = parse_core_module(ctx.reader, size as usize)?;
+                let module = Arc::new(parse_core_module(ctx.reader, size as usize)?);
+                ctx.sort.add_core_module(module)
             }
             ComponentSectionType::CoreInstance => {
-                let (_, instances) = parse_vec(ctx, |v| v.reader, parse_core_instance)?;
+                parse_vec_map(
+                    ctx,
+                    |v| v.reader,
+                    parse_core_instance,
+                    |v, i| {
+                        v.sort.add_core_instance(Arc::new(i));
+                    },
+                )?;
             }
             ComponentSectionType::CoreType => {
-                let (_, core_types) = parse_vec(ctx, |v| v.reader, parse_core_type)?;
+                parse_vec_map(
+                    ctx,
+                    |v| v.reader,
+                    parse_core_type,
+                    |v, i| {
+                        v.sort.add_core_type(Arc::new(i));
+                    },
+                )?;
             }
             ComponentSectionType::Component => {
-                let component = parse_component(ctx)?;
+                let map = SortMap::new(Some(&ctx.sort));
+                let mut child_context = ParseContext::new(ctx.reader, map);
+                _parse_component(&mut child_context)?;
+                ctx.sort
+                    .add_component(Arc::new(Component::from(child_context.sort)));
             }
             ComponentSectionType::Instance => {
-                let (_, instances) = parse_vec(ctx, |v| v.reader, parse_instance)?;
+                parse_vec_map(
+                    ctx,
+                    |v| v.reader,
+                    parse_instance,
+                    |v, i| {
+                        v.sort.add_instance(Arc::new(i));
+                    },
+                )?;
             }
             ComponentSectionType::Alias => {
-                let (_, aliases) = parse_vec(ctx, |v| v.reader, alias::parse_alias)?;
+                parse_vec_map(
+                    ctx,
+                    |v| v.reader,
+                    alias::parse_alias,
+                    |v, i| {
+                        v.sort.add_alias(Arc::new(i));
+                    },
+                )?;
             }
             ComponentSectionType::Type => {
-                let (_, types) = parse_vec(ctx, |v| v.reader, types::parse_type)?;
+                parse_vec_map(
+                    ctx,
+                    |v| v.reader,
+                    types::parse_type,
+                    |v, i| {
+                        v.sort.add_type(Arc::new(i));
+                    },
+                )?;
             }
             ComponentSectionType::Canon => {
-                let (_, canons) = parse_vec(ctx, |v| v.reader, canon::parse_canon)?;
+                parse_vec_map(
+                    ctx,
+                    |v| v.reader,
+                    canon::parse_canon,
+                    |v, i| {
+                        v.sort.add_canon(Arc::new(i));
+                    },
+                )?;
             }
             ComponentSectionType::Start => {
                 unimplemented!()
             }
             ComponentSectionType::Import => {
-                let (_, imports) = parse_vec(ctx, |v| v.reader, import_export::parse_import)?;
+                parse_vec_map(
+                    ctx,
+                    |v| v.reader,
+                    import_export::parse_import,
+                    |v, i| {
+                        v.sort.add_import(Arc::new(i));
+                    },
+                )?;
             }
             ComponentSectionType::Export => {
-                let (_, exports) = parse_vec(ctx, |v| v.reader, import_export::parse_export)?;
+                parse_vec_map(
+                    ctx,
+                    |v| v.reader,
+                    import_export::parse_export,
+                    |v, i| {
+                        v.sort.add_export(Arc::new(i));
+                    },
+                )?;
             }
             ComponentSectionType::Value => {
                 unimplemented!()
             }
         }
     }
-    Ok(Component {
-        modules: vec![],
-        core_instances: vec![],
-        core_types: vec![],
-        components: vec![],
-        instances: vec![],
-        aliases: vec![],
-        types: vec![],
-    })
+    Ok(())
 }
 
 pub fn parse_magic<R: BinaryReader>(reader: &mut R) -> Result<()> {
@@ -221,4 +284,26 @@ where
         }
         x => Err(ComponentModelParserError::InvalidOptionMagic(x)),
     }
+}
+
+pub fn parse_vec_map<A, R: BinaryReader, V, E>(
+    env: &mut A,
+    reader: impl FnOnce(&mut A) -> &mut R,
+    mut f: impl FnMut(&mut A) -> std::result::Result<(usize, V), E>,
+    mut map: impl FnMut(&mut A, V) -> (),
+) -> std::result::Result<(usize, ()), E>
+where
+    E: From<WasmParserError>,
+{
+    let mut read_bytes = 0;
+
+    let (len_len, len) = parse_u32(reader(env))?;
+    trace!("parse_vec_map: {len_len} {len}");
+    read_bytes += len_len;
+    for _i in 0..len {
+        let (len, v) = f(env)?;
+        map(env, v);
+        read_bytes += len;
+    }
+    Ok((read_bytes, ()))
 }

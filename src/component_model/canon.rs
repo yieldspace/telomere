@@ -1,6 +1,7 @@
 use crate::component_model::id::{CoreFuncId, CoreMemoryId, CoreTableId, FuncId, TypeId};
 use crate::component_model::types::ValType;
 
+#[derive(Debug)]
 pub enum CanonicalFuncKind {
     CanonLift(FuncId, Vec<CanonOpt>, TypeId),
     CanonLower(FuncId, Vec<CanonOpt>),
@@ -41,6 +42,7 @@ pub enum CanonicalFuncKind {
     ThreadAvailableParallelism,
 }
 
+#[derive(Debug)]
 pub enum CanonOpt {
     StringEncodingUtf8,
     StringEncodingUtf16,

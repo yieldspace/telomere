@@ -1,12 +1,14 @@
 use crate::assert_magic;
 use crate::binary::BinaryReader;
-use crate::component_model::id::ModuleId;
+use crate::component_model::id::CoreModuleIdx;
 use crate::component_model::{
     CoreInstance, CoreInstanceInlineExport, CoreInstantiate, CoreInstantiateArg, CoreSort,
     CoreSortType,
 };
 use crate::parser::component::parser::context::ParseContext;
-use crate::parser::component::parser::id::{parse_instance_id, parse_module_id, parse_sort_id};
+use crate::parser::component::parser::id::{
+    parse_core_module_id, parse_instance_id, parse_sort_id,
+};
 use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
@@ -17,7 +19,7 @@ pub fn parse_core_instance<R: BinaryReader>(
 ) -> Result<(usize, CoreInstance)> {
     match ctx.reader.read_exact_one()? {
         0x00 => {
-            let (idx_len, idx) = parse_module_id(ctx)?;
+            let (idx_len, idx) = parse_core_module_id(ctx)?;
             let (args_len, args) = parse_vec(ctx, |v| v.reader, parse_core_instantiate_arg)?;
             Ok((
                 1 + idx_len + args_len,

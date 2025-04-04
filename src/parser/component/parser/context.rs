@@ -1,13 +1,16 @@
 use crate::binary::BinaryReader;
-pub struct ParseContext<'a, R: BinaryReader> {
+use crate::parser::component::sort::SortMap;
+
+pub struct ParseContext<'a, 'b, R: BinaryReader> {
     pub reader: &'a mut R,
+    pub sort: SortMap<'b>,
 }
 
-impl<'a, R> ParseContext<'a, R>
+impl<'a, 'b, R> ParseContext<'a, 'b, R>
 where
     R: BinaryReader,
 {
-    pub fn new(reader: &'a mut R) -> Self {
-        ParseContext { reader }
+    pub fn new(reader: &'a mut R, sort: SortMap<'b>) -> Self {
+        ParseContext { reader, sort }
     }
 }

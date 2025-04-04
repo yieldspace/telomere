@@ -15,7 +15,7 @@ num-traits = "0.2.19"
 wast = { version = "226.0.0" }
 tracing-subscriber = { version = "0.3.19" }
 wat = {version = "1.227.1", features = ["component-model"]}
-
+wasmparser = {version = "0.228.0", features = ["component-model"]}
 [features]
 default = ["interpreter", "component-model"]
 interpreter = []
