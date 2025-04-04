@@ -1,12 +1,12 @@
 mod base;
-mod code;
 mod error;
 mod parser;
 mod types;
 mod validate;
 mod values;
+mod instruction;
+pub(crate) use instruction::InstructionParser;
 pub use error::WasmParserError;
-pub use code::WasmCodeParser;
 pub use parser::WasmParser;
 pub type Result<R> = std::result::Result<R, WasmParserError>;
 pub use values::*;

@@ -1,21 +1,24 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use tracing::trace;
 
-use crate::common::{ConstExpr, ElemInit};
+use crate::common::{BlockType, ConstExpr, ElemInit, Func, Instr, Locals, Operand};
+use crate::parser::core::instruction::BlockKind;
+use crate::parser::core::InstructionParser;
+use crate::runtime::vm;
 use crate::{
     binary::BinaryReader,
     common::{
-        CodeSection, Data, DataCountVerifier, DataMode, DataSection, Elem,
-        ElemMode, ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FuncType,
-        FunctionSection, Global, GlobalIdx, GlobalType, Import, ImportDesc, ImportSection, MemIdx, MemType, Mut, RefType, ResultType, Table,
-        TableIdx, TableType, TypeIdx, TypeSection, ValType,
+        CodeSection, Data, DataCountVerifier, DataMode, DataSection, Elem, ElemMode,
+        ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FuncType, FunctionSection,
+        Global, GlobalIdx, GlobalType, Import, ImportDesc, ImportSection, MemIdx, MemType, Mut,
+        RefType, ResultType, Table, TableIdx, TableType, TypeIdx, TypeSection, ValType,
     },
     Module,
 };
 
 use super::base::WasmBaseParser;
 use super::validate::{assert_memory, assert_valtype, validate_active_elem};
-use super::{Result, WasmCodeParser, WasmParserError};
+use super::{Result, WasmParserError};
 
 fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
     if idx as usize >= tables.len() {
@@ -442,18 +445,17 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
 
         let (len, mut codes) = self.parse_vec(|me| {
-            let mut code_parser = WasmCodeParser::new(me.reader());
-
-            let r = code_parser.parse_code(
+            let r = me.parse_code(
+                FuncIdx(idx),
                 type_section,
                 functions,
+                mems,
                 globals,
                 tables,
-                mems,
                 elems,
                 data_count_section,
-                FuncIdx(idx),
             )?;
+
             idx += 1;
             Ok(r)
         })?;
@@ -657,6 +659,120 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             Err(WasmParserError::InvalidSectionSize)?
         }
         Ok(ElementSection(elems))
+    }
+    fn parse_locals(&mut self) -> Result<(usize, Locals)> {
+        let (len, n) = self.parse_u32()?;
+        let (len2, t) = self.parse_valtype()?;
+        Ok((len + len2, Locals { n, t }))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn parse_code_inner(
+        &mut self,
+        funcidx: FuncIdx,
+        typeidx: TypeIdx,
+        functype: &FuncType,
+        type_section: &TypeSection,
+        functions: &[TypeIdx],
+        mems: &[MemType],
+        globals: &[GlobalType],
+        table_section: &[TableType],
+        elems: &[Elem],
+        data_count_section: &mut DataCountVerifier,
+        size: u32,
+    ) -> Result<Func> {
+        let (len, locals) = self.parse_vec(&Self::parse_locals)?;
+        let mut instrs = Vec::new();
+        let mut types = Vec::new();
+        let mut block_types_idxs = VecDeque::new();
+        block_types_idxs.push_front((BlockKind::Block, BlockType::TypeIdx(typeidx), 0));
+        let mut unreachable = false;
+        let mut else_addr = None;
+        let mut parser = InstructionParser::new(
+            self.reader(),
+            type_section,
+            functions,
+            funcidx,
+            mems,
+            functype,
+            &locals,
+            globals,
+            table_section,
+            elems,
+        );
+        let len2 = parser.parse_instrs(
+            data_count_section,
+            &mut instrs,
+            &mut types,
+            &mut block_types_idxs,
+            &mut else_addr,
+            &mut unreachable,
+            false,
+        )?;
+        trace!("function return");
+        if !unreachable {
+            for ty in functype.1.stack_pop_iter() {
+                assert_valtype(*ty, types.pop())?;
+            }
+            if !types.is_empty() {
+                Err(WasmParserError::InvalidStackValTypeAny)?
+            }
+        }
+        if len + len2 != size as usize {
+            Err(WasmParserError::InvalidInstructionSize(
+                size,
+                (len + len2) as u32,
+            ))?
+        }
+
+        instrs.push(Instr {
+            op: vm::special_function_return,
+        });
+        instrs.push(Instr {
+            operand: Operand {
+                drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
+            },
+        });
+        Ok(Func {
+            locals,
+            expr: instrs,
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn parse_code(
+        &mut self,
+        funcidx: FuncIdx,
+        type_section: &TypeSection,
+        functions: &[TypeIdx],
+        mems: &[MemType],
+        globals: &[GlobalType],
+        table_section: &[TableType],
+        elems: &[Elem],
+        data_count_section: &mut DataCountVerifier,
+    ) -> Result<(usize, Func)> {
+        let (len, size) = self.parse_u32()?;
+        let typeidx = *functions
+            .get(funcidx.0 as usize)
+            .ok_or(WasmParserError::InvalidFuncIdx(funcidx))?;
+        let functype = type_section
+            .get(typeidx)
+            .ok_or(WasmParserError::InvalidTypeIdx(typeidx))?;
+        tracing::trace!("parse_code: {funcidx:?} {typeidx:?} {functype:?}");
+
+        let func = self.parse_code_inner(
+            funcidx,
+            typeidx,
+            functype,
+            type_section,
+            functions,
+            mems,
+            globals,
+            table_section,
+            elems,
+            data_count_section,
+            size,
+        )?;
+        Ok((len + size as usize, func))
     }
     pub fn new(reader: &'a mut R) -> Self {
         Self { reader }
