@@ -84,7 +84,7 @@ pub enum WasmParserError {
     UnknownElement,
 }
 impl WasmParserError {
-  pub fn invalid_instruction1(inst: u8) -> WasmParserError {
-      WasmParserError::InvalidInstruction([inst, 0, 0, 0])
-  }
+    pub fn invalid_instruction1(inst: u8) -> WasmParserError {
+        WasmParserError::InvalidInstruction([inst, 0, 0, 0])
+    }
 }

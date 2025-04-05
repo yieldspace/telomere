@@ -1,6 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::common::{
-    BlockType, FuncType, GlobalType, Limits, MemType, Mut, RefType, ResultType, TableType, TypeIdx, ValType
+    BlockType, FuncType, GlobalType, Limits, MemType, Mut, RefType, ResultType, TableType, TypeIdx,
+    ValType,
 };
 use crate::parser::leb128::Leb128Parser;
 use crate::WasmParserError;

@@ -21,12 +21,12 @@ impl TypeChecker {
     pub fn get_block(&self, idx: usize) -> Result<&(BlockKind, BlockType, usize)> {
         self.blocks
             .get(idx)
-            .ok_or_else(|| WasmParserError::InvalidStackValTypeAny)
+            .ok_or(WasmParserError::InvalidStackValTypeAny)
     }
     pub fn current_block(&self) -> Result<&(BlockKind, BlockType, usize)> {
         self.blocks
             .front()
-            .ok_or_else(|| WasmParserError::InvalidStackValTypeAny)
+            .ok_or(WasmParserError::InvalidStackValTypeAny)
     }
     pub fn block_base(&self) -> Result<usize> {
         Ok(self.current_block()?.2)
@@ -41,7 +41,7 @@ impl TypeChecker {
     pub fn pop(&mut self) -> Result<ValType> {
         let v = self.types.pop();
         self.check_block_base()?;
-        v.ok_or_else(|| WasmParserError::InvalidStackValTypeAny)
+        v.ok_or(WasmParserError::InvalidStackValTypeAny)
     }
     pub fn push(&mut self, vt: ValType) {
         self.types.push(vt);
