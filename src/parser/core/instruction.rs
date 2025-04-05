@@ -1,4 +1,5 @@
 use super::base::WasmBaseParser;
+use super::type_checker::TypeChecker;
 use super::validate::*;
 use super::Result;
 use crate::binary::BinaryReader;
@@ -17,7 +18,6 @@ use crate::{
     },
     WasmParserError,
 };
-use std::collections::VecDeque;
 use tracing::trace;
 fn get_local_addr(ty: &ResultType, locals: &[Locals], idx: u32) -> Result<(ValType, u32)> {
     let mut addr = 0;
@@ -39,59 +39,34 @@ fn get_local_addr(ty: &ResultType, locals: &[Locals], idx: u32) -> Result<(ValTy
     }
     Err(WasmParserError::InvalidLocalIndex(idx))
 }
-fn assert_type_stack_size(
-    types: &[ValType],
-    blocks: &VecDeque<(BlockKind, BlockType, u32)>,
-) -> Result<()> {
-    let expected = blocks
-        .front()
-        .ok_or(WasmParserError::InvalidStackValTypeAny)?
-        .2 as usize;
-    let actual = types.len();
-    if expected <= actual {
-        Ok(())
-    } else {
-        Err(WasmParserError::InvalidStackValTypeAny)
-    }
-}
 fn validate_br_table_types(
     idx: u32,
     type_section: &TypeSection,
-    types: &mut Vec<ValType>,
-    blocks: &VecDeque<(BlockKind, BlockType, u32)>,
+    checker: &mut TypeChecker,
 ) -> Result<u32> {
-    let result_len = if let Some((kind, blocktype, _)) = blocks.get(idx as usize) {
+    let (kind, blocktype, _) = checker.get_block(idx as usize)?;
+    let result_len = {
         match kind {
             BlockKind::Block | BlockKind::If => match blocktype {
                 BlockType::Void => {
-                    assert_type_stack_size(types, blocks)?;
+                    checker.op(&[], &[])?;
                     0
                 }
                 BlockType::ValType(ty) => {
-                    assert_valtype(*ty, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(*ty);
+                    checker.op(&[*ty], &[*ty])?;
                     1
                 }
                 BlockType::TypeIdx(idx) => {
                     let ty = type_section
                         .get(*idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                    for ty in ty.1.stack_pop_iter() {
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    assert_type_stack_size(types, blocks)?;
-
-                    for ty in ty.1.iter() {
-                        types.push(*ty);
-                    }
+                    checker.op(&ty.1 .0, &ty.1 .0)?;
                     ty.1.iter().count() as u32
                 }
             },
             BlockKind::Loop => match blocktype {
                 BlockType::Void | BlockType::ValType(_) => {
-                    assert_type_stack_size(types, blocks)?;
+                    checker.op(&[], &[])?;
 
                     // ok
                     0
@@ -100,19 +75,11 @@ fn validate_br_table_types(
                     let ty = type_section
                         .get(*idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                    for ty in ty.0.stack_pop_iter() {
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    assert_type_stack_size(types, blocks)?;
-                    for ty in ty.0.iter() {
-                        types.push(*ty);
-                    }
-                    ty.1.iter().count() as u32
+                    checker.op(&ty.0 .0, &ty.0 .0)?;
+                    ty.0.iter().count() as u32
                 }
             },
         }
-    } else {
-        Err(WasmParserError::InvalidStackValTypeAny)?
     };
     Ok(result_len)
 }
@@ -136,6 +103,7 @@ fn assert_data_idx(idx: u32, dcv: &mut DataCountVerifier) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub(crate) enum BlockKind {
     Block,
     If,
@@ -171,8 +139,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         &mut self,
         data_count_section: &mut DataCountVerifier,
         instrs: &mut Vec<Instr>,
-        types: &mut Vec<ValType>,
-        blocks: &mut VecDeque<(BlockKind, BlockType, u32)>,
+        checker: &mut TypeChecker,
         else_addr: &mut Option<u32>,
         unreachable: &mut bool,
         is_unreachable_if_block: bool,
@@ -204,86 +171,63 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     },
                 });
                 let index = instrs.len() - 1;
-                let before_stack_len = types.len();
-                let mut block_input_size: usize = 0;
                 if let BlockType::TypeIdx(idx) = blocktype {
                     let ty = self
                         .types
                         .get(idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-                    for ty in ty.0.stack_pop_iter() {
-                        block_input_size += 1;
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    assert_type_stack_size(types, blocks)?;
-                    for ty in ty.0.iter() {
-                        types.push(*ty);
-                    }
+                    checker.op(&ty.0 .0, &[])?;
+                    checker.enter_block(BlockKind::Block, blocktype);
+                    checker.op(&[], &ty.0 .0)?;
+                } else {
+                    checker.enter_block(BlockKind::Block, blocktype);
                 };
-                let block_base_stack_len = before_stack_len - block_input_size;
-                let block_base_stack_size = types[0..block_base_stack_len]
-                    .iter()
-                    .map(|v| v.stack_size().u32())
-                    .sum();
-                blocks.push_front((BlockKind::Block, blocktype, block_base_stack_len as u32));
+                let block_base_stack_size = checker.block_base_stack_size()?;
 
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
-                    types,
-                    blocks,
+                    checker,
                     else_addr,
                     &mut unreachable,
                     is_unreachable_if_block,
                 )?;
-                blocks.pop_front();
                 instrs[index].operand.jump_addr = instrs.len() as u32;
-                let mut return_size = 0;
-                trace!("parse_op_block(2): {types:?}");
-                match blocktype {
+                trace!("parse_op_block(2): {checker:?}");
+                let return_size = match blocktype {
                     BlockType::TypeIdx(idx) => {
                         let ty = self
                             .types
                             .get(idx)
                             .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-                        for ty in ty.1.stack_pop_iter() {
-                            return_size += ty.stack_size().u32();
-                            if !unreachable {
-                                assert_valtype(*ty, types.pop())?;
-                            }
-                        }
-                        assert_type_stack_size(types, blocks)?;
                         if unreachable {
-                            types.truncate(block_base_stack_len);
-                        } else if types.len() != block_base_stack_len {
-                            Err(WasmParserError::InvalidStackValTypeAny)?;
+                            checker.reset_stack()?;
+                        } else {
+                            checker.op(&ty.1 .0, &[])?;
                         }
-
-                        for ty in ty.1.iter() {
-                            types.push(*ty);
-                        }
+                        checker.leave_block()?;
+                        checker.op(&[], &ty.1 .0)?;
+                        ty.1.iter().map(|v| v.stack_size().u32()).sum()
                     }
                     BlockType::ValType(ty) => {
-                        if !unreachable {
-                            assert_valtype(ty, types.pop())?;
-                        }
-                        assert_type_stack_size(types, blocks)?;
-                        return_size += ty.stack_size().u32();
                         if unreachable {
-                            types.truncate(block_base_stack_len);
-                        } else if types.len() != block_base_stack_len {
-                            Err(WasmParserError::InvalidStackValTypeAny)?;
+                            checker.reset_stack()?;
+                        } else {
+                            checker.op(&[ty], &[])?;
                         }
-                        types.push(ty);
+                        checker.leave_block()?;
+                        checker.op(&[], &[ty])?;
+                        ty.stack_size().u32()
                     }
                     BlockType::Void => {
                         if unreachable {
-                            types.truncate(block_base_stack_len);
-                        } else if types.len() != block_base_stack_len {
-                            Err(WasmParserError::InvalidStackValTypeAny)?;
+                            checker.reset_stack()?;
                         }
+                        checker.leave_block()?;
+                        0
                     }
-                }
+                };
+
                 instrs.push(Instr {
                     op: vm::special_block_return,
                 });
@@ -308,32 +252,21 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         jump_addr: (instrs.len() - 1) as u32,
                     },
                 });
-
-                let before_stack_len = types.len();
-                let mut block_input_len = 0;
                 let mut block_input_size = 0;
+
                 if let BlockType::TypeIdx(idx) = blocktype {
                     let ty = self
                         .types
                         .get(idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-                    trace!("ty: {ty:?}");
-
-                    for ty in ty.0.stack_pop_iter() {
-                        block_input_len += 1;
-                        block_input_size += ty.stack_size().u32();
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    assert_type_stack_size(types, blocks)?;
-                    for ty in ty.0.iter() {
-                        types.push(*ty);
-                    }
+                    block_input_size = ty.0.iter().map(|v| v.stack_size().u32()).sum();
+                    checker.op(&ty.0 .0, &[])?;
+                    checker.enter_block(BlockKind::Loop, blocktype);
+                    checker.op(&[], &ty.0 .0)?;
+                } else {
+                    checker.enter_block(BlockKind::Loop, blocktype);
                 }
-                let block_base_stack_len = before_stack_len - block_input_len;
-                let block_base_stack_size = types[0..block_base_stack_len]
-                    .iter()
-                    .map(|v| v.stack_size().u32())
-                    .sum();
+                let block_base_stack_size = checker.block_base_stack_size()?;
                 instrs.push(Instr {
                     operand: Operand {
                         loop_param: LoopParam {
@@ -342,29 +275,22 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         },
                     },
                 });
-                blocks.push_front((BlockKind::Loop, blocktype, block_base_stack_len as u32));
 
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
-                    types,
-                    blocks,
+                    checker,
                     else_addr,
                     &mut unreachable,
                     is_unreachable_if_block,
                 )?;
 
-                blocks.pop_front();
-                tracing::trace!("{block_base_stack_len} {blocktype:?} {types:?}");
-
                 let return_size = match blocktype {
                     BlockType::Void => {
                         if unreachable {
-                            types.truncate(block_base_stack_len);
+                            checker.reset_stack()?;
                         }
-                        if !unreachable && types.len() != block_base_stack_len {
-                            Err(WasmParserError::InvalidStackValTypeAny)?;
-                        }
+                        checker.leave_block()?;
                         0
                     }
                     BlockType::TypeIdx(idx) => {
@@ -373,40 +299,26 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             .get(idx)
                             .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
                         if !unreachable {
-                            for ty in ty.1.stack_pop_iter() {
-                                assert_valtype(*ty, types.pop())?;
-                            }
-                            assert_type_stack_size(types, blocks)?;
+                            checker.op(&ty.1 .0, &[])?;
+                        } else {
+                            checker.reset_stack()?;
                         }
-                        if unreachable {
-                            types.truncate(block_base_stack_len);
-                        }
-                        if !unreachable && types.len() != block_base_stack_len {
-                            Err(WasmParserError::InvalidStackValTypeAny)?;
-                        }
-                        for ty in ty.1.iter() {
-                            types.push(*ty);
-                        }
-
+                        checker.leave_block()?;
+                        checker.op(&[], &ty.1 .0)?;
                         ty.1.iter().map(|v| v.stack_size().u32()).sum()
                     }
                     BlockType::ValType(ty) => {
                         if !unreachable {
-                            assert_valtype(ty, types.pop())?;
+                            checker.op(&[ty], &[])?;
+                        } else {
+                            checker.reset_stack()?;
                         }
-                        assert_type_stack_size(types, blocks)?;
-                        if unreachable {
-                            types.truncate(block_base_stack_len);
-                        }
-                        if !unreachable && types.len() != block_base_stack_len {
-                            Err(WasmParserError::InvalidStackValTypeAny)?;
-                        }
-                        types.push(ty);
+                        checker.leave_block()?;
+                        checker.op(&[], &[ty])?;
 
                         ty.stack_size().u32()
                     }
                 };
-                tracing::trace!("{types:?}");
                 instrs.push(Instr {
                     op: vm::special_block_return,
                 });
@@ -425,8 +337,6 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let (len, blocktype) = self.parse_block_type()?;
                 let mut unreachable = *unreachable;
                 let is_unreachable_if_block = unreachable;
-                let mut base_stack_len = 0;
-
                 if !is_unreachable_if_block {
                     instrs.push(Instr { op: vm::op_if });
                     instrs.push(Instr {
@@ -434,25 +344,21 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             jump_addr2: (0xFCFCFCFC, 0xFDFDFDFD),
                         },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    let before_stack_len = types.len();
-                    base_stack_len = before_stack_len;
-                    if let BlockType::TypeIdx(idx) = blocktype {
-                        let ty = self
-                            .types
-                            .get(idx)
-                            .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-                        for ty in ty.0.iter() {
-                            assert_valtype(*ty, types.pop())?;
-                        }
-                        base_stack_len = types.len();
-                        assert_type_stack_size(types, blocks)?;
-                        for ty in ty.0.iter() {
-                            types.push(*ty);
-                        }
+                    checker.op(&[ValType::I32], &[])?;
+                }
+
+                if let BlockType::TypeIdx(idx) = blocktype {
+                    let ty = self
+                        .types
+                        .get(idx)
+                        .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
+                    if !is_unreachable_if_block {
+                        checker.op(&ty.0 .0, &[])?;
                     }
-                    blocks.push_front((BlockKind::If, blocktype, base_stack_len as u32));
+                    checker.enter_block(BlockKind::If, blocktype);
+                    checker.op(&[], &ty.0 .0)?;
+                } else {
+                    checker.enter_block(BlockKind::If, blocktype);
                 }
 
                 let index = instrs.len() - 1;
@@ -460,8 +366,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
-                    types,
-                    blocks,
+                    checker,
                     &mut else_addr,
                     &mut unreachable,
                     is_unreachable_if_block,
@@ -473,112 +378,99 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
                         ),
                     };
-                    blocks.pop_front();
                 }
                 match blocktype {
                     BlockType::Void => {
                         if unreachable {
-                            types.truncate(base_stack_len);
-                        } else if types.len() != base_stack_len {
-                            Err(WasmParserError::InvalidStackValTypeAny)?;
+                            checker.reset_stack()?;
                         }
+                        checker.leave_block()?;
                     }
                     BlockType::TypeIdx(idx) => {
                         let ty = self
                             .types
                             .get(idx)
                             .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-
-                        if !unreachable {
-                            if else_addr.is_none() {
-                                for ty in ty.1.stack_pop_iter() {
-                                    assert_valtype(*ty, types.pop())?;
-                                }
-                                assert_type_stack_size(types, blocks)?;
-                                for ty in ty.0.iter() {
-                                    types.push(*ty);
-                                }
+                        if else_addr.is_none() {
+                            if unreachable {
+                                checker.reset_stack()?;
+                            } else {
+                                checker.op(&ty.1 .0, &[])?;
                             }
-                            for ty in ty.1.stack_pop_iter() {
-                                assert_valtype(*ty, types.pop())?;
-                            }
-                            assert_type_stack_size(types, blocks)?;
-                            if types.len() != base_stack_len {
-                                Err(WasmParserError::InvalidStackValTypeAny)?;
-                            }
+                            checker.leave_block()?;
+                            checker.enter_block(BlockKind::If, blocktype);
+                            checker.op(&[], &ty.0 .0)?;
+                            unreachable = is_unreachable_if_block;
+                        }
+                        if unreachable {
+                            checker.reset_stack()?;
                         } else {
-                            types.truncate(base_stack_len);
+                            checker.op(&ty.1 .0, &[])?;
                         }
-
-                        for ty in ty.1.iter() {
-                            types.push(*ty);
-                        }
+                        checker.leave_block()?;
+                        checker.op(&[], &ty.1 .0)?;
                     }
                     BlockType::ValType(ty) => {
-                        if !unreachable {
-                            if else_addr.is_none() {
-                                assert_valtype(ty, types.pop())?;
-                                assert_type_stack_size(types, blocks)?;
+                        if else_addr.is_none() {
+                            if unreachable {
+                                checker.reset_stack()?;
+                            } else {
+                                checker.op(&[ty], &[])?;
                             }
-                            assert_valtype(ty, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-                            if types.len() != base_stack_len {
-                                Err(WasmParserError::InvalidStackValTypeAny)?;
-                            }
-                        } else {
-                            types.truncate(base_stack_len);
+                            checker.leave_block()?;
+                            checker.enter_block(BlockKind::If, blocktype);
+                            unreachable = is_unreachable_if_block;
                         }
-
-                        types.push(ty);
+                        if unreachable {
+                            checker.reset_stack()?;
+                        } else {
+                            checker.op(&[ty], &[])?;
+                        }
+                        checker.leave_block()?;
+                        checker.op(&[], &[ty])?;
                     }
                 }
 
                 (1 + len + len2, false)
             }
             0x05 => {
-                trace!("parse_op_else");
                 let inst_unreachable = *unreachable;
+                trace!("parse_op_else: {inst_unreachable} {is_unreachable_if_block}");
+
                 *unreachable = is_unreachable_if_block;
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_else });
                     *else_addr = Some(instrs.len() as u32);
-                    if let Some((BlockKind::If, blocktype, block_base_stack_len)) = blocks.front() {
+                    if let (BlockKind::If, blocktype, _block_base_stack_len) =
+                        *checker.current_block()?
+                    {
                         match blocktype {
                             BlockType::Void => {
-                                if types.len() != *block_base_stack_len as usize {
-                                    Err(WasmParserError::InvalidStackValTypeAny)?;
-                                }
+                                checker.leave_block()?;
+                                checker.enter_block(BlockKind::If, blocktype);
                             }
                             BlockType::TypeIdx(idx) => {
                                 let ty = self
                                     .types
-                                    .get(*idx)
-                                    .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                                for ty in ty.1.stack_pop_iter() {
-                                    if !inst_unreachable {
-                                        assert_valtype(*ty, types.pop())?;
-                                    }
-                                }
-                                assert_type_stack_size(types, blocks)?;
+                                    .get(idx)
+                                    .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
                                 if inst_unreachable {
-                                    types.truncate(*block_base_stack_len as usize);
-                                } else if types.len() != *block_base_stack_len as usize {
-                                    Err(WasmParserError::InvalidStackValTypeAny)?;
+                                    checker.reset_stack()?;
+                                } else {
+                                    checker.op(&ty.1 .0, &[])?;
                                 }
-                                for ty in ty.0.iter() {
-                                    types.push(*ty);
-                                }
+                                checker.leave_block()?;
+                                checker.enter_block(BlockKind::If, blocktype);
+                                checker.op(&[], &ty.0 .0)?;
                             }
                             BlockType::ValType(ty) => {
-                                if !inst_unreachable {
-                                    assert_valtype(*ty, types.pop())?;
-                                }
-                                assert_type_stack_size(types, blocks)?;
                                 if inst_unreachable {
-                                    types.truncate(*block_base_stack_len as usize);
-                                } else if types.len() != *block_base_stack_len as usize {
-                                    Err(WasmParserError::InvalidStackValTypeAny)?;
+                                    checker.reset_stack()?;
+                                } else {
+                                    checker.op(&[ty], &[])?;
                                 }
+                                checker.leave_block()?;
+                                checker.enter_block(BlockKind::If, blocktype);
                             }
                         }
                     } else {
@@ -605,68 +497,44 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 instrs.push(Instr {
                     operand: Operand { u32: idx },
                 });
-                if let Some((kind, blocktype, block_base_stack_len)) = blocks.get(idx as usize) {
-                    match kind {
-                        BlockKind::Block | BlockKind::If => match blocktype {
-                            BlockType::Void => {
-                                // ok
-                            }
-                            BlockType::ValType(ty) => {
-                                if !inst_unreachable {
-                                    assert_valtype(*ty, types.pop())?;
-                                }
-                                assert_type_stack_size(types, blocks)?;
+                let (kind, blocktype, _block_base_stack_len) = checker.get_block(idx as usize)?;
 
-                                types.truncate(*block_base_stack_len as usize);
-                                types.push(*ty);
+                match kind {
+                    BlockKind::Block | BlockKind::If => match blocktype {
+                        BlockType::Void => {
+                            // ok
+                        }
+                        BlockType::ValType(ty) => {
+                            if !inst_unreachable {
+                                checker.op(&[*ty], &[])?;
                             }
-                            BlockType::TypeIdx(idx) => {
-                                let ty = self
-                                    .types
-                                    .get(*idx)
-                                    .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                                if !inst_unreachable {
-                                    for ty in ty.1.stack_pop_iter() {
-                                        assert_valtype(*ty, types.pop())?;
-                                    }
-                                }
-                                assert_type_stack_size(types, blocks)?;
-                                types.truncate(*block_base_stack_len as usize);
-
-                                for ty in ty.1.iter() {
-                                    types.push(*ty);
-                                }
+                        }
+                        BlockType::TypeIdx(idx) => {
+                            let ty = self
+                                .types
+                                .get(*idx)
+                                .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
+                            if !inst_unreachable {
+                                checker.op(&ty.1 .0, &[])?;
                             }
-                        },
-                        BlockKind::Loop => match blocktype {
-                            BlockType::Void | BlockType::ValType(_) => {
-                                assert_type_stack_size(types, blocks)?;
-                                types.truncate(*block_base_stack_len as usize);
-                                // ok
+                        }
+                    },
+                    BlockKind::Loop => match blocktype {
+                        BlockType::Void | BlockType::ValType(_) => {
+                            // ok
+                        }
+                        BlockType::TypeIdx(idx) => {
+                            let ty = self
+                                .types
+                                .get(*idx)
+                                .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
+                            if !inst_unreachable {
+                                checker.op(&ty.0 .0, &[])?;
                             }
-                            BlockType::TypeIdx(idx) => {
-                                let ty = self
-                                    .types
-                                    .get(*idx)
-                                    .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                                let mut arity = 0;
-                                for ty in ty.0.stack_pop_iter() {
-                                    if !inst_unreachable {
-                                        assert_valtype(*ty, types.pop())?;
-                                    }
-                                    arity += 1;
-                                }
-                                assert_type_stack_size(types, blocks)?;
-                                types.truncate((block_base_stack_len - arity) as usize);
-                                for ty in ty.0.iter() {
-                                    types.push(*ty);
-                                }
-                            }
-                        },
-                    }
-                } else {
-                    Err(WasmParserError::InvalidStackValTypeAny)?
+                        }
+                    },
                 }
+
                 (1 + len, false)
             }
             0x0D => {
@@ -674,45 +542,34 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_br_if: {}", idx);
 
                 if !*unreachable {
-                    assert_valtype(ValType::I32, types.pop())?;
+                    checker.op(&[ValType::I32], &[])?;
                     instrs.push(Instr { op: vm::op_br_if });
                     instrs.push(Instr {
                         operand: Operand { u32: idx },
                     });
-                    if let Some((kind, blocktype, _base_stack_len)) = blocks.get(idx as usize) {
-                        match kind {
-                            BlockKind::Block | BlockKind::If => {
-                                match blocktype {
-                                    BlockType::Void => {
-                                        // ok
-                                    }
-                                    BlockType::ValType(ty) => {
-                                        assert_valtype(*ty, types.pop())?;
-                                        //
-                                        assert_type_stack_size(types, blocks)?;
-                                        types.push(*ty);
-                                    }
-                                    BlockType::TypeIdx(idx) => {
-                                        let ty = self
-                                            .types
-                                            .get(*idx)
-                                            .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                                        for ty in ty.1.stack_pop_iter() {
-                                            assert_valtype(*ty, types.pop())?;
-                                        }
-                                        assert_type_stack_size(types, blocks)?;
-                                        for ty in ty.1.iter() {
-                                            types.push(*ty);
-                                        }
-                                    }
+                    let (kind, blocktype, _base_stack_len) = checker.get_block(idx as usize)?;
+
+                    match kind {
+                        BlockKind::Block | BlockKind::If => {
+                            match blocktype {
+                                BlockType::Void => {
+                                    // ok
+                                }
+                                BlockType::ValType(ty) => {
+                                    checker.op(&[*ty], &[*ty])?;
+                                }
+                                BlockType::TypeIdx(idx) => {
+                                    let ty = self
+                                        .types
+                                        .get(*idx)
+                                        .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
+                                    checker.op_result_type(&ty.1, &ty.1)?;
                                 }
                             }
-                            BlockKind::Loop => {
-                                // do nothing
-                            }
                         }
-                    } else {
-                        Err(WasmParserError::InvalidStackValTypeAny)?;
+                        BlockKind::Loop => {
+                            // do nothing
+                        }
                     }
                 }
                 (1 + len, false)
@@ -720,7 +577,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x0E => {
                 let (len, idxs) = self.parse_vec(Self::parse_u32)?;
                 let (len2, default_idx) = self.parse_u32()?;
-                trace!("parse_op_br_table: {idxs:?} {default_idx} {types:?}");
+                trace!("parse_op_br_table: {idxs:?} {default_idx} {checker:?}");
 
                 if !*unreachable {
                     instrs.push(Instr {
@@ -739,12 +596,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { u32: default_idx },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    let result_len =
-                        validate_br_table_types(default_idx, self.types, types, blocks)?;
+                    checker.op(&[ValType::I32], &[])?;
+                    trace!("parse_op_br_table: i32 poped");
+
+                    let result_len = validate_br_table_types(default_idx, self.types, checker)?;
                     for idx in idxs {
-                        if result_len != validate_br_table_types(idx, self.types, types, blocks)? {
+                        if result_len != validate_br_table_types(idx, self.types, checker)? {
                             Err(WasmParserError::InvalidStackValTypeAny)?;
                         }
                     }
@@ -756,14 +613,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_return");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_return });
-                    for ty in self.functype.1.stack_pop_iter() {
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    assert_type_stack_size(types, blocks)?;
-                    types.truncate(0);
-                    for ty in self.functype.1.iter() {
-                        types.push(*ty);
-                    }
+                    checker.op(&self.functype.1 .0, &[])?;
                     *unreachable = true;
                 }
                 (1, false)
@@ -785,13 +635,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         operand: Operand { u32: idx },
                     });
 
-                    for ty in ty.0.stack_pop_iter() {
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    assert_type_stack_size(types, blocks)?;
-                    for ty in ty.1.iter() {
-                        types.push(*ty);
-                    }
+                    checker.op_func_type(ty)?;
                 }
                 (1 + len, false)
             }
@@ -815,54 +659,37 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { u32: typeidx },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.op(&[ValType::I32], &[])?;
                     let ty = self
                         .types
                         .get(TypeIdx(typeidx))
                         .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(typeidx)))?;
-                    for ty in ty.0.stack_pop_iter() {
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    assert_type_stack_size(types, blocks)?;
-                    for ty in ty.1.iter() {
-                        types.push(*ty);
-                    }
+                    checker.op_func_type(ty)?;
                 }
                 (1 + len + len2, false)
             }
             0x1A => {
                 trace!("parse_op_drop");
                 if !*unreachable {
-                    if let Some(x) = types.pop() {
-                        instrs.push(Instr { op: vm::op_drop });
-                        instrs.push(Instr {
-                            operand: Operand {
-                                drop_size: x.stack_size().u32(),
-                            },
-                        });
-                    } else {
-                        Err(WasmParserError::InvalidStackValTypeAny)?
-                    }
-                    assert_type_stack_size(types, blocks)?;
+                    let x = checker.pop()?;
+                    instrs.push(Instr { op: vm::op_drop });
+                    instrs.push(Instr {
+                        operand: Operand {
+                            drop_size: x.stack_size().u32(),
+                        },
+                    });
                 }
                 (1, false)
             }
             0x1B => {
                 trace!("parse_op_select");
                 if !*unreachable {
-                    assert_valtype(ValType::I32, types.pop())?;
-                    let x = if let Some(first) = types.pop() {
-                        assert_valtype(first, types.pop())?;
-                        first
-                    } else {
-                        Err(WasmParserError::InvalidStackValTypeAny)?
-                    };
+                    checker.op(&[ValType::I32], &[])?;
+                    let x = checker.pop()?;
+                    checker.op(&[x], &[x])?;
                     if matches!(x, ValType::ExternRef | ValType::FuncRef) {
                         Err(WasmParserError::InvalidStackValTypeAny)?
                     }
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(x);
                     instrs.push(Instr { op: vm::op_select });
                     instrs.push(Instr {
                         operand: Operand {
@@ -873,26 +700,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1, false)
             }
             0x1C => {
-                let (len, mut operand) = self.parse_vec(Self::parse_valtype)?;
+                let (len, operand) = self.parse_vec(Self::parse_valtype)?;
                 trace!("parse_op_select_with_param: {operand:?}");
                 if !*unreachable {
                     if operand.len() != 1 {
                         Err(WasmParserError::InvalidResultArity)?;
                     }
-                    assert_valtype(ValType::I32, types.pop())?;
-                    for ty in &operand {
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    for ty in &operand {
-                        assert_valtype(*ty, types.pop())?;
-                    }
-                    assert_type_stack_size(types, blocks)?;
-                    operand.reverse();
-                    let mut bytes = 0;
-                    for ty in operand {
-                        bytes += ty.stack_size().u32();
-                        types.push(ty);
-                    }
+                    checker.op(&[ValType::I32], &[])?;
+                    checker.op(&operand, &[])?;
+                    checker.op(&operand, &operand)?;
+                    let bytes = operand.iter().map(|v| v.stack_size().u32()).sum();
                     instrs.push(Instr { op: vm::op_select });
                     instrs.push(Instr {
                         operand: Operand { select: bytes },
@@ -922,7 +739,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { local_addr: addr },
                     });
-                    types.push(ty);
+                    checker.op(&[], &[ty])?;
                 }
                 (1 + len, false)
             }
@@ -940,8 +757,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }),
                         ValueSize::Byte16 => todo!(),
                     }
-                    assert_valtype(ty, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.op(&[ty], &[])?;
                     instrs.push(Instr {
                         operand: Operand { local_addr: addr },
                     });
@@ -962,9 +778,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }),
                         ValueSize::Byte16 => todo!(),
                     }
-                    assert_valtype(ty, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ty);
+                    checker.op(&[ty], &[ty])?;
                     instrs.push(Instr {
                         operand: Operand { local_addr: addr },
                     });
@@ -989,7 +803,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }),
                         ValueSize::Byte16 => todo!(),
                     }
-                    types.push(ty.0);
+                    checker.op(&[], &[ty.0])?;
+
                     instrs.push(Instr {
                         operand: Operand { u32: idx },
                     });
@@ -1016,8 +831,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }),
                         ValueSize::Byte16 => todo!(),
                     }
-                    assert_valtype(ty.0, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.op(&[ty.0], &[])?;
+
                     instrs.push(Instr {
                         operand: Operand { u32: idx },
                     });
@@ -1032,9 +847,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         .tables
                         .get(idx as usize)
                         .ok_or(WasmParserError::InvalidTableIndex(idx))?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ty.reftype.into());
+                    checker.op(&[ValType::I32], &[ty.reftype.into()])?;
                     instrs.push(Instr {
                         op: vm::op_table_get,
                     });
@@ -1052,9 +865,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         .tables
                         .get(idx as usize)
                         .ok_or(WasmParserError::InvalidTableIndex(idx))?;
-                    assert_valtype(ty.reftype.into(), types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.op(&[ValType::I32, ty.reftype.into()], &[])?;
                     instrs.push(Instr {
                         op: vm::op_table_set,
                     });
@@ -1075,9 +886,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.load_op(ValType::I32)?;
                 }
                 (1 + len, false)
             }
@@ -1092,9 +901,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
+                    checker.load_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1109,9 +916,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F32);
+                    checker.load_op(ValType::F32)?;
                 }
                 (1 + len, false)
             }
@@ -1126,9 +931,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F64);
+                    checker.load_op(ValType::F64)?;
                 }
                 (1 + len, false)
             }
@@ -1143,9 +946,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.load_op(ValType::I32)?;
                 }
                 (1 + len, false)
             }
@@ -1160,9 +961,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.load_op(ValType::I32)?;
                 }
                 (1 + len, false)
             }
@@ -1177,9 +976,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.load_op(ValType::I32)?;
                 }
                 (1 + len, false)
             }
@@ -1194,9 +991,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.load_op(ValType::I32)?;
                 }
                 (1 + len, false)
             }
@@ -1211,9 +1006,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
+                    checker.load_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1228,9 +1021,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
+                    checker.load_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1245,9 +1036,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
+                    checker.load_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1262,9 +1051,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
+                    checker.load_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1279,9 +1066,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
+                    checker.load_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1296,9 +1081,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
+                    checker.load_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1313,9 +1096,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::I32)?;
                 }
                 (1 + len, false)
             }
@@ -1330,9 +1111,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1347,9 +1126,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::F32)?;
                 }
                 (1 + len, false)
             }
@@ -1364,9 +1141,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::F64)?;
                 }
                 (1 + len, false)
             }
@@ -1381,9 +1156,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::I32)?;
                 }
                 (1 + len, false)
             }
@@ -1398,9 +1171,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::I32)?;
                 }
                 (1 + len, false)
             }
@@ -1415,9 +1186,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1432,9 +1201,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1449,9 +1216,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { memarg },
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
+                    checker.store_op(ValType::I64)?;
                 }
                 (1 + len, false)
             }
@@ -1463,10 +1228,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     Err(WasmParserError::InvalidInstruction([0x3F, next, 0, 0]))?
                 }
                 if !*unreachable {
-                    types.push(ValType::I32);
                     instrs.push(Instr {
                         op: vm::op_mem_size,
                     });
+                    checker.op(&[], &[ValType::I32])?;
                 }
                 (2, false)
             }
@@ -1478,9 +1243,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 assert_memory(self.mems)?;
                 if !*unreachable {
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::I32], &[ValType::I32])?;
                     instrs.push(Instr {
                         op: vm::op_mem_grow,
                     });
@@ -1497,7 +1260,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { i32: operand },
                     });
-                    types.push(ValType::I32);
+                    checker.op(&[], &[ValType::I32])?;
                 }
                 (1 + len, false)
             }
@@ -1511,7 +1274,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { i64: operand },
                     });
-                    types.push(ValType::I64);
+                    checker.op(&[], &[ValType::I64])?;
                 }
                 (1 + len, false)
             }
@@ -1525,7 +1288,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { f32: operand },
                     });
-                    types.push(ValType::F32);
+                    checker.op(&[], &[ValType::F32])?;
                 }
                 (1 + len, false)
             }
@@ -1539,7 +1302,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { f64: operand },
                     });
-                    types.push(ValType::F64);
+                    checker.op(&[], &[ValType::F64])?;
                 }
                 (1 + len, false)
             }
@@ -1547,9 +1310,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_eqz");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_eqz });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::I32], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -1557,11 +1318,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_eq");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_eq });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1569,11 +1326,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_ne");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_ne });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1583,11 +1336,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_lt_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1597,11 +1346,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_lt_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1611,11 +1356,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_gt_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1625,11 +1366,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_gt_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1639,11 +1376,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_le_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1653,11 +1386,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_le_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1667,11 +1396,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_ge_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1681,11 +1406,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_ge_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -1693,10 +1414,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_eqz");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_eqz });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::I64], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -1704,11 +1422,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_eq");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_eq });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1716,11 +1430,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_ne");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_ne });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1730,11 +1440,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_lt_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1744,11 +1450,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_lt_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1758,11 +1460,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_gt_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1772,11 +1470,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_gt_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1786,11 +1480,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_le_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1800,11 +1490,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_le_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1814,11 +1500,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_ge_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1828,11 +1510,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_ge_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -1840,11 +1518,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_eq");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_eq });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -1852,11 +1526,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_ne");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_ne });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -1864,11 +1534,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_lt");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_lt });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -1876,11 +1542,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_gt");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_gt });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -1888,11 +1550,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_le");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_le });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -1900,11 +1558,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_ge");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_ge });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -1912,11 +1566,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_eq");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_eq });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -1924,11 +1574,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_ne");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_ne });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -1936,11 +1582,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_lt");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_lt });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -1948,11 +1590,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_gt");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_gt });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -1960,11 +1598,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_le");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_le });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -1972,11 +1606,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_ge");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_ge });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.cond_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -1984,10 +1614,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_clz");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_clz });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::I32], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -1995,10 +1622,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_ctz");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_ctz });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::I32], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -2008,10 +1632,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_popcnt,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::I32], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -2019,10 +1640,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_add");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_add });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2030,11 +1648,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_sub");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_sub });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2042,11 +1656,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_mul");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_mul });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2056,11 +1666,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_div_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2070,11 +1676,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_div_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2084,11 +1686,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_rem_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2098,11 +1696,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_rem_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2110,11 +1704,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_and");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_and });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2122,11 +1712,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_or");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_or });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2134,11 +1720,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_xor");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_xor });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2146,11 +1728,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_shl");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i32_shl });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2160,11 +1738,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_shr_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2174,11 +1748,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_shr_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2188,11 +1758,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_rotl,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2202,11 +1768,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_rotr,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.unary_op(ValType::I32)?;
                 }
                 (1, false)
             }
@@ -2214,10 +1776,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_clz");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_clz });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.binary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2225,10 +1784,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_ctz");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_ctz });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.binary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2238,10 +1794,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_popcnt,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.binary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2249,10 +1802,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_add");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_add });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2260,11 +1810,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_sub");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_sub });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2272,11 +1818,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_mul");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_mul });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2286,11 +1828,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_div_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2300,11 +1838,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_div_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2314,11 +1848,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_rem_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2328,11 +1858,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_rem_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2340,11 +1866,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_and");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_and });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2352,11 +1874,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_or");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_or });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2364,11 +1882,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_xor");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_xor });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2376,11 +1890,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op64_shl");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_i64_shl });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2390,11 +1900,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_shr_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2404,11 +1910,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_shr_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2418,11 +1920,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_rotl,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2432,11 +1930,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_rotr,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.unary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -2444,10 +1938,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_abs");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_abs });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.binary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2455,10 +1946,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_neg");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_neg });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.binary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2468,10 +1956,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_ceil,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.binary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2481,10 +1966,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_floor,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.binary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2494,10 +1976,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_trunc,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.binary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2507,10 +1986,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_nearest,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.binary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2520,10 +1996,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_sqrt,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.binary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2531,11 +2004,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_add");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_add });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.unary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2543,11 +2012,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_sub");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_sub });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.unary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2555,11 +2020,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_mul");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_mul });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.unary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2567,11 +2028,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_div");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_div });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.unary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2579,11 +2036,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_min");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_min });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.unary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2591,11 +2044,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_max");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f32_max });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.unary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2605,11 +2054,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_copysign,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.unary_op(ValType::F32)?;
                 }
                 (1, false)
             }
@@ -2617,10 +2062,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_abs");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_abs });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.binary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2628,10 +2070,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_neg");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_neg });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.binary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2641,10 +2080,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_ceil,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.binary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2654,10 +2090,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_floor,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.binary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2667,10 +2100,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_trunc,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.binary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2680,10 +2110,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_nearest,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.binary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2694,10 +2121,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_sqrt,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.binary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2705,11 +2129,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_add");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_add });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.unary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2717,11 +2137,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_sub");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_sub });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.unary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2729,11 +2145,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_mul");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_mul });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.unary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2741,11 +2153,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_div");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_div });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.unary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2753,11 +2161,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_min");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_min });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.unary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2765,11 +2169,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_max");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_f64_max });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.unary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2779,11 +2179,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_copysign,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.unary_op(ValType::F64)?;
                 }
                 (1, false)
             }
@@ -2793,10 +2189,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_wrap_i64,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::I64], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -2806,10 +2199,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_trunc_f32_s,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::F32], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -2819,10 +2209,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_trunc_f32_u,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::F32], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -2832,10 +2219,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_trunc_f64_s,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::F64], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -2845,10 +2229,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_trunc_f64_u,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::F64], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -2858,10 +2239,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_extend_i32_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.op(&[ValType::I32], &[ValType::I64])?;
                 }
                 (1, false)
             }
@@ -2871,10 +2249,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_extend_i32_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.op(&[ValType::I32], &[ValType::I64])?;
                 }
                 (1, false)
             }
@@ -2884,10 +2259,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_trunc_f32_s,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.op(&[ValType::F32], &[ValType::I64])?;
                 }
                 (1, false)
             }
@@ -2897,10 +2269,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_trunc_f32_u,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.op(&[ValType::F32], &[ValType::I64])?;
                 }
                 (1, false)
             }
@@ -2910,10 +2279,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_trunc_f64_s,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.op(&[ValType::F64], &[ValType::I64])?;
                 }
                 (1, false)
             }
@@ -2923,10 +2289,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_trunc_f64_u,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.op(&[ValType::F64], &[ValType::I64])?;
                 }
                 (1, false)
             }
@@ -2936,9 +2299,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_convert_i32_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F32);
+                    checker.op(&[ValType::I32], &[ValType::F32])?;
                 }
                 (1, false)
             }
@@ -2948,9 +2309,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_convert_i32_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F32);
+                    checker.op(&[ValType::I32], &[ValType::F32])?;
                 }
                 (1, false)
             }
@@ -2960,9 +2319,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_convert_i64_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F32);
+                    checker.op(&[ValType::I64], &[ValType::F32])?;
                 }
                 (1, false)
             }
@@ -2972,9 +2329,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_convert_i64_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F32);
+                    checker.op(&[ValType::I64], &[ValType::F32])?;
                 }
                 (1, false)
             }
@@ -2984,9 +2339,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f32_demote_f64,
                     });
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F32);
+                    checker.op(&[ValType::F64], &[ValType::F32])?;
                 }
                 (1, false)
             }
@@ -2996,9 +2349,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_convert_i32_s,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F64);
+                    checker.op(&[ValType::I32], &[ValType::F64])?;
                 }
                 (1, false)
             }
@@ -3008,9 +2359,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_convert_i32_u,
                     });
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F64);
+                    checker.op(&[ValType::I32], &[ValType::F64])?;
                 }
                 (1, false)
             }
@@ -3020,9 +2369,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_convert_i64_s,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F64);
+                    checker.op(&[ValType::I64], &[ValType::F64])?;
                 }
                 (1, false)
             }
@@ -3032,9 +2379,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_convert_i64_u,
                     });
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F64);
+                    checker.op(&[ValType::I64], &[ValType::F64])?;
                 }
                 (1, false)
             }
@@ -3044,49 +2389,35 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_f64_promote_f32,
                     });
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::F64);
+                    checker.op(&[ValType::F32], &[ValType::F64])?;
                 }
                 (1, false)
             }
             0xBC => {
                 trace!("parse_op_i32_reinterpret_f32");
                 if !*unreachable {
-                    assert_valtype(ValType::F32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I32);
+                    checker.op(&[ValType::F32], &[ValType::I32])?;
                 }
                 (1, false)
             }
             0xBD => {
                 trace!("parse_op_i64_reinterpret_f64");
                 if !*unreachable {
-                    assert_valtype(ValType::F64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::I64);
+                    checker.op(&[ValType::F64], &[ValType::I64])?;
                 }
                 (1, false)
             }
             0xBE => {
                 trace!("parse_op_f32_reinterpret_i32");
                 if !*unreachable {
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F32);
+                    checker.op(&[ValType::I32], &[ValType::F32])?;
                 }
                 (1, false)
             }
             0xBF => {
                 trace!("parse_op_f64_reinterpret_i64");
                 if !*unreachable {
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-
-                    types.push(ValType::F64);
+                    checker.op(&[ValType::I64], &[ValType::F64])?;
                 }
                 (1, false)
             }
@@ -3099,10 +2430,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_i32_trunc_sat_f32_s,
                             });
-                            assert_valtype(ValType::F32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-
-                            types.push(ValType::I32);
+                            checker.op(&[ValType::F32], &[ValType::I32])?;
                         }
                         (1 + len, false)
                     }
@@ -3112,10 +2440,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_i32_trunc_sat_f32_u,
                             });
-                            assert_valtype(ValType::F32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-
-                            types.push(ValType::I32);
+                            checker.op(&[ValType::F32], &[ValType::I32])?;
                         }
                         (1 + len, false)
                     }
@@ -3125,10 +2450,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_i32_trunc_sat_f64_s,
                             });
-                            assert_valtype(ValType::F64, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-
-                            types.push(ValType::I32);
+                            checker.op(&[ValType::F64], &[ValType::I32])?;
                         }
                         (1 + len, false)
                     }
@@ -3138,10 +2460,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_i32_trunc_sat_f64_u,
                             });
-                            assert_valtype(ValType::F64, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-
-                            types.push(ValType::I32);
+                            checker.op(&[ValType::F64], &[ValType::I32])?;
                         }
                         (1 + len, false)
                     }
@@ -3151,10 +2470,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_i64_trunc_sat_f32_s,
                             });
-                            assert_valtype(ValType::F32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-
-                            types.push(ValType::I64);
+                            checker.op(&[ValType::F32], &[ValType::I64])?;
                         }
                         (1 + len, false)
                     }
@@ -3164,10 +2480,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_i64_trunc_sat_f32_u,
                             });
-                            assert_valtype(ValType::F32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-
-                            types.push(ValType::I64);
+                            checker.op(&[ValType::F32], &[ValType::I64])?;
                         }
                         (1 + len, false)
                     }
@@ -3177,10 +2490,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_i64_trunc_sat_f64_s,
                             });
-                            assert_valtype(ValType::F64, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-
-                            types.push(ValType::I64);
+                            checker.op(&[ValType::F64], &[ValType::I64])?;
                         }
                         (1 + len, false)
                     }
@@ -3190,10 +2500,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_i64_trunc_sat_f64_u,
                             });
-                            assert_valtype(ValType::F64, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
-
-                            types.push(ValType::I64);
+                            checker.op(&[ValType::F64], &[ValType::I64])?;
                         }
                         (1 + len, false)
                     }
@@ -3216,10 +2523,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 operand: Operand { u32: idx },
                             });
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
+                            checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         }
                         (2 + len + len2, false)
                     }
@@ -3246,10 +2550,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_mem_copy,
                             });
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
+                            checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         }
                         (3 + len, false)
                     }
@@ -3264,10 +2565,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 op: vm::op_mem_fill,
                             });
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
+                            checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         }
                         (2 + len, false)
                     }
@@ -3291,10 +2589,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 operand: Operand { u32: tableidx },
                             });
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
+                            checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         }
                         (1 + len + len2 + len3, false)
                     }
@@ -3320,10 +2615,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             instrs.push(Instr {
                                 operand: Operand { u32: tableidx2 },
                             });
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_valtype(ValType::I32, types.pop())?;
-                            assert_type_stack_size(types, blocks)?;
+                            checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         }
                         (1 + len + len2 + len3, false)
                     }
@@ -3335,60 +2627,50 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0xC0 => {
                 trace!("parse_op_i32_extend8_s");
                 if !*unreachable {
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
                     instrs.push(Instr {
                         op: vm::op_i32_extend8_s,
                     });
+                    checker.binary_op(ValType::I32)?;
                 }
                 (1, false)
             }
             0xC1 => {
                 trace!("parse_op_i32_extend16_s");
                 if !*unreachable {
-                    assert_valtype(ValType::I32, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
                     instrs.push(Instr {
                         op: vm::op_i32_extend16_s,
                     });
+                    checker.binary_op(ValType::I32)?;
                 }
                 (1, false)
             }
             0xC2 => {
                 trace!("parse_op_i64_extend8_s");
                 if !*unreachable {
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
                     instrs.push(Instr {
                         op: vm::op_i64_extend8_s,
                     });
+                    checker.binary_op(ValType::I64)?;
                 }
                 (1, false)
             }
             0xC3 => {
                 trace!("parse_op_i64_extend16_s");
                 if !*unreachable {
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
                     instrs.push(Instr {
                         op: vm::op_i64_extend16_s,
                     });
+                    checker.binary_op(ValType::I64)?;
                 }
                 (1, false)
             }
             0xC4 => {
                 trace!("parse_op_i64_extend32_s");
                 if !*unreachable {
-                    assert_valtype(ValType::I64, types.pop())?;
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I64);
                     instrs.push(Instr {
                         op: vm::op_i64_extend32_s,
                     });
+                    checker.binary_op(ValType::I64)?;
                 }
                 (1, false)
             }
@@ -3400,7 +2682,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_ref_null,
                     });
-                    types.push(t.into());
+                    checker.op(&[], &[t.into()])?;
                 }
                 (1 + len, false)
             }
@@ -3411,15 +2693,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_ref_is_null,
                     });
-                    if let Some(v) = types.pop() {
-                        if !matches!(v, ValType::ExternRef | ValType::FuncRef) {
-                            Err(WasmParserError::InvalidStackValTypeAny)?;
-                        }
-                    } else {
+                    let v = checker.pop()?;
+                    if !matches!(v, ValType::ExternRef | ValType::FuncRef) {
                         Err(WasmParserError::InvalidStackValTypeAny)?;
                     }
-                    assert_type_stack_size(types, blocks)?;
-                    types.push(ValType::I32);
+                    checker.op(&[], &[ValType::I32])?;
                 }
                 (1, false)
             }
@@ -3437,7 +2715,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         operand: Operand { u32: idx },
                     });
-                    types.push(ValType::FuncRef);
+                    checker.op(&[], &[ValType::FuncRef])?;
                 }
                 (1 + len, false)
             }
@@ -3448,8 +2726,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         &mut self,
         data_count_section: &mut DataCountVerifier,
         instrs: &mut Vec<Instr>,
-        types: &mut Vec<ValType>,
-        blocks: &mut VecDeque<(BlockKind, BlockType, u32)>,
+        checker: &mut TypeChecker,
         else_addr: &mut Option<u32>,
         unreachable: &mut bool,
         is_unreachable_if_block: bool,
@@ -3459,13 +2736,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             let (len, end) = self.parse_inst(
                 data_count_section,
                 instrs,
-                types,
-                blocks,
+                checker,
                 else_addr,
                 unreachable,
                 is_unreachable_if_block,
             )?;
-            trace!("{types:?}");
+            trace!("{checker:?}");
             read_bytes += len;
             if end {
                 return Ok(read_bytes);

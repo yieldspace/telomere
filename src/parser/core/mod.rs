@@ -5,6 +5,7 @@ mod types;
 mod validate;
 mod values;
 mod instruction;
+mod type_checker;
 pub(crate) use instruction::InstructionParser;
 pub use error::WasmParserError;
 pub use parser::WasmParser;

@@ -1,8 +1,8 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use tracing::trace;
 
-use crate::common::{BlockType, ConstExpr, ElemInit, Func, Instr, Locals, Operand};
-use crate::parser::core::instruction::BlockKind;
+use crate::common::{ConstExpr, ElemInit, Func, Instr, Locals, Operand};
+use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::InstructionParser;
 use crate::runtime::vm;
 use crate::{
@@ -683,9 +683,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     ) -> Result<Func> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
         let mut instrs = Vec::new();
-        let mut types = Vec::new();
-        let mut block_types_idxs = VecDeque::new();
-        block_types_idxs.push_front((BlockKind::Block, BlockType::TypeIdx(typeidx), 0));
+        let mut checker = TypeChecker::new(typeidx);
         let mut unreachable = false;
         let mut else_addr = None;
         let mut parser = InstructionParser::new(
@@ -703,21 +701,19 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let len2 = parser.parse_instrs(
             data_count_section,
             &mut instrs,
-            &mut types,
-            &mut block_types_idxs,
+            &mut checker,
             &mut else_addr,
             &mut unreachable,
             false,
         )?;
         trace!("function return");
-        if !unreachable {
-            for ty in functype.1.stack_pop_iter() {
-                assert_valtype(*ty, types.pop())?;
-            }
-            if !types.is_empty() {
-                Err(WasmParserError::InvalidStackValTypeAny)?
-            }
+        if unreachable {
+            checker.reset_stack()?;
+        } else {
+            checker.op(&functype.1 .0, &[])?;
         }
+        checker.leave_block()?;
+
         if len + len2 != size as usize {
             Err(WasmParserError::InvalidInstructionSize(
                 size,

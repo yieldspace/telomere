@@ -82,11 +82,16 @@ fn run_wast(text: &str) {
         match directive {
             WastDirective::Module(mut m) => {
                 let name = m.name();
-
+                let span = m.span();
                 let source = m.encode().unwrap();
                 let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                 let mut parser = telomere::WasmParser::new(&mut reader);
-                let m = parser.parse_module().unwrap();
+                let m = match parser.parse_module() {
+                    Ok(v) => v,
+                    Err(v) => {
+                        panic!("{:?} {:?}", span.linecol_in(text), v);
+                    }
+                };
                 tracing::trace!("{:?}", m.elems);
                 let inst = instantiate(m, &mut store, &registry).unwrap();
                 if let Some(name) = name {
@@ -409,6 +414,9 @@ fn nop() {
 
 #[test]
 fn func() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
     run_test_file("func");
 }
 
@@ -619,9 +627,6 @@ fn obsolete_keywords() {
 }
 #[test]
 fn ref_func() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     run_test_file("ref_func");
 }
 #[test]
