@@ -2748,6 +2748,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader: &'a mut R,
         types: &'a TypeSection,
