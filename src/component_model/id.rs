@@ -26,24 +26,16 @@ pub enum CoreSortId {
 }
 
 #[derive(Debug)]
-pub struct CoreFuncId {
-    pub value: usize,
-}
+pub struct CoreFuncId(pub u32);
 
 #[derive(Debug)]
-pub struct CoreTableId {
-    pub value: usize,
-}
+pub struct CoreTableId(pub u32);
 
 #[derive(Debug)]
-pub struct CoreMemoryId {
-    pub value: usize,
-}
+pub struct CoreMemoryId(pub u32);
 
 #[derive(Debug)]
-pub struct CoreGlobalId {
-    pub value: usize,
-}
+pub struct CoreGlobalId(pub u32);
 
 #[derive(Debug)]
 pub enum SortId {

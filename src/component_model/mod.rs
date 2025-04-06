@@ -44,7 +44,6 @@ pub struct CoreInstantiateArg {
 pub struct CoreInstanceInlineExport {
     pub name: String,
     pub sort: CoreSort,
-    pub sort_idx: SortId,
 }
 
 #[derive(Debug)]
@@ -61,13 +60,13 @@ pub enum CoreSortType {
 
 #[derive(Debug)]
 pub enum CoreSort {
-    Func(CoreFuncId),
-    Table(CoreTableId),
-    Memory(CoreMemoryId),
-    Global(CoreGlobalId),
-    Type(CoreTypeIdx),
-    Module(CoreModuleIdx),
-    Instance(CoreInstanceIdx),
+    Func(u32),
+    Table(u32),
+    Memory(u32),
+    Global(u32),
+    Type(u32),
+    Module(u32),
+    Instance(u32),
 }
 
 #[derive(Debug)]

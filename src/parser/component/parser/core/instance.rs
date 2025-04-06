@@ -61,7 +61,7 @@ fn parse_core_instance_inline_export<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> Result<(usize, CoreInstanceInlineExport)> {
     let (name_len, name) = parse_name(ctx.reader)?;
-    let (_, sort) = parse_core_sort(ctx)?;
+    let (sort_len, sort) = parse_core_sort(ctx)?;
     // let (idx_len, sort_idx) = parse_sort_idx(ctx)?;
     // Ok((
     //     name_len + 1 + idx_len,
@@ -71,24 +71,22 @@ fn parse_core_instance_inline_export<R: BinaryReader>(
     //         sort_idx,
     //     },
     // ))
-    todo!()
+    Ok((name_len + sort_len, CoreInstanceInlineExport { name, sort }))
 }
 
 pub fn parse_core_sort<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, CoreSort)> {
     let (len, ty) = parse_core_sort_type(ctx)?;
-    todo!()
-    // match ty {
-    //     CoreSortType::Func => {
-    //         ctx.get_module_id()
-    //     }
-    //     CoreSortType::Table => {}
-    //     CoreSortType::Memory => {}
-    //     CoreSortType::Global => {}
-    //     CoreSortType::Type => {}
-    //     CoreSortType::Module => {}
-    //     CoreSortType::Instance => {}
-    // }
-    // Ok((1, sort))
+    let (idx_len, idx) = parse_u32(ctx.reader)?;
+    let sort = match ty {
+        CoreSortType::Func => CoreSort::Func(idx),
+        CoreSortType::Table => CoreSort::Table(idx),
+        CoreSortType::Memory => CoreSort::Memory(idx),
+        CoreSortType::Global => CoreSort::Global(idx),
+        CoreSortType::Type => CoreSort::Type(idx),
+        CoreSortType::Module => CoreSort::Module(idx),
+        CoreSortType::Instance => CoreSort::Instance(idx),
+    };
+    Ok((len + idx_len, sort))
 }
 
 pub(crate) fn parse_core_sort_type<R: BinaryReader>(

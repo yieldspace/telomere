@@ -6,7 +6,6 @@ fn test_empty_component() {
     "#;
     let binary = wat::parse_str(component).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
-    let mut sort_map = telomere::parser::component::SortMap::new(None);
     let k = telomere::parser::component::parse_component(&mut reader).unwrap();
     println!("{:?}", k);
 }
@@ -21,6 +20,17 @@ fn test_with_core_wasm() {
           )
           (core instance (;0;) (instantiate 0))
           (type (;0;) (func (param "a" u32) (param "b" u32) (result u32)))
+          (core instance (;0;)
+            (export "add" (func 0))
+          )
+          (component (;0;)
+            (type (;0;) (enum "add"))
+          )
+          (instance (;1;) (instantiate 0
+              (with "import-func-eval-expression" (func 1))
+              (with "import-type-op" (type 1))
+            )
+          )
         )
     "#;
     let binary = wat::parse_str(component).unwrap();

@@ -62,7 +62,7 @@ pub enum ComponentModelParserError {
     InvalidCoreAliasTargetMagic(u8),
     #[error("invalid sort: {0:?}")]
     InvalidSort(u8),
-    #[error("invalid alias target: {0:?}")]
+    #[error("invalid alias target: {0:#x}")]
     InvalidAliasTarget(u8),
     #[error("invalid {0} idx: {1:?}")]
     InvalidIdx(String, u32),
@@ -136,8 +136,10 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
             }
             ComponentSectionType::Component => {
                 let map = SortMap::new(Some(&ctx.sort));
-                let mut child_context = ParseContext::new(ctx.reader, map);
+                let mut component_reader = ctx.reader.take(size as usize);
+                let mut child_context = ParseContext::new(&mut component_reader, map);
                 _parse_component(&mut child_context)?;
+                println!("OK");
                 ctx.sort
                     .add_component(Arc::new(Component::from(child_context.sort)));
             }

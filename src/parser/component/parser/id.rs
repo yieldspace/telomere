@@ -51,23 +51,6 @@ pub fn parse_component_idx<R: BinaryReader>(
     }
 }
 
-pub fn parse_core_sort_idx<R: BinaryReader>(
-    ctx: &mut ParseContext<R>,
-    sort: &CoreSort,
-) -> Result<(usize, CoreSortId)> {
-    let (len, id) = parse_u32(ctx.reader)?;
-    todo!()
-    // match sort {
-    //     CoreSort::Func => {todo!()}
-    //     CoreSort::Table => {todo!()}
-    //     CoreSort::Memory => {todo!()}
-    //     CoreSort::Global => {todo!()}
-    //     CoreSort::Type => {todo!()}
-    //     CoreSort::Module => {todo!()}
-    //     CoreSort::Instance => {todo!()}
-    // }
-}
-
 pub fn parse_sort_idx<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, SortId)> {
     todo!()
 }
