@@ -1,4 +1,5 @@
 use crate::binary::BinaryReader;
+use crate::parser::component::parser::ComponentModelParserError;
 use crate::parser::component::sort::SortMap;
 
 pub struct ParseContext<'a, 'b, R: BinaryReader> {

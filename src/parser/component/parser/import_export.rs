@@ -30,11 +30,11 @@ pub fn parse_import_name_dash(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(usize, String)> {
     Ok(with_count!(ctx.reader, {
-        assert_magic!(
-            ctx.reader.read_exact_one()?,
-            0x00,
-            ComponentModelParserError::InvalidImportNameMagic
-        );
+        ComponentModelParserError::assert_magic(
+            [ctx.reader.read_exact_one()?],
+            [0x00],
+            "import name",
+        )?;
         // todo: check name
         let (_, name) = parse_name(ctx.reader)?;
         name
@@ -45,11 +45,11 @@ pub fn parse_export_name_dash(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(usize, String)> {
     Ok(with_count!(ctx.reader, {
-        assert_magic!(
-            ctx.reader.read_exact_one()?,
-            0x00,
-            ComponentModelParserError::InvalidImportNameMagic
-        );
+        ComponentModelParserError::assert_magic(
+            [ctx.reader.read_exact_one()?],
+            [0x00],
+            "export name",
+        )?;
         // todo: check name
         let (_, name) = parse_name(ctx.reader)?;
         name

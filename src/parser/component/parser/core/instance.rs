@@ -45,11 +45,11 @@ fn parse_core_instantiate_arg<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> Result<(usize, CoreInstantiateArg)> {
     let (name_len, name) = parse_name(ctx.reader)?;
-    assert_magic!(
-        ctx.reader.read_exact_one()?,
-        0x12,
-        ComponentModelParserError::InvalidInstantiateArgMagic
-    );
+    ComponentModelParserError::assert_magic(
+        [ctx.reader.read_exact_one()?],
+        [0x12],
+        "instantiate arg",
+    )?;
     let (idx_len, instance_idx) = parse_instance_idx(ctx)?;
     Ok((
         name_len + 1 + idx_len,

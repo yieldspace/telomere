@@ -233,11 +233,7 @@ fn parse_case<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, Case
     Ok(with_count!(ctx.reader, {
         let (_, l) = parse_label_dash(ctx)?;
         let (_, t) = parse_option(ctx, parse_valtype)?;
-        assert_magic!(
-            ctx.reader.read_exact_one()?,
-            0x00,
-            ComponentModelParserError::InvalidCaseMagic
-        );
+        ComponentModelParserError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "case")?;
         Case { label: l, t }
     }))
 }
@@ -326,11 +322,11 @@ pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(us
     Ok(with_count!(ctx.reader, {
         match ctx.reader.read_exact_one()? {
             0x00 => {
-                assert_magic!(
-                    ctx.reader.read_exact_one()?,
-                    0x00,
-                    ComponentModelParserError::InvalidExternDescMagic
-                );
+                ComponentModelParserError::assert_magic(
+                    [ctx.reader.read_exact_one()?],
+                    [0x00],
+                    "extern desc",
+                )?;
                 let (_, i) = parse_u32(ctx.reader)?;
                 ExternDesc::Core(i as usize)
             }

@@ -1,5 +1,5 @@
 use crate::assert_magic;
-use crate::binary::BinaryReader;
+use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::{CoreAlias, CoreAliasTarget, CoreModuleDecl, CoreType};
 use crate::parser::component::parser::context::ParseContext;
 use crate::parser::component::parser::core::parse_core_sort;
@@ -12,11 +12,16 @@ type Result<R> = std::result::Result<R, ComponentModelParserError>;
 pub fn parse_core_type<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> crate::parser::component::parser::Result<(usize, CoreType)> {
-    assert_magic!(
-        ctx.reader.read_exact_one()?,
-        0x50,
-        ComponentModelParserError::InvalidCoreModuleTypeMagic
-    );
+    parse_core_module_type(ctx)
+}
+
+fn parse_core_module_type(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, CoreType)> {
+    let mut counter = Counter::new();
+    ComponentModelParserError::assert_magic(
+        [ctx.reader.read_exact_one()?.count(&mut counter)],
+        [0x50],
+        "core module type",
+    )?;
     let (len, decls) = parse_vec(ctx, |v| v.reader, parse_core_module_decl)?;
     Ok((len + 1, CoreType::CoreModuleType(decls)))
 }
@@ -32,11 +37,11 @@ fn parse_core_module_decl<R: BinaryReader>(
         }
         0x02 => {
             let (sort_len, sort) = parse_core_sort(ctx)?;
-            assert_magic!(
-                ctx.reader.read_exact_one()?,
-                0x01,
-                ComponentModelParserError::InvalidCoreAliasTargetMagic
-            );
+            ComponentModelParserError::assert_magic(
+                [ctx.reader.read_exact_one()?],
+                [0x01],
+                "core alias target",
+            )?;
             let (ct_len, ct) = parse_u32(ctx.reader)?;
             let (idx_len, idx) = parse_u32(ctx.reader)?;
             Ok((

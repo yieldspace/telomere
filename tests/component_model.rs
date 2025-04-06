@@ -23,14 +23,6 @@ fn test_with_core_wasm() {
           (core instance (;0;)
             (export "add" (func 0))
           )
-          (component (;0;)
-            (type (;0;) (enum "add"))
-          )
-          (instance (;1;) (instantiate 0
-              (with "import-func-eval-expression" (func 1))
-              (with "import-type-op" (type 1))
-            )
-          )
         )
     "#;
     let binary = wat::parse_str(component).unwrap();

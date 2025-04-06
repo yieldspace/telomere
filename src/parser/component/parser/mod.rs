@@ -36,8 +36,8 @@ type Result<R> = std::result::Result<R, ComponentModelParserError>;
 pub enum ComponentModelParserError {
     #[error("module can't set multiple times")]
     MultipleModule,
-    #[error("invalid magic: {0:?}")]
-    InvalidMagic([u8; 4]),
+    #[error("invalid {2} magic: {0:?} != {1:?}")]
+    InvalidMagic(Box<[u8]>, Box<[u8]>, String),
     #[error("invalid version: {0:?}")]
     InvalidVersion([u8; 2]),
     #[error("invalid layer: {0:?}")]
@@ -84,6 +84,24 @@ pub enum ComponentModelParserError {
     InvalidImportNameMagic(u8),
     #[error("invalid extern desc magic: {0:?}")]
     InvalidExternDescMagic(u8),
+}
+
+impl ComponentModelParserError {
+    pub fn assert_magic<const N: usize>(
+        magic: [u8; N],
+        expected: [u8; N],
+        name: &str,
+    ) -> std::result::Result<(), Self> {
+        if magic == expected {
+            Ok(())
+        } else {
+            Err(Self::InvalidMagic(
+                Box::new(expected),
+                Box::new(magic),
+                name.to_string(),
+            ))
+        }
+    }
 }
 
 pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
@@ -136,8 +154,7 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
             }
             ComponentSectionType::Component => {
                 let map = SortMap::new(Some(&ctx.sort));
-                let mut component_reader = ctx.reader.take(size as usize);
-                let mut child_context = ParseContext::new(&mut component_reader, map);
+                let mut child_context = ParseContext::new(ctx.reader, map);
                 _parse_component(&mut child_context)?;
                 println!("OK");
                 ctx.sort
@@ -219,7 +236,11 @@ pub fn parse_magic<R: BinaryReader>(reader: &mut R) -> Result<()> {
     if matches!(&magic, &[0x00, 0x61, 0x73, 0x6d]) {
         Ok(())
     } else {
-        Err(ComponentModelParserError::InvalidMagic(magic))
+        Err(ComponentModelParserError::InvalidMagic(
+            Box::new(magic),
+            Box::new([0x00, 0x61, 0x73, 0x6d]),
+            "component".to_string(),
+        ))
     }
 }
 
