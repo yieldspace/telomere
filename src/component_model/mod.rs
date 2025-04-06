@@ -6,10 +6,8 @@ pub mod types;
 
 use crate::common::{Import, ImportDesc};
 use crate::component_model::id::{
-    ComponentIdx, CoreFuncId, CoreGlobalId, CoreInstanceIdx, CoreMemoryId, CoreModuleIdx,
-    CoreTableId, CoreTypeIdx, FuncId, InstanceIdx, SortId, TypeId,
+    ComponentIdx, CoreInstanceIdx, CoreModuleIdx, FuncId, InstanceIdx, TypeId,
 };
-use crate::component_model::types::Type;
 use crate::Module;
 pub use canon::*;
 pub use component::*;

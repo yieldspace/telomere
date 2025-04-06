@@ -11,5 +11,4 @@ pub(crate) use instruction::InstructionParser;
 pub use parser::WasmParser;
 pub type Result<R> = std::result::Result<R, WasmParserError>;
 pub use parser::WasmParserError;
-pub use types::*;
 pub use values::*;

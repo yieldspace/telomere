@@ -1,7 +1,6 @@
 use crate::component_model::types::Type;
 use crate::component_model::{
     Alias, CanonicalFuncKind, ComponentExport, ComponentImport, CoreInstance, CoreType, Instance,
-    Sort,
 };
 use crate::parser::component::SortMap;
 use crate::Module;
