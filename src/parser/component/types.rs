@@ -11,13 +11,11 @@ use crate::parser::component::alias::parse_alias;
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::core::parse_core_type;
 use crate::parser::component::id::{parse_func_idx, parse_type_idx};
-use crate::parser::component::import_export::{
-    parse_export_name_dash, parse_import_name_dash,
-};
+use crate::parser::component::import_export::{parse_export_name_dash, parse_import_name_dash};
 use crate::parser::component::{parse_option, ComponentModelParserError};
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
-use crate::{with_count};
+use crate::with_count;
 use num_traits::FromPrimitive;
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
@@ -81,7 +79,10 @@ where
             let (len, v) = f(ctx.reader)?;
             Ok((len + 1, Some(v)))
         }
-        x => Err(ComponentModelParserError::WrongMagic(x, "core option".to_string())),
+        x => Err(ComponentModelParserError::WrongMagic(
+            x,
+            "core option".to_string(),
+        )),
     }
 }
 

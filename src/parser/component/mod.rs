@@ -1,29 +1,28 @@
-mod section;
-mod sort;
 mod alias;
 mod canon;
 mod context;
+mod core;
+mod error;
 mod id;
 mod import_export;
 mod instance;
+mod section;
+mod sort;
 mod types;
-mod error;
-mod core;
 
-use std::sync::Arc;
-use tracing::trace;
-pub use sort::SortMap;
 use crate::binary::BinaryReader;
 use crate::component_model::Component;
-use crate::{Module, WasmParser, WasmParserError};
-pub use context::ParseContext;
 use crate::parser::component::error::ComponentModelParserError;
 use crate::parser::component::instance::parse_instance;
 use crate::parser::component::section::ComponentSectionType;
 use crate::parser::core::parse_u32;
+use crate::{Module, WasmParser, WasmParserError};
+pub use context::ParseContext;
+pub use sort::SortMap;
+use std::sync::Arc;
+use tracing::trace;
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
-
 
 pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
     let sort_map = SortMap::new(None);
@@ -226,7 +225,10 @@ where
             let (len, v) = f(ctx)?;
             Ok((len + 1, Some(v)))
         }
-        x => Err(ComponentModelParserError::WrongMagic(x, "option".to_string())),
+        x => Err(ComponentModelParserError::WrongMagic(
+            x,
+            "option".to_string(),
+        )),
     }
 }
 

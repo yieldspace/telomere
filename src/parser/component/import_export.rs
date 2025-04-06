@@ -5,7 +5,7 @@ use crate::parser::component::id::parse_sort_idx;
 use crate::parser::component::types::parse_externdesc;
 use crate::parser::component::{parse_option, ComponentModelParserError};
 use crate::parser::core::parse_name;
-use crate::{with_count};
+use crate::with_count;
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 

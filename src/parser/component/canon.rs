@@ -4,8 +4,8 @@ use crate::parser::component::core::{
     parse_core_func_id, parse_core_memory_id, parse_core_table_id,
 };
 use crate::parser::component::id::{parse_func_idx, parse_type_idx};
-use crate::parser::component::{parse_option, ComponentModelParserError};
 use crate::parser::component::ParseContext;
+use crate::parser::component::{parse_option, ComponentModelParserError};
 use crate::parser::core::parse_vec;
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;

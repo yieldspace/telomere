@@ -4,9 +4,7 @@ use crate::component_model::{
     CoreSortType,
 };
 use crate::parser::component::context::ParseContext;
-use crate::parser::component::id::{
-    parse_core_module_id, parse_instance_idx
-};
+use crate::parser::component::id::{parse_core_module_id, parse_instance_idx};
 use crate::parser::component::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 

@@ -8,9 +8,7 @@ use crate::parser::core::{parse_name, parse_u32, parse_vec};
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
 /// note: rt and sub x* ct is not supported (Wasm 3.0)
-pub fn parse_core_type<R: BinaryReader>(
-    ctx: &mut ParseContext<R>,
-) -> Result<(usize, CoreType)> {
+pub fn parse_core_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, CoreType)> {
     parse_core_module_type(ctx)
 }
 

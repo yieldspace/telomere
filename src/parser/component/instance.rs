@@ -1,7 +1,5 @@
 use crate::binary::{BinaryReader, Countable, Counter};
-use crate::component_model::{
-    InlineExport, Instance, Instantiate, InstantiateArg, Sort, SortType,
-};
+use crate::component_model::{InlineExport, Instance, Instantiate, InstantiateArg, Sort, SortType};
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::core::parse_core_sort;
 use crate::parser::component::error::ComponentModelParserError;

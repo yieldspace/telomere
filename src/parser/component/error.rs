@@ -1,5 +1,5 @@
-use thiserror::Error;
 use crate::WasmParserError;
+use thiserror::Error;
 
 /// `ComponentModelParserError` represents the possible errors that can occur in the component model parser.
 #[derive(Error, Debug)]
