@@ -1,10 +1,9 @@
 use crate::binary::BinaryReader;
 use crate::component_model::id::{
-    ComponentIdx, CoreModuleIdx, CoreSortId, FuncId, InstanceIdx, SortId, TypeId,
+    ComponentIdx, CoreModuleIdx, FuncId, InstanceIdx, SortId, TypeId,
 };
-use crate::component_model::{CoreSort, SortType};
-use crate::parser::component::parser::context::ParseContext;
-use crate::parser::component::parser::ComponentModelParserError;
+use crate::parser::component::context::ParseContext;
+use crate::parser::component::ComponentModelParserError;
 use crate::parser::core::{parse_i32, parse_u32};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;

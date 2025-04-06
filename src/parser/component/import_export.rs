@@ -1,11 +1,11 @@
 use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::{ComponentExport, ComponentImport};
-use crate::parser::component::parser::context::ParseContext;
-use crate::parser::component::parser::id::parse_sort_idx;
-use crate::parser::component::parser::types::parse_externdesc;
-use crate::parser::component::parser::{parse_option, ComponentModelParserError};
+use crate::parser::component::context::ParseContext;
+use crate::parser::component::id::parse_sort_idx;
+use crate::parser::component::types::parse_externdesc;
+use crate::parser::component::{parse_option, ComponentModelParserError};
 use crate::parser::core::parse_name;
-use crate::{assert_magic, with_count};
+use crate::{with_count};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 

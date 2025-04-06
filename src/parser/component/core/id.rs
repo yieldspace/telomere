@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::id::{CoreFuncId, CoreInstanceIdx, CoreMemoryId, CoreTableId};
-use crate::parser::component::parser::ComponentModelParserError;
+use crate::parser::component::ComponentModelParserError;
 use crate::parser::component::ParseContext;
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;

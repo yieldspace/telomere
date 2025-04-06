@@ -1,15 +1,13 @@
-use crate::assert_magic;
 use crate::binary::BinaryReader;
-use crate::component_model::id::CoreModuleIdx;
 use crate::component_model::{
     CoreInstance, CoreInstanceInlineExport, CoreInstantiate, CoreInstantiateArg, CoreSort,
     CoreSortType,
 };
-use crate::parser::component::parser::context::ParseContext;
-use crate::parser::component::parser::id::{
-    parse_core_module_id, parse_instance_idx, parse_sort_idx,
+use crate::parser::component::context::ParseContext;
+use crate::parser::component::id::{
+    parse_core_module_id, parse_instance_idx
 };
-use crate::parser::component::parser::ComponentModelParserError;
+use crate::parser::component::ComponentModelParserError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;

@@ -1,11 +1,11 @@
 use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::{CanonOpt, CanonicalFuncKind};
-use crate::parser::component::parser::core::{
+use crate::parser::component::core::{
     parse_core_func_id, parse_core_memory_id, parse_core_table_id,
 };
-use crate::parser::component::parser::id::{parse_func_idx, parse_type_idx};
-use crate::parser::component::parser::types::parse_resultlist;
-use crate::parser::component::parser::{parse_option, ComponentModelParserError};
+use crate::parser::component::id::{parse_func_idx, parse_type_idx};
+use crate::parser::component::types::parse_resultlist;
+use crate::parser::component::{parse_option, ComponentModelParserError};
 use crate::parser::component::ParseContext;
 use crate::parser::core::{parse_u32, parse_vec};
 

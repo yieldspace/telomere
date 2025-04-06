@@ -7,21 +7,28 @@ use crate::component_model::types::{
     InstanceDecl, InstanceType, Label, LabelValType, PrimValType, ResourceType, Type, TypeBound,
     ValType,
 };
-use crate::parser::component::parser::alias::parse_alias;
-use crate::parser::component::parser::context::ParseContext;
-use crate::parser::component::parser::core::parse_core_type;
-use crate::parser::component::parser::id::{parse_func_idx, parse_type_idx};
-use crate::parser::component::parser::import_export::{
+use crate::parser::component::alias::parse_alias;
+use crate::parser::component::context::ParseContext;
+use crate::parser::component::core::parse_core_type;
+use crate::parser::component::id::{parse_func_idx, parse_type_idx};
+use crate::parser::component::import_export::{
     parse_export_name_dash, parse_import_name_dash,
 };
-use crate::parser::component::parser::{parse_option, ComponentModelParserError};
+use crate::parser::component::{parse_option, ComponentModelParserError};
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
-use crate::{assert_magic, with_count};
+use crate::{with_count};
 use num_traits::FromPrimitive;
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
+/// Macro to define a constant type with a given value and name.
+///
+/// # Parameters
+/// - `$value`: The value to be assigned to the constant.
+/// - `$name`: The identifier for the constant.
+///
+/// The macro uses the `compile_i32` function to compile the provided value into an `i32` constant.
 macro_rules! const_type {
     ($value:expr, $name:ident) => {
         const $name: i32 = compile_i32($value);
@@ -49,6 +56,14 @@ const_type!([0x42], INSTANCE_TYPE);
 const_type!([0x3f, 0x7f], RESOURCE_TYPE);
 const_type!([0x3e, 0x7f], RESOURCE_TYPE_WITH_ASYNC_CALLBACK);
 
+/// Checks if the given opcode is a type opcode.
+///
+/// # Parameters
+/// - `opcode`: The opcode to check.
+///
+/// # Returns
+/// - `true` if the opcode is a type opcode (i.e., less than or equal to -1).
+/// - `false` otherwise.
 fn is_type_opcode(opcode: i32) -> bool {
     opcode <= -1
 }
@@ -66,7 +81,7 @@ where
             let (len, v) = f(ctx.reader)?;
             Ok((len + 1, Some(v)))
         }
-        x => Err(ComponentModelParserError::InvalidOptionMagic(x)),
+        x => Err(ComponentModelParserError::WrongMagic(x, "core option".to_string())),
     }
 }
 

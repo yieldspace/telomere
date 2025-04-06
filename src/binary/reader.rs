@@ -1,4 +1,4 @@
-use std::io::{self, Read, Take};
+use std::io::{self, Read};
 
 /// A trait that defines methods for reading binary data.
 pub trait BinaryReader {
