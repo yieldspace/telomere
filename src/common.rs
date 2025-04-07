@@ -12,6 +12,7 @@ pub(crate) use store::FunctionInstance;
 pub(crate) use store::ModuleInstance;
 
 pub use store::Store;
+
 #[derive(Debug, Clone, Copy)]
 pub struct TypeIdx(pub u32);
 #[derive(Debug, Clone, Copy)]
@@ -252,7 +253,32 @@ pub enum BlockType {
     ValType(ValType),
     TypeIdx(TypeIdx),
 }
+impl BlockType {
+    pub fn return_size(&self, types: &TypeSection) -> Option<u32> {
+        let return_size = match self {
+            BlockType::TypeIdx(idx) => {
+                let ty = types.get(*idx)?;
 
+                ty.1.iter().map(|v| v.stack_size().u32()).sum()
+            }
+            BlockType::ValType(ty) => ty.stack_size().u32(),
+            BlockType::Void => 0,
+        };
+        Some(return_size)
+    }
+    pub fn param_size(&self, types: &TypeSection) -> Option<u32> {
+        let param_size = match self {
+            BlockType::TypeIdx(idx) => {
+                let ty = types.get(*idx)?;
+
+                ty.0.iter().map(|v| v.stack_size().u32()).sum()
+            }
+            BlockType::ValType(_ty) => 0,
+            BlockType::Void => 0,
+        };
+        Some(param_size)
+    }
+}
 #[derive(Debug, Clone, Copy)]
 pub struct LoopParam {
     pub stack_top: u32,

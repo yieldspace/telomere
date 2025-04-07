@@ -707,11 +707,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             false,
         )?;
         trace!("function return");
-        if unreachable {
-            checker.reset_stack()?;
-        } else {
-            checker.op(&functype.1 .0, &[])?;
-        }
+
+        checker.op(&functype.1 .0, &[])?;
+
         checker.leave_block()?;
 
         if len + len2 != size as usize {

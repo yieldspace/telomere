@@ -682,13 +682,11 @@ fn unreachable() {
     run_test_file("unreachable");
 }
 
-/*
-FIXME: 型検査機を書き直さないと無理!あとでやる。
 #[test]
 fn unreached_invalid() {
     run_test_file("unreached-invalid");
 }
-*/
+
 #[test]
 fn unreached_valid() {
     run_test_file("unreached-valid");
