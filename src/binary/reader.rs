@@ -1,9 +1,16 @@
 use std::io::{self, Read};
 
 pub trait BinaryReader {
+    fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+
     fn read<const N: usize>(&mut self) -> io::Result<(usize, [u8; N])>
     where
-        Self: Sized;
+        Self: Sized,
+    {
+        let mut buf = [0u8; N];
+        let len = self.read_slice(&mut buf)?;
+        Ok((len, buf))
+    }
     fn read_exact<const N: usize>(&mut self) -> io::Result<[u8; N]>
     where
         Self: Sized;
@@ -27,23 +34,18 @@ pub trait BinaryReader {
     fn read_count(&self) -> usize
     where
         Self: Sized;
+    type Take<'b>: BinaryReader + 'b
+    where
+        Self: 'b;
+    fn take(&mut self, limit: usize) -> Self::Take<'_>;
 }
+
 pub struct IoReadBinaryReader<R: Read> {
     read: R,
     count: usize,
 }
 
 impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
-    fn read<const N: usize>(&mut self) -> io::Result<(usize, [u8; N])>
-    where
-        Self: Sized,
-    {
-        let mut buf = [0u8; N];
-        let len = self.read.read(&mut buf)?;
-        self.count += len;
-        Ok((len, buf))
-    }
-
     fn read_exact<const N: usize>(&mut self) -> io::Result<[u8; N]>
     where
         Self: Sized,
@@ -59,6 +61,19 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
     {
         self.count
     }
+
+    type Take<'b>
+        = LimitingBinaryReader<'b, IoReadBinaryReader<R>>
+    where
+        Self: 'b;
+
+    fn take(&mut self, limit: usize) -> Self::Take<'_> {
+        LimitingBinaryReader::new(self, self.read_count() + limit)
+    }
+
+    fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.read.read(buf)
+    }
 }
 impl<R: Read> From<R> for IoReadBinaryReader<R> {
     fn from(read: R) -> Self {
@@ -66,6 +81,55 @@ impl<R: Read> From<R> for IoReadBinaryReader<R> {
     }
 }
 
+pub struct LimitingBinaryReader<'a, R: BinaryReader> {
+    reader: &'a mut R,
+    limit: usize,
+}
+impl<'a, R: BinaryReader> LimitingBinaryReader<'a, R> {
+    fn new(reader: &'a mut R, limit: usize) -> Self {
+        Self { reader, limit }
+    }
+}
+impl<R: BinaryReader> BinaryReader for LimitingBinaryReader<'_, R> {
+    fn read_count(&self) -> usize
+    where
+        Self: Sized,
+    {
+        self.reader.read_count()
+    }
+
+    type Take<'b>
+        = LimitingBinaryReader<'b, R>
+    where
+        R: 'b,
+        Self: 'b;
+    fn take(&mut self, limit: usize) -> Self::Take<'_> {
+        let limit = self.read_count() + limit;
+        LimitingBinaryReader::new(self.reader, limit)
+    }
+
+    fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let remaining: usize = self.limit.saturating_sub(self.read_count());
+        if remaining == 0 && !buf.is_empty() {
+            io::Result::Err(io::Error::new(io::ErrorKind::UnexpectedEof, "take error"))?
+        }
+        let len = remaining.min(buf.len());
+
+        let buf = &mut buf[..len];
+        self.reader.read_slice(buf)
+    }
+
+    fn read_exact<const N: usize>(&mut self) -> io::Result<[u8; N]>
+    where
+        Self: Sized,
+    {
+        let remaining: usize = self.limit.saturating_sub(self.read_count());
+        if remaining < N {
+            io::Result::Err(io::Error::new(io::ErrorKind::UnexpectedEof, "take error"))?
+        }
+        self.reader.read_exact()
+    }
+}
 #[macro_export]
 macro_rules! with_count {
     ($reader:expr, $b:block) => {{
