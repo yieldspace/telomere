@@ -1,3 +1,5 @@
+use tracing::Level;
+
 #[test]
 fn test_empty_component() {
     let component = r#"
@@ -12,8 +14,11 @@ fn test_empty_component() {
 
 #[test]
 fn test_with_core_wasm() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
     let component = r#"
-        (component
+       (component
           (core module
             (func (export "mod-main") (result i32)
               (i32.const 42))

@@ -1,7 +1,7 @@
 use crate::component_model::id::{
     ComponentIdx, CoreInstanceIdx, CoreModuleIdx, CoreTypeIdx, InstanceIdx,
 };
-use crate::component_model::types::Type;
+use crate::component_model::types::{Type, TypeKind};
 use crate::component_model::{
     Alias, CanonicalFuncKind, Component, ComponentExport, ComponentImport, CoreInstance, CoreType,
     Instance,
@@ -22,6 +22,7 @@ pub struct SortMap<'a> {
     pub canons: Vec<Arc<CanonicalFuncKind>>,
     pub imports: Vec<Arc<ComponentImport>>,
     pub exports: Vec<Arc<ComponentExport>>,
+    type_table: Vec<TypeKind>,
 }
 
 impl<'a> SortMap<'a> {
@@ -38,6 +39,7 @@ impl<'a> SortMap<'a> {
             canons: vec![],
             imports: vec![],
             exports: vec![],
+            type_table: vec![],
         }
     }
 
@@ -66,6 +68,7 @@ impl<'a> SortMap<'a> {
     }
 
     pub fn add_type(&mut self, core_type: Arc<Type>) {
+        self.type_table.push(TypeKind::Type(Arc::downgrade(&core_type)));
         self.types.push(core_type);
     }
 

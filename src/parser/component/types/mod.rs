@@ -1,3 +1,6 @@
+mod sort;
+mod instance;
+
 use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::id::TypeId;
 #[cfg(feature = "import_export")]
@@ -12,11 +15,13 @@ use crate::parser::component::context::ParseContext;
 use crate::parser::component::core::parse_core_type;
 use crate::parser::component::id::{parse_func_idx, parse_type_idx};
 use crate::parser::component::import_export::{parse_export_name_dash, parse_import_name_dash};
-use crate::parser::component::{parse_option, ComponentModelParserError};
+use crate::parser::component::types::sort::TypeSort;
+use crate::parser::component::{parse_option, parse_vec_map, ComponentModelParserError};
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
 use crate::with_count;
 use num_traits::FromPrimitive;
+use crate::parser::component::types::instance::{_parse_instance_decl, parse_instance_decl, parse_instance_type};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
@@ -86,7 +91,9 @@ where
     }
 }
 
-pub fn parse_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, Type)> {
+pub fn parse_type<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
+) -> Result<(usize, Type)> {
     let mut counter = Counter::new();
     let opcode = parse_i32(ctx.reader)?.count(&mut counter);
     let ty = match opcode {
@@ -172,8 +179,7 @@ pub fn parse_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, 
             Type::Component(ComponentType(cd))
         }
         INSTANCE_TYPE => {
-            let id = parse_vec(ctx, |v| v.reader, parse_instance_decl)?.count(&mut counter);
-            Type::Instance(InstanceType(id))
+            Type::Instance(parse_instance_type(ctx)?.1)
         }
         RESOURCE_TYPE => {
             let idx = parse_option(ctx, parse_func_idx)?.count(&mut counter);
@@ -285,43 +291,9 @@ fn parse_component_decl(
             }
             x => {
                 let (_, decl) = _parse_instance_decl(ctx, Some(x))?;
+                // type_sort.add_instance_decl(decl);
                 ComponentDecl::Instance(decl)
             }
-        }
-    }))
-}
-
-fn parse_instance_decl(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, InstanceDecl)> {
-    _parse_instance_decl(ctx, None)
-}
-
-fn _parse_instance_decl(
-    ctx: &mut ParseContext<impl BinaryReader>,
-    byte: Option<u8>,
-) -> Result<(usize, InstanceDecl)> {
-    Ok(with_count!(ctx.reader, {
-        let b = match byte {
-            Some(b) => b,
-            None => ctx.reader.read_exact_one()?,
-        };
-        match b {
-            0x00 => {
-                let (_, t) = parse_core_type(ctx)?;
-                InstanceDecl::CoreType(t)
-            }
-            0x01 => {
-                let (_, t) = parse_type(ctx)?;
-                InstanceDecl::Type(t)
-            }
-            0x02 => {
-                let (_, a) = parse_alias(ctx)?;
-                InstanceDecl::Alias(a)
-            }
-            0x04 => {
-                let (_, decl) = parse_export_decl(ctx)?;
-                InstanceDecl::ExportDecl(decl)
-            }
-            _ => todo!(),
         }
     }))
 }
