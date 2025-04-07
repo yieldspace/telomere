@@ -259,7 +259,7 @@ impl<R: BinaryReader> BinaryReader for LimitingBinaryReader<'_, R> {
                 "read limit exceeded",
             ))?
         }
-        self.reader.read_exact()
+        self.reader.read_exact::<N>()
     }
 
     /// Returns the number of bytes read so far.
