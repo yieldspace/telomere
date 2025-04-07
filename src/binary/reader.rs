@@ -139,6 +139,7 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
     {
         let mut buf = [0u8; N];
         self.read.read_exact(&mut buf)?;
+        self.count += N;
         Ok(buf)
     }
 
@@ -227,11 +228,8 @@ impl<R: BinaryReader> BinaryReader for LimitingBinaryReader<'_, R> {
     /// * `io::Result<usize>` - The number of bytes read, or an error if the read operation fails.
     fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let remaining: usize = self.limit.saturating_sub(self.read_count());
-        if remaining == 0 && !buf.is_empty() {
-            io::Result::Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "read limit exceeded",
-            ))?
+        if remaining == 0 {
+            return Ok(0);
         }
         let len = remaining.min(buf.len());
 
