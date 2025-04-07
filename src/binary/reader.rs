@@ -113,7 +113,10 @@ impl<R: BinaryReader> BinaryReader for LimitingBinaryReader<'_, R> {
     fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let remaining: usize = self.limit.saturating_sub(self.read_count());
         if remaining == 0 && !buf.is_empty() {
-            io::Result::Err(io::Error::new(io::ErrorKind::UnexpectedEof, "read limit exceeded"))?
+            io::Result::Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "read limit exceeded",
+            ))?
         }
         let len = remaining.min(buf.len());
 
