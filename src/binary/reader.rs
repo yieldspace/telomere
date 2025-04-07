@@ -1,12 +1,54 @@
 use std::io::{self, Read};
 
+/// A trait that defines methods for reading binary data.
 pub trait BinaryReader {
+    /// Reads a slice of bytes into the provided buffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - A mutable reference to a buffer where the read bytes will be stored.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<usize>` - The number of bytes read, or an error if the read operation fails.
+    fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize>;
+
+    /// Reads a fixed number of bytes into an array.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `N` - The number of bytes to read.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<(usize, [u8; N])>` - A tuple containing the number of bytes read and the array of read bytes, or an error if the read operation fails.
     fn read<const N: usize>(&mut self) -> io::Result<(usize, [u8; N])>
     where
-        Self: Sized;
+        Self: Sized,
+    {
+        let mut buf = [0u8; N];
+        let len = self.read_slice(&mut buf)?;
+        Ok((len, buf))
+    }
+
+    /// Reads exactly `N` bytes into an array.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `N` - The number of bytes to read.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<[u8; N]>` - An array of read bytes, or an error if the read operation fails.
     fn read_exact<const N: usize>(&mut self) -> io::Result<[u8; N]>
     where
         Self: Sized;
+
+    /// Reads a single byte and returns it as an `Option<u8>`.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<Option<u8>>` - An `Option` containing the read byte, or `None` if no byte was read, or an error if the read operation fails.
     fn read_one(&mut self) -> io::Result<Option<u8>>
     where
         Self: Sized,
@@ -17,6 +59,12 @@ pub trait BinaryReader {
             _ => unreachable!(),
         }
     }
+
+    /// Reads exactly one byte and returns it.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<u8>` - The read byte, or an error if the read operation fails.
     fn read_exact_one(&mut self) -> io::Result<u8>
     where
         Self: Sized,
@@ -24,26 +72,67 @@ pub trait BinaryReader {
         Ok(self.read_exact::<1>()?[0])
     }
 
+    /// Returns the number of bytes read so far.
+    ///
+    /// # Returns
+    ///
+    /// * `usize` - The number of bytes read.
     fn read_count(&self) -> usize
     where
         Self: Sized;
+
+    /// A type that represents a limited view of the reader.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `'b` - The lifetime of the limited view.
+    type Take<'b>: BinaryReader + 'b
+    where
+        Self: 'b;
+
+    /// Creates a limited view of the reader with the specified byte limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - The maximum number of bytes that can be read from the limited view.
+    ///
+    /// # Returns
+    ///
+    /// * `Self::Take<'_>` - A limited view of the reader.
+    fn take(&mut self, limit: usize) -> Self::Take<'_>;
 }
+
+/// A struct that implements `BinaryReader` for any type that implements `Read`.
 pub struct IoReadBinaryReader<R: Read> {
     read: R,
     count: usize,
 }
 
 impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
-    fn read<const N: usize>(&mut self) -> io::Result<(usize, [u8; N])>
-    where
-        Self: Sized,
-    {
-        let mut buf = [0u8; N];
-        let len = self.read.read(&mut buf)?;
-        self.count += len;
-        Ok((len, buf))
+    /// Reads a slice of bytes into the provided buffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - A mutable reference to a buffer where the read bytes will be stored.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<usize>` - The number of bytes read, or an error if the read operation fails.
+    fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let bytes_read = self.read.read(buf)?;
+        self.count += bytes_read;
+        Ok(bytes_read)
     }
 
+    /// Reads exactly `N` bytes into an array.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `N` - The number of bytes to read.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<[u8; N]>` - An array of read bytes, or an error if the read operation fails.
     fn read_exact<const N: usize>(&mut self) -> io::Result<[u8; N]>
     where
         Self: Sized,
@@ -53,19 +142,174 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
         Ok(buf)
     }
 
+    /// Returns the number of bytes read so far.
+    ///
+    /// # Returns
+    ///
+    /// * `usize` - The number of bytes read.
     fn read_count(&self) -> usize
     where
         Self: Sized,
     {
         self.count
     }
+
+    /// A type that represents a limited view of the reader.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `'b` - The lifetime of the limited view.
+    type Take<'b>
+        = LimitingBinaryReader<'b, IoReadBinaryReader<R>>
+    where
+        Self: 'b;
+
+    /// Creates a limited view of the reader with the specified byte limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - The maximum number of bytes that can be read from the limited view.
+    ///
+    /// # Returns
+    ///
+    /// * `Self::Take<'_>` - A limited view of the reader.
+    fn take(&mut self, limit: usize) -> Self::Take<'_> {
+        LimitingBinaryReader::new(self, self.read_count() + limit)
+    }
 }
+
 impl<R: Read> From<R> for IoReadBinaryReader<R> {
+    /// Creates a new `IoReadBinaryReader` from a type that implements `Read`.
+    ///
+    /// # Arguments
+    ///
+    /// * `read` - The reader to wrap.
+    ///
+    /// # Returns
+    ///
+    /// * `Self` - A new `IoReadBinaryReader`.
     fn from(read: R) -> Self {
         Self { read, count: 0 }
     }
 }
 
+/// A struct that implements `BinaryReader` with a byte limit.
+pub struct LimitingBinaryReader<'a, R: BinaryReader> {
+    reader: &'a mut R,
+    limit: usize,
+}
+
+impl<'a, R: BinaryReader> LimitingBinaryReader<'a, R> {
+    /// Creates a new `LimitingBinaryReader` with the specified byte limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `reader` - The underlying reader.
+    /// * `limit` - The maximum number of bytes that can be read.
+    ///
+    /// # Returns
+    ///
+    /// * `Self` - A new `LimitingBinaryReader`.
+    fn new(reader: &'a mut R, limit: usize) -> Self {
+        Self { reader, limit }
+    }
+}
+
+impl<R: BinaryReader> BinaryReader for LimitingBinaryReader<'_, R> {
+    /// Reads a slice of bytes into the provided buffer.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - A mutable reference to a buffer where the read bytes will be stored.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<usize>` - The number of bytes read, or an error if the read operation fails.
+    fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let remaining: usize = self.limit.saturating_sub(self.read_count());
+        if remaining == 0 && !buf.is_empty() {
+            io::Result::Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "read limit exceeded",
+            ))?
+        }
+        let len = remaining.min(buf.len());
+
+        let buf = &mut buf[..len];
+        self.reader.read_slice(buf)
+    }
+
+    /// Reads exactly `N` bytes into an array.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `N` - The number of bytes to read.
+    ///
+    /// # Returns
+    ///
+    /// * `io::Result<[u8; N]>` - An array of read bytes, or an error if the read operation fails.
+    fn read_exact<const N: usize>(&mut self) -> io::Result<[u8; N]>
+    where
+        Self: Sized,
+    {
+        let remaining: usize = self.limit.saturating_sub(self.read_count());
+        if remaining < N {
+            io::Result::Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "read limit exceeded",
+            ))?
+        }
+        self.reader.read_exact::<N>()
+    }
+
+    /// Returns the number of bytes read so far.
+    ///
+    /// # Returns
+    ///
+    /// * `usize` - The number of bytes read.
+    fn read_count(&self) -> usize
+    where
+        Self: Sized,
+    {
+        self.reader.read_count()
+    }
+
+    /// A type that represents a limited view of the reader.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `'b` - The lifetime of the limited view.
+    type Take<'b>
+        = LimitingBinaryReader<'b, R>
+    where
+        R: 'b,
+        Self: 'b;
+
+    /// Creates a limited view of the reader with the specified byte limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - The maximum number of bytes that can be read from the limited view.
+    ///
+    /// # Returns
+    ///
+    /// * `Self::Take<'_>` - A limited view of the reader.
+    fn take(&mut self, limit: usize) -> Self::Take<'_> {
+        let limit = self.read_count() + limit;
+        LimitingBinaryReader::new(self.reader, limit)
+    }
+}
+
+/// A macro that calculates the number of bytes read within a block of code.
+///
+/// # Arguments
+///
+/// * `$reader` - The reader to use.
+/// * `$b` - The block of code to execute.
+///
+/// # Returns
+///
+/// * `(usize, T)` - A tuple containing the number of bytes read and the result of the block.
 #[macro_export]
 macro_rules! with_count {
     ($reader:expr, $b:block) => {{
@@ -92,5 +336,46 @@ mod tests {
             1
         });
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn read_slice_within_limit() {
+        use super::*;
+        use std::io::Cursor;
+
+        let data = [1, 2, 3, 4, 5];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+        let mut limiting_reader = LimitingBinaryReader::new(&mut reader, 3);
+
+        let mut buf = [0u8; 2];
+        let bytes_read = limiting_reader.read_slice(&mut buf).unwrap();
+        assert_eq!(bytes_read, 2);
+        assert_eq!(buf, [1, 2]);
+    }
+
+    #[test]
+    fn read_exact_within_limit() {
+        use super::*;
+        use std::io::Cursor;
+
+        let data = [1, 2, 3, 4, 5];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+        let mut limiting_reader = LimitingBinaryReader::new(&mut reader, 3);
+
+        let buf = limiting_reader.read_exact::<2>().unwrap();
+        assert_eq!(buf, [1, 2]);
+    }
+
+    #[test]
+    fn read_exact_exceeding_limit() {
+        use super::*;
+        use std::io::Cursor;
+
+        let data = [1, 2, 3, 4, 5];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+        let mut limiting_reader = LimitingBinaryReader::new(&mut reader, 3);
+
+        let result = limiting_reader.read_exact::<4>();
+        assert!(result.is_err());
     }
 }
