@@ -1,5 +1,5 @@
-mod sort;
 mod instance;
+mod sort;
 
 use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::id::TypeId;
@@ -7,21 +7,19 @@ use crate::component_model::id::TypeId;
 use crate::component_model::types::ValueBound;
 use crate::component_model::types::{
     Case, ComponentDecl, ComponentType, DefValType, ExportDecl, ExternDesc, FuncType, ImportDecl,
-    InstanceDecl, InstanceType, Label, LabelValType, PrimValType, ResourceType, Type, TypeBound,
-    ValType,
+    Label, LabelValType, PrimValType, ResourceType, Type, TypeBound, ValType,
 };
-use crate::parser::component::alias::parse_alias;
 use crate::parser::component::context::ParseContext;
-use crate::parser::component::core::parse_core_type;
 use crate::parser::component::id::{parse_func_idx, parse_type_idx};
 use crate::parser::component::import_export::{parse_export_name_dash, parse_import_name_dash};
-use crate::parser::component::types::sort::TypeSort;
+use crate::parser::component::types::instance::{
+    _parse_instance_decl, parse_instance_decl, parse_instance_type,
+};
 use crate::parser::component::{parse_option, parse_vec_map, ComponentModelParserError};
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
 use crate::with_count;
 use num_traits::FromPrimitive;
-use crate::parser::component::types::instance::{_parse_instance_decl, parse_instance_decl, parse_instance_type};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
@@ -91,9 +89,7 @@ where
     }
 }
 
-pub fn parse_type<R: BinaryReader>(
-    ctx: &mut ParseContext<R>,
-) -> Result<(usize, Type)> {
+pub fn parse_type<'a, R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, Type)> {
     let mut counter = Counter::new();
     let opcode = parse_i32(ctx.reader)?.count(&mut counter);
     let ty = match opcode {
@@ -178,9 +174,7 @@ pub fn parse_type<R: BinaryReader>(
             let cd = parse_vec(ctx, |v| v.reader, parse_component_decl)?.count(&mut counter);
             Type::Component(ComponentType(cd))
         }
-        INSTANCE_TYPE => {
-            Type::Instance(parse_instance_type(ctx)?.1)
-        }
+        INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?.1),
         RESOURCE_TYPE => {
             let idx = parse_option(ctx, parse_func_idx)?.count(&mut counter);
             Type::Resource(ResourceType::Resource(idx))

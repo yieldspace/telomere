@@ -3,6 +3,7 @@ use crate::component_model::id::{
     ComponentIdx, CoreModuleIdx, FuncId, InstanceIdx, SortId, TypeId,
 };
 use crate::parser::component::context::ParseContext;
+use crate::parser::component::sort::TypeTable;
 use crate::parser::component::ComponentModelParserError;
 use crate::parser::core::{parse_i32, parse_u32};
 

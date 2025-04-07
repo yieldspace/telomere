@@ -1,20 +1,27 @@
-use crate::component_model::types::{ExportDecl, InstanceDecl, Type};
+use crate::component_model::types::{ExportDecl, InstanceDecl, Type, TypeKind};
 use crate::component_model::{Alias, CoreType};
+use crate::parser::component::sort::TypeTable;
 
-pub struct TypeSort {
+pub struct InstanceTypeSort<'a, T: TypeTable> {
+    parent: Option<&'a mut T>,
     types: Vec<Type>,
-    core_types: Vec<CoreType>,
-    aliases: Vec<Alias>,
-    exports: Vec<ExportDecl>,
 }
 
-impl TypeSort {
+impl<'a, T> InstanceTypeSort<'a, T>
+where
+    T: TypeTable,
+{
     pub fn new() -> Self {
         Self {
+            parent: None,
             types: vec![],
-            core_types: vec![],
-            aliases: vec![],
-            exports: vec![],
+        }
+    }
+
+    pub fn with_parent(parent: &'a mut T) -> Self {
+        Self {
+            parent: Some(parent),
+            types: vec![],
         }
     }
 
@@ -22,24 +29,14 @@ impl TypeSort {
         self.types.push(ty);
     }
 
-    pub fn get_types(&self) -> &[Type] {
-        &self.types
-    }
+    pub fn add_instance_decl(&mut self, decl: InstanceDecl) {}
+}
 
-    pub fn add_instance_decl(&mut self, decl: InstanceDecl) {
-        match decl {
-            InstanceDecl::CoreType(coretype) => {
-                self.core_types.push(coretype);
-            }
-            InstanceDecl::Type(ty) => {
-                self.types.push(ty);
-            }
-            InstanceDecl::Alias(alias) => {
-                self.aliases.push(alias);
-            }
-            InstanceDecl::ExportDecl(decl) => {
-                self.exports.push(decl);
-            }
-        }
+impl<'a, T> TypeTable for InstanceTypeSort<'a, T>
+where
+    T: TypeTable,
+{
+    fn get_type(&self, idx: usize) -> Option<TypeKind> {
+        todo!()
     }
 }

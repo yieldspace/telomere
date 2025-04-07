@@ -1,10 +1,10 @@
-use std::sync::{Arc, Weak};
 use crate::component_model::id::{FuncId, TypeId};
 use crate::component_model::{Alias, CoreType};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
+use std::sync::{Arc, Weak};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TypeKind {
     Type(Weak<Type>),
     Alias(Weak<Alias>),

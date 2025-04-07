@@ -10,8 +10,8 @@ use crate::parser::core::parse_vec;
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
-pub fn parse_canon(
-    ctx: &mut ParseContext<impl BinaryReader>,
+pub fn parse_canon<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
 ) -> Result<(usize, CanonicalFuncKind)> {
     let mut counter = Counter::new();
     let kind = match ctx.reader.read_exact_one()?.count(&mut counter) {

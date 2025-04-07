@@ -2,20 +2,24 @@ use crate::binary::BinaryReader;
 use crate::component_model::types::{InstanceDecl, InstanceType};
 use crate::parser::component::alias::parse_alias;
 use crate::parser::component::core::parse_core_type;
-use crate::parser::component::{parse_vec_map, ParseContext};
 use crate::parser::component::error::ComponentModelParserError;
+use crate::parser::component::types::sort::InstanceTypeSort;
 use crate::parser::component::types::{parse_export_decl, parse_type};
+use crate::parser::component::{parse_vec_map, ParseContext};
 
 type Result<R> = std::result::Result<R, ComponentModelParserError>;
 
-pub fn parse_instance_type(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, InstanceType)> {
-    parse_vec_map(ctx, |v| v.reader, parse_instance_decl, |c, decl| {
-
-    })?;
+pub fn parse_instance_type(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> Result<(usize, InstanceType)> {
+    let mut sort = InstanceTypeSort::with_parent(&mut ctx.sort);
+    parse_vec_map(ctx, |v| v.reader, parse_instance_decl, |c, decl| {})?;
     Ok((0, InstanceType(vec![])))
 }
 
-pub fn parse_instance_decl(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, InstanceDecl)> {
+pub fn parse_instance_decl(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> Result<(usize, InstanceDecl)> {
     _parse_instance_decl(ctx, None)
 }
 

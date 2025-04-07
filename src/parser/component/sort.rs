@@ -7,7 +7,7 @@ use crate::component_model::{
     Instance,
 };
 use crate::Module;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 #[derive(Debug)]
 pub struct SortMap<'a> {
@@ -68,7 +68,8 @@ impl<'a> SortMap<'a> {
     }
 
     pub fn add_type(&mut self, core_type: Arc<Type>) {
-        self.type_table.push(TypeKind::Type(Arc::downgrade(&core_type)));
+        self.type_table
+            .push(TypeKind::Type(Arc::downgrade(&core_type)));
         self.types.push(core_type);
     }
 
@@ -113,4 +114,14 @@ impl<'a> SortMap<'a> {
             .get(id)
             .map(|i| ComponentIdx(Arc::downgrade(i)))
     }
+}
+
+impl<'a> TypeTable for SortMap<'a> {
+    fn get_type(&self, idx: usize) -> Option<TypeKind> {
+        self.type_table.get(idx).cloned()
+    }
+}
+
+pub trait TypeTable {
+    fn get_type(&self, idx: usize) -> Option<TypeKind>;
 }
