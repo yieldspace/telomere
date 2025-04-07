@@ -1,10 +1,13 @@
 use crate::binary::BinaryReader;
 use crate::common::{
-    FuncType, GlobalType, Limits, MemType, Mut, RefType, ResultType, TableType, ValType,
+    BlockType, FuncType, GlobalType, Limits, MemType, Mut, RefType, ResultType, TableType, TypeIdx,
+    ValType,
 };
-use crate::parser::core::{parse_u32, parse_vec};
+use crate::parser::leb128::Leb128Parser;
 use crate::WasmParserError;
 use tracing::trace;
+
+use super::{parse_u32, parse_vec};
 
 pub type Result<R> = std::result::Result<R, WasmParserError>;
 
@@ -109,4 +112,25 @@ pub fn parse_memtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, MemType)
         Err(WasmParserError::InvalidMemorySize(limits))?
     }
     Ok((len, MemType(limits)))
+}
+pub fn parse_block_type(reader: &mut impl BinaryReader) -> Result<(usize, BlockType)> {
+    let (len, v) = Leb128Parser::new(reader).parse_i64(33)?;
+    let t = if v < 0 {
+        if len != 1 {
+            Err(WasmParserError::InvalidBlockType(v))?
+        }
+        match v {
+            -1 => BlockType::ValType(ValType::I32),
+            -2 => BlockType::ValType(ValType::I64),
+            -3 => BlockType::ValType(ValType::F32),
+            -4 => BlockType::ValType(ValType::F64),
+            -16 => BlockType::ValType(ValType::FuncRef),
+            -17 => BlockType::ValType(ValType::ExternRef),
+            -64 => BlockType::Void,
+            _ => Err(WasmParserError::InvalidBlockType(v))?,
+        }
+    } else {
+        BlockType::TypeIdx(TypeIdx(v as u32))
+    };
+    Ok((len, t))
 }

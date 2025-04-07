@@ -27,17 +27,19 @@ pub fn parse_f64<R: BinaryReader>(reader: &mut R) -> Result<(usize, f64)> {
     Ok((8, f64::from_le_bytes(v)))
 }
 
-pub fn parse_vec<A, R: BinaryReader, V, E>(
+pub fn parse_vec<A, R: BinaryReader, F, G, V, E>(
     env: &mut A,
-    reader: impl FnOnce(&mut A) -> &mut R,
-    mut f: impl FnMut(&mut A) -> std::result::Result<(usize, V), E>,
+    reader: F,
+    mut f: G,
 ) -> std::result::Result<(usize, Vec<V>), E>
 where
     E: From<WasmParserError>,
+    F: for<'b> FnOnce(&'b mut A) -> &'b mut R,
+    G: for<'b> FnMut(&'b mut A) -> std::result::Result<(usize, V), E>,
 {
     let mut read_bytes = 0;
-
-    let (len_len, len) = parse_u32(reader(env))?;
+    let r = reader(env);
+    let (len_len, len) = parse_u32(r)?;
     trace!("parse_vec: {len_len} {len}");
     read_bytes += len_len;
     let mut result = Vec::new();
