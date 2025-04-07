@@ -130,7 +130,10 @@ impl<R: BinaryReader> BinaryReader for LimitingBinaryReader<'_, R> {
     {
         let remaining: usize = self.limit.saturating_sub(self.read_count());
         if remaining < N {
-            io::Result::Err(io::Error::new(io::ErrorKind::UnexpectedEof, "read limit exceeded"))?
+            io::Result::Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "read limit exceeded",
+            ))?
         }
         self.reader.read_exact()
     }
