@@ -72,7 +72,9 @@ impl<R: Read> BinaryReader for IoReadBinaryReader<R> {
     }
 
     fn read_slice(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read.read(buf)
+        let bytes_read = self.read.read(buf)?;
+        self.count += bytes_read;
+        Ok(bytes_read)
     }
 }
 impl<R: Read> From<R> for IoReadBinaryReader<R> {
