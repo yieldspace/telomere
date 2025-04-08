@@ -414,9 +414,6 @@ fn nop() {
 
 #[test]
 fn func() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     run_test_file("func");
 }
 
@@ -722,21 +719,22 @@ fn table_sub() {
 fn table_init() {
     run_test_file("table_init");
 }
-
-/*
-TODO:
-
 #[test]
 fn table_grow() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("table_grow");
-}
-
-#[test]
-fn table_fill() {
-    run_test_file("table_fill");
 }
 #[test]
 fn table_size() {
     run_test_file("table_size");
 }
+/*
+TODO:
+
+
+#[test]
+fn table_fill() {
+    run_test_file("table_fill");
+}
+
     */

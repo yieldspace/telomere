@@ -2,13 +2,12 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        ElemInit, ElemMode, ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable,
-        LocalState, Stack, VMResult, ValType, WasmValue,
+        execute_elem_init_const_expr, ElemInit, ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable, LocalState, Stack, VMResult, ValType, WasmValue
     },
     Store,
 };
 
-use super::{instantiate::execute_elem_init_const_expr, TABLE_UNINITIALIZED};
+use super::TABLE_UNINITIALIZED;
 pub struct ResultValue(Vec<WasmValue>);
 impl ResultValue {
     pub fn new(args: Vec<WasmValue>) -> Self {
@@ -956,6 +955,42 @@ pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     .as_mut_ptr();
     std::ptr::copy(src_ptr, dst_ptr, len);
     call_next(tail_code, 2, ctx)
+}
+pub unsafe fn op_table_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let table_idx = (*tail_code).operand.u32 as usize;
+    let table_addr = ctx.instance().tables[table_idx] as usize;
+    let table_inst = &mut ctx.store.tables[table_addr];
+    let n = ctx.stack.pop_i32();
+    let val = ctx.stack.pop_u32();
+    let sz = table_inst.1.len();
+    if n < 0 {
+        vm_try!(ctx.stack.push_i32(-1));
+    } else {
+        let new_len = sz + n as usize;
+        match table_inst.0.limits.max {
+            Some(max) if max as usize >= new_len => {
+                table_inst.1.resize(new_len, val);
+                vm_try!(ctx.stack.push_u32(sz as u32));
+            }
+            None => {
+                table_inst.1.resize(new_len, val);
+                vm_try!(ctx.stack.push_u32(sz as u32));
+            }
+            Some(_) => {
+                vm_try!(ctx.stack.push_i32(-1));
+            }
+        }
+    }
+    call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_table_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let table_idx = (*tail_code).operand.u32 as usize;
+    let table_addr = ctx.instance().tables[table_idx] as usize;
+    let table_inst = &mut ctx.store.tables[table_addr];
+    let val = table_inst.1.len() as u32;
+    trace!("op_table_size: {table_idx} {table_addr} {table_inst:?} => {val}");
+    vm_try!(ctx.stack.push_u32(val));
+    call_next(tail_code, 1, ctx)
 }
 macro_rules! memory_try {
     ($ctx: expr) => {

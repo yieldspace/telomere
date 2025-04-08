@@ -655,6 +655,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     ) -> Result<ElementSection> {
         trace!("{:?}", functions);
         let (len, elems) = self.parse_vec(|me| me.parse_elem(globals, functions, tables))?;
+        tracing::trace!("elems: {elems:?}");
         if len != size as usize {
             Err(WasmParserError::InvalidSectionSize)?
         }

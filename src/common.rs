@@ -1,5 +1,6 @@
 #[macro_use]
 mod vm_result;
+use store::GlobalStore;
 pub use vm_result::VMResult;
 mod memory;
 pub use memory::{MemArg, Memory};
@@ -420,3 +421,52 @@ impl JumpTable {
 }
 #[derive(Debug, Clone, Copy)]
 pub struct InstanceAddr(pub(crate) u32);
+
+pub fn execute_elem_init_const_expr(
+    global_store: &GlobalStore,
+    globals: &[u32],
+    funcs: &[u32],
+    exprs: &[ConstExpr],
+    expected: RefType,
+) -> VMResult<u32> {
+    if exprs.len() != 1 {
+        return VMResult::Unlinkable;
+    }
+    tracing::trace!("execute_elem_init_const_expr: {funcs:?} {exprs:?}");
+    match &exprs[0] {
+        ConstExpr::FuncRef(idx) => {
+            if expected != RefType::FuncRef {
+                return VMResult::Unlinkable;
+            }
+
+            if let Some(addr) = funcs.get(*idx as usize) {
+                VMResult::Success(*addr)
+            } else {
+                tracing::trace!("InvalidOperand");
+
+                VMResult::InvalidOperand
+            }
+        }
+        ConstExpr::RefNull(RefType::FuncRef) => {
+            if expected != RefType::FuncRef {
+                return VMResult::Unlinkable;
+            }
+            VMResult::Success(0)
+        }
+        ConstExpr::RefNull(RefType::ExternRef) => {
+            if expected != RefType::ExternRef {
+                return VMResult::Unlinkable;
+            }
+            VMResult::Success(0)
+        }
+        ConstExpr::GlobalGet(idx) => {
+            let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
+                VMResult::Unlinkable
+            })) as usize;
+            let mut buf = [0u8; 4];
+            buf.copy_from_slice(&global_store.0[addr..addr + 4]);
+            VMResult::Success(u32::from_le_bytes(buf))
+        }
+        unknown => todo!("{unknown:?}"),
+    }
+}
