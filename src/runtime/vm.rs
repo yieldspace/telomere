@@ -870,28 +870,30 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let len = ctx.stack.pop_u32() as usize;
     let src = ctx.stack.pop_u32() as usize;
     let dst = ctx.stack.pop_u32() as usize;
-    let src_elem_idx = (*tail_code).operand.u32 as usize;
+    let src_elem_idx = (*tail_code).operand.u32;
     let dst_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
 
     let ExecuteContext {
         local_state, store, ..
     } = ctx;
     let ls = local_state.last().unwrap_unchecked();
-    let instance_addr = ls.instance_addr as usize;
+    let instance_addr = ls.instance_addr;
     let Store {
         instances,
         tables,
-        modules,
         globals: global_store,
+        elems,
         ..
     } = store;
-    let instance = &mut instances[instance_addr];
+    let instance = &mut instances[instance_addr as usize];
     let dst_table_addr = instance.tables[dst_table_idx] as usize;
 
-    let elem = &modules[instance.module_addr as usize].elem[src_elem_idx];
-    if !matches!(elem.mode, ElemMode::Passive) {
+    let elem = if let Some(elem) = elems.get(&(instance_addr, src_elem_idx)) {
+        elem
+    } else {
         return VMResult::TableIndexOutOfRange;
-    }
+    };
+
     let dst_table = &mut tables[dst_table_addr];
     let dst = vm_try!(VMResult::from_option(
         dst_table.1.get_mut(dst..dst + len),
@@ -899,12 +901,18 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     ));
     match &elem.init {
         ElemInit::FuncIdx(idxs) => {
-            for (i, funcidx) in idxs[src..src + len].iter().enumerate() {
+            let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
+                VMResult::TableIndexOutOfRange
+            }));
+            for (i, funcidx) in slice.iter().enumerate() {
                 dst[i] = instance.funcs[*funcidx as usize];
             }
         }
         ElemInit::ConstExpr(exprs) => {
-            for (i, expr) in exprs[src..src + len].iter().enumerate() {
+            let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
+                VMResult::TableIndexOutOfRange
+            }));
+            for (i, expr) in slice.iter().enumerate() {
                 dst[i] = vm_try!(execute_elem_init_const_expr(
                     global_store,
                     &instance.globals,
@@ -918,6 +926,14 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 
     call_next(tail_code, 2, ctx)
 }
+pub unsafe fn op_elem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let elem_idx = (*tail_code).operand.u32;
+    let ls = ctx.local_state.last().unwrap_unchecked();
+    let instance_addr = ls.instance_addr;
+    ctx.store.elems.remove(&(instance_addr, elem_idx));
+    call_next(tail_code, 1, ctx)
+}
+
 pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32() as usize;
     let src = ctx.stack.pop_u32() as usize;

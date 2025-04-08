@@ -2640,6 +2640,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         if self.elems.get(elemidx as usize).is_none() {
                             Err(WasmParserError::UnknownElement)?;
                         }
+                        trace!("parse_op_elem_drop");
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_elem_drop,
+                            });
+                            instrs.push(Instr {
+                                operand: Operand { u32: elemidx },
+                            });
+                        }
+
                         (1 + len + len2, false)
                     }
                     14 => {

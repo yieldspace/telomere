@@ -718,14 +718,11 @@ fn table_sub() {
     run_test_file("table-sub");
 }
 */
-/*
-TODO: element のdrop無理すぎる。あとでやる。
-
 #[test]
 fn table_init() {
     run_test_file("table_init");
 }
-*/
+
 /*
 TODO:
 

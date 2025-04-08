@@ -273,7 +273,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
 
     let res = (|| {
         tracing::trace!("funcs2: {funcs:?}");
-        for elem in &m_elems.0 {
+        for (idx, elem) in (0u32..).zip(m_elems.0.into_iter()) {
             tracing::trace!("funcs3: {funcs:?}");
             match &elem.mode {
                 ElemMode::Active(idx, offset) => match &elem.init {
@@ -326,8 +326,11 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                         }
                     }
                 },
-                _ => {
-                    // do nothing
+                ElemMode::Passive  => {
+                    store.elems.insert((inst_addr, idx), elem);
+                }
+                ElemMode::Declarative => {
+                    //FIXME: do nothing
                 }
             }
         }
@@ -343,7 +346,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         exports: exs,
         tables: m_tables,
         globals: m_globals,
-        elem: m_elems.0,
         mems,
     });
     let instance = Instance {
