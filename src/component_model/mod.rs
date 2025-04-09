@@ -5,9 +5,7 @@ mod import_export;
 pub mod types;
 
 use crate::common::{Import, ImportDesc};
-use crate::component_model::id::{
-    ComponentIdx, CoreInstanceIdx, CoreModuleIdx, FuncId, InstanceIdx, TypeId,
-};
+use crate::component_model::id::{ComponentIdx, CoreInstanceIdx, CoreModuleIdx, CoreTypeIdx, FuncId, InstanceIdx, TypeId};
 use crate::Module;
 pub use canon::*;
 pub use component::*;
@@ -105,6 +103,11 @@ pub enum CoreAliasTarget {
 pub enum Instance {
     Instantiate(Instantiate),
     InlineExport(Vec<InlineExport>),
+}
+
+pub struct CInstance {
+    component: Option<ComponentIdx>,
+
 }
 
 #[derive(Debug)]
