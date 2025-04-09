@@ -2,10 +2,10 @@ use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::{CoreAlias, CoreAliasTarget, CoreModuleDecl, CoreType};
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::core::parse_core_sort;
-use crate::parser::component::ComponentModelParserError;
+use crate::parser::component::ComponentParseError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 /// note: rt and sub x* ct is not supported (Wasm 3.0)
 pub fn parse_core_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, CoreType)> {
@@ -14,7 +14,7 @@ pub fn parse_core_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(us
 
 fn parse_core_module_type(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, CoreType)> {
     let mut counter = Counter::new();
-    ComponentModelParserError::assert_magic(
+    ComponentParseError::assert_magic(
         [ctx.reader.read_exact_one()?.count(&mut counter)],
         [0x50],
         "core module type",
@@ -34,7 +34,7 @@ fn parse_core_module_decl<R: BinaryReader>(
         }
         0x02 => {
             let (sort_len, sort) = parse_core_sort(ctx)?;
-            ComponentModelParserError::assert_magic(
+            ComponentParseError::assert_magic(
                 [ctx.reader.read_exact_one()?],
                 [0x01],
                 "core alias target",
@@ -53,6 +53,6 @@ fn parse_core_module_decl<R: BinaryReader>(
             let (name_len, name) = parse_name(ctx.reader)?;
             todo!("parse core import desc")
         }
-        t => Err(ComponentModelParserError::InvalidCoreModuleDecl(t)),
+        t => Err(ComponentParseError::InvalidCoreModuleDecl(t)),
     }
 }

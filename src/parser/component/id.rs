@@ -4,10 +4,10 @@ use crate::component_model::id::{
 };
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::sort::TypeTable;
-use crate::parser::component::ComponentModelParserError;
+use crate::parser::component::ComponentParseError;
 use crate::parser::core::{parse_i32, parse_u32};
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_core_module_id<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
@@ -16,7 +16,7 @@ pub fn parse_core_module_id<R: BinaryReader>(
     if let Some(idx) = ctx.sort.get_core_module_idx(id as usize) {
         Ok((len, idx))
     } else {
-        Err(ComponentModelParserError::InvalidIdx(
+        Err(ComponentParseError::InvalidIdx(
             "Module".to_string(),
             id,
         ))
@@ -30,7 +30,7 @@ pub fn parse_instance_idx<R: BinaryReader>(
     if let Some(idx) = ctx.sort.get_instance_idx(id as usize) {
         Ok((len, idx))
     } else {
-        Err(ComponentModelParserError::InvalidIdx(
+        Err(ComponentParseError::InvalidIdx(
             "Instance".to_string(),
             id,
         ))
@@ -44,7 +44,7 @@ pub fn parse_component_idx<R: BinaryReader>(
     if let Some(idx) = ctx.sort.get_component_idx(id as usize) {
         Ok((len, idx))
     } else {
-        Err(ComponentModelParserError::InvalidIdx(
+        Err(ComponentParseError::InvalidIdx(
             "Component".to_string(),
             id,
         ))

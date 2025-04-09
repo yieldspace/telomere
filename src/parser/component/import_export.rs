@@ -3,11 +3,11 @@ use crate::component_model::{ComponentExport, ComponentImport};
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::id::parse_sort_idx;
 use crate::parser::component::types::parse_externdesc;
-use crate::parser::component::{parse_option, ComponentModelParserError};
+use crate::parser::component::{parse_option, ComponentParseError};
 use crate::parser::core::parse_name;
 use crate::with_count;
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(usize, ComponentImport)> {
     let mut counter = Counter::new();
@@ -30,7 +30,7 @@ pub fn parse_import_name_dash(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(usize, String)> {
     Ok(with_count!(ctx.reader, {
-        ComponentModelParserError::assert_magic(
+        ComponentParseError::assert_magic(
             [ctx.reader.read_exact_one()?],
             [0x00],
             "import name",
@@ -45,7 +45,7 @@ pub fn parse_export_name_dash(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(usize, String)> {
     Ok(with_count!(ctx.reader, {
-        ComponentModelParserError::assert_magic(
+        ComponentParseError::assert_magic(
             [ctx.reader.read_exact_one()?],
             [0x00],
             "export name",

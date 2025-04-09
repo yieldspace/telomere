@@ -5,10 +5,10 @@ use crate::component_model::{
 };
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::id::{parse_core_module_id, parse_instance_idx};
-use crate::parser::component::ComponentModelParserError;
+use crate::parser::component::ComponentParseError;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_core_instance<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
@@ -33,7 +33,7 @@ pub fn parse_core_instance<R: BinaryReader>(
                 CoreInstance::InlineExport(inline_exports),
             ))
         }
-        magic => Err(ComponentModelParserError::InvalidInstanceExpr(magic)),
+        magic => Err(ComponentParseError::InvalidInstanceExpr(magic)),
     }
 }
 
@@ -41,7 +41,7 @@ fn parse_core_instantiate_arg<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> Result<(usize, CoreInstantiateArg)> {
     let (name_len, name) = parse_name(ctx.reader)?;
-    ComponentModelParserError::assert_magic(
+    ComponentParseError::assert_magic(
         [ctx.reader.read_exact_one()?],
         [0x12],
         "instantiate arg",
@@ -96,7 +96,7 @@ pub(crate) fn parse_core_sort_type<R: BinaryReader>(
         0x10 => CoreSortType::Type,
         0x11 => CoreSortType::Module,
         0x12 => CoreSortType::Instance,
-        magic => return Err(ComponentModelParserError::InvalidCoreSort(magic)),
+        magic => return Err(ComponentParseError::InvalidCoreSort(magic)),
     };
     Ok((1, sort))
 }

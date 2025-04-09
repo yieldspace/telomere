@@ -1,9 +1,9 @@
 use crate::binary::BinaryReader;
 use crate::component_model::id::{CoreFuncId, CoreInstanceIdx, CoreMemoryId, CoreTableId};
-use crate::parser::component::ComponentModelParserError;
+use crate::parser::component::ComponentParseError;
 use crate::parser::component::ParseContext;
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_core_memory_id(
     ctx: &mut ParseContext<impl BinaryReader>,

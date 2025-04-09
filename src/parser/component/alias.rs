@@ -2,12 +2,12 @@ use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::{Alias, AliasTarget};
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::core::parse_core_instance_idx;
-use crate::parser::component::error::ComponentModelParserError;
+use crate::parser::component::error::ComponentParseError;
 use crate::parser::component::id::parse_instance_idx;
 use crate::parser::component::instance::parse_sort;
 use crate::parser::core::{parse_name, parse_u32};
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_alias<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, Alias)> {
     let mut counter = Counter::new();
@@ -43,6 +43,6 @@ pub fn parse_alias<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize,
                 },
             ))
         }
-        x => Err(ComponentModelParserError::InvalidAliasTarget(x)),
+        x => Err(ComponentParseError::InvalidAliasTarget(x)),
     }
 }

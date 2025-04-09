@@ -2,12 +2,12 @@ use crate::binary::BinaryReader;
 use crate::component_model::types::{InstanceDecl, InstanceType};
 use crate::parser::component::alias::parse_alias;
 use crate::parser::component::core::parse_core_type;
-use crate::parser::component::error::ComponentModelParserError;
+use crate::parser::component::error::ComponentParseError;
 use crate::parser::component::types::sort::InstanceTypeSort;
 use crate::parser::component::types::{parse_export_decl, parse_type};
 use crate::parser::component::{parse_vec_map, ParseContext};
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_instance_type(
     ctx: &mut ParseContext<impl BinaryReader>,

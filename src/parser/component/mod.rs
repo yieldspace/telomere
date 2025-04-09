@@ -12,7 +12,7 @@ mod types;
 
 use crate::binary::BinaryReader;
 use crate::component_model::Component;
-use crate::parser::component::error::ComponentModelParserError;
+use crate::parser::component::error::ComponentParseError;
 use crate::parser::component::instance::parse_instance;
 use crate::parser::component::section::ComponentSectionType;
 use crate::parser::core::parse_u32;
@@ -22,7 +22,7 @@ pub use sort::SortMap;
 use std::sync::Arc;
 use tracing::trace;
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
     let sort_map = SortMap::new(None);
@@ -156,7 +156,7 @@ pub fn parse_magic<R: BinaryReader>(reader: &mut R) -> Result<()> {
     if matches!(&magic, &[0x00, 0x61, 0x73, 0x6d]) {
         Ok(())
     } else {
-        Err(ComponentModelParserError::InvalidMagic(
+        Err(ComponentParseError::InvalidMagic(
             Box::new(magic),
             Box::new([0x00, 0x61, 0x73, 0x6d]),
             "component".to_string(),
@@ -169,7 +169,7 @@ pub fn parse_version<R: BinaryReader>(reader: &mut R) -> Result<()> {
     if matches!(&version, &[0x0d, 0x00]) {
         Ok(())
     } else {
-        Err(ComponentModelParserError::InvalidVersion(version))
+        Err(ComponentParseError::InvalidVersion(version))
     }
 }
 
@@ -178,7 +178,7 @@ pub fn parse_layer<R: BinaryReader>(reader: &mut R) -> Result<()> {
     if matches!(&layer, &[0x01, 0x00]) {
         Ok(())
     } else {
-        Err(ComponentModelParserError::InvalidLayer(layer))
+        Err(ComponentParseError::InvalidLayer(layer))
     }
 }
 
@@ -198,7 +198,7 @@ pub fn parse_section_type<R: BinaryReader>(reader: &mut R) -> Result<Option<Comp
             0x0a => Ok(Some(ComponentSectionType::Import)),
             0x0b => Ok(Some(ComponentSectionType::Export)),
             0x0c => Ok(Some(ComponentSectionType::Value)),
-            _ => Err(ComponentModelParserError::InvalidSectionType(kind)),
+            _ => Err(ComponentParseError::InvalidSectionType(kind)),
         }
     } else {
         Ok(None)
@@ -217,7 +217,7 @@ pub fn parse_option<R: BinaryReader, V, E>(
     mut f: impl FnMut(&mut ParseContext<R>) -> std::result::Result<(usize, V), E>,
 ) -> Result<(usize, Option<V>)>
 where
-    ComponentModelParserError: From<E>,
+    ComponentParseError: From<E>,
 {
     match ctx.reader.read_exact_one()? {
         0x00 => Ok((1, None)),
@@ -225,7 +225,7 @@ where
             let (len, v) = f(ctx)?;
             Ok((len + 1, Some(v)))
         }
-        x => Err(ComponentModelParserError::WrongMagic(
+        x => Err(ComponentParseError::WrongMagic(
             x,
             "option".to_string(),
         )),

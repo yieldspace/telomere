@@ -1,9 +1,9 @@
 use crate::WasmParserError;
 use thiserror::Error;
 
-/// `ComponentModelParserError` represents the possible errors that can occur in the component model parser.
+/// `ComponentParseError` represents the possible errors that can occur in the component model parser.
 #[derive(Error, Debug)]
-pub enum ComponentModelParserError {
+pub enum ComponentParseError {
     /// Error when a module is set multiple times.
     #[error("module can't set multiple times")]
     MultipleModule,
@@ -66,7 +66,7 @@ pub enum ComponentModelParserError {
     TypeError(String),
 }
 
-impl ComponentModelParserError {
+impl ComponentParseError {
     /// Asserts that the provided `magic` array matches the expected `expected` array.
     ///
     /// # Parameters
@@ -76,7 +76,7 @@ impl ComponentModelParserError {
     ///
     /// # Returns
     /// - `Ok(())` if the magic number matches the expected value.
-    /// - `Err(ComponentModelParserError::InvalidMagic)` if the magic number does not match the expected value.
+    /// - `Err(ComponentParseError::InvalidMagic)` if the magic number does not match the expected value.
     pub fn assert_magic<const N: usize>(
         magic: [u8; N],
         expected: [u8; N],
@@ -103,7 +103,7 @@ mod tests {
         let magic = [0x00, 0x61, 0x73, 0x6d];
         let expected = [0x00, 0x61, 0x73, 0x6d];
         let name = "component";
-        assert!(ComponentModelParserError::assert_magic(magic, expected, name).is_ok());
+        assert!(ComponentParseError::assert_magic(magic, expected, name).is_ok());
     }
 
     #[test]
@@ -111,9 +111,9 @@ mod tests {
         let magic = [0x00, 0x61, 0x73, 0x6e];
         let expected = [0x00, 0x61, 0x73, 0x6d];
         let name = "component";
-        let result = ComponentModelParserError::assert_magic(magic, expected, name);
+        let result = ComponentParseError::assert_magic(magic, expected, name);
         assert!(result.is_err());
-        if let Err(ComponentModelParserError::InvalidMagic(exp, act, n)) = result {
+        if let Err(ComponentParseError::InvalidMagic(exp, act, n)) = result {
             assert_eq!(*exp, expected);
             assert_eq!(*act, magic);
             assert_eq!(n, name);

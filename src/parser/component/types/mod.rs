@@ -15,13 +15,13 @@ use crate::parser::component::import_export::{parse_export_name_dash, parse_impo
 use crate::parser::component::types::instance::{
     _parse_instance_decl, parse_instance_decl, parse_instance_type,
 };
-use crate::parser::component::{parse_option, parse_vec_map, ComponentModelParserError};
+use crate::parser::component::{parse_option, parse_vec_map, ComponentParseError};
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
 use crate::with_count;
 use num_traits::FromPrimitive;
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 /// Macro to define a constant type with a given value and name.
 ///
@@ -74,7 +74,7 @@ fn parse_core_option<R: BinaryReader, V, E>(
     mut f: impl FnMut(&mut R) -> std::result::Result<(usize, V), E>,
 ) -> Result<(usize, Option<V>)>
 where
-    ComponentModelParserError: From<E>,
+    ComponentParseError: From<E>,
 {
     match ctx.reader.read_exact_one()? {
         0x00 => Ok((1, None)),
@@ -82,7 +82,7 @@ where
             let (len, v) = f(ctx.reader)?;
             Ok((len + 1, Some(v)))
         }
-        x => Err(ComponentModelParserError::WrongMagic(
+        x => Err(ComponentParseError::WrongMagic(
             x,
             "core option".to_string(),
         )),
@@ -120,7 +120,7 @@ pub fn parse_type<'a, R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usi
         DEFVALTYPE_FLAGS => {
             let labels = parse_vec(ctx, |v| v.reader, parse_label_dash)?.count(&mut counter);
             if labels.is_empty() || labels.len() > 32 {
-                return Err(ComponentModelParserError::TypeError(
+                return Err(ComponentParseError::TypeError(
                     "Flags type must have 1-32 labels".to_string(),
                 ));
             }
@@ -129,7 +129,7 @@ pub fn parse_type<'a, R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usi
         DEFVALTYPE_ENUM => {
             let labels = parse_vec(ctx, |v| v.reader, parse_label_dash)?.count(&mut counter);
             if labels.is_empty() {
-                return Err(ComponentModelParserError::TypeError(
+                return Err(ComponentParseError::TypeError(
                     "Enum type cannot be empty".to_string(),
                 ));
             }
@@ -185,7 +185,7 @@ pub fn parse_type<'a, R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usi
             Type::Resource(ResourceType::ResourceWithAsyncCallback(idx, cb))
         }
         n => {
-            return Err(ComponentModelParserError::TypeError(format!(
+            return Err(ComponentParseError::TypeError(format!(
                 "Invalid type: {n}"
             )));
         }
@@ -205,13 +205,13 @@ pub fn parse_resultlist(
         0x01 => match ctx.reader.read_exact_one()?.count(&mut counter) {
             0x00 => None,
             x => {
-                return Err(ComponentModelParserError::TypeError(format!(
+                return Err(ComponentParseError::TypeError(format!(
                     "Invalid function result type: {x}"
                 )));
             }
         },
         x => {
-            return Err(ComponentModelParserError::TypeError(format!(
+            return Err(ComponentParseError::TypeError(format!(
                 "Invalid function result type: {x}"
             )));
         }
@@ -227,7 +227,7 @@ pub fn parse_primvaltype<R: BinaryReader>(
         if let Some(s) = PrimValType::from_u8(n) {
             s
         } else {
-            return Err(ComponentModelParserError::InvalidPrimValType(n));
+            return Err(ComponentParseError::InvalidPrimValType(n));
         }
     });
     Ok(r)
@@ -249,7 +249,7 @@ fn parse_case<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, Case
     Ok(with_count!(ctx.reader, {
         let (_, l) = parse_label_dash(ctx)?;
         let (_, t) = parse_option(ctx, parse_valtype)?;
-        ComponentModelParserError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "case")?;
+        ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "case")?;
         Case { label: l, t }
     }))
 }
@@ -304,7 +304,7 @@ pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> Result<(us
     Ok(with_count!(ctx.reader, {
         match ctx.reader.read_exact_one()? {
             0x00 => {
-                ComponentModelParserError::assert_magic(
+                ComponentParseError::assert_magic(
                     [ctx.reader.read_exact_one()?],
                     [0x00],
                     "extern desc",

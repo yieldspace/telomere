@@ -2,11 +2,11 @@ use crate::binary::{BinaryReader, Countable, Counter};
 use crate::component_model::{InlineExport, Instance, Instantiate, InstantiateArg, Sort, SortType};
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::core::parse_core_sort;
-use crate::parser::component::error::ComponentModelParserError;
+use crate::parser::component::error::ComponentParseError;
 use crate::parser::component::id::parse_component_idx;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_instance<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, Instance)> {
     let mut counter = Counter::new();
@@ -54,7 +54,7 @@ pub(crate) fn parse_sort<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(
         }
         SortType::Component => {
             // match ctx.get_component_id(idx) {
-            //     None => return Err(ComponentModelParserError::InvalidComponentId(idx)),
+            //     None => return Err(ComponentParseError::InvalidComponentId(idx)),
             //     Some(id) => {
             //         Sort::Component(id, idx as usize)
             //     }
@@ -63,7 +63,7 @@ pub(crate) fn parse_sort<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(
         }
         SortType::Instance => {
             // match ctx.get_instance_id(idx) {
-            //     None => return Err(ComponentModelParserError::InvalidInstanceId(idx)),
+            //     None => return Err(ComponentParseError::InvalidInstanceId(idx)),
             //     Some(id) => {
             //         Sort::Instance(id, idx as usize)
             //     }
@@ -87,7 +87,7 @@ pub(crate) fn parse_sort_type<R: BinaryReader>(
         0x03 => (1, SortType::Type),
         0x04 => (1, SortType::Component),
         0x05 => (1, SortType::Instance),
-        sort => return Err(ComponentModelParserError::InvalidSort(sort)),
+        sort => return Err(ComponentParseError::InvalidSort(sort)),
     })
 }
 

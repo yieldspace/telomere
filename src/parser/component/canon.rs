@@ -5,10 +5,10 @@ use crate::parser::component::core::{
 };
 use crate::parser::component::id::{parse_func_idx, parse_type_idx};
 use crate::parser::component::ParseContext;
-use crate::parser::component::{parse_option, ComponentModelParserError};
+use crate::parser::component::{parse_option, ComponentParseError};
 use crate::parser::core::parse_vec;
 
-type Result<R> = std::result::Result<R, ComponentModelParserError>;
+type Result<R> = std::result::Result<R, ComponentParseError>;
 
 pub fn parse_canon<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
