@@ -354,7 +354,7 @@ pub fn aliasing(
     let inst_addr = store.instances.len() as u32;
     let mut exports = vec![];
     for (modname, importname, exportname) in triplets {
-        let instance_addr = vm_try!(VMResult::from_option(registry.get(&modname), || {
+        let instance_addr = vm_try!(VMResult::from_option(registry.get(modname), || {
             VMResult::Unlinkable
         }));
         let Store {
