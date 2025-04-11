@@ -2664,11 +2664,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         let tt1 = self
                             .tables
                             .get(tableidx as usize)
-                            .ok_or_else(|| WasmParserError::InvalidTableIndex(tableidx))?;
+                            .ok_or(WasmParserError::InvalidTableIndex(tableidx))?;
                         let tt2 = self
                             .tables
                             .get(tableidx2 as usize)
-                            .ok_or_else(|| WasmParserError::InvalidTableIndex(tableidx2))?;
+                            .ok_or(WasmParserError::InvalidTableIndex(tableidx2))?;
                         if tt1.reftype != tt2.reftype {
                             Err(WasmParserError::InvalidStackValTypeAny)?
                         }
@@ -2692,7 +2692,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         let tt = self
                             .tables
                             .get(tableidx as usize)
-                            .ok_or_else(|| WasmParserError::InvalidTableIndex(tableidx))?;
+                            .ok_or(WasmParserError::InvalidTableIndex(tableidx))?;
                         checker.op(&[tt.reftype.into(), ValType::I32], &[ValType::I32])?;
                         if !*unreachable {
                             instrs.push(Instr {
@@ -2709,7 +2709,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         trace!("parse_op_table_size");
                         self.tables
                             .get(tableidx as usize)
-                            .ok_or_else(|| WasmParserError::InvalidTableIndex(tableidx))?;
+                            .ok_or(WasmParserError::InvalidTableIndex(tableidx))?;
                         checker.op(&[], &[ValType::I32])?;
                         if !*unreachable {
                             instrs.push(Instr {
@@ -2727,7 +2727,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         let tt = self
                             .tables
                             .get(tableidx as usize)
-                            .ok_or_else(|| WasmParserError::InvalidTableIndex(tableidx))?;
+                            .ok_or(WasmParserError::InvalidTableIndex(tableidx))?;
                         checker.op(&[ValType::I32, tt.reftype.into(), ValType::I32], &[])?;
                         if !*unreachable {
                             instrs.push(Instr {

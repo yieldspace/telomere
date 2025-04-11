@@ -4,7 +4,7 @@ use telomere::{
     common::InstanceAddr, get_global, instantiate, Registry, ResultValue, Store, VMResult,
     WasmValue,
 };
-use tracing::{error, Level};
+use tracing::error;
 use wast::{
     core::{AbstractHeapType, HeapType, NanPattern, WastRetCore},
     parser::ParseBuffer,
