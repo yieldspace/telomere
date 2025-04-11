@@ -2,12 +2,14 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        execute_elem_init_const_expr, ElemInit, ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable, LocalState, Stack, VMResult, ValType, WasmValue
+        execute_elem_init_const_expr, ElemInit, ExecuteContext, ExportDesc, Instance, InstanceAddr,
+        Instr, JumpTable, LocalState, Stack, VMResult, ValType, WasmValue,
     },
     Store,
 };
 
 use super::TABLE_UNINITIALIZED;
+#[derive(Debug)]
 pub struct ResultValue(Vec<WasmValue>);
 impl ResultValue {
     pub fn new(args: Vec<WasmValue>) -> Self {
@@ -992,6 +994,21 @@ pub unsafe fn op_table_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     vm_try!(ctx.stack.push_u32(val));
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_table_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let n = ctx.stack.pop_u32() as usize;
+    let val = ctx.stack.pop_u32();
+    let i = ctx.stack.pop_u32() as usize;
+    let table_idx = (*tail_code).operand.u32 as usize;
+
+    let table_addr = ctx.instance().tables[table_idx] as usize;
+    let table = &mut ctx.store.tables[table_addr].1;
+    let slice = vm_try!(VMResult::from_option(table.get_mut(i..i + n), || {
+        VMResult::TableIndexOutOfRange
+    }));
+    slice.fill(val);
+    call_next(tail_code, 1, ctx)
+}
+
 macro_rules! memory_try {
     ($ctx: expr) => {
         if let Some(v) = $ctx.memory() {
@@ -1868,6 +1885,7 @@ pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     vm_try!(ctx.stack.push_u32(ctx.instance().funcs[funcidx as usize]));
     call_next(tail_code, 1, ctx)
 }
+
 pub unsafe fn special_function_return(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

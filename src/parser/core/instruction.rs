@@ -2659,8 +2659,19 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     14 => {
                         let (len2, tableidx) = self.parse_u32()?;
                         let (len3, tableidx2) = self.parse_u32()?;
-
                         trace!("parse_op_table_copy");
+
+                        let tt1 = self
+                            .tables
+                            .get(tableidx as usize)
+                            .ok_or_else(|| WasmParserError::InvalidTableIndex(tableidx))?;
+                        let tt2 = self
+                            .tables
+                            .get(tableidx2 as usize)
+                            .ok_or_else(|| WasmParserError::InvalidTableIndex(tableidx2))?;
+                        if tt1.reftype != tt2.reftype {
+                            Err(WasmParserError::InvalidStackValTypeAny)?
+                        }
                         if !*unreachable {
                             instrs.push(Instr {
                                 op: vm::op_table_copy,
@@ -2703,6 +2714,24 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         if !*unreachable {
                             instrs.push(Instr {
                                 op: vm::op_table_size,
+                            });
+                            instrs.push(Instr {
+                                operand: Operand { u32: tableidx },
+                            });
+                        }
+                        (1 + len + len2, false)
+                    }
+                    17 => {
+                        let (len2, tableidx) = self.parse_u32()?;
+                        trace!("parse_op_table_fill");
+                        let tt = self
+                            .tables
+                            .get(tableidx as usize)
+                            .ok_or_else(|| WasmParserError::InvalidTableIndex(tableidx))?;
+                        checker.op(&[ValType::I32, tt.reftype.into(), ValType::I32], &[])?;
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_table_fill,
                             });
                             instrs.push(Instr {
                                 operand: Operand { u32: tableidx },
