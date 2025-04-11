@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{collections::HashMap, io::Write};
 
 use super::{
     ConstExpr, Data, Elem, ExportSection, Func, FuncType, GlobalType, Instance, MemType, Memory,
@@ -60,7 +60,7 @@ pub struct ModuleInstance {
     pub functions: Vec<TypeIdx>,
     pub function_types: Vec<FuncType>,
     pub data: Vec<Data>,
-    pub elem: Vec<Elem>,
+    //pub elem: Vec<Elem>,
     pub mems: Vec<MemType>,
 }
 pub struct Store {
@@ -70,6 +70,7 @@ pub struct Store {
     pub instances: Vec<Instance>,
     pub tables: Vec<TableInstance>,
     pub memory: Vec<Memory>,
+    pub elems: HashMap<(u32, u32), Elem>,
 }
 impl Default for Store {
     fn default() -> Self {
@@ -86,6 +87,7 @@ impl Store {
             instances: vec![],
             tables: vec![],
             memory: vec![],
+            elems: HashMap::new(),
         }
     }
 }

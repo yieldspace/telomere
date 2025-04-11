@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use telomere::{
-    common::InstanceAddr, get_global, instantiate, Registry, ResultValue, Store, WasmValue,
+    common::InstanceAddr, get_global, instantiate, Registry, ResultValue, Store, VMResult,
+    WasmValue,
 };
-use tracing::{error, Level};
+use tracing::error;
 use wast::{
     core::{AbstractHeapType, HeapType, NanPattern, WastRetCore},
     parser::ParseBuffer,
@@ -329,7 +330,10 @@ fn run_wast(text: &str) {
                     invoke.name,
                     &ResultValue::new(convert_args(&invoke.args)),
                 );
-                assert!(!result.is_err())
+                match result {
+                    VMResult::Success(_) => {} // ok
+                    other => panic!("{:?}", other),
+                }
             }
             WastDirective::Register {
                 span: _,
@@ -414,9 +418,6 @@ fn nop() {
 
 #[test]
 fn func() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     run_test_file("func");
 }
 
@@ -491,11 +492,18 @@ fn data() {
     run_test_file("data");
 }
 /*
+TODO: dataのdropをちゃんとしないといけないぽい
+*/
+/*
 #[test]
 fn bulk() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
     run_test_file("bulk");
 }
-    */
+ */
+
 #[test]
 fn elem() {
     run_test_file("elem");
@@ -711,35 +719,26 @@ fn table_get() {
 fn table_set() {
     run_test_file("table_set");
 }
-/*
-TODO: あとでやる
+
 #[test]
 fn table_sub() {
     run_test_file("table-sub");
 }
-*/
-/*
-TODO: element のdrop無理すぎる。あとでやる。
 
 #[test]
 fn table_init() {
     run_test_file("table_init");
 }
-*/
-/*
-TODO:
-
 #[test]
 fn table_grow() {
     run_test_file("table_grow");
+}
+#[test]
+fn table_size() {
+    run_test_file("table_size");
 }
 
 #[test]
 fn table_fill() {
     run_test_file("table_fill");
 }
-#[test]
-fn table_size() {
-    run_test_file("table_size");
-}
-    */

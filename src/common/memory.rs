@@ -148,9 +148,7 @@ impl Memory {
             || { VMResult::MemoryIndexOutOfRange }
         ));
 
-        slice.fill(vm_try!(VMResult::from_option(data.try_into().ok(), || {
-            VMResult::Unreachable
-        })));
+        slice.fill(data as u8);
         VMResult::Success(())
     }
     pub fn copy(&mut self, dst: u32, src: u32, len: u32) -> VMResult<()> {

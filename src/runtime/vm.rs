@@ -2,13 +2,14 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        ElemInit, ElemMode, ExecuteContext, ExportDesc, Instance, InstanceAddr, Instr, JumpTable,
-        LocalState, Stack, VMResult, ValType, WasmValue,
+        execute_elem_init_const_expr, ElemInit, ExecuteContext, ExportDesc, Instance, InstanceAddr,
+        Instr, JumpTable, LocalState, Stack, VMResult, ValType, WasmValue,
     },
     Store,
 };
 
-use super::{instantiate::execute_elem_init_const_expr, TABLE_UNINITIALIZED};
+use super::TABLE_UNINITIALIZED;
+#[derive(Debug)]
 pub struct ResultValue(Vec<WasmValue>);
 impl ResultValue {
     pub fn new(args: Vec<WasmValue>) -> Self {
@@ -870,28 +871,30 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let len = ctx.stack.pop_u32() as usize;
     let src = ctx.stack.pop_u32() as usize;
     let dst = ctx.stack.pop_u32() as usize;
-    let src_elem_idx = (*tail_code).operand.u32 as usize;
+    let src_elem_idx = (*tail_code).operand.u32;
     let dst_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
 
     let ExecuteContext {
         local_state, store, ..
     } = ctx;
     let ls = local_state.last().unwrap_unchecked();
-    let instance_addr = ls.instance_addr as usize;
+    let instance_addr = ls.instance_addr;
     let Store {
         instances,
         tables,
-        modules,
         globals: global_store,
+        elems,
         ..
     } = store;
-    let instance = &mut instances[instance_addr];
+    let instance = &mut instances[instance_addr as usize];
     let dst_table_addr = instance.tables[dst_table_idx] as usize;
 
-    let elem = &modules[instance.module_addr as usize].elem[src_elem_idx];
-    if !matches!(elem.mode, ElemMode::Passive) {
+    let elem = if let Some(elem) = elems.get(&(instance_addr, src_elem_idx)) {
+        elem
+    } else {
         return VMResult::TableIndexOutOfRange;
-    }
+    };
+
     let dst_table = &mut tables[dst_table_addr];
     let dst = vm_try!(VMResult::from_option(
         dst_table.1.get_mut(dst..dst + len),
@@ -899,12 +902,18 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     ));
     match &elem.init {
         ElemInit::FuncIdx(idxs) => {
-            for (i, funcidx) in idxs[src..src + len].iter().enumerate() {
+            let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
+                VMResult::TableIndexOutOfRange
+            }));
+            for (i, funcidx) in slice.iter().enumerate() {
                 dst[i] = instance.funcs[*funcidx as usize];
             }
         }
         ElemInit::ConstExpr(exprs) => {
-            for (i, expr) in exprs[src..src + len].iter().enumerate() {
+            let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
+                VMResult::TableIndexOutOfRange
+            }));
+            for (i, expr) in slice.iter().enumerate() {
                 dst[i] = vm_try!(execute_elem_init_const_expr(
                     global_store,
                     &instance.globals,
@@ -918,6 +927,14 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 
     call_next(tail_code, 2, ctx)
 }
+pub unsafe fn op_elem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let elem_idx = (*tail_code).operand.u32;
+    let ls = ctx.local_state.last().unwrap_unchecked();
+    let instance_addr = ls.instance_addr;
+    ctx.store.elems.remove(&(instance_addr, elem_idx));
+    call_next(tail_code, 1, ctx)
+}
+
 pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32() as usize;
     let src = ctx.stack.pop_u32() as usize;
@@ -941,6 +958,57 @@ pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     std::ptr::copy(src_ptr, dst_ptr, len);
     call_next(tail_code, 2, ctx)
 }
+pub unsafe fn op_table_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let table_idx = (*tail_code).operand.u32 as usize;
+    let table_addr = ctx.instance().tables[table_idx] as usize;
+    let table_inst = &mut ctx.store.tables[table_addr];
+    let n = ctx.stack.pop_i32();
+    let val = ctx.stack.pop_u32();
+    let sz = table_inst.1.len();
+    if n < 0 {
+        vm_try!(ctx.stack.push_i32(-1));
+    } else {
+        let new_len = sz + n as usize;
+        match table_inst.0.limits.max {
+            Some(max) if max as usize >= new_len => {
+                table_inst.1.resize(new_len, val);
+                vm_try!(ctx.stack.push_u32(sz as u32));
+            }
+            None => {
+                table_inst.1.resize(new_len, val);
+                vm_try!(ctx.stack.push_u32(sz as u32));
+            }
+            Some(_) => {
+                vm_try!(ctx.stack.push_i32(-1));
+            }
+        }
+    }
+    call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_table_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let table_idx = (*tail_code).operand.u32 as usize;
+    let table_addr = ctx.instance().tables[table_idx] as usize;
+    let table_inst = &mut ctx.store.tables[table_addr];
+    let val = table_inst.1.len() as u32;
+    trace!("op_table_size: {table_idx} {table_addr} {table_inst:?} => {val}");
+    vm_try!(ctx.stack.push_u32(val));
+    call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_table_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let n = ctx.stack.pop_u32() as usize;
+    let val = ctx.stack.pop_u32();
+    let i = ctx.stack.pop_u32() as usize;
+    let table_idx = (*tail_code).operand.u32 as usize;
+
+    let table_addr = ctx.instance().tables[table_idx] as usize;
+    let table = &mut ctx.store.tables[table_addr].1;
+    let slice = vm_try!(VMResult::from_option(table.get_mut(i..i + n), || {
+        VMResult::TableIndexOutOfRange
+    }));
+    slice.fill(val);
+    call_next(tail_code, 1, ctx)
+}
+
 macro_rules! memory_try {
     ($ctx: expr) => {
         if let Some(v) = $ctx.memory() {
@@ -1817,6 +1885,7 @@ pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     vm_try!(ctx.stack.push_u32(ctx.instance().funcs[funcidx as usize]));
     call_next(tail_code, 1, ctx)
 }
+
 pub unsafe fn special_function_return(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
