@@ -1,8 +1,9 @@
 use crate::{
     common::{
         execute_elem_init_const_expr, ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext,
-        Export, ExportDesc, ExportSection, FunctionInstance, ImportDesc, InstanceAddr, JumpTable,
-        Limits, LocalState, Memory, ModuleInstance, TableInstance, PAGE_SIZE_MAX,
+        Export, ExportDesc, ExportSection, FuncIdx, FunctionInstance, Import, ImportDesc,
+        InstanceAddr, JumpTable, Limits, LocalState, Memory, ModuleInstance, TableInstance,
+        TypeIdx, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -351,7 +352,10 @@ pub fn aliasing(
     store: &mut Store,
 ) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
-    let inst_addr = store.instances.len() as u32;
+    let inst_addr: u32 = store.instances.len() as u32;
+    let mut functions = vec![];
+    let mut function_types = vec![];
+    let mut function_addrs = vec![];
     let mut exports = vec![];
     for (modname, importname, exportname) in triplets {
         let instance_addr = vm_try!(VMResult::from_option(registry.get(modname), || {
@@ -362,20 +366,36 @@ pub fn aliasing(
             modules: s_modules,
             ..
         } = store;
-        let instance = &s_instances[instance_addr.0 as usize];
-        let module = &s_modules[instance.module_addr as usize];
+        let ext_instance = &s_instances[instance_addr.0 as usize];
+        let ext_module = &s_modules[ext_instance.module_addr as usize];
         let export_desc = vm_try!(VMResult::from_option(
-            module.exports.find(importname),
+            ext_module.exports.find(importname),
             || { VMResult::Unlinkable }
         ));
-        exports.push(Export((*exportname).to_owned(), export_desc));
+        match export_desc {
+            ExportDesc::Func(idx) => {
+                let tidx = ext_module.functions[idx.0 as usize];
+                let ft = &ext_module.function_types[tidx.0 as usize];
+                let new_tidx = function_types.len();
+                let new_funcidx = functions.len();
+                function_types.push(ft.clone());
+                functions.push(TypeIdx(new_tidx as u32));
+                let addr = ext_instance.funcs[idx.0 as usize];
+                function_addrs.push(addr);
+                exports.push(Export(
+                    (*exportname).to_owned(),
+                    ExportDesc::Func(FuncIdx(new_funcidx as u32)),
+                ));
+            }
+            _ => {}
+        }
     }
     store.modules.push(ModuleInstance {
         exports: ExportSection(exports),
         tables: vec![],
         globals: vec![],
-        functions: vec![],
-        function_types: vec![],
+        functions,
+        function_types,
         data: vec![],
         mems: vec![],
     });
@@ -383,7 +403,7 @@ pub fn aliasing(
         module_addr: mod_addr,
         memory: None,
         globals: vec![],
-        funcs: vec![],
+        funcs: function_addrs,
         tables: vec![],
     });
     VMResult::Success(InstanceAddr(inst_addr))
