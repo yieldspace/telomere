@@ -1,8 +1,8 @@
 use crate::{
     common::{
         execute_elem_init_const_expr, ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext,
-        ExportDesc, FunctionInstance, ImportDesc, InstanceAddr, JumpTable, Limits, LocalState,
-        Memory, ModuleInstance, TableInstance, PAGE_SIZE_MAX,
+        Export, ExportDesc, ExportSection, FunctionInstance, ImportDesc, InstanceAddr, JumpTable,
+        Limits, LocalState, Memory, ModuleInstance, TableInstance, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -342,4 +342,49 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         vm_try!(res);
     }
     VMResult::Success(addr)
+}
+// TODO:
+#[allow(dead_code)]
+pub fn aliasing(
+    registry: &Registry,
+    triplets: &[(&str, &str, &str)],
+    store: &mut Store,
+) -> VMResult<InstanceAddr> {
+    let mod_addr = store.modules.len() as u32;
+    let inst_addr = store.instances.len() as u32;
+    let mut exports = vec![];
+    for (modname, importname, exportname) in triplets {
+        let instance_addr = vm_try!(VMResult::from_option(registry.get(&modname), || {
+            VMResult::Unlinkable
+        }));
+        let Store {
+            instances: s_instances,
+            modules: s_modules,
+            ..
+        } = store;
+        let instance = &s_instances[instance_addr.0 as usize];
+        let module = &s_modules[instance.module_addr as usize];
+        let export_desc = vm_try!(VMResult::from_option(
+            module.exports.find(importname),
+            || { VMResult::Unlinkable }
+        ));
+        exports.push(Export((*exportname).to_owned(), export_desc));
+    }
+    store.modules.push(ModuleInstance {
+        exports: ExportSection(exports),
+        tables: vec![],
+        globals: vec![],
+        functions: vec![],
+        function_types: vec![],
+        data: vec![],
+        mems: vec![],
+    });
+    store.instances.push(Instance {
+        module_addr: mod_addr,
+        memory: None,
+        globals: vec![],
+        funcs: vec![],
+        tables: vec![],
+    });
+    VMResult::Success(InstanceAddr(inst_addr))
 }
