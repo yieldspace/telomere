@@ -150,10 +150,8 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     return VMResult::Unlinkable;
                 }
             }
-            // TODO: import other type objects
             _ => {
                 tracing::trace!("import other type objects");
-
                 return VMResult::Unlinkable;
             }
         }

@@ -2721,8 +2721,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_extend8_s,
                     });
-                    checker.binary_op(ValType::I32)?;
                 }
+                checker.binary_op(ValType::I32)?;
                 (1, false)
             }
             0xC1 => {
@@ -2731,8 +2731,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i32_extend16_s,
                     });
-                    checker.binary_op(ValType::I32)?;
                 }
+                checker.binary_op(ValType::I32)?;
                 (1, false)
             }
             0xC2 => {
@@ -2741,8 +2741,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_extend8_s,
                     });
-                    checker.binary_op(ValType::I64)?;
                 }
+                checker.binary_op(ValType::I64)?;
                 (1, false)
             }
             0xC3 => {
@@ -2751,8 +2751,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_extend16_s,
                     });
-                    checker.binary_op(ValType::I64)?;
                 }
+                checker.binary_op(ValType::I64)?;
                 (1, false)
             }
             0xC4 => {
@@ -2761,8 +2761,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr {
                         op: vm::op_i64_extend32_s,
                     });
-                    checker.binary_op(ValType::I64)?;
                 }
+                checker.binary_op(ValType::I64)?;
                 (1, false)
             }
             0xD0 => {

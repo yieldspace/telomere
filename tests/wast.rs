@@ -721,7 +721,9 @@ fn table_init() {
 }
 #[test]
 fn table_grow() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
+    tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
     run_test_file("table_grow");
 }
 #[test]
