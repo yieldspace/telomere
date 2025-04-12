@@ -1,8 +1,9 @@
 use crate::{
     common::{
         execute_elem_init_const_expr, ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext,
-        ExportDesc, FunctionInstance, ImportDesc, InstanceAddr, JumpTable, Limits, LocalState,
-        Memory, ModuleInstance, TableInstance, PAGE_SIZE_MAX,
+        Export, ExportDesc, ExportSection, FuncIdx, FunctionInstance, GlobalIdx, ImportDesc,
+        InstanceAddr, JumpTable, Limits, LocalState, MemIdx, Memory, ModuleInstance, TableIdx,
+        TableInstance, TypeIdx, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -342,4 +343,105 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         vm_try!(res);
     }
     VMResult::Success(addr)
+}
+// TODO:
+#[allow(dead_code)]
+pub fn aliasing(
+    registry: &Registry,
+    triplets: &[(&str, &str, &str)],
+    store: &mut Store,
+) -> VMResult<InstanceAddr> {
+    let mod_addr = store.modules.len() as u32;
+    let inst_addr: u32 = store.instances.len() as u32;
+    let mut functions = vec![];
+    let mut function_types = vec![];
+    let mut globals = vec![];
+    let mut memories = vec![];
+    let mut tables = vec![];
+    let mut function_addrs = vec![];
+    let mut global_addrs = vec![];
+    let mut mem_addr = None;
+    let mut table_addrs = vec![];
+    let mut exports = vec![];
+    for (modname, importname, exportname) in triplets {
+        let instance_addr = vm_try!(VMResult::from_option(registry.get(modname), || {
+            VMResult::Unlinkable
+        }));
+        let Store {
+            instances: s_instances,
+            modules: s_modules,
+            ..
+        } = store;
+        let ext_instance = &s_instances[instance_addr.0 as usize];
+        let ext_module = &s_modules[ext_instance.module_addr as usize];
+        let export_desc = vm_try!(VMResult::from_option(
+            ext_module.exports.find(importname),
+            || { VMResult::Unlinkable }
+        ));
+        let exportname = (*exportname).to_owned();
+        match export_desc {
+            ExportDesc::Func(idx) => {
+                let tidx = ext_module.functions[idx.0 as usize];
+                let ft = &ext_module.function_types[tidx.0 as usize];
+                let new_tidx = function_types.len();
+                let new_funcidx = functions.len();
+                function_types.push(ft.clone());
+                functions.push(TypeIdx(new_tidx as u32));
+                let addr = ext_instance.funcs[idx.0 as usize];
+                function_addrs.push(addr);
+                exports.push(Export(
+                    exportname,
+                    ExportDesc::Func(FuncIdx(new_funcidx as u32)),
+                ));
+            }
+            ExportDesc::Global(idx) => {
+                let gt = ext_module.globals[idx.0 as usize];
+                let new_gidx = globals.len();
+                globals.push(gt);
+                let addr = ext_instance.globals[idx.0 as usize];
+                global_addrs.push(addr);
+                exports.push(Export(
+                    exportname,
+                    ExportDesc::Global(GlobalIdx(new_gidx as u32)),
+                ));
+            }
+            ExportDesc::Mem(idx) => {
+                let mt = ext_module.mems[idx.0 as usize];
+                let new_memidx = memories.len();
+                memories.push(mt);
+                mem_addr = ext_instance.memory;
+                exports.push(Export(
+                    exportname,
+                    ExportDesc::Mem(MemIdx(new_memidx as u32)),
+                ));
+            }
+            ExportDesc::Table(idx) => {
+                let tt = ext_module.tables[idx.0 as usize];
+                let new_tableidx = tables.len();
+                tables.push(tt);
+                table_addrs.push(ext_instance.tables[idx.0 as usize]);
+                exports.push(Export(
+                    exportname,
+                    ExportDesc::Table(TableIdx(new_tableidx as u32)),
+                ));
+            }
+        }
+    }
+    store.modules.push(ModuleInstance {
+        exports: ExportSection(exports),
+        tables,
+        globals,
+        functions,
+        function_types,
+        data: vec![],
+        mems: memories,
+    });
+    store.instances.push(Instance {
+        module_addr: mod_addr,
+        memory: mem_addr,
+        globals: global_addrs,
+        funcs: function_addrs,
+        tables: table_addrs,
+    });
+    VMResult::Success(InstanceAddr(inst_addr))
 }
