@@ -12,7 +12,8 @@ type Result<R> = std::result::Result<R, ComponentParseError>;
 pub fn parse_instance_type(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(usize, InstanceType)> {
-    let mut sort = InstanceTypeSort::with_parent(&mut ctx.sort);
+    // let mut sort = InstanceTypeSort::with_parent(&mut ctx.sort);
+    todo!();
     parse_vec_map(ctx, |v| v.reader, parse_instance_decl, |c, decl| {})?;
     Ok((0, InstanceType(vec![])))
 }

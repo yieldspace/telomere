@@ -1,17 +1,18 @@
 use crate::binary::{BinaryReader, Counter};
+use crate::component_model::ComponentBuilder;
 use crate::parser::component::sort::SortMap;
 
 pub struct ParseContext<'a, 'b, R: BinaryReader> {
     pub reader: &'a mut R,
-    pub sort: SortMap<'b>,
+    pub builder: &'b mut ComponentBuilder,
 }
 
 impl<'a, 'b, R> ParseContext<'a, 'b, R>
 where
     R: BinaryReader,
 {
-    pub fn new(reader: &'a mut R, sort: SortMap<'b>) -> Self {
-        ParseContext { reader, sort }
+    pub fn new(reader: &'a mut R, builder: &'b mut ComponentBuilder) -> Self {
+        ParseContext { reader, builder }
     }
 
     pub fn start_count(&self) -> usize {

@@ -1,4 +1,5 @@
 use crate::binary::BinaryReader;
+use crate::component_model::CoreModule;
 use crate::component_model::id::{
     ComponentIdx, CoreModuleIdx, FuncId, InstanceIdx, SortId, TypeId,
 };
@@ -13,8 +14,8 @@ pub fn parse_core_module_id<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> Result<(usize, CoreModuleIdx)> {
     let (len, id) = parse_u32(ctx.reader)?;
-    if let Some(idx) = ctx.sort.get_core_module_idx(id as usize) {
-        Ok((len, idx))
+    if let Some(_) = ctx.builder.get_core_module(id as usize) {
+        Ok((len, CoreModuleIdx(id as usize)))
     } else {
         Err(ComponentParseError::InvalidIdx(
             "Module".to_string(),
@@ -27,28 +28,30 @@ pub fn parse_instance_idx<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> Result<(usize, InstanceIdx)> {
     let (len, id) = parse_u32(ctx.reader)?;
-    if let Some(idx) = ctx.sort.get_instance_idx(id as usize) {
-        Ok((len, idx))
-    } else {
-        Err(ComponentParseError::InvalidIdx(
-            "Instance".to_string(),
-            id,
-        ))
-    }
+    // if let Some(idx) = ctx.sort.get_instance_idx(id as usize) {
+    //     Ok((len, idx))
+    // } else {
+    //     Err(ComponentParseError::InvalidIdx(
+    //         "Instance".to_string(),
+    //         id,
+    //     ))
+    // }
+    todo!()
 }
 
 pub fn parse_component_idx<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> Result<(usize, ComponentIdx)> {
     let (len, id) = parse_u32(ctx.reader)?;
-    if let Some(idx) = ctx.sort.get_component_idx(id as usize) {
-        Ok((len, idx))
-    } else {
-        Err(ComponentParseError::InvalidIdx(
-            "Component".to_string(),
-            id,
-        ))
-    }
+    // if let Some(idx) = ctx.sort.get_component_idx(id as usize) {
+    //     Ok((len, idx))
+    // } else {
+    //     Err(ComponentParseError::InvalidIdx(
+    //         "Component".to_string(),
+    //         id,
+    //     ))
+    // }
+    todo!()
 }
 
 pub fn parse_sort_idx<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<(usize, SortId)> {

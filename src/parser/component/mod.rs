@@ -9,9 +9,11 @@ mod instance;
 mod section;
 mod sort;
 mod types;
+mod component;
+mod vec;
 
 use crate::binary::BinaryReader;
-use crate::component_model::Component;
+use crate::component_model::{Component, ComponentBuilder};
 use crate::parser::component::error::ComponentParseError;
 use crate::parser::component::instance::parse_instance;
 use crate::parser::component::section::ComponentSectionType;
@@ -21,14 +23,16 @@ pub use context::ParseContext;
 pub use sort::SortMap;
 use std::sync::Arc;
 use tracing::trace;
+pub use component::parse_component;
 
 type Result<R> = std::result::Result<R, ComponentParseError>;
 
-pub fn parse_component<R: BinaryReader>(reader: &mut R) -> Result<Component> {
-    let sort_map = SortMap::new(None);
-    let mut ctx = ParseContext::new(reader, sort_map);
+pub fn parse_component_old<R: BinaryReader>(reader: &mut R) -> Result<Component> {
+    // let sort_map = SortMap::new(None);
+    let mut builder = ComponentBuilder::new();
+    let mut ctx = ParseContext { reader, builder: &mut builder };
     _parse_component(&mut ctx)?;
-    Ok(Component::from(ctx.sort))
+    todo!()
 }
 
 pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()> {
@@ -50,7 +54,8 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
             }
             ComponentSectionType::CoreModule => {
                 let module = Arc::new(parse_core_module(ctx.reader, size as usize)?);
-                ctx.sort.add_core_module(module)
+                // ctx.sort.add_core_module(module)
+                todo!()
             }
             ComponentSectionType::CoreInstance => {
                 parse_vec_map(
@@ -58,7 +63,7 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
                     |v| v.reader,
                     core::parse_core_instance,
                     |v, i| {
-                        v.sort.add_core_instance(Arc::new(i));
+                        // v.sort.add_core_instance(Arc::new(i));
                     },
                 )?;
             }
@@ -68,17 +73,17 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
                     |v| v.reader,
                     crate::parser::component::core::parse_core_type,
                     |v, i| {
-                        v.sort.add_core_type(Arc::new(i));
+                        // v.sort.add_core_type(Arc::new(i));
                     },
                 )?;
             }
             ComponentSectionType::Component => {
-                let map = SortMap::new(Some(&ctx.sort));
-                let mut child_context = ParseContext::new(ctx.reader, map);
+                // let map = SortMap::new(Some(&ctx.sort));
+                let mut child_context = ParseContext::new(ctx.reader, ctx.builder);
                 _parse_component(&mut child_context)?;
                 println!("OK");
-                ctx.sort
-                    .add_component(Arc::new(Component::from(child_context.sort)));
+                // ctx.sort
+                //     .add_component(Arc::new(Component::from(child_context.sort)));
             }
             ComponentSectionType::Instance => {
                 parse_vec_map(
@@ -86,7 +91,7 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
                     |v| v.reader,
                     parse_instance,
                     |v, i| {
-                        v.sort.add_instance(Arc::new(i));
+                        // v.sort.add_instance(Arc::new(i));
                     },
                 )?;
             }
@@ -96,7 +101,7 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
                     |v| v.reader,
                     alias::parse_alias,
                     |v, i| {
-                        v.sort.add_alias(Arc::new(i));
+                        // v.sort.add_alias(Arc::new(i));
                     },
                 )?;
             }
@@ -106,7 +111,7 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
                     |v| v.reader,
                     types::parse_type,
                     |v, i| {
-                        v.sort.add_type(Arc::new(i));
+                        // v.sort.add_type(Arc::new(i));
                     },
                 )?;
             }
@@ -116,7 +121,7 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
                     |v| v.reader,
                     canon::parse_canon,
                     |v, i| {
-                        v.sort.add_canon(Arc::new(i));
+                        // v.sort.add_canon(Arc::new(i));
                     },
                 )?;
             }
@@ -129,7 +134,7 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
                     |v| v.reader,
                     import_export::parse_import,
                     |v, i| {
-                        v.sort.add_import(Arc::new(i));
+                        // v.sort.add_import(Arc::new(i));
                     },
                 )?;
             }
@@ -139,7 +144,7 @@ pub fn _parse_component<R: BinaryReader>(ctx: &mut ParseContext<R>) -> Result<()
                     |v| v.reader,
                     import_export::parse_export,
                     |v, i| {
-                        v.sort.add_export(Arc::new(i));
+                        // v.sort.add_export(Arc::new(i));
                     },
                 )?;
             }

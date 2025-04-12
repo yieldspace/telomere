@@ -10,8 +10,7 @@ use crate::Module;
 use std::sync::{Arc, Weak};
 
 #[derive(Debug)]
-pub struct SortMap<'a> {
-    parent: Option<&'a SortMap<'a>>,
+pub struct SortMap {
     pub modules: Vec<Arc<Module>>,
     pub core_instances: Vec<Arc<CoreInstance>>,
     pub core_types: Vec<Arc<CoreType>>,
@@ -25,10 +24,9 @@ pub struct SortMap<'a> {
     type_table: Vec<TypeKind>,
 }
 
-impl<'a> SortMap<'a> {
-    pub fn new(parent: Option<&'a SortMap<'a>>) -> Self {
+impl SortMap {
+    pub fn new() -> Self {
         SortMap {
-            parent,
             modules: vec![],
             core_instances: vec![],
             core_types: vec![],
@@ -48,7 +46,7 @@ impl<'a> SortMap<'a> {
     }
 
     pub fn add_core_instance(&mut self, instance: Arc<CoreInstance>) {
-        self.core_instances.push(instance);
+        // self.core_instances.push(instance);
     }
 
     pub fn add_core_type(&mut self, core_type: Arc<CoreType>) {
@@ -86,15 +84,17 @@ impl<'a> SortMap<'a> {
     }
 
     pub fn get_core_module_idx(&self, id: usize) -> Option<CoreModuleIdx> {
-        self.modules
-            .get(id)
-            .map(|m| CoreModuleIdx(Arc::downgrade(m)))
+        // self.modules
+        //     .get(id)
+            // .map(|m| CoreModuleIdx(Arc::downgrade(m)))
+        todo!()
     }
 
     pub fn get_core_instance_idx(&self, id: usize) -> Option<CoreInstanceIdx> {
-        self.core_instances
-            .get(id)
-            .map(|i| CoreInstanceIdx(Arc::downgrade(i)))
+        // self.core_instances
+        //     .get(id)
+        //     .map(|i| CoreInstanceIdx(Arc::downgrade(i)))
+        todo!()
     }
 
     pub fn get_core_type_idx(&self, id: usize) -> Option<CoreTypeIdx> {
@@ -113,12 +113,6 @@ impl<'a> SortMap<'a> {
         self.components
             .get(id)
             .map(|i| ComponentIdx(Arc::downgrade(i)))
-    }
-}
-
-impl<'a> TypeTable for SortMap<'a> {
-    fn get_type(&self, idx: usize) -> Option<TypeKind> {
-        self.type_table.get(idx).cloned()
     }
 }
 

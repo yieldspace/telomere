@@ -1,13 +1,31 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
-use crate::component_model::{Component, ComponentImport};
+use crate::component_model::{Component};
 use crate::{Module};
 use crate::component_model::types::ExternDesc;
 
 pub struct ComponentInstance {
     instances: Vec<ComponentInstance>,
-    core_module_instances: Vec<CoreModuleInstance>,
+    exports: HashMap<String, ComponentExport>,
+    imports: HashMap<String, ComponentImport>
+}
+
+pub enum ComponentExport {
+    Reference,
+    CoreModule,
+    Value,
+    Type,
+    Component,
+    Instance,
+}
+
+pub enum ComponentImport {
+    CoreModule,
+    Value,
+    Type,
+    Component,
+    Instance,
 }
 
 pub struct CoreModuleInstance {
@@ -43,17 +61,58 @@ impl ComponentRegistry {
     }
 }
 
+pub struct ImportStore {
+
+}
+
 pub fn instantiate(component: Component, registry: &ComponentRegistry) -> ComponentInstance {
+    let Component {
+        modules,
+        imports,
+    } = component;
+
     // importを処理する
-    for import in &component.imports {
-        match import.deref() {
-            _ => {}
+    for (name, ty) in imports {
+        match ty {
+            ExternDesc::Core(_) => {
+                // core moduleを処理する
+                if let Some(core_module) = registry.core_modules.get(&name) {
+                    // core moduleを処理する
+                } else {
+                    panic!()
+                    // core moduleが見つからない場合の処理
+                }
+            }
+            ExternDesc::Func(_) => {
+                let func = registry.component_functions.get(&name).unwrap();
+                // funcを処理する
+            }
+            #[cfg(feature = "import_export")]
+            ExternDesc::Value(_) => {
+                // valueを処理する
+            }
+            ExternDesc::Type(_) => {
+                todo!()
+                // typeを処理する
+            }
+            ExternDesc::Component(_) => {
+                let component = registry.components.get(&name).unwrap();
+                // componentを処理する
+            }
+            ExternDesc::Instance(_) => {
+
+                // instanceを処理する
+            }
         }
     }
     // exportを処理する
+    // moduleをinstantiateする
     // child componentを処理する
     ComponentInstance {
         instances: vec![],
-        core_module_instances: vec![],
+
+        // core_module_instances: vec![],
+        exports: Default::default(),
+        imports: Default::default(),
     }
 }

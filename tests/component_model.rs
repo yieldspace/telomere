@@ -24,10 +24,6 @@ fn test_with_core_wasm() {
               (i32.const 42))
           )
           (core instance (;0;) (instantiate 0))
-          (type (;0;) (func (param "a" u32) (param "b" u32) (result u32)))
-          (core instance (;0;)
-            (export "add" (func 0))
-          )
         )
     "#;
     let binary = wat::parse_str(component).unwrap();

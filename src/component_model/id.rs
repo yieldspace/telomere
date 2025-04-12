@@ -3,10 +3,10 @@ use crate::Module;
 use std::sync::Weak;
 
 #[derive(Debug)]
-pub struct CoreModuleIdx(pub Weak<Module>);
+pub struct CoreModuleIdx(pub usize);
 
 #[derive(Debug)]
-pub struct CoreInstanceIdx(pub Weak<CoreInstance>);
+pub struct CoreInstanceIdx(pub usize);
 
 #[derive(Debug)]
 pub struct InstanceIdx(pub Weak<Instance>);

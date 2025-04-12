@@ -1,11 +1,12 @@
+use std::collections::HashMap;
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    CoreInstance, CoreInstanceInlineExport, CoreInstantiate, CoreInstantiateArg, CoreSort,
-    CoreSortType,
-};
+use crate::component_model::{CoreInstance, CoreInstanceExport, CoreInstanceInlineExport, CoreInstantiate, CoreInstantiateArg, CoreSort, CoreSortType};
+use crate::component_model::id::CoreFuncId;
 use crate::parser::component::context::ParseContext;
 use crate::parser::component::id::{parse_core_module_id, parse_instance_idx};
 use crate::parser::component::ComponentParseError;
+use crate::parser::component::core::parse_core_instance_idx;
+use crate::parser::component::vec::VecParser;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 
 type Result<R> = std::result::Result<R, ComponentParseError>;
@@ -13,24 +14,37 @@ type Result<R> = std::result::Result<R, ComponentParseError>;
 pub fn parse_core_instance<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> Result<(usize, CoreInstance)> {
+    let start = ctx.start_count();
     match ctx.reader.read_exact_one()? {
         0x00 => {
-            let (idx_len, idx) = parse_core_module_id(ctx)?;
-            let (args_len, args) = parse_vec(ctx, |v| v.reader, parse_core_instantiate_arg)?;
+            let (_, idx) = parse_core_module_id(ctx)?;
+            let mut imports = HashMap::new();
+            for data in VecParser::new(ctx, parse_core_instantiate_arg)? {
+                let (_, CoreInstantiateArg { name, instance_idx }) = data?;
+                imports.insert(name, instance_idx);
+            }
             Ok((
-                1 + idx_len + args_len,
-                CoreInstance::Instantiate(CoreInstantiate {
-                    module_idx: idx,
-                    args,
-                }),
+                ctx.end_count(start),
+                CoreInstance {
+                    module_idx: Some(idx),
+                    exports: HashMap::new(),
+                    imports,
+                }
             ))
         }
         0x01 => {
-            let (inline_exports_len, inline_exports) =
-                parse_vec(ctx, |v| v.reader, parse_core_instance_inline_export)?;
+            let mut exports = HashMap::new();
+            for data in VecParser::new(ctx, parse_core_instance_inline_export)? {
+                let (_, export) = data?;
+                exports.insert(export.name.clone(), CoreInstanceExport::FuncReference(CoreFuncId(0)));
+            }
             Ok((
-                1 + inline_exports_len,
-                CoreInstance::InlineExport(inline_exports),
+                1,
+                CoreInstance {
+                    module_idx: None,
+                    exports,
+                    imports: Default::default(),
+                },
             ))
         }
         magic => Err(ComponentParseError::InvalidInstanceExpr(magic)),
@@ -46,7 +60,7 @@ fn parse_core_instantiate_arg<R: BinaryReader>(
         [0x12],
         "instantiate arg",
     )?;
-    let (idx_len, instance_idx) = parse_instance_idx(ctx)?;
+    let (idx_len, instance_idx) = parse_core_instance_idx(ctx)?;
     Ok((
         name_len + 1 + idx_len,
         CoreInstantiateArg { name, instance_idx },

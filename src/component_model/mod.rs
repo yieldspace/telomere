@@ -3,13 +3,16 @@ mod component;
 pub mod id;
 mod import_export;
 pub mod types;
+mod core;
 
+use std::collections::HashMap;
 use crate::common::{Import, ImportDesc};
-use crate::component_model::id::{ComponentIdx, CoreInstanceIdx, CoreModuleIdx, CoreTypeIdx, FuncId, InstanceIdx, TypeId};
+use crate::component_model::id::{ComponentIdx, CoreFuncId, CoreInstanceIdx, CoreModuleIdx, CoreTypeIdx, FuncId, InstanceIdx, TypeId};
 use crate::Module;
 pub use canon::*;
 pub use component::*;
 pub use import_export::*;
+pub use core::*;
 use std::fmt::{Debug, Formatter};
 
 impl Debug for Module {
@@ -19,21 +22,20 @@ impl Debug for Module {
 }
 
 #[derive(Debug)]
-pub enum CoreInstance {
-    Instantiate(CoreInstantiate),
-    InlineExport(Vec<CoreInstanceInlineExport>),
+pub enum CoreFunc {
+
 }
 
 #[derive(Debug)]
 pub struct CoreInstantiate {
-    pub module_idx: CoreModuleIdx,
+    // pub module_idx: CoreModuleIdx,
     pub args: Vec<CoreInstantiateArg>,
 }
 
 #[derive(Debug)]
 pub struct CoreInstantiateArg {
     pub name: String,
-    pub instance_idx: InstanceIdx,
+    pub instance_idx: CoreInstanceIdx,
 }
 
 #[derive(Debug)]

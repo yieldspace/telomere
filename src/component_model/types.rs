@@ -1,8 +1,9 @@
-use crate::component_model::id::{FuncId, TypeId};
+use crate::component_model::id::{CoreTypeIdx, FuncId, TypeId};
 use crate::component_model::{Alias, CoreType};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
 use std::sync::{Arc, Weak};
+use crate::common::TypeIdx;
 
 #[derive(Debug, Clone)]
 pub enum TypeKind {
@@ -129,13 +130,13 @@ pub struct ExportDecl {
 
 #[derive(Debug)]
 pub enum ExternDesc {
-    Core(usize),
-    Func(usize),
+    Core(CoreTypeIdx),
+    Func(TypeIdx),
     #[cfg(feature = "import_export")]
     Value(ValueBound),
     Type(TypeBound),
-    Component(usize),
-    Instance(usize),
+    Component(TypeIdx),
+    Instance(TypeIdx),
 }
 
 #[derive(Debug)]

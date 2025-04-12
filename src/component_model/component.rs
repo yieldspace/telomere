@@ -1,68 +1,60 @@
-use crate::component_model::types::Type;
-use crate::component_model::{
-    Alias, CanonicalFuncKind, ComponentExport, ComponentImport, CoreInstance, CoreType, Instance,
-};
+use std::collections::HashMap;
+use crate::component_model::types::{ExternDesc, Type};
+use crate::component_model::{Alias, CanonicalFuncKind, ComponentExport, ComponentImport, CoreFunc, CoreInstance, CoreModule, CoreType, Instance};
 use crate::parser::component::SortMap;
 use crate::Module;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+use crate::component_model::id::{CoreInstanceIdx, CoreModuleIdx};
 
 #[derive(Debug)]
 pub struct Component {
-    pub modules: Vec<Arc<Module>>,
-    pub core_instances: Vec<Arc<CoreInstance>>,
-    pub core_types: Vec<Arc<CoreType>>,
-    pub components: Vec<Arc<Component>>,
-    pub instances: Vec<Arc<Instance>>,
-    pub aliases: Vec<Arc<Alias>>,
-    pub types: Vec<Arc<Type>>,
-    pub canons: Vec<Arc<CanonicalFuncKind>>,
-    pub imports: Vec<Arc<ComponentImport>>,
-    pub exports: Vec<Arc<ComponentExport>>,
+    pub modules: Vec<CoreModule>,
+    pub imports: HashMap<String, ExternDesc>,
 }
 
 impl Component {
+}
+
+
+pub struct ComponentBuilder {
+    modules: Vec<CoreModule>,
+    core_instances: Vec<CoreInstance>,
+    core_functions: Vec<CoreFunc>,
+}
+
+impl ComponentBuilder {
     pub fn new() -> Self {
         Self {
             modules: vec![],
             core_instances: vec![],
-            core_types: vec![],
-            components: vec![],
-            instances: vec![],
-            aliases: vec![],
-            types: vec![],
-            canons: vec![],
-            imports: vec![],
-            exports: vec![],
+            core_functions: vec![],
         }
     }
-}
 
-impl<'a> From<SortMap<'a>> for Component {
-    fn from(value: SortMap) -> Self {
-        let SortMap {
+    pub fn build(self) -> Component {
+        let Self {
             modules,
             core_instances,
-            core_types,
-            components,
-            instances,
-            aliases,
-            types,
-            canons,
-            imports,
-            exports,
-            ..
-        } = value;
-        Self {
+            core_functions,
+        } = self;
+        Component {
             modules,
-            core_instances,
-            core_types,
-            components,
-            instances,
-            aliases,
-            types,
-            canons,
-            imports,
-            exports,
         }
+    }
+
+    pub fn register_core_module(&mut self, module: CoreModule) {
+        self.modules.push(module);
+    }
+
+    pub fn get_core_module(&self, index: usize) -> Option<&CoreModule> {
+        self.modules.get(index)
+    }
+
+    pub fn register_core_instance(&mut self, instance: CoreInstance) {
+        self.core_instances.push(instance);
+    }
+
+    pub fn get_core_instance(&self, index: usize) -> Option<&CoreInstance> {
+        self.core_instances.get(index)
     }
 }
