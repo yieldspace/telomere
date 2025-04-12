@@ -8,10 +8,13 @@ thiserror = "2.0.11"
 bytes = "1.10.0"
 bumpalo = { version = "3.17.0", features = ["collections"] }
 tracing = { version = "0.1.41" }
+num-derive = "0.4.2"
+num-traits = "0.2.19"
 
 [dev-dependencies]
 wast = { version = "226.0.0" }
 tracing-subscriber = { version = "0.3.19" }
+wat = "1.228.0"
 
 [features]
 default = ["interpreter", "component-model"]
