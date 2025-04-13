@@ -1,7 +1,7 @@
 mod common;
 use common::{instantiate_wat, run_wast_with};
 use telomere::{
-    common::{ExecuteContext, FunctionBody, Instr, LocalState},
+    common::{ExecuteContext, FunctionBody, Instr},
     link_host_function_with_function_idx, vm_try, Registry, Store, VMResult,
 };
 static mut PRINT_CALL: Vec<()> = vec![];
@@ -10,9 +10,8 @@ fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     unsafe {
         PRINT_CALL.push(())
     };
-    let st = ctx.local_state.pop().unwrap();
-    let return_addr = ctx.stack.function_return(&st.local_reference, 0);
-
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0);
+    ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
 
@@ -64,29 +63,25 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let func = &ctx.store.funcs.0[func_addr as usize];
     match &func.body {
         FunctionBody::Wasm(code) => {
-            let local_ref = vm_try!(ctx.stack.function_call(
+            ctx.local_reference = vm_try!(ctx.stack.function_call(
                 4,
                 code.local_size(),
                 func.instance_addr,
                 func_addr,
+                ctx.local_reference,
                 TAIL_CALL_FUNCTION_RETURN.as_ptr()
             ));
-            ctx.local_state.push(LocalState {
-                local_reference: local_ref,
-            });
             VMResult::Success(code.expr.as_ptr())
         }
         FunctionBody::Host(f) => {
-            let local_ref = vm_try!(ctx.stack.function_call(
+            ctx.local_reference = vm_try!(ctx.stack.function_call(
                 4,
                 0,
                 func.instance_addr,
                 func_addr,
+                ctx.local_reference,
                 TAIL_CALL_FUNCTION_RETURN.as_ptr()
             ));
-            ctx.local_state.push(LocalState {
-                local_reference: local_ref,
-            });
             f(ctx)
         }
     }
@@ -124,9 +119,8 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     tracing::trace!("{arg}");
 
     vm_try!(ctx.stack.push_i32(arg + 60));
-    let st = ctx.local_state.pop().unwrap();
-    let return_addr = ctx.stack.function_return(&st.local_reference, 4);
-
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 4);
+    ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
 #[test]

@@ -16,11 +16,13 @@ struct CallStackInfo {
     return_addr: *const Instr,
     instance_addr: u32,
     code_addr: u32,
+    prev_local_reference: LocalReference,
 }
 #[derive(Debug, Clone, Copy)]
+#[repr(C, packed)]
 pub struct LocalReference {
-    local_top: usize,
-    local_size: usize,
+    pub local_top: usize,
+    pub local_size: usize,
 }
 impl Stack {
     pub fn new(size: usize) -> Self {
@@ -164,6 +166,7 @@ impl Stack {
         local_size: usize,
         instance_addr: u32,
         code_addr: u32,
+        prev_local_reference: LocalReference,
         return_addr: *const Instr,
     ) -> VMResult<LocalReference> {
         let local_top = vm_try!(VMResult::from_option(
@@ -176,6 +179,7 @@ impl Stack {
             instance_addr,
             return_addr,
             code_addr,
+            prev_local_reference,
         };
 
         let d = unsafe {
@@ -200,13 +204,17 @@ impl Stack {
         &mut self,
         reference: &LocalReference,
         return_size: usize,
-    ) -> *const Instr {
-        let return_addr = self.call_stack_info(reference).return_addr;
+    ) -> (LocalReference, *const Instr) {
+        let CallStackInfo {
+            return_addr,
+            prev_local_reference,
+            ..
+        } = *self.call_stack_info(reference);
 
         self.memory
             .copy_within(self.top - return_size..self.top, reference.local_top);
         self.top = reference.local_top + return_size;
-        return_addr
+        (prev_local_reference, return_addr)
     }
     pub fn block_return(
         &mut self,

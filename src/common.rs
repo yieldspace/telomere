@@ -360,7 +360,7 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
-    pub local_state: Vec<LocalState>,
+    pub local_reference: LocalReference,
     pub store: &'a mut Store,
 }
 impl ExecuteContext<'_> {
@@ -380,17 +380,13 @@ impl ExecuteContext<'_> {
         &self.store.instances[self.instance_addr() as usize]
     }
     pub fn local_reference(&self) -> LocalReference {
-        unsafe { self.local_state.last().unwrap_unchecked().local_reference }
+        self.local_reference
     }
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.instance()
             .memory
             .and_then(|v| self.store.memory.get_mut(v as usize))
     }
-}
-pub struct LocalState {
-    // TODO: We should write this to stack and holds current only.
-    pub local_reference: LocalReference,
 }
 
 #[derive(Debug, Clone, Copy)]
