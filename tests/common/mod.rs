@@ -75,6 +75,8 @@ fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceAddr {
 pub fn run_wast(text: &str) {
     let mut store = Store::new();
     let mut registry = Registry::new();
+    let st = init_spectest(&mut store, &registry);
+    registry.register("spectest", st);
     run_wast_with(text, &mut store, &mut registry);
 }
 pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
@@ -82,8 +84,6 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
     let mut instance: Option<InstanceAddr> = None;
 
-    let st = init_spectest(store, registry);
-    registry.register("spectest", st);
     for directive in wast.directives {
         use wast::WastDirective;
         match directive {
