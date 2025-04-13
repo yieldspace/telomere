@@ -1,4 +1,4 @@
-use crate::runtime::component_model::{Component, ComponentInstantiated, CoreFunction};
+use crate::component_model::{Component, CoreFunction};
 
 pub trait Idx<T> {
     fn get<'a>(&self, component: &'a Component) -> &'a T;

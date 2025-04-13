@@ -8,6 +8,6 @@ pub mod vm;
 const TABLE_UNINITIALIZED: u32 = 0x00;
 
 pub mod component_model;
-mod instantiate;
+pub(crate) mod instantiate;
 
 pub use instantiate::instantiate;
