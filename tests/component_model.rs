@@ -1,6 +1,23 @@
 use tracing::Level;
 
 #[test]
+fn test_basic_component() {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .init();
+    let component = r#"
+       (component)
+    "#;
+    let binary = wat::parse_str(component).unwrap();
+    let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
+    let k = telomere::parser::component_model::parse_component(&mut reader).unwrap();
+    let mut store = telomere::Store::new();
+    let linker = telomere::runtime::component_model::Linker::new();
+    let instance = telomere::runtime::component_model::instantiate(k, &mut store, &linker).unwrap();
+    todo!()
+}
+
+#[test]
 fn test_with_core_wasm() {
     let _ = tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)

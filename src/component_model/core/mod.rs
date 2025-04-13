@@ -1,5 +1,5 @@
 use crate::component_model::{CanonicalFuncKind, Component, CoreFuncIdx, Idx};
-use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated};
+use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
 use crate::{Registry, Store};
 use std::collections::HashMap;
 
@@ -30,6 +30,7 @@ impl CoreInstance {
         store: &mut Store,
         component: &Component,
         present_instance: &ComponentInstantiated,
+        linker: &Linker,
     ) -> CoreInstantiated {
         match self {
             CoreInstance::Real {

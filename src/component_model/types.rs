@@ -2,7 +2,7 @@ use crate::common::{FuncIdx, TypeIdx};
 use crate::component_model::{CoreType, CoreTypeIdx};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
-use std::sync::{Arc, Weak};
+use std::sync::Weak;
 
 // todo
 #[derive(Debug, Clone)]

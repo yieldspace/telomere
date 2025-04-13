@@ -1,6 +1,11 @@
+mod error;
+mod linker;
+
 use crate::common::InstanceAddr;
-use crate::component_model::{CanonicalFuncKind, Component, CoreFuncIdx, CoreType, Idx};
-use crate::{Module, Registry, Store};
+use crate::component_model::Component;
+use crate::{Registry, Store};
+pub use error::ComponentVMError;
+pub use linker::Linker;
 use std::collections::HashMap;
 
 pub struct ComponentInstantiated {
@@ -32,22 +37,16 @@ pub struct CoreInstantiated {
     pub(crate) registry: Registry,
 }
 
-pub struct Linker {}
-
-impl Linker {}
-
 pub fn instantiate(
     component: Component,
     store: &mut Store,
-    linker: Linker,
-) -> ComponentInstantiated {
-    let component_instance = ComponentInstantiated::new();
-
-    let mut compiled_core_instances = vec![];
+    linker: &Linker,
+) -> Result<ComponentInstantiated, ComponentVMError> {
+    let mut component_instance = ComponentInstantiated::new();
 
     for core_instance in &component.core_instances {
-        let compiled = core_instance.instantiate(store, &component, &component_instance);
-        compiled_core_instances.push(compiled);
+        let compiled = core_instance.instantiate(store, &component, &component_instance, &linker);
+        component_instance.core_instances.push(compiled);
     }
 
     todo!()
