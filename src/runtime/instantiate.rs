@@ -3,7 +3,7 @@ use crate::{
         execute_elem_init_const_expr,
         store::{FunctionBody, HostFunction},
         ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, Export, ExportDesc, ExportSection,
-        FuncIdx, FunctionInstance, GlobalIdx, ImportDesc, InstanceAddr, JumpTable, Limits,
+        FuncIdx, FunctionInstance, GlobalIdx, ImportDesc, InstanceAddr, Limits,
         LocalState, MemIdx, Memory, ModuleInstance, TableIdx, TableInstance, TypeIdx,
         PAGE_SIZE_MAX,
     },
@@ -326,8 +326,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         let code = &funcinst.body;
         match code {
             FunctionBody::Wasm(code) => {
-                let mut jump_table = JumpTable::new();
-                jump_table.push((code.expr.len() - 2) as u32);
                 let mut local_size = 0usize;
                 for local in &code.locals {
                     local_size += local.n as usize * local.t.stack_size().usize();
@@ -338,7 +336,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
                     local_state: vec![LocalState {
-                        jump_table,
                         local_reference,
                         code_addr: funcaddr,
                         instance_addr: funcinst.instance_addr,
@@ -349,12 +346,10 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             }
             FunctionBody::Host(fp) => {
                 let fp = *fp;
-                let jump_table = JumpTable::new();
                 let local_reference = vm_try!(stack.function_call(0, 0, &vm::VM_END));
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
                     local_state: vec![LocalState {
-                        jump_table,
                         local_reference,
                         code_addr: funcaddr,
                         instance_addr: funcinst.instance_addr,

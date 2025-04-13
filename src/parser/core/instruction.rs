@@ -1,4 +1,5 @@
 use super::base::WasmBaseParser;
+use super::jump_resolver::JumpResolver;
 use super::type_checker::TypeChecker;
 use super::validate::*;
 use super::Result;
@@ -12,6 +13,7 @@ use crate::common::MemArg;
 use crate::common::Mut;
 use crate::common::RefType;
 use crate::common::ResultType;
+use crate::parser::core::jump_resolver::JumpResolverDSL;
 use crate::parser::core::type_checker::MaybeUnreachable;
 use crate::runtime::vm;
 use crate::{
@@ -138,6 +140,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         data_count_section: &mut DataCountVerifier,
         instrs: &mut Vec<Instr>,
         checker: &mut TypeChecker,
+        jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
         unreachable: &mut bool,
         is_unreachable_if_block: bool,
@@ -162,16 +165,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_block: {blocktype:?}");
                 let inst_unreachable = *unreachable;
                 let mut unreachable = *unreachable;
-                if !inst_unreachable {
-                    instrs.push(Instr { op: vm::op_block });
-                    instrs.push(Instr {
-                        operand: Operand {
-                            jump_addr: 0xFAFAFAFA,
-                        },
-                    });
-                }
 
-                let index = instrs.len() - 1;
                 if let BlockType::TypeIdx(idx) = blocktype {
                     let ty = self
                         .types
@@ -183,18 +177,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 } else {
                     checker.enter_block(BlockKind::Block, blocktype);
                 };
+                jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
 
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
                     checker,
+                    jump_resolver,
                     else_addr,
                     &mut unreachable,
                     is_unreachable_if_block,
                 )?;
                 if !inst_unreachable {
-                    instrs[index].operand.jump_addr = instrs.len() as u32;
-
                     let block_base_stack_size = checker.block_base_stack_size()?;
 
                     instrs.push(Instr {
@@ -242,14 +236,6 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_loop: {blocktype:?}");
                 let inst_unreachable = *unreachable;
                 let mut unreachable = *unreachable;
-                if !inst_unreachable {
-                    instrs.push(Instr { op: vm::op_loop });
-                    instrs.push(Instr {
-                        operand: Operand {
-                            jump_addr: (instrs.len() - 1) as u32,
-                        },
-                    });
-                }
 
                 if let BlockType::TypeIdx(idx) = blocktype {
                     let ty = self
@@ -262,7 +248,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 } else {
                     checker.enter_block(BlockKind::Loop, blocktype);
                 }
+                jump_resolver.push(JumpResolverDSL::EnterBackwardJumpBlock(instrs.len() as u32));
+
                 if !inst_unreachable {
+                    instrs.push(Instr { op: vm::op_loop });
+
                     let block_base_stack_size = checker.block_base_stack_size()?;
                     instrs.push(Instr {
                         operand: Operand {
@@ -280,6 +270,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     data_count_section,
                     instrs,
                     checker,
+                    jump_resolver,
                     else_addr,
                     &mut unreachable,
                     is_unreachable_if_block,
@@ -333,7 +324,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     instrs.push(Instr { op: vm::op_if });
                     instrs.push(Instr {
                         operand: Operand {
-                            jump_addr2: (0xFCFCFCFC, 0xFDFDFDFD),
+                            jump_addr: 0xFCFCFCFC,
                         },
                     });
                 }
@@ -350,6 +341,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 } else {
                     checker.enter_block(BlockKind::If, blocktype);
                 }
+                jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
 
                 let index = instrs.len() - 1;
                 let mut else_addr = None;
@@ -357,16 +349,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     data_count_section,
                     instrs,
                     checker,
+                    jump_resolver,
                     &mut else_addr,
                     &mut unreachable,
                     is_unreachable_if_block,
                 )?;
                 if !is_unreachable_if_block {
                     instrs[index].operand = Operand {
-                        jump_addr2: (
-                            instrs.len() as u32,
-                            else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
-                        ),
+                        jump_addr: else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
                     };
                 }
                 match blocktype {
@@ -426,10 +416,15 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x05 => {
                 let inst_unreachable = *unreachable;
                 trace!("parse_op_else: {inst_unreachable} {is_unreachable_if_block}");
-
                 *unreachable = is_unreachable_if_block;
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_else });
+                    jump_resolver.push(JumpResolverDSL::Br(0, instrs.len() as u32));
+                    instrs.push(Instr {
+                        operand: Operand {
+                            jump_addr: 0xFFFB0000,
+                        },
+                    });
                     *else_addr = Some(instrs.len() as u32);
                     if let (BlockKind::If, blocktype, _block_base_stack_len) =
                         checker.current_block()?
@@ -476,6 +471,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x0B => {
                 trace!("parse_op_end");
+                jump_resolver.push(JumpResolverDSL::LeaveBlock(instrs.len() as u32));
                 instrs.push(Instr { op: vm::op_end });
 
                 (1, true)
@@ -488,8 +484,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 *unreachable = true;
                 if !inst_unreachable {
                     instrs.push(Instr { op: vm::op_br });
+                    jump_resolver.push(JumpResolverDSL::Br(idx, instrs.len() as u32));
                     instrs.push(Instr {
-                        operand: Operand { u32: idx },
+                        operand: Operand {
+                            u32: 0xFFFF0000 | idx,
+                        },
                     });
                 }
 
@@ -558,8 +557,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_br_if });
+                    jump_resolver.push(JumpResolverDSL::Br(idx, instrs.len() as u32));
                     instrs.push(Instr {
-                        operand: Operand { u32: idx },
+                        operand: Operand {
+                            u32: 0xFFFE0000 | idx,
+                        },
                     });
                 }
                 (1 + len, false)
@@ -586,12 +588,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         },
                     });
                     for idx in &idxs {
+                        jump_resolver.push(JumpResolverDSL::Br(*idx, instrs.len() as u32));
                         instrs.push(Instr {
-                            operand: Operand { u32: *idx },
+                            operand: Operand {
+                                u32: 0xFFFD0000 | *idx,
+                            },
                         });
                     }
+                    jump_resolver.push(JumpResolverDSL::Br(default_idx, instrs.len() as u32));
                     instrs.push(Instr {
-                        operand: Operand { u32: default_idx },
+                        operand: Operand {
+                            u32: 0xFFFD0000 | default_idx,
+                        },
                     });
                 }
                 checker.unreachable();
@@ -602,6 +610,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_return");
                 if !*unreachable {
                     instrs.push(Instr { op: vm::op_return });
+                    jump_resolver.push(JumpResolverDSL::Return(instrs.len() as u32));
+                    instrs.push(Instr {
+                        operand: Operand {
+                            jump_addr: 0xFFFC0000,
+                        },
+                    });
                 }
                 checker.op(&self.functype.1 .0, &[])?;
                 checker.unreachable();
@@ -2874,6 +2888,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         data_count_section: &mut DataCountVerifier,
         instrs: &mut Vec<Instr>,
         checker: &mut TypeChecker,
+        jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
         unreachable: &mut bool,
         is_unreachable_if_block: bool,
@@ -2884,6 +2899,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 data_count_section,
                 instrs,
                 checker,
+                jump_resolver,
                 else_addr,
                 unreachable,
                 is_unreachable_if_block,

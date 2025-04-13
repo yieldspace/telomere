@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use tracing::trace;
 
 use crate::common::{ConstExpr, ElemInit, Func, Instr, Locals, Operand};
+use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::InstructionParser;
 use crate::runtime::vm;
@@ -685,6 +686,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
         let mut instrs = Vec::new();
         let mut checker = TypeChecker::new(typeidx);
+        let mut jump_resolver = JumpResolver::new();
         let mut unreachable = false;
         let mut else_addr = None;
         let mut parser = InstructionParser::new(
@@ -699,10 +701,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             table_section,
             elems,
         );
+        jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
         let len2 = parser.parse_instrs(
             data_count_section,
             &mut instrs,
             &mut checker,
+            &mut jump_resolver,
             &mut else_addr,
             &mut unreachable,
             false,
@@ -719,7 +723,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 (len + len2) as u32,
             ))?
         }
-
         instrs.push(Instr {
             op: vm::special_function_return,
         });
@@ -728,6 +731,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
             },
         });
+        jump_resolver.evaluate(&mut instrs);
         Ok(Func {
             locals,
             expr: instrs,
