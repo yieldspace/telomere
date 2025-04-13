@@ -81,7 +81,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
     let mut instance: Option<InstanceAddr> = None;
 
-    let st = init_spectest(store, &registry);
+    let st = init_spectest(store, registry);
     registry.register("spectest", st);
     for directive in wast.directives {
         use wast::WastDirective;
@@ -99,7 +99,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     }
                 };
                 tracing::trace!("{:?}", m.elems);
-                let inst = instantiate(m, store, &registry).unwrap();
+                let inst = instantiate(m, store, registry).unwrap();
                 if let Some(name) = name {
                     registry.register(name.name(), inst);
                 }
@@ -319,7 +319,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     let mut parser = telomere::WasmParser::new(&mut reader);
                     let m = parser.parse_module().unwrap();
                     assert!(
-                        instantiate(m, store, &registry).is_err(),
+                        instantiate(m, store, registry).is_err(),
                         "{:?}",
                         span.linecol_in(text)
                     )
@@ -361,7 +361,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
 
                     // TODO: test error message
                     assert!(
-                        instantiate(module, store, &registry).is_err(),
+                        instantiate(module, store, registry).is_err(),
                         "{:?}",
                         span.linecol_in(text)
                     )

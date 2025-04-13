@@ -30,7 +30,7 @@ fn test_print() {
     )
     "#,
         &mut store,
-        &mut registry,
+        &registry,
     );
     registry.register("host", host);
     link_host_function_with_function_idx(host, 0, print, &mut store);
@@ -112,7 +112,7 @@ fn test_tail_call_wasm() {
     )
     "#,
         &mut store,
-        &mut registry,
+        &registry,
     );
     registry.register("host", host);
     link_host_function_with_function_idx(host, 0, tail_call, &mut store);
@@ -152,7 +152,7 @@ pub fn test_tail_call_native() {
     )
     "#,
         &mut store,
-        &mut registry,
+        &registry,
     );
     registry.register("host", host);
     link_host_function_with_function_idx(host, 0, tail_call, &mut store);
