@@ -20,5 +20,5 @@ pub use runtime::instantiate;
 pub use runtime::link_host_function_with_export_name;
 pub use runtime::link_host_function_with_function_idx;
 pub use runtime::run_module_function;
-pub use runtime::ResultValue;
 pub use runtime::special_function_return;
+pub use runtime::ResultValue;
