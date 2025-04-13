@@ -21,9 +21,6 @@ fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 
 #[test]
 fn test_print() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     let mut store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
@@ -105,9 +102,6 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 
 #[test]
 fn test_tail_call_wasm() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     let mut store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
