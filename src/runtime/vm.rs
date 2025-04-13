@@ -671,13 +671,11 @@ pub(crate) unsafe fn internal_op_call(
                 param_size,
                 code.local_size(),
                 funcinst.instance_addr,
+                funcaddr,
                 return_addr
             ));
 
-            ctx.local_state.push(LocalState {
-                local_reference,
-                code_addr: funcaddr,
-            });
+            ctx.local_state.push(LocalState { local_reference });
             VMResult::Success(code.expr.as_ptr())
         }
         FunctionBody::Host(fp) => {
@@ -686,11 +684,11 @@ pub(crate) unsafe fn internal_op_call(
                 param_size,
                 0,
                 funcinst.instance_addr,
+                funcaddr,
                 return_addr
             ));
             ctx.local_state.push(LocalState {
                 local_reference,
-                code_addr: funcaddr,
             });
             let return_addr = vm_try!(fp(ctx));
             VMResult::Success(return_addr)
@@ -1970,16 +1968,14 @@ pub fn run_module_function(
             param_size,
             local_size,
             funcinst.instance_addr,
+            code_addr,
             &VM_END as *const Instr
         ));
 
         let ptr = code.expr.as_ptr();
         let mut ctx = ExecuteContext {
             stack: &mut stack,
-            local_state: vec![LocalState {
-                local_reference,
-                code_addr,
-            }],
+            local_state: vec![LocalState { local_reference }],
             store,
         };
         vm_try!(unsafe { call_next(ptr, 0, &mut ctx) });

@@ -15,6 +15,7 @@ impl Debug for Stack {
 struct CallStackInfo {
     return_addr: *const Instr,
     instance_addr: u32,
+    code_addr: u32,
 }
 #[derive(Debug, Clone, Copy)]
 pub struct LocalReference {
@@ -162,6 +163,7 @@ impl Stack {
         param_size: usize,
         local_size: usize,
         instance_addr: u32,
+        code_addr: u32,
         return_addr: *const Instr,
     ) -> VMResult<LocalReference> {
         let local_top = vm_try!(VMResult::from_option(
@@ -173,6 +175,7 @@ impl Stack {
         let info = CallStackInfo {
             instance_addr,
             return_addr,
+            code_addr,
         };
 
         let d = unsafe {
@@ -189,6 +192,9 @@ impl Stack {
     }
     pub fn instance_addr(&self, reference: &LocalReference) -> u32 {
         self.call_stack_info(reference).instance_addr
+    }
+    pub fn code_addr(&self, reference: &LocalReference) -> u32 {
+        self.call_stack_info(reference).code_addr
     }
     pub fn function_return(
         &mut self,

@@ -333,30 +333,30 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     0,
                     local_size,
                     funcinst.instance_addr,
+                    funcaddr,
                     &vm::VM_END
                 ));
                 let ptr = code.expr.as_ptr();
 
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
-                    local_state: vec![LocalState {
-                        local_reference,
-                        code_addr: funcaddr,
-                    }],
+                    local_state: vec![LocalState { local_reference }],
                     store,
                 };
                 vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
             }
             FunctionBody::Host(fp) => {
                 let fp = *fp;
-                let local_reference =
-                    vm_try!(stack.function_call(0, 0, funcinst.instance_addr, &vm::VM_END));
+                let local_reference = vm_try!(stack.function_call(
+                    0,
+                    0,
+                    funcinst.instance_addr,
+                    funcaddr,
+                    &vm::VM_END
+                ));
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
-                    local_state: vec![LocalState {
-                        local_reference,
-                        code_addr: funcaddr,
-                    }],
+                    local_state: vec![LocalState { local_reference }],
                     store,
                 };
                 let return_addr = vm_try!(fp(&mut ctx));

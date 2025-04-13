@@ -365,13 +365,9 @@ pub struct ExecuteContext<'a> {
 }
 impl ExecuteContext<'_> {
     pub(crate) fn code(&self) -> *const Instr {
-        unsafe {
-            match &self.store.funcs.0[self.local_state.last().unwrap_unchecked().code_addr as usize]
-                .body
-            {
-                FunctionBody::Wasm(code) => code.expr.as_ptr(),
-                FunctionBody::Host(_) => unreachable!(),
-            }
+        match &self.store.funcs.0[self.stack.code_addr(&self.local_reference()) as usize].body {
+            FunctionBody::Wasm(code) => code.expr.as_ptr(),
+            FunctionBody::Host(_) => unreachable!(),
         }
     }
     pub fn module(&self) -> &ModuleInstance {
@@ -395,8 +391,6 @@ impl ExecuteContext<'_> {
 pub struct LocalState {
     // TODO: We should write this to stack and holds current only.
     pub local_reference: LocalReference,
-    // TODO: We should write this to stack and holds current code or may avoid this?
-    pub code_addr: u32,
 }
 
 #[derive(Debug, Clone, Copy)]

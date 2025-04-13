@@ -68,11 +68,11 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
                 4,
                 code.local_size(),
                 func.instance_addr,
+                func_addr,
                 TAIL_CALL_FUNCTION_RETURN.as_ptr()
             ));
             ctx.local_state.push(LocalState {
                 local_reference: local_ref,
-                code_addr: func_addr,
             });
             VMResult::Success(code.expr.as_ptr())
         }
@@ -81,11 +81,11 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
                 4,
                 0,
                 func.instance_addr,
+                func_addr,
                 TAIL_CALL_FUNCTION_RETURN.as_ptr()
             ));
             ctx.local_state.push(LocalState {
                 local_reference: local_ref,
-                code_addr: func_addr,
             });
             f(ctx)
         }
