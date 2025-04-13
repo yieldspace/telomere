@@ -153,12 +153,12 @@ impl Stack {
     fn call_stack_info(&self, reference: &LocalReference) -> &CallStackInfo {
         let info_top =
             reference.local_top + reference.local_size - std::mem::size_of::<CallStackInfo>();
-        let d = unsafe {
-            std::mem::transmute::<*const u8, &CallStackInfo>(
-                self.memory[info_top..info_top + std::mem::size_of::<CallStackInfo>()].as_ptr(),
-            )
-        };
-        d
+
+        (unsafe {
+            &*self.memory[info_top..info_top + std::mem::size_of::<CallStackInfo>()]
+                .as_ptr()
+                .cast::<CallStackInfo>()
+        }) as _
     }
     pub fn function_call(
         &mut self,
