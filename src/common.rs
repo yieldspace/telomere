@@ -364,7 +364,6 @@ pub struct ExecuteContext<'a> {
     pub store: &'a mut Store,
 }
 impl ExecuteContext<'_> {
-
     pub(crate) fn code(&self) -> *const Instr {
         unsafe {
             match &self.store.funcs.0[self.local_state.last().unwrap_unchecked().code_addr as usize]
@@ -393,7 +392,6 @@ impl ExecuteContext<'_> {
     }
 }
 pub struct LocalState {
-
     // TODO: We should write this to stack and holds current only.
     pub local_reference: LocalReference,
     // TODO: We should write this to stack and holds current code or may avoid this?

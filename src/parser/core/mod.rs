@@ -1,12 +1,12 @@
 mod base;
 mod error;
 mod instruction;
+mod jump_resolver;
 mod parser;
 mod type_checker;
 mod types;
 mod validate;
 mod values;
-mod jump_resolver;
 pub use error::WasmParserError;
 pub(crate) use instruction::InstructionParser;
 pub use parser::WasmParser;

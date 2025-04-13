@@ -135,6 +135,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         let (len2, offset) = self.parse_u32()?;
         Ok((len + len2, MemArg { align, offset }))
     }
+    #[allow(clippy::too_many_arguments)]
     fn parse_inst(
         &mut self,
         data_count_section: &mut DataCountVerifier,
@@ -2883,6 +2884,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
         })
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn parse_instrs(
         &mut self,
         data_count_section: &mut DataCountVerifier,
