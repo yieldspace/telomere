@@ -11,6 +11,11 @@ impl Debug for Stack {
         write!(f, "Stack({},{:?})", self.top, &self.memory[0..self.top])
     }
 }
+#[repr(C, packed)]
+struct CallStackInfo {
+    return_addr: *const Instr,
+    instance_addr: u32,
+}
 #[derive(Debug, Clone, Copy)]
 pub struct LocalReference {
     local_top: usize,
@@ -142,40 +147,60 @@ impl Stack {
         self.memory
             .copy_within(self.top - size..self.top, reference.local_top + local_addr);
     }
+    fn call_stack_info(&self, reference: &LocalReference) -> &CallStackInfo {
+        let info_top =
+            reference.local_top + reference.local_size - std::mem::size_of::<CallStackInfo>();
+        let d = unsafe {
+            std::mem::transmute::<*const u8, &CallStackInfo>(
+                self.memory[info_top..info_top + std::mem::size_of::<CallStackInfo>()].as_ptr(),
+            )
+        };
+        d
+    }
     pub fn function_call(
         &mut self,
         param_size: usize,
         local_size: usize,
+        instance_addr: u32,
         return_addr: *const Instr,
     ) -> VMResult<LocalReference> {
         let local_top = vm_try!(VMResult::from_option(
             self.top.checked_sub(param_size),
             || VMResult::StackOverflow
         ));
+
         vm_try!(self.add_top(local_size));
-        vm_try!(self.push_slice(&(return_addr as usize).to_le_bytes()));
+        let info = CallStackInfo {
+            instance_addr,
+            return_addr,
+        };
+
+        let d = unsafe {
+            std::mem::transmute::<CallStackInfo, [u8; std::mem::size_of::<CallStackInfo>()]>(info)
+        };
+
+        vm_try!(self.get_memory(std::mem::size_of_val(&d))).copy_from_slice(&d);
+        vm_try!(self.add_top(std::mem::size_of_val(&d)));
+
         VMResult::Success(LocalReference {
             local_top,
-            local_size: param_size + local_size + std::mem::size_of_val(&return_addr),
+            local_size: param_size + local_size + std::mem::size_of_val(&d),
         })
+    }
+    pub fn instance_addr(&self, reference: &LocalReference) -> u32 {
+        self.call_stack_info(reference).instance_addr
     }
     pub fn function_return(
         &mut self,
         reference: &LocalReference,
         return_size: usize,
     ) -> *const Instr {
-        let return_addr_addr =
-            reference.local_top + reference.local_size - std::mem::size_of::<usize>();
-        let mut buf = [0; std::mem::size_of::<usize>()];
-        buf.copy_from_slice(
-            &self.memory[return_addr_addr..return_addr_addr + std::mem::size_of::<usize>()],
-        );
-        let return_addr = usize::from_le_bytes(buf);
+        let return_addr = self.call_stack_info(reference).return_addr;
 
         self.memory
             .copy_within(self.top - return_size..self.top, reference.local_top);
         self.top = reference.local_top + return_size;
-        return_addr as *const Instr
+        return_addr
     }
     pub fn block_return(
         &mut self,

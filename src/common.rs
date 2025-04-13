@@ -377,10 +377,11 @@ impl ExecuteContext<'_> {
     pub fn module(&self) -> &ModuleInstance {
         &self.store.modules[self.instance().module_addr as usize]
     }
+    pub fn instance_addr(&self) -> u32 {
+        self.stack.instance_addr(&self.local_reference())
+    }
     pub fn instance(&self) -> &Instance {
-        unsafe {
-            &self.store.instances[self.local_state.last().unwrap_unchecked().instance_addr as usize]
-        }
+        &self.store.instances[self.instance_addr() as usize]
     }
     pub fn local_reference(&self) -> LocalReference {
         unsafe { self.local_state.last().unwrap_unchecked().local_reference }
@@ -396,8 +397,6 @@ pub struct LocalState {
     pub local_reference: LocalReference,
     // TODO: We should write this to stack and holds current code or may avoid this?
     pub code_addr: u32,
-    // TODO: We should write this to stack and holds current code or may avoid this?
-    pub instance_addr: u32,
 }
 
 #[derive(Debug, Clone, Copy)]

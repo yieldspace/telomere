@@ -329,7 +329,12 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 for local in &code.locals {
                     local_size += local.n as usize * local.t.stack_size().usize();
                 }
-                let local_reference = vm_try!(stack.function_call(0, local_size, &vm::VM_END));
+                let local_reference = vm_try!(stack.function_call(
+                    0,
+                    local_size,
+                    funcinst.instance_addr,
+                    &vm::VM_END
+                ));
                 let ptr = code.expr.as_ptr();
 
                 let mut ctx = ExecuteContext {
@@ -337,7 +342,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     local_state: vec![LocalState {
                         local_reference,
                         code_addr: funcaddr,
-                        instance_addr: funcinst.instance_addr,
                     }],
                     store,
                 };
@@ -345,13 +349,13 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             }
             FunctionBody::Host(fp) => {
                 let fp = *fp;
-                let local_reference = vm_try!(stack.function_call(0, 0, &vm::VM_END));
+                let local_reference =
+                    vm_try!(stack.function_call(0, 0, funcinst.instance_addr, &vm::VM_END));
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
                     local_state: vec![LocalState {
                         local_reference,
                         code_addr: funcaddr,
-                        instance_addr: funcinst.instance_addr,
                     }],
                     store,
                 };

@@ -58,8 +58,6 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     vm_try!(ctx.stack.local_get(&ctx.local_reference(), 0, 4));
     let arg = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push_i32(arg + 40));
-    let st = unsafe { ctx.local_state.last().unwrap_unchecked() };
-    let inst_addr = st.instance_addr;
     let funcidx = 1;
     let func_addr = ctx.instance().funcs[funcidx];
 
@@ -69,24 +67,25 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             let local_ref = vm_try!(ctx.stack.function_call(
                 4,
                 code.local_size(),
+                func.instance_addr,
                 TAIL_CALL_FUNCTION_RETURN.as_ptr()
             ));
             ctx.local_state.push(LocalState {
                 local_reference: local_ref,
                 code_addr: func_addr,
-                instance_addr: inst_addr,
             });
             VMResult::Success(code.expr.as_ptr())
         }
         FunctionBody::Host(f) => {
-            let local_ref =
-                vm_try!(ctx
-                    .stack
-                    .function_call(4, 0, TAIL_CALL_FUNCTION_RETURN.as_ptr()));
+            let local_ref = vm_try!(ctx.stack.function_call(
+                4,
+                0,
+                func.instance_addr,
+                TAIL_CALL_FUNCTION_RETURN.as_ptr()
+            ));
             ctx.local_state.push(LocalState {
                 local_reference: local_ref,
                 code_addr: func_addr,
-                instance_addr: inst_addr,
             });
             f(ctx)
         }
