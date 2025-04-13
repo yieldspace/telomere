@@ -3,8 +3,8 @@ use crate::{
         execute_elem_init_const_expr,
         store::{FunctionBody, HostFunction},
         ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, Export, ExportDesc, ExportSection,
-        FuncIdx, FunctionInstance, GlobalIdx, ImportDesc, InstanceAddr, Limits, LocalState, MemIdx,
-        Memory, ModuleInstance, TableIdx, TableInstance, TypeIdx, PAGE_SIZE_MAX,
+        FuncIdx, FunctionInstance, GlobalIdx, ImportDesc, InstanceAddr, Limits, LocalReference,
+        MemIdx, Memory, ModuleInstance, TableIdx, TableInstance, TypeIdx, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -329,31 +329,41 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 for local in &code.locals {
                     local_size += local.n as usize * local.t.stack_size().usize();
                 }
-                let local_reference = vm_try!(stack.function_call(0, local_size, &vm::VM_END));
+                let local_reference = vm_try!(stack.function_call(
+                    0,
+                    local_size,
+                    funcaddr,
+                    LocalReference {
+                        local_size: 0,
+                        local_top: 0
+                    },
+                    &vm::VM_END
+                ));
                 let ptr = code.expr.as_ptr();
 
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
-                    local_state: vec![LocalState {
-                        local_reference,
-                        code_addr: funcaddr,
-                        instance_addr: funcinst.instance_addr,
-                    }],
                     store,
+                    local_reference,
                 };
                 vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
             }
             FunctionBody::Host(fp) => {
                 let fp = *fp;
-                let local_reference = vm_try!(stack.function_call(0, 0, &vm::VM_END));
+                let local_reference = vm_try!(stack.function_call(
+                    0,
+                    0,
+                    funcaddr,
+                    LocalReference {
+                        local_size: 0,
+                        local_top: 0
+                    },
+                    &vm::VM_END
+                ));
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
-                    local_state: vec![LocalState {
-                        local_reference,
-                        code_addr: funcaddr,
-                        instance_addr: funcinst.instance_addr,
-                    }],
                     store,
+                    local_reference,
                 };
                 let return_addr = vm_try!(fp(&mut ctx));
                 vm_try!(unsafe { vm::call_next(return_addr, 0, &mut ctx) });

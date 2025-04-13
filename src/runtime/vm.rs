@@ -3,7 +3,7 @@ use std::ops::BitXor;
 use crate::{
     common::{
         execute_elem_init_const_expr, store::FunctionBody, ElemInit, ExecuteContext, ExportDesc,
-        Instance, InstanceAddr, Instr, LocalState, Stack, VMResult, ValType, WasmValue,
+        Instance, InstanceAddr, Instr, LocalReference, Stack, VMResult, ValType, WasmValue,
     },
     Store,
 };
@@ -634,7 +634,6 @@ pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
     };
     call_next(ptr, 0, ctx)
 }
-const MAX_CALL_STACK: usize = 10000;
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
@@ -643,11 +642,6 @@ pub(crate) unsafe fn internal_op_call(
     funcaddr: u32,
     ctx: &mut ExecuteContext,
 ) -> VMResult<*const Instr> {
-    if ctx.local_state.len() > MAX_CALL_STACK {
-        return VMResult::StackOverflow;
-    }
-    //FIXME: unwrap
-
     let funcinst = &ctx.store.funcs.0[funcaddr as usize];
     let instance_addr = funcinst.instance_addr;
     let instance = &ctx.store.instances[instance_addr as usize];
@@ -667,26 +661,25 @@ pub(crate) unsafe fn internal_op_call(
 
     match code {
         FunctionBody::Wasm(code) => {
-            let local_reference =
-                vm_try!(ctx
-                    .stack
-                    .function_call(param_size, code.local_size(), return_addr));
+            ctx.local_reference = vm_try!(ctx.stack.function_call(
+                param_size,
+                code.local_size(),
+                funcaddr,
+                ctx.local_reference,
+                return_addr
+            ));
 
-            ctx.local_state.push(LocalState {
-                local_reference,
-                code_addr: funcaddr,
-                instance_addr,
-            });
             VMResult::Success(code.expr.as_ptr())
         }
         FunctionBody::Host(fp) => {
             let fp = *fp;
-            let local_reference = vm_try!(ctx.stack.function_call(param_size, 0, return_addr));
-            ctx.local_state.push(LocalState {
-                local_reference,
-                code_addr: funcaddr,
-                instance_addr,
-            });
+            ctx.local_reference = vm_try!(ctx.stack.function_call(
+                param_size,
+                0,
+                funcaddr,
+                ctx.local_reference,
+                return_addr
+            ));
             let return_addr = vm_try!(fp(ctx));
             VMResult::Success(return_addr)
         }
@@ -860,12 +853,9 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let dst = ctx.stack.pop_u32() as usize;
     let src_elem_idx = (*tail_code).operand.u32;
     let dst_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
+    let instance_addr = ctx.instance_addr();
 
-    let ExecuteContext {
-        local_state, store, ..
-    } = ctx;
-    let ls = local_state.last().unwrap_unchecked();
-    let instance_addr = ls.instance_addr;
+    let ExecuteContext { store, .. } = ctx;
     let Store {
         instances,
         tables,
@@ -916,8 +906,7 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 }
 pub unsafe fn op_elem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let elem_idx = (*tail_code).operand.u32;
-    let ls = ctx.local_state.last().unwrap_unchecked();
-    let instance_addr = ls.instance_addr;
+    let instance_addr = ctx.instance_addr();
     ctx.store.elems.remove(&(instance_addr, elem_idx));
     call_next(tail_code, 1, ctx)
 }
@@ -1878,12 +1867,11 @@ pub unsafe fn special_function_return(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     trace!("function return");
-    let tail_code = ctx.stack.function_return(
+    let (prev_local_ref, tail_code) = ctx.stack.function_return(
         &ctx.local_reference(),
         (*tail_code).operand.drop_size as usize,
     );
-
-    ctx.local_state.pop();
+    ctx.local_reference = prev_local_ref;
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn special_block_return(
@@ -1965,17 +1953,21 @@ pub fn run_module_function(
         }
 
         tracing::trace!("run_module_function: {name} {local_size} {:?}", code.locals,);
-        let local_reference =
-            vm_try!(stack.function_call(param_size, local_size, &VM_END as *const Instr));
+        let local_reference = vm_try!(stack.function_call(
+            param_size,
+            local_size,
+            code_addr,
+            LocalReference {
+                local_size: 0,
+                local_top: 0
+            },
+            &VM_END as *const Instr
+        ));
 
         let ptr = code.expr.as_ptr();
         let mut ctx = ExecuteContext {
             stack: &mut stack,
-            local_state: vec![LocalState {
-                local_reference,
-                code_addr,
-                instance_addr: funcinst.instance_addr,
-            }],
+            local_reference,
             store,
         };
         vm_try!(unsafe { call_next(ptr, 0, &mut ctx) });

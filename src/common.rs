@@ -360,44 +360,36 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
-    pub local_state: Vec<LocalState>,
+    pub local_reference: LocalReference,
     pub store: &'a mut Store,
 }
 impl ExecuteContext<'_> {
+    pub fn func(&self) -> &FunctionInstance {
+        &self.store.funcs.0[self.stack.code_addr(&self.local_reference()) as usize]
+    }
     pub(crate) fn code(&self) -> *const Instr {
-        unsafe {
-            match &self.store.funcs.0[self.local_state.last().unwrap_unchecked().code_addr as usize]
-                .body
-            {
-                FunctionBody::Wasm(code) => code.expr.as_ptr(),
-                FunctionBody::Host(_) => unreachable!(),
-            }
+        match &self.func().body {
+            FunctionBody::Wasm(code) => code.expr.as_ptr(),
+            FunctionBody::Host(_) => unreachable!(),
         }
     }
     pub fn module(&self) -> &ModuleInstance {
         &self.store.modules[self.instance().module_addr as usize]
     }
+    pub fn instance_addr(&self) -> u32 {
+        self.func().instance_addr
+    }
     pub fn instance(&self) -> &Instance {
-        unsafe {
-            &self.store.instances[self.local_state.last().unwrap_unchecked().instance_addr as usize]
-        }
+        &self.store.instances[self.instance_addr() as usize]
     }
     pub fn local_reference(&self) -> LocalReference {
-        unsafe { self.local_state.last().unwrap_unchecked().local_reference }
+        self.local_reference
     }
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.instance()
             .memory
             .and_then(|v| self.store.memory.get_mut(v as usize))
     }
-}
-pub struct LocalState {
-    // TODO: We should write this to stack and holds current only.
-    pub local_reference: LocalReference,
-    // TODO: We should write this to stack and holds current code or may avoid this?
-    pub code_addr: u32,
-    // TODO: We should write this to stack and holds current code or may avoid this?
-    pub instance_addr: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
