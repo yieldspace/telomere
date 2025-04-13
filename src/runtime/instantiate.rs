@@ -1,9 +1,11 @@
 use crate::{
     common::{
-        execute_elem_init_const_expr, ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext,
-        Export, ExportDesc, ExportSection, FuncIdx, FunctionInstance, GlobalIdx, ImportDesc,
-        InstanceAddr, JumpTable, Limits, LocalState, MemIdx, Memory, ModuleInstance, TableIdx,
-        TableInstance, TypeIdx, PAGE_SIZE_MAX,
+        execute_elem_init_const_expr,
+        store::{FunctionBody, HostFunction},
+        ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, Export, ExportDesc, ExportSection,
+        FuncIdx, FunctionInstance, GlobalIdx, ImportDesc, InstanceAddr, JumpTable, Limits,
+        LocalState, MemIdx, Memory, ModuleInstance, TableIdx, TableInstance, TypeIdx,
+        PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -84,15 +86,19 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         start,
     } = m;
     for import in &imports.0 {
-        tracing::trace!("{import:?}");
+        tracing::trace!("processing import: {import:?}");
         let ext_inst_addr = vm_try!(VMResult::from_option(registry.get(&import.module), || {
+            tracing::error!("unknown instance");
             VMResult::Unlinkable
         }));
         let ext_inst = &store.instances[ext_inst_addr.0 as usize];
         let ext_module = &store.modules[ext_inst.module_addr as usize];
         let export = vm_try!(VMResult::from_option(
             ext_module.exports.find(&import.name),
-            || { VMResult::Unlinkable }
+            || {
+                tracing::error!("unknown export");
+                VMResult::Unlinkable
+            }
         ));
         match (&import.desc, export) {
             (ImportDesc::TypeIdx(tidx), ExportDesc::Func(funcidx)) => {
@@ -197,7 +203,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         s_funcs.push(FunctionInstance {
             instance_addr: inst_addr,
             funcidx,
-            body: func,
+            body: FunctionBody::Wasm(func),
         });
 
         tracing::trace!("linking: {mod_addr} {funcidx} => {funcaddr}");
@@ -318,26 +324,47 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
 
         let funcinst = &store.funcs.0[funcaddr as usize];
         let code = &funcinst.body;
-        let mut jump_table = JumpTable::new();
-        jump_table.push((code.expr.len() - 2) as u32);
-        let mut local_size = 0usize;
-        for local in &code.locals {
-            local_size += local.n as usize * local.t.stack_size().usize();
-        }
-        let local_reference = vm_try!(stack.function_call(0, local_size, &vm::VM_END));
-        let ptr = code.expr.as_ptr();
+        match code {
+            FunctionBody::Wasm(code) => {
+                let mut jump_table = JumpTable::new();
+                jump_table.push((code.expr.len() - 2) as u32);
+                let mut local_size = 0usize;
+                for local in &code.locals {
+                    local_size += local.n as usize * local.t.stack_size().usize();
+                }
+                let local_reference = vm_try!(stack.function_call(0, local_size, &vm::VM_END));
+                let ptr = code.expr.as_ptr();
 
-        let mut ctx = ExecuteContext {
-            stack: &mut stack,
-            local_state: vec![LocalState {
-                jump_table,
-                local_reference,
-                code_addr: funcaddr,
-                instance_addr: funcinst.instance_addr,
-            }],
-            store,
-        };
-        vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
+                let mut ctx = ExecuteContext {
+                    stack: &mut stack,
+                    local_state: vec![LocalState {
+                        jump_table,
+                        local_reference,
+                        code_addr: funcaddr,
+                        instance_addr: funcinst.instance_addr,
+                    }],
+                    store,
+                };
+                vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
+            }
+            FunctionBody::Host(fp) => {
+                let fp = *fp;
+                let jump_table = JumpTable::new();
+                let local_reference = vm_try!(stack.function_call(0, 0, &vm::VM_END));
+                let mut ctx = ExecuteContext {
+                    stack: &mut stack,
+                    local_state: vec![LocalState {
+                        jump_table,
+                        local_reference,
+                        code_addr: funcaddr,
+                        instance_addr: funcinst.instance_addr,
+                    }],
+                    store,
+                };
+                let return_addr = vm_try!(fp(&mut ctx));
+                vm_try!(unsafe { vm::call_next(return_addr, 0, &mut ctx) });
+            }
+        }
     } else {
         store.instances.push(instance);
         vm_try!(res);
@@ -444,4 +471,33 @@ pub fn aliasing(
         tables: table_addrs,
     });
     VMResult::Success(InstanceAddr(inst_addr))
+}
+pub fn link_host_function_with_function_idx(
+    addr: InstanceAddr,
+    funcidx: u32,
+    f: HostFunction,
+    store: &mut Store,
+) {
+    let instance = &store.instances[addr.0 as usize];
+    let funcaddr = instance.funcs[funcidx as usize];
+    let func = &mut store.funcs.0[funcaddr as usize];
+    func.body = FunctionBody::Host(f);
+}
+pub fn link_host_function_with_export_name(
+    addr: InstanceAddr,
+    name: &str,
+    f: HostFunction,
+    store: &mut Store,
+) {
+    let instance = &store.instances[addr.0 as usize];
+    let module = &store.modules[instance.module_addr as usize];
+    let export = &module.exports.find(name).unwrap();
+    let func_idx = if let ExportDesc::Func(v) = export {
+        v
+    } else {
+        unreachable!()
+    };
+    let funcaddr = instance.funcs[func_idx.0 as usize];
+    let func = &mut store.funcs.0[funcaddr as usize];
+    func.body = FunctionBody::Host(f);
 }

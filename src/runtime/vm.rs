@@ -2,8 +2,8 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        execute_elem_init_const_expr, ElemInit, ExecuteContext, ExportDesc, Instance, InstanceAddr,
-        Instr, JumpTable, LocalState, Stack, VMResult, ValType, WasmValue,
+        execute_elem_init_const_expr, store::FunctionBody, ElemInit, ExecuteContext, ExportDesc,
+        Instance, InstanceAddr, Instr, JumpTable, LocalState, Stack, VMResult, ValType, WasmValue,
     },
     Store,
 };
@@ -678,32 +678,46 @@ pub(crate) unsafe fn internal_op_call(
         .unwrap_unchecked();
     let ft = &module.function_types[typeidx.0 as usize];
     let code = &funcinst.body;
-    let mut jump_table = JumpTable::new();
-    jump_table.push(code.expr.len() as u32 - 2);
-
+    trace!("op_call_internal: {instance_addr}({module_addr})  {funcaddr}");
     let mut param_size = 0usize;
-    for t in ft.0.iter() {
-        param_size += t.stack_size().usize();
+    for param in ft.0.iter() {
+        param_size += param.stack_size().usize();
     }
+    let mut jump_table = JumpTable::new();
     let mut local_size = 0usize;
-    for local in &code.locals {
-        local_size += local.n as usize * local.t.stack_size().usize();
+
+    match code {
+        FunctionBody::Wasm(code) => {
+            jump_table.push(code.expr.len() as u32 - 2);
+
+            for local in &code.locals {
+                local_size += local.n as usize * local.t.stack_size().usize();
+            }
+            let local_reference =
+                vm_try!(ctx.stack.function_call(param_size, local_size, return_addr));
+
+            ctx.local_state.push(LocalState {
+                local_reference,
+                jump_table,
+                code_addr: funcaddr,
+                instance_addr,
+            });
+            VMResult::Success(code.expr.as_ptr())
+        }
+        FunctionBody::Host(fp) => {
+            let fp = *fp;
+            let local_reference =
+                vm_try!(ctx.stack.function_call(param_size, local_size, return_addr));
+            ctx.local_state.push(LocalState {
+                local_reference,
+                jump_table,
+                code_addr: funcaddr,
+                instance_addr,
+            });
+            let return_addr = vm_try!(fp(ctx));
+            VMResult::Success(return_addr)
+        }
     }
-    let local_reference = vm_try!(ctx.stack.function_call(param_size, local_size, return_addr));
-    trace!(
-        "op_call_internal: {} @ {instance_addr}({module_addr})  {funcaddr} {local_size} {:?} {:?} {:?}",
-        funcinst.funcidx,
-        ft,
-        code.locals,
-        local_reference
-    );
-    ctx.local_state.push(LocalState {
-        local_reference,
-        jump_table,
-        code_addr: funcaddr,
-        instance_addr: funcinst.instance_addr,
-    });
-    VMResult::Success(code.expr.as_ptr())
 }
 
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1959,7 +1973,10 @@ pub fn run_module_function(
             param_size += t.stack_size().usize();
         }
         let mut local_size = 0usize;
-        let code = &funcinst.body;
+        let code = match &funcinst.body {
+            FunctionBody::Wasm(code) => code,
+            FunctionBody::Host(_) => unreachable!(),
+        };
         for local in &code.locals {
             local_size += local.n as usize * local.t.stack_size().usize();
         }
