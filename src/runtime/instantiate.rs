@@ -332,7 +332,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 let local_reference = vm_try!(stack.function_call(
                     0,
                     local_size,
-                    funcinst.instance_addr,
                     funcaddr,
                     LocalReference {
                         local_size: 0,
@@ -354,7 +353,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 let local_reference = vm_try!(stack.function_call(
                     0,
                     0,
-                    funcinst.instance_addr,
                     funcaddr,
                     LocalReference {
                         local_size: 0,

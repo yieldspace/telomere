@@ -66,7 +66,6 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             ctx.local_reference = vm_try!(ctx.stack.function_call(
                 4,
                 code.local_size(),
-                func.instance_addr,
                 func_addr,
                 ctx.local_reference,
                 TAIL_CALL_FUNCTION_RETURN.as_ptr()
@@ -77,7 +76,6 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             ctx.local_reference = vm_try!(ctx.stack.function_call(
                 4,
                 0,
-                func.instance_addr,
                 func_addr,
                 ctx.local_reference,
                 TAIL_CALL_FUNCTION_RETURN.as_ptr()

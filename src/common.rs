@@ -364,8 +364,11 @@ pub struct ExecuteContext<'a> {
     pub store: &'a mut Store,
 }
 impl ExecuteContext<'_> {
+    pub fn func(&self) -> &FunctionInstance {
+        &self.store.funcs.0[self.stack.code_addr(&self.local_reference()) as usize]
+    }
     pub(crate) fn code(&self) -> *const Instr {
-        match &self.store.funcs.0[self.stack.code_addr(&self.local_reference()) as usize].body {
+        match &self.func().body {
             FunctionBody::Wasm(code) => code.expr.as_ptr(),
             FunctionBody::Host(_) => unreachable!(),
         }
@@ -374,7 +377,7 @@ impl ExecuteContext<'_> {
         &self.store.modules[self.instance().module_addr as usize]
     }
     pub fn instance_addr(&self) -> u32 {
-        self.stack.instance_addr(&self.local_reference())
+        self.func().instance_addr
     }
     pub fn instance(&self) -> &Instance {
         &self.store.instances[self.instance_addr() as usize]

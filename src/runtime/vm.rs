@@ -664,7 +664,6 @@ pub(crate) unsafe fn internal_op_call(
             ctx.local_reference = vm_try!(ctx.stack.function_call(
                 param_size,
                 code.local_size(),
-                funcinst.instance_addr,
                 funcaddr,
                 ctx.local_reference,
                 return_addr
@@ -677,7 +676,6 @@ pub(crate) unsafe fn internal_op_call(
             ctx.local_reference = vm_try!(ctx.stack.function_call(
                 param_size,
                 0,
-                funcinst.instance_addr,
                 funcaddr,
                 ctx.local_reference,
                 return_addr
@@ -1958,7 +1956,6 @@ pub fn run_module_function(
         let local_reference = vm_try!(stack.function_call(
             param_size,
             local_size,
-            funcinst.instance_addr,
             code_addr,
             LocalReference {
                 local_size: 0,
