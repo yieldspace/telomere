@@ -310,7 +310,6 @@ pub union Operand {
     pub f64: f64,
 
     pub jump_addr: u32,
-    pub jump_addr2: (u32, u32),
     pub drop_size: u32,
     pub local_addr: u32,
     pub select: u32,
@@ -365,9 +364,6 @@ pub struct ExecuteContext<'a> {
     pub store: &'a mut Store,
 }
 impl ExecuteContext<'_> {
-    pub fn jump_table(&mut self) -> &mut JumpTable {
-        unsafe { &mut self.local_state.last_mut().unwrap_unchecked().jump_table }
-    }
     pub(crate) fn code(&self) -> *const Instr {
         unsafe {
             match &self.store.funcs.0[self.local_state.last().unwrap_unchecked().code_addr as usize]
@@ -396,8 +392,6 @@ impl ExecuteContext<'_> {
     }
 }
 pub struct LocalState {
-    // TODO: We should resolve jump address during instantiate time
-    pub jump_table: JumpTable,
     // TODO: We should write this to stack and holds current only.
     pub local_reference: LocalReference,
     // TODO: We should write this to stack and holds current code or may avoid this?
@@ -405,31 +399,7 @@ pub struct LocalState {
     // TODO: We should write this to stack and holds current code or may avoid this?
     pub instance_addr: u32,
 }
-#[derive(Debug)]
-pub struct JumpTable(Vec<u32>);
-impl Default for JumpTable {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
-impl JumpTable {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-    pub fn push(&mut self, addr: u32) {
-        self.0.push(addr);
-    }
-    pub fn br(&mut self, idx: usize) -> Option<u32> {
-        self.0.drain(self.0.len() - 1 - idx..).next()
-    }
-    pub fn ret(&mut self) -> u32 {
-        unsafe { self.0.drain(0..).next().unwrap_unchecked() }
-    }
-    pub fn end(&mut self) {
-        self.0.pop();
-    }
-}
 #[derive(Debug, Clone, Copy)]
 pub struct InstanceAddr(pub(crate) u32);
 

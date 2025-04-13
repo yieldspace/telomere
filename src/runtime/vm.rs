@@ -3,7 +3,7 @@ use std::ops::BitXor;
 use crate::{
     common::{
         execute_elem_init_const_expr, store::FunctionBody, ElemInit, ExecuteContext, ExportDesc,
-        Instance, InstanceAddr, Instr, JumpTable, LocalState, Stack, VMResult, ValType, WasmValue,
+        Instance, InstanceAddr, Instr, LocalState, Stack, VMResult, ValType, WasmValue,
     },
     Store,
 };
@@ -550,8 +550,8 @@ pub unsafe fn op_f64_promote_f32(
     vm_try!(ctx.stack.push_f64(a.into()));
     call_next(tail_code, 0, ctx)
 }
-pub unsafe fn op_return(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = ctx.jump_table().ret();
+pub unsafe fn op_return(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let addr = (*tail_code).operand.jump_addr;
     trace!("op_return: {addr}");
     let code = ctx.code();
     let tail_code = code.offset(addr as isize);
@@ -560,36 +560,28 @@ pub unsafe fn op_return(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 
 pub unsafe fn op_end(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_end");
-
-    ctx.jump_table().end();
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_br(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = ctx
-        .jump_table()
-        .br((*tail_code).operand.u32 as usize)
-        .unwrap_unchecked();
+    let addr = (*tail_code).operand.jump_addr;
     trace!("op_br: {addr}");
 
     let tail_code = ctx.code().offset(addr as isize);
     call_next(tail_code, 0, ctx)
 }
-pub unsafe fn op_else(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_else");
 
-    let addr = ctx.jump_table().br(0).unwrap_unchecked();
+    let addr = (*tail_code).operand.jump_addr;
     let tail_code = ctx.code().offset(addr as isize);
-    call_next(tail_code, 0, ctx)
+    call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let cond = ctx.stack.pop_u32();
     trace!("op_br_if: {cond}");
 
     let ptr = if cond != 0 {
-        let addr = ctx
-            .jump_table()
-            .br((*tail_code).operand.u32 as usize)
-            .unwrap_unchecked();
+        let addr = (*tail_code).operand.jump_addr;
 
         ctx.code().offset(addr as isize)
     } else {
@@ -601,50 +593,39 @@ pub unsafe fn op_br_table(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let index = ctx.stack.pop_u32();
     let table_size = (*tail_code).operand.u32;
 
-    let idx = if index < table_size {
-        (*tail_code.offset((index + 1) as isize)).operand.u32
+    let addr = if index < table_size {
+        (*tail_code.offset((index + 1) as isize)).operand.jump_addr
     } else {
-        (*tail_code.offset((table_size + 1) as isize)).operand.u32
+        (*tail_code.offset((table_size + 1) as isize))
+            .operand
+            .jump_addr
     };
     trace!(
-        "op_br_table: index={} table_size={} => jump_idx={}",
+        "op_br_table: index={} table_size={} => addr={}",
         index,
         table_size,
-        idx
+        addr
     );
-    let addr = ctx.jump_table().br(idx as usize).unwrap_unchecked();
-
     let tail_code = ctx.code().offset(addr as isize);
     call_next(tail_code, 0, ctx)
 }
-pub unsafe fn op_block(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    trace!("op_block: {}", (*tail_code).operand.jump_addr);
-    ctx.jump_table().push((*tail_code).operand.jump_addr);
-    call_next(tail_code, 1, ctx)
-}
 
 pub unsafe fn op_loop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    ctx.jump_table().push((*tail_code).operand.jump_addr);
-    trace!(
-        "op_loop: {} {:?}",
-        (*tail_code).operand.jump_addr,
-        ctx.jump_table()
-    );
+    trace!("op_loop: {}", (*tail_code).operand.jump_addr);
 
-    let loop_param = (*tail_code.offset(1)).operand.loop_param;
+    let loop_param = (*tail_code).operand.loop_param;
     ctx.stack.block_return(
         &ctx.local_reference(),
         loop_param.stack_top as usize,
         loop_param.param_size as usize,
     );
 
-    call_next(tail_code, 2, ctx)
+    call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let (end_addr, else_addr) = (*tail_code).operand.jump_addr2;
-    ctx.jump_table().push(end_addr);
+    let else_addr = (*tail_code).operand.jump_addr;
     let v = ctx.stack.pop_u32();
-    trace!("op_if: {end_addr} {else_addr} {v} {:?}", ctx.jump_table());
+    trace!("op_if: {else_addr} {v}");
 
     let ptr = if v == 0 {
         ctx.code().offset(else_addr as isize)
@@ -683,22 +664,16 @@ pub(crate) unsafe fn internal_op_call(
     for param in ft.0.iter() {
         param_size += param.stack_size().usize();
     }
-    let mut jump_table = JumpTable::new();
-    let mut local_size = 0usize;
 
     match code {
         FunctionBody::Wasm(code) => {
-            jump_table.push(code.expr.len() as u32 - 2);
-
-            for local in &code.locals {
-                local_size += local.n as usize * local.t.stack_size().usize();
-            }
             let local_reference =
-                vm_try!(ctx.stack.function_call(param_size, local_size, return_addr));
+                vm_try!(ctx
+                    .stack
+                    .function_call(param_size, code.local_size(), return_addr));
 
             ctx.local_state.push(LocalState {
                 local_reference,
-                jump_table,
                 code_addr: funcaddr,
                 instance_addr,
             });
@@ -706,11 +681,9 @@ pub(crate) unsafe fn internal_op_call(
         }
         FunctionBody::Host(fp) => {
             let fp = *fp;
-            let local_reference =
-                vm_try!(ctx.stack.function_call(param_size, local_size, return_addr));
+            let local_reference = vm_try!(ctx.stack.function_call(param_size, 0, return_addr));
             ctx.local_state.push(LocalState {
                 local_reference,
-                jump_table,
                 code_addr: funcaddr,
                 instance_addr,
             });
@@ -1994,14 +1967,11 @@ pub fn run_module_function(
         tracing::trace!("run_module_function: {name} {local_size} {:?}", code.locals,);
         let local_reference =
             vm_try!(stack.function_call(param_size, local_size, &VM_END as *const Instr));
-        let mut jump_table = JumpTable::new();
-        jump_table.push((code.expr.len() - 2) as u32);
 
         let ptr = code.expr.as_ptr();
         let mut ctx = ExecuteContext {
             stack: &mut stack,
             local_state: vec![LocalState {
-                jump_table,
                 local_reference,
                 code_addr,
                 instance_addr: funcinst.instance_addr,

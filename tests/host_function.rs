@@ -1,12 +1,9 @@
 mod common;
 use common::{instantiate_wat, run_wast_with};
 use telomere::{
-    common::{ExecuteContext, FunctionBody, Instr, JumpTable, LocalState},
+    common::{ExecuteContext, FunctionBody, Instr, LocalState},
     link_host_function_with_function_idx, vm_try, Registry, Store, VMResult,
 };
-
-use tracing::Level;
-
 static mut PRINT_CALL: Vec<()> = vec![];
 fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     #[allow(static_mut_refs)]
@@ -66,7 +63,6 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let funcidx = 1;
     let func_addr = ctx.instance().funcs[funcidx];
 
-    let mut jump_table = JumpTable::new();
     let func = &ctx.store.funcs.0[func_addr as usize];
     match &func.body {
         FunctionBody::Wasm(code) => {
@@ -75,9 +71,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
                 code.local_size(),
                 TAIL_CALL_FUNCTION_RETURN.as_ptr()
             ));
-            jump_table.push((code.expr.len() - 2) as u32);
             ctx.local_state.push(LocalState {
-                jump_table,
                 local_reference: local_ref,
                 code_addr: func_addr,
                 instance_addr: inst_addr,
@@ -90,7 +84,6 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
                     .stack
                     .function_call(4, 0, TAIL_CALL_FUNCTION_RETURN.as_ptr()));
             ctx.local_state.push(LocalState {
-                jump_table,
                 local_reference: local_ref,
                 code_addr: func_addr,
                 instance_addr: inst_addr,
@@ -139,9 +132,6 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 }
 #[test]
 pub fn test_tail_call_native() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
     let mut store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
