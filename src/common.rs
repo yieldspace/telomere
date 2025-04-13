@@ -1,5 +1,6 @@
 #[macro_use]
 mod vm_result;
+pub use store::FunctionBody;
 use store::GlobalStore;
 pub use vm_result::VMResult;
 mod memory;
@@ -238,6 +239,15 @@ pub struct Func {
     pub locals: Vec<Locals>,
     pub expr: Vec<Instr>,
 }
+impl Func {
+    pub fn local_size(&self) -> usize {
+        let mut local_size = 0usize;
+        for local in &self.locals {
+            local_size += local.n as usize * local.t.stack_size().usize();
+        }
+        local_size
+    }
+}
 #[derive(Debug, Clone, Copy)]
 pub enum ExportDesc {
     Func(FuncIdx),
@@ -352,19 +362,20 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     pub local_state: Vec<LocalState>,
-    //pub funcs: &'a [u32],
     pub store: &'a mut Store,
 }
 impl ExecuteContext<'_> {
     pub fn jump_table(&mut self) -> &mut JumpTable {
         unsafe { &mut self.local_state.last_mut().unwrap_unchecked().jump_table }
     }
-    pub fn code(&self) -> *const Instr {
+    pub(crate) fn code(&self) -> *const Instr {
         unsafe {
-            self.store.funcs.0[self.local_state.last().unwrap_unchecked().code_addr as usize]
+            match &self.store.funcs.0[self.local_state.last().unwrap_unchecked().code_addr as usize]
                 .body
-                .expr
-                .as_ptr()
+            {
+                FunctionBody::Wasm(code) => code.expr.as_ptr(),
+                FunctionBody::Host(_) => unreachable!(),
+            }
         }
     }
     pub fn module(&self) -> &ModuleInstance {
