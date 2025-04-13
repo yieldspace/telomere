@@ -71,6 +71,7 @@ const SPECTEST_WAT: &str = r#"
 fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceAddr {
     instantiate_wat(SPECTEST_WAT, store, registry)
 }
+#[allow(dead_code)]
 pub fn run_wast(text: &str) {
     let mut store = Store::new();
     let mut registry = Registry::new();
