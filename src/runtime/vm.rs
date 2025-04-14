@@ -672,7 +672,6 @@ pub(crate) unsafe fn internal_op_call(
             VMResult::Success(code.expr.as_ptr())
         }
         FunctionBody::Host(fp) => {
-            let fp = fp;
             ctx.local_reference = vm_try!(ctx.stack.function_call(
                 param_size,
                 0,

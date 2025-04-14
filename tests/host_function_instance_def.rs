@@ -1,5 +1,5 @@
 mod common;
-use common::{instantiate_wat, run_wast_with};
+use common::run_wast_with;
 use telomere::{
     common::{
         ExecuteContext, FuncType, FunctionBody, HostFunctionDefinition, Instr, NativeModule,

@@ -68,7 +68,7 @@ impl CoreInstance {
                         let instance = registry.get(name).expect("Instance not found");
                         match alias {
                             CoreInstanceAliasExport::Func(idx) => {
-                                let k = idx.get(&component);
+                                let k = idx.get(component);
                             }
                         }
                         (name.clone(), instance)
