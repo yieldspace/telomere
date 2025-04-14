@@ -3,6 +3,8 @@ use super::{
     Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
 use std::{collections::HashMap, io::Write};
+use std::any::Any;
+use std::ops::Deref;
 
 pub struct GlobalStore(pub Vec<u8>);
 impl GlobalStore {
@@ -136,7 +138,7 @@ impl Drop for StoreState {
     fn drop(&mut self) {
         if self.0 != 0 {
             unsafe {
-                let _ = Box::from_raw(self.0 as *mut u8);
+                let _ = Box::from_raw(self.0 as *mut &(dyn Any));
             }
         }
     }
