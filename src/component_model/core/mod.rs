@@ -1,14 +1,15 @@
-use crate::component_model::{CanonicalFuncKind, Component, CoreFuncIdx, Idx};
+mod func;
+mod types;
+mod sort;
+
+use crate::component_model::{CanonOpt, CanonicalFuncKind, Component, CoreFuncIdx, Idx, TypeIdx};
 use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
 use crate::{Registry, Store};
 use std::collections::HashMap;
+pub use func::*;
+pub use types::*;
+pub use sort::*;
 
-#[derive(Debug)]
-pub struct CoreType {}
-
-pub enum CoreFunction {
-    Canon(CanonicalFuncKind),
-}
 
 pub enum CoreInstance {
     Real {
