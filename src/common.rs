@@ -91,6 +91,11 @@ pub struct Table(pub TableType);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncType(pub ResultType, pub ResultType);
+impl FuncType {
+    pub fn new(param: Vec<ValType>, result: Vec<ValType>) -> Self {
+        Self(ResultType(param), ResultType(result))
+    }
+}
 #[derive(Debug, Clone)]
 pub struct TypeSection(pub Vec<FuncType>);
 impl TypeSection {
