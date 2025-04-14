@@ -1,7 +1,8 @@
 use std::{collections::HashMap, io::Write};
 
 use super::{
-    ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType, Memory, TableInstance, TableType, TypeIdx, VMResult
+    ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
+    Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
 
 pub struct GlobalStore(pub Vec<u8>);
