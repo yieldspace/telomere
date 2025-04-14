@@ -124,19 +124,13 @@ impl StoreState {
 
     #[inline]
     pub fn get<T>(&self) -> Option<&T> {
-        if self.0 == 0 {
-            return None;
-        }
         let ptr = self.0 as *const T;
         unsafe { ptr.as_ref() }
     }
 
     #[inline]
     pub fn get_mut<T>(&self) -> Option<&mut T> {
-        if self.0 == 0 {
-            return None;
-        }
-        let ptr = self.0 as *const T as *mut T;
+        let ptr = self.0 as *mut T;
         unsafe { ptr.as_mut() }
     }
 }
@@ -157,16 +151,5 @@ mod test {
         unsafe {
             assert_eq!(state.get::<Vec<i32>>().unwrap(), &data);
         }
-    }
-
-    #[test]
-    fn invalid_lifetime() {
-        use super::StoreState;
-        let state = {
-            let data = vec![1, 2, 3];
-            let state = StoreState::new(Some(&data));
-            drop(data);
-            state
-        };
     }
 }
