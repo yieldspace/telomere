@@ -1,9 +1,8 @@
-use std::{collections::HashMap, io::Write};
-use std::mem::forget;
 use super::{
     ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
     Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
+use std::{collections::HashMap, io::Write};
 
 pub struct GlobalStore(pub Vec<u8>);
 impl GlobalStore {
@@ -129,4 +128,3 @@ impl Drop for StoreState {
         }
     }
 }
-
