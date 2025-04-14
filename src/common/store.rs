@@ -2,7 +2,6 @@ use super::{
     ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
     Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
-use std::any::Any;
 use std::{collections::HashMap, io::Write};
 
 pub struct GlobalStore(pub Vec<u8>);
@@ -111,19 +110,29 @@ impl Store {
 pub struct StoreState(usize);
 
 impl StoreState {
-    pub fn new<T>(data: Option<Box<T>>) -> Self {
+    pub fn new<'a, 'b, T>(data: Option<&'a T>) -> Self
+    where
+        Self: 'b,
+        'b: 'a,
+    {
         if let Some(data) = data {
-            let addr = Box::into_raw(data) as usize;
-            StoreState(addr)
+            StoreState(data as *const T as usize)
         } else {
             StoreState(0)
         }
     }
-    pub fn get<T>(&self) -> *mut T {
+    pub unsafe fn get<T>(&self) -> Option<&T> {
         if self.0 == 0 {
-            return std::ptr::null_mut();
+            return None;
         }
-        self.0 as *mut T
+        Some(&*(self.0 as *const T))
+    }
+
+    pub unsafe fn get_mut<T>(&self) -> Option<&mut T> {
+        if self.0 == 0 {
+            return None;
+        }
+        Some(&mut *(self.0 as *const T as *mut T))
     }
 }
 
@@ -133,12 +142,15 @@ impl Default for StoreState {
     }
 }
 
-impl Drop for StoreState {
-    fn drop(&mut self) {
-        if self.0 != 0 {
-            unsafe {
-                let _ = Box::from_raw(self.0 as *mut &(dyn Any));
-            }
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_state() {
+        use super::StoreState;
+        let data = vec![1, 2, 3];
+        let state = StoreState::new(Some(&data));
+        unsafe {
+            assert_eq!(state.get::<Vec<i32>>().unwrap(), &data);
         }
     }
 }
