@@ -45,7 +45,7 @@ pub fn instantiate(
     let mut component_instance = ComponentInstantiated::new();
 
     for core_instance in &component.core_instances {
-        let compiled = core_instance.instantiate(store, &component, &component_instance, &linker);
+        let compiled = core_instance.instantiate(store, &component, &component_instance, linker);
         component_instance.core_instances.push(compiled);
     }
 

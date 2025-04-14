@@ -11,6 +11,7 @@ pub mod component_model;
 pub(crate) mod instantiate;
 pub use instantiate::aliasing;
 pub use instantiate::instantiate;
+pub use instantiate::instantiate_native_module;
 pub use instantiate::link_host_function_with_export_name;
 pub use instantiate::link_host_function_with_function_idx;
 pub use vm::get_global;

@@ -2,7 +2,7 @@ use tracing::Level;
 
 #[test]
 fn test_basic_component() {
-    let _ = tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
     let component = r#"
@@ -19,7 +19,7 @@ fn test_basic_component() {
 
 #[test]
 fn test_with_core_wasm() {
-    let _ = tracing_subscriber::fmt()
+    tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
     let component = r#"

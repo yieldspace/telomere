@@ -73,7 +73,7 @@ pub const fn compile_i32<const N: usize>(bytes: [u8; N]) -> i32 {
     }
 
     if is_signed && (read_bytes * 7) < bit_size && (byte & 0x40) != 0 {
-        result |= (!0i32) << read_bytes * 7;
+        result |= (!0i32) << (read_bytes * 7);
     }
 
     result

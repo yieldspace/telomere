@@ -1,8 +1,8 @@
 use std::{collections::HashMap, io::Write};
 
 use super::{
-    ConstExpr, Data, Elem, ExecuteContext, ExportSection, Func, FuncType, GlobalType, Instance,
-    Instr, MemType, Memory, TableInstance, TableType, TypeIdx, VMResult,
+    ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
+    Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
 
 pub struct GlobalStore(pub Vec<u8>);
@@ -47,11 +47,7 @@ impl GlobalStore {
         }
     }
 }
-pub type HostFunction = fn(ctx: &mut ExecuteContext) -> VMResult<*const Instr>;
-pub enum FunctionBody {
-    Wasm(Func),
-    Host(HostFunction),
-}
+
 pub struct FunctionInstance {
     pub instance_addr: u32,
     pub funcidx: u32,

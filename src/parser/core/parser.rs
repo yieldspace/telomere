@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use tracing::trace;
 
-use crate::common::{ConstExpr, ElemInit, Func, Instr, Locals, Operand};
+use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, Operand};
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::InstructionParser;
@@ -446,7 +446,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
 
         let (len, mut codes) = self.parse_vec(|me| {
-            let r = me.parse_code(
+            let (len, func) = me.parse_code(
                 FuncIdx(idx),
                 type_section,
                 functions,
@@ -458,7 +458,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             )?;
 
             idx += 1;
-            Ok(r)
+            Ok((len, FunctionBody::Wasm(func)))
         })?;
         if len != size as usize {
             Err(WasmParserError::InvalidSectionSize)?

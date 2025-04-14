@@ -1,10 +1,10 @@
 use crate::{
     common::{
-        execute_elem_init_const_expr,
-        store::{FunctionBody, HostFunction},
-        ConstExpr, DataMode, ElemInit, ElemMode, ExecuteContext, Export, ExportDesc, ExportSection,
-        FuncIdx, FunctionInstance, GlobalIdx, ImportDesc, InstanceAddr, Limits, LocalReference,
-        MemIdx, Memory, ModuleInstance, TableIdx, TableInstance, TypeIdx, PAGE_SIZE_MAX,
+        execute_elem_init_const_expr, CodeSection, ConstExpr, DataMode, DataSection, ElemInit,
+        ElemMode, ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx,
+        FunctionBody, FunctionInstance, GlobalIdx, HostFunction, HostFunctionDefinition,
+        ImportDesc, ImportSection, InstanceAddr, Limits, LocalReference, MemIdx, Memory,
+        ModuleInstance, NativeModule, TableIdx, TableInstance, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -60,6 +60,48 @@ fn execute_offset_const_expr(
         });
     }
     VMResult::Unlinkable
+}
+
+fn convert_native_module_to_module(m: NativeModule) -> Module {
+    let mut codes = vec![];
+    let mut functions = vec![];
+    let mut fts = vec![];
+    let mut exs = vec![];
+    for HostFunctionDefinition {
+        fp,
+        name,
+        signature,
+    } in m.functions.into_iter()
+    {
+        let funcidx = functions.len();
+        functions.push(TypeIdx(fts.len() as u32));
+        fts.push(signature);
+        codes.push(FunctionBody::Host(fp));
+        if let Some(name) = name {
+            exs.push(Export(name, ExportDesc::Func(FuncIdx(funcidx as u32))));
+        }
+    }
+    Module {
+        codes: CodeSection(codes),
+        functions,
+        fts: TypeSection(fts),
+        data: DataSection(vec![]),
+        elems: ElementSection(vec![]),
+        imports: ImportSection(vec![]),
+        mems: vec![],
+        globals: vec![],
+        global_init: vec![],
+        exs: ExportSection(exs),
+        tables: vec![],
+        start: None,
+    }
+}
+pub fn instantiate_native_module(
+    m: NativeModule,
+    store: &mut Store,
+    registry: &Registry,
+) -> VMResult<InstanceAddr> {
+    instantiate(convert_native_module_to_module(m), store, registry)
 }
 
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
@@ -202,7 +244,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         s_funcs.push(FunctionInstance {
             instance_addr: inst_addr,
             funcidx,
-            body: FunctionBody::Wasm(func),
+            body: func,
         });
 
         tracing::trace!("linking: {mod_addr} {funcidx} => {funcaddr}");

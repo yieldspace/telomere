@@ -1,6 +1,5 @@
 #[macro_use]
 mod vm_result;
-pub use store::FunctionBody;
 use store::GlobalStore;
 pub use vm_result::VMResult;
 mod memory;
@@ -92,6 +91,11 @@ pub struct Table(pub TableType);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncType(pub ResultType, pub ResultType);
+impl FuncType {
+    pub fn new(param: Vec<ValType>, result: Vec<ValType>) -> Self {
+        Self(ResultType(param), ResultType(result))
+    }
+}
 #[derive(Debug, Clone)]
 pub struct TypeSection(pub Vec<FuncType>);
 impl TypeSection {
@@ -127,13 +131,14 @@ impl ExportSection {
         self.0.iter().find(|it| it.0 == name).map(|it| it.1)
     }
 }
+pub type HostFunction = fn(ctx: &mut ExecuteContext) -> VMResult<*const Instr>;
 #[derive(Clone)]
-pub struct CodeSection(pub Vec<Func>);
-impl CodeSection {
-    pub fn get(&self, idx: FuncIdx) -> Option<&Func> {
-        self.0.get(idx.0 as usize)
-    }
+pub enum FunctionBody {
+    Wasm(Func),
+    Host(HostFunction),
 }
+#[derive(Clone)]
+pub struct CodeSection(pub Vec<FunctionBody>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     pub min: u32,
@@ -204,6 +209,14 @@ pub struct Module {
     pub codes: CodeSection,
     pub data: DataSection,
     pub start: Option<FuncIdx>,
+}
+pub struct HostFunctionDefinition {
+    pub name: Option<String>,
+    pub signature: FuncType,
+    pub fp: HostFunction,
+}
+pub struct NativeModule {
+    pub functions: Vec<HostFunctionDefinition>,
 }
 #[derive(Debug, Clone)]
 pub struct TableInstance(pub TableType, pub Vec<u32>);
