@@ -7,7 +7,8 @@ pub(crate) mod vm;
 //FIXME:
 const TABLE_UNINITIALIZED: u32 = 0x00;
 
-mod instantiate;
+pub mod component_model;
+pub(crate) mod instantiate;
 pub use instantiate::aliasing;
 pub use instantiate::instantiate;
 pub use instantiate::link_host_function_with_export_name;

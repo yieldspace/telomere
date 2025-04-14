@@ -50,3 +50,55 @@ impl<'a, R: BinaryReader> Leb128Parser<'a, R> {
     parse_leb128impl!(parse_i32, i32, true);
     parse_leb128impl!(parse_i64, i64, true);
 }
+
+pub const fn compile_i32<const N: usize>(bytes: [u8; N]) -> i32 {
+    let is_signed = true; // because i32
+    let bit_size = std::mem::size_of::<u32>() * 8;
+    let mut result = 0;
+    let mut read_bytes: usize = 0;
+    let mut i = 0;
+    let mut byte: u8;
+
+    loop {
+        byte = bytes[i];
+        result |= ((byte & 0x7F) as i32) << (read_bytes * 7);
+        read_bytes += 1;
+        if byte & 0x80 == 0 {
+            break;
+        }
+        if (read_bytes * 7) >= bit_size {
+            panic!("InvalidLeb128Encoding")
+        }
+        i += 1;
+    }
+
+    if is_signed && (read_bytes * 7) < bit_size && (byte & 0x40) != 0 {
+        result |= (!0i32) << read_bytes * 7;
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parser::core::parse_i32;
+    use crate::parser::leb128::compile_i32;
+    use crate::IoReadBinaryReader;
+
+    #[test]
+    fn test_sleb128() {
+        use std::io::Cursor;
+
+        let data = [0x3f, 0x7f];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+        let (_, k) = parse_i32(&mut reader).unwrap();
+        assert_eq!(k, 63);
+    }
+
+    #[test]
+    fn test_compile_i32() {
+        let data = [0x77];
+        let k = compile_i32(data);
+        assert_eq!(k, -9);
+    }
+}

@@ -3,9 +3,10 @@ use crate::parser::error::ParseError;
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
+pub mod component_model;
 pub(crate) mod core;
 mod error;
-mod leb128;
+pub(crate) mod leb128;
 
 pub trait BinaryParser<R>
 where
