@@ -1,9 +1,8 @@
-use std::{collections::HashMap, io::Write};
-
 use super::{
     ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
     Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
+use std::{collections::HashMap, io::Write};
 
 pub struct GlobalStore(pub Vec<u8>);
 impl GlobalStore {
@@ -72,6 +71,7 @@ pub struct Store {
     pub tables: Vec<TableInstance>,
     pub memory: Vec<Memory>,
     pub elems: HashMap<(u32, u32), Elem>,
+    pub state: StoreState,
 }
 impl Default for Store {
     fn default() -> Self {
@@ -89,6 +89,67 @@ impl Store {
             tables: vec![],
             memory: vec![],
             elems: HashMap::new(),
+            state: StoreState::default(),
+        }
+    }
+
+    pub fn new_with_state(state: StoreState) -> Self {
+        Store {
+            globals: GlobalStore(vec![]),
+            funcs: FunctionStore(vec![]),
+            modules: vec![],
+            instances: vec![],
+            tables: vec![],
+            memory: vec![],
+            elems: HashMap::new(),
+            state,
+        }
+    }
+}
+
+pub struct StoreState(usize);
+
+impl StoreState {
+    pub fn new<'a, 'b, T>(data: Option<&'a T>) -> Self
+    where
+        Self: 'b,
+        'a: 'b,
+    {
+        if let Some(data) = data {
+            StoreState(data as *const T as usize)
+        } else {
+            StoreState(0)
+        }
+    }
+
+    #[inline]
+    pub fn get<T>(&self) -> Option<&T> {
+        let ptr = self.0 as *const T;
+        unsafe { ptr.as_ref() }
+    }
+
+    #[inline]
+    pub fn get_mut<T>(&self) -> Option<&mut T> {
+        let ptr = self.0 as *mut T;
+        unsafe { ptr.as_mut() }
+    }
+}
+
+impl Default for StoreState {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_state() {
+        use super::StoreState;
+        let data = vec![1, 2, 3];
+        let state = StoreState::new(Some(&data));
+        unsafe {
+            assert_eq!(state.get::<Vec<i32>>().unwrap(), &data);
         }
     }
 }
