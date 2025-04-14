@@ -11,7 +11,7 @@ pub enum VMResult<V> {
     Unlinkable,
     InvalidOperand,
 }
-
+#[macro_export]
 macro_rules! vm_try {
     ($expr: expr) => {
         match $expr {

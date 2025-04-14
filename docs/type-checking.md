@@ -1,4 +1,4 @@
-# WASMの型検査について
+# type checking
 ## 値の型
 wasmには仕様上`i32`,`i64`,`f32`,`f64`と`funcref`,`externref`,`v128`の型がある.
 ```rust

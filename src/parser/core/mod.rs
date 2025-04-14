@@ -1,6 +1,7 @@
 mod base;
 mod error;
 mod instruction;
+mod jump_resolver;
 mod parser;
 mod type_checker;
 mod types;
