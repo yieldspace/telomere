@@ -2,8 +2,7 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        execute_elem_init_const_expr, store::FunctionBody, ElemInit, ExecuteContext, ExportDesc,
-        Instance, InstanceAddr, Instr, LocalReference, Stack, VMResult, ValType, WasmValue,
+        execute_elem_init_const_expr, ElemInit, ExecuteContext, ExportDesc, FunctionBody, Instance, InstanceAddr, Instr, LocalReference, Stack, VMResult, ValType, WasmValue
     },
     Store,
 };
@@ -672,7 +671,7 @@ pub(crate) unsafe fn internal_op_call(
             VMResult::Success(code.expr.as_ptr())
         }
         FunctionBody::Host(fp) => {
-            let fp = *fp;
+            let fp = fp;
             ctx.local_reference = vm_try!(ctx.stack.function_call(
                 param_size,
                 0,
