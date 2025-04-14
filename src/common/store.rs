@@ -1,5 +1,5 @@
 use std::{collections::HashMap, io::Write};
-
+use std::mem::forget;
 use super::{
     ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
     Memory, TableInstance, TableType, TypeIdx, VMResult,
@@ -72,6 +72,7 @@ pub struct Store {
     pub tables: Vec<TableInstance>,
     pub memory: Vec<Memory>,
     pub elems: HashMap<(u32, u32), Elem>,
+    pub state: StoreState,
 }
 impl Default for Store {
     fn default() -> Self {
@@ -89,6 +90,43 @@ impl Store {
             tables: vec![],
             memory: vec![],
             elems: HashMap::new(),
+            state: StoreState::default(),
         }
     }
 }
+
+pub struct StoreState(usize);
+
+impl StoreState {
+    pub fn new<T>(data: Option<Box<T>>) -> Self {
+        if let Some(data) = data {
+            let addr = Box::into_raw(data) as usize;
+            StoreState(addr)
+        } else {
+            StoreState(0)
+        }
+    }
+    pub fn get<T>(&self) -> *mut T {
+        if self.0 == 0 {
+            return std::ptr::null_mut();
+        }
+        self.0 as *mut T
+    }
+}
+
+impl Default for StoreState {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
+impl Drop for StoreState {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            unsafe {
+                let _ = Box::from_raw(self.0 as *mut u8);
+            }
+        }
+    }
+}
+
