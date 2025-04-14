@@ -12,7 +12,7 @@ pub(crate) mod store;
 pub(crate) use store::FunctionInstance;
 pub(crate) use store::ModuleInstance;
 
-pub use store::Store;
+pub use store::{Store, StoreState};
 
 #[derive(Debug, Clone, Copy)]
 pub struct TypeIdx(pub u32);

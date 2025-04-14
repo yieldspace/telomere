@@ -92,6 +92,19 @@ impl Store {
             state: StoreState::default(),
         }
     }
+
+    pub fn new_with_state(state: StoreState) -> Self {
+        Store {
+            globals: GlobalStore(vec![]),
+            funcs: FunctionStore(vec![]),
+            modules: vec![],
+            instances: vec![],
+            tables: vec![],
+            memory: vec![],
+            elems: HashMap::new(),
+            state,
+        }
+    }
 }
 
 pub struct StoreState(usize);
