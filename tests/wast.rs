@@ -376,8 +376,5 @@ fn binary() {
 }
 #[test]
 fn binary_leb128() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
     run_test_file("binary-leb128");
 }

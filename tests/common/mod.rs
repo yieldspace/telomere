@@ -238,12 +238,18 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
             WastDirective::AssertMalformed {
                 span,
                 mut module,
-                message,
+                message: _,
             } => {
                 let test = module.to_test().unwrap();
                 match test {
-                    wast::QuoteWatTest::Text(_t) => {
-                        tracing::warn!("ignore test");
+                    wast::QuoteWatTest::Text(source) => {
+                        let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+                        let mut parser = telomere::WasmParser::new(&mut reader);
+                        assert!(
+                            parser.parse_module().is_err(),
+                            "{:?}",
+                            span.linecol_in(text)
+                        )
                     }
                     wast::QuoteWatTest::Binary(source) => {
                         let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
@@ -255,9 +261,6 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                         )
                     }
                 }
-                //TODO: Is there anything that wast fails to encode that could be binary?
-
-                // FIXME: now we ignore AssertMalformed
             }
             WastDirective::AssertInvalid {
                 span,
@@ -265,6 +268,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                 message,
             } => {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
+                //FIXME: ignoring alignment error
                 if message != "alignment must not be larger than natural" {
                     //TODO: Is there anything that wast fails to encode that could be binary?
                     if let Ok(source) = module.encode() {

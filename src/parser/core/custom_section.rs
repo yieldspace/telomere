@@ -1,10 +1,9 @@
 use crate::binary::BinaryReader;
+use crate::common::custom_section::{FuncNameSubSec, LocalNameSubSec, ModuleNameSubSec, NameSubSection};
 
 use super::base::WasmBaseParser;
 use super::{Result, WasmParserError};
-struct ModuleNameSubSec(String);
-struct FuncNameSubSec(Vec<(u32, String)>);
-struct LocalNameSubSec(Vec<(u32, Vec<(u32, String)>)>);
+
 pub struct CustomSectionParser<'a, R: BinaryReader> {
     reader: &'a mut R,
 }
@@ -18,7 +17,7 @@ enum NameSubsectionId {
     ModuleName = 0,
     FunctionName = 1,
     LocalName = 2,
-    Unknown(u8),
+    Unknown,
 }
 impl<'a, R: BinaryReader> CustomSectionParser<'a, R> {
     fn parse_name_subsec_id(&mut self) -> Result<Option<NameSubsectionId>> {
@@ -27,7 +26,7 @@ impl<'a, R: BinaryReader> CustomSectionParser<'a, R> {
             Some(0) => Some(NameSubsectionId::ModuleName),
             Some(1) => Some(NameSubsectionId::FunctionName),
             Some(2) => Some(NameSubsectionId::LocalName),
-            Some(other) => Some(NameSubsectionId::Unknown(other)),
+            Some(_other) => Some(NameSubsectionId::Unknown),
             None => None,
         };
         Ok(r)
@@ -35,14 +34,14 @@ impl<'a, R: BinaryReader> CustomSectionParser<'a, R> {
     pub fn new(reader: &'a mut R) -> Self {
         Self { reader }
     }
-    pub fn parse_name_subsec(&mut self) -> Result<()> {
+    pub fn parse_name_subsec(&mut self) -> Result<NameSubSection> {
         let mut mod_name_subsec = None;
         let mut func_name_subsec = None;
         let mut local_name_subsec = None;
         loop {
             if let Some(id) = self.parse_name_subsec_id()? {
                 match id {
-                    NameSubsectionId::Unknown(_) => {
+                    NameSubsectionId::Unknown => {
                         self.parse_unknown_sub_sec()?;
                     }
                     NameSubsectionId::ModuleName => {
@@ -59,7 +58,11 @@ impl<'a, R: BinaryReader> CustomSectionParser<'a, R> {
                 break;
             }
         }
-        Ok(())
+        Ok(NameSubSection {
+            function_name: func_name_subsec,
+            local_name: local_name_subsec,
+            module_name: mod_name_subsec,
+        })
     }
     fn parse_module_name_sub_sec(&mut self) -> Result<ModuleNameSubSec> {
         let (_len, size) = self.parse_u32()?;

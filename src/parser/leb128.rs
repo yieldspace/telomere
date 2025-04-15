@@ -8,54 +8,74 @@ pub(crate) struct Leb128Parser<'a, R: BinaryReader> {
 }
 macro_rules! parse_leb128impl {
     ($name: ident, $t: ident, $is_signed: expr) => {
+        /// Parses a LEB128 encoded value.
+        ///
+        /// # Parameters
+        /// - `bit_size`: The number of bits for the target type (e.g., 32 for u32).
+        ///
+        /// # Returns
+        /// A tuple of:
+        /// - `usize`: The number of bytes read.
+        /// - `$t`: The decoded value of the specified type.
+        ///
+        /// # Errors
+        /// Returns an error if the encoding is invalid, exceeds the bit size, or fails validation.
         pub fn $name(&mut self, bit_size: usize) -> Result<(usize, $t)> {
             let mut result: $t = 0;
             let mut read_bytes: usize = 0;
-            let mut byte: u8;
-
+            let mut byte;
             loop {
+                // Read one byte from the input
                 byte = self.reader.read_exact_one()?;
                 tracing::trace!("{read_bytes} {:x}", byte);
-                // Extract the lower 7 bits and shift them into the result.
-                result |= ((byte & 0x7F) as $t) << (read_bytes * 7);
 
+                // Extract the lower 7 bits and shift them into the result
+                result |= ((byte & 0x7F) as $t) << (read_bytes * 7);
                 read_bytes += 1;
 
-                // If the most significant bit is not set, this is the final byte.
+                // If the MSB is not set, this is the last byte
                 if byte & 0x80 == 0 {
-                    
                     break;
                 }
 
-                // Check if the shift amount exceeds or equals the specified bit size.
+                // Check for overflow: Ensure we don't exceed the specified bit size
                 if (read_bytes * 7) >= bit_size {
                     return Err(WasmParserError::InvalidLeb128Encoding);
                 }
             }
 
-            // For signed numbers, perform sign extension if the sign bit (0x40) is set.
+            // Perform sign extension for signed numbers if necessary
             if $is_signed && (read_bytes * 7) < bit_size && (byte & 0x40) != 0 {
-                result |= (!0 as $t) << read_bytes * 7;
-                
+                result |= (!0 as $t) << (read_bytes * 7);
             }
-            if !$is_signed{
-                let shift = bit_size.saturating_sub((read_bytes - 1) * 7);
-            
-                let remaining = byte.checked_shr(shift as u32).unwrap_or(0);
-                tracing::trace!("remaining: {shift} {read_bytes} {:x}", remaining);
-    
-                if remaining != 0 {
-                    return Err(WasmParserError::InvalidLeb128Encoding);
-                }
+
+            // Validate remaining bits
+            let shift = if $is_signed {
+                (bit_size - 1).saturating_sub((read_bytes - 1) * 7)
+            } else {
+                bit_size.saturating_sub((read_bytes - 1) * 7)
+            };
+
+            let remaining = if $is_signed && (byte & 0x40) != 0 {
+                (!byte & 0x3F).checked_shr(shift as u32).unwrap_or(0)
+            } else {
+                byte.checked_shr(shift as u32).unwrap_or(0)
+            };
+
+            if remaining != 0 {
+                return Err(WasmParserError::InvalidLeb128Encoding);
             }
-            
+
             Ok((read_bytes, result))
         }
     };
+
+    // Overloaded macro: Defaults to unsigned parsing if `$is_signed` is not provided
     ($name: ident, $t: ident) => {
         parse_leb128impl!($name, $t, false);
     };
 }
+
 impl<'a, R: BinaryReader> Leb128Parser<'a, R> {
     pub fn new(reader: &'a mut R) -> Self {
         Self { reader }
