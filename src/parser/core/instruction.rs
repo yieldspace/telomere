@@ -2593,7 +2593,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         trace!("op_data_drop");
                         assert_memory(self.mems)?;
                         assert_data_idx(idx, data_count_section)?;
-                        //FIXME: do nothing
+                        if !*unreachable {
+                            instrs.push(Instr {
+                                op: vm::op_mem_drop,
+                            });
+                            instrs.push(Instr {
+                                operand: Operand { u32: idx },
+                            });
+                        }
                         (1 + len + len2, false)
                     }
                     10 => {

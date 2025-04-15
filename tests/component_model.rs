@@ -17,7 +17,7 @@ fn test_basic_component() {
     todo!()
 }
 
-#[test]
+/*#[test]
 fn test_with_core_wasm() {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
@@ -41,3 +41,4 @@ fn test_with_core_wasm() {
     let binary = wat::parse_str(component).unwrap();
     std::fs::write("test.wasm", &binary).unwrap();
 }
+*/

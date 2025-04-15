@@ -342,7 +342,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     store.modules.push(ModuleInstance {
         function_types: fts.0,
         functions,
-        data: data.0,
         exports: exs,
         tables: m_tables,
         globals: m_globals,
@@ -506,7 +505,6 @@ pub fn aliasing(
         globals,
         functions,
         function_types,
-        data: vec![],
         mems: memories,
     });
     store.instances.push(Instance {
