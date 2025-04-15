@@ -214,7 +214,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         }
     }
 
-    for d in &data.0 {
+    for (idx, d) in (0..).into_iter().zip(data.0.into_iter()) {
         match &d.mode {
             DataMode::Active(mem, offset) => {
                 assert_eq!(mem.0, 0);
@@ -229,9 +229,10 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 } else {
                     return VMResult::MemoryIndexOutOfRange;
                 }
+                store.data.insert((inst_addr, idx), d);
             }
-            _ => {
-                // do nothing
+            DataMode::Passive => {
+                store.data.insert((inst_addr, idx), d);
             }
         }
     }
