@@ -378,3 +378,23 @@ fn binary() {
 fn binary_leb128() {
     run_test_file("binary-leb128");
 }
+
+#[test]
+fn utf8_custom_section_id() {
+    run_test_file("utf8-custom-section-id");
+}
+
+#[test]
+fn utf8_import_field() {
+    run_test_file("utf8-import-field");
+}
+
+#[test]
+fn utf8_import_module() {
+    run_test_file("utf8-import-module");
+}
+
+#[test]
+fn utf8_invalid_encoding() {
+    run_test_file("utf8-invalid-encoding");
+}
