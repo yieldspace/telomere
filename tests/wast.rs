@@ -138,7 +138,6 @@ fn bulk() {
     run_test_file("bulk");
 }
 
-
 #[test]
 fn elem() {
     run_test_file("elem");

@@ -1771,9 +1771,10 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let d = ctx.stack.pop_u32();
     let instance_addr = ctx.instance_addr();
 
-    let data = vm_try!(VMResult::from_option(ctx.store.data.get(&(instance_addr,idx)), || {
-        VMResult::MemoryIndexOutOfRange
-    }));
+    let data = vm_try!(VMResult::from_option(
+        ctx.store.data.get(&(instance_addr, idx)),
+        || { VMResult::MemoryIndexOutOfRange }
+    ));
     let last = vm_try!(VMResult::from_option(s.checked_add(n), || {
         VMResult::MemoryIndexOutOfRange
     }));
@@ -1793,7 +1794,7 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 pub unsafe fn op_mem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32;
     let instance_addr = ctx.instance_addr();
-    if ctx.store.data.remove(&(instance_addr,idx)).is_none(){
+    if ctx.store.data.remove(&(instance_addr, idx)).is_none() {
         return VMResult::MemoryIndexOutOfRange;
     }
     call_next(tail_code, 1, ctx)
