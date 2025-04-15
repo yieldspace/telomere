@@ -1,3 +1,1 @@
-pub struct ComponentExecuteContext {
-    
-}
+pub struct ComponentExecuteContext {}

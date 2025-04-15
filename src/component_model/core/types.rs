@@ -1,3 +1,2 @@
-pub struct CoreType {
-
-}
+#[derive(Debug)]
+pub struct CoreType {}

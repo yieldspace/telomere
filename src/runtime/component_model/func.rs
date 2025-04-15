@@ -1,3 +1,1 @@
-pub struct ComponentFunctionInstantiated {
-    
-}
+pub struct ComponentFunctionInstantiated {}

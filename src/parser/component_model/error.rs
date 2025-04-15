@@ -10,4 +10,50 @@ pub enum ComponentParseError {
     /// Error from the underlying layer.
     #[error("error from underlying layer: {0:?}")]
     IoError(#[from] std::io::Error),
+    /// Error for invalid magic number with expected and actual values.
+    #[error("invalid {2} magic: {0:?} != {1:?}")]
+    InvalidMagic(Box<[u8]>, Box<[u8]>, String),
+    /// Error for invalid magic number with a single byte.
+    #[error("invalid {1} magic: {0:?}")]
+    WrongMagic(u8, String),
+    /// Error for invalid version.
+    #[error("invalid version: {0:?}")]
+    InvalidVersion([u8; 2]),
+    /// Error for invalid layer.
+    #[error("invalid layer: {0:?}")]
+    InvalidLayer([u8; 2]),
+    /// Error for invalid section type.
+    #[error("invalid section type: {0:?}")]
+    InvalidSectionType(u8),
+    /// Error for invalid core sort.
+    #[error("invalid core sort: {0:?}")]
+    InvalidCoreSort(u8),
+}
+
+impl ComponentParseError {
+    /// Asserts that the provided `magic` array matches the expected `expected` array.
+    ///
+    /// # Parameters
+    /// - `magic`: The actual magic number array.
+    /// - `expected`: The expected magic number array.
+    /// - `name`: A string representing the name of the magic number being checked.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the magic number matches the expected value.
+    /// - `Err(ComponentParseError::InvalidMagic)` if the magic number does not match the expected value.
+    pub fn assert_magic<const N: usize>(
+        magic: [u8; N],
+        expected: [u8; N],
+        name: &str,
+    ) -> std::result::Result<(), Self> {
+        if magic == expected {
+            Ok(())
+        } else {
+            Err(Self::InvalidMagic(
+                Box::new(expected),
+                Box::new(magic),
+                name.to_string(),
+            ))
+        }
+    }
 }
