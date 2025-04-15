@@ -8,7 +8,7 @@ use crate::parser::component_model::error::ComponentParseError;
 use crate::Module;
 pub use child::ChildValidator;
 
-pub(crate) trait Validator {
+pub trait Validator {
     fn validate_core_module_idx(&self, local: usize) -> Result<CoreModuleIdx, ComponentParseError>;
 
     fn validate_core_instance_idx(
@@ -52,7 +52,7 @@ pub struct ComponentValidator<'a> {
 }
 
 impl<'a> ComponentValidator<'a> {
-    pub(crate) fn new(component: &'a mut FlattenComponent) -> Self {
+    pub fn new(component: &'a mut FlattenComponent) -> Self {
         Self {
             component,
             core_modules: vec![],

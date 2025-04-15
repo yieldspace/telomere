@@ -1,17 +1,16 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Component, FlattenComponent};
+use crate::component_model::Component;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
-use crate::parser::component_model::validator::{ChildValidator, ComponentValidator, Validator};
+use crate::parser::component_model::validator::{ChildValidator, Validator};
 use crate::parser::component_model::{
-    parse_layer, parse_magic, parse_section_type, parse_vec_map, parse_version,
+    parse_layer, parse_magic, parse_section_type, parse_version,
 };
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::{Module, WasmParser};
-use typed_arena::Arena;
 
 pub fn parse_component<R: BinaryReader, V: Validator>(
     ctx: &mut ParseContext<R, V>,

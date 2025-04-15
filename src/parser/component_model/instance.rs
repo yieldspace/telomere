@@ -1,7 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreSort, CoreSortWithIdx, InlineExport, Instance, InstanceIdx, Instantiate, InstantiateArg,
-    Sort, SortWithIdx,
+    CoreSort, CoreSortWithIdx, InlineExport, Instance, InstanceIdx, Instantiate, InstantiateArg, SortWithIdx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::{

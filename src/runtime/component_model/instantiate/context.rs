@@ -1,11 +1,7 @@
 use crate::common::InstanceAddr;
 use crate::component_model::FlattenComponent;
 use crate::runtime::component_model::ComponentInstantiated;
-use crate::{Module, Registry, Store};
-use std::cell::Cell;
-use std::collections::HashMap;
-use std::sync::Arc;
-use typed_arena::Arena;
+use crate::{Registry, Store};
 
 pub struct ScopedTable {
     pub core_functions: Vec<(InstanceAddr, String)>,

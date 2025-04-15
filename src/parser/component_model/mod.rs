@@ -1,10 +1,13 @@
 use crate::binary::BinaryReader;
-use crate::component_model::FlattenComponent;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::core::parse_u32;
 use crate::WasmParserError;
 use tracing::trace;
+
+pub use component::parse_component;
+pub use context::ParseContext;
+pub use validator::{Validator, ComponentValidator, ChildValidator};
 
 mod component;
 mod context;

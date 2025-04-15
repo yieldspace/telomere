@@ -1,5 +1,4 @@
-use crate::component_model::{CanonOpt, CoreFuncIdx, FlattenComponent, FuncIdx, Idx, TypeIdx};
-use crate::Store;
+use crate::component_model::{CanonOpt, FuncIdx, TypeIdx};
 
 pub enum CoreFunction {
     Export(),

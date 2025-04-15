@@ -1,11 +1,10 @@
 use crate::aliasing as core_aliasing;
 use crate::component_model::{
-    CanonicalFuncKind, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx, Instance,
+    CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx,
 };
 use crate::instantiate as core_instantiate;
 use crate::runtime::component_model::instantiate::context::InstantiateContext;
-use crate::runtime::component_model::ComponentInstantiated;
-use crate::{Module, Registry};
+use crate::Registry;
 
 mod context;
 

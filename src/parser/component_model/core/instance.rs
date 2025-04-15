@@ -7,7 +7,7 @@ use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_co
 use crate::parser::component_model::core::sort::parse_core_sort;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::validator::Validator;
-use crate::parser::component_model::{parse_vec_map, SizedResult};
+use crate::parser::component_model::SizedResult;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 use std::collections::HashMap;
 

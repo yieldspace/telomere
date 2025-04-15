@@ -6,13 +6,10 @@ mod types;
 
 use crate::component_model::func::ComponentFunction;
 use crate::runtime::component_model::instantiate::InstantiateInstr;
-use crate::runtime::component_model::ComponentVMError;
 use crate::Module;
 pub use canon::*;
 pub use core::*;
 pub use idx::*;
-use std::collections::HashMap;
-use std::sync::Arc;
 pub use types::*;
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]

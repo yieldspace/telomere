@@ -3,11 +3,8 @@ mod sort;
 mod types;
 
 use crate::component_model::{
-    CanonOpt, CanonicalFuncKind, CoreFuncIdx, CoreInstanceIdx, CoreModuleIdx, FlattenComponent,
-    Idx, TypeIdx,
+    CoreFuncIdx, CoreInstanceIdx, CoreModuleIdx,
 };
-use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
-use crate::{Registry, Store};
 pub use func::*;
 pub use sort::*;
 use std::collections::HashMap;
