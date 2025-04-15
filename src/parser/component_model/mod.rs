@@ -10,6 +10,8 @@ mod component;
 mod context;
 mod core;
 mod error;
+mod idx;
+mod instance;
 mod section;
 mod validator;
 

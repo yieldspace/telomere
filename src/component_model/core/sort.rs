@@ -1,3 +1,7 @@
+use crate::component_model::{
+    CoreFuncIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTypeIdx,
+};
+
 #[repr(u8)]
 #[derive(Debug)]
 pub enum CoreSort {
@@ -10,4 +14,13 @@ pub enum CoreSort {
     Instance = 0x12,
 }
 
-pub struct CoreSortWithIdx(pub CoreSort, pub usize);
+#[derive(Debug)]
+pub enum CoreSortWithIdx {
+    Func(CoreFuncIdx),
+    Table(usize),
+    Memory(CoreMemoryIdx),
+    Global(usize),
+    Type(CoreTypeIdx),
+    Module(CoreModuleIdx),
+    Instance(CoreInstanceIdx),
+}

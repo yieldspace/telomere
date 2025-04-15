@@ -1,5 +1,6 @@
 use crate::component_model::{
-    Component, ComponentIdx, CoreFuncIdx, CoreInstance, CoreInstanceIdx, CoreModuleIdx,
+    Component, ComponentIdx, CoreFuncIdx, CoreInstance, CoreInstanceIdx, CoreMemoryIdx,
+    CoreModuleIdx, CoreTypeIdx, FuncIdx, Instance, InstanceIdx, TypeIdx,
 };
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::validator::Validator;
@@ -40,6 +41,30 @@ where
         todo!()
     }
 
+    fn validate_component_idx(&self, local: usize) -> Result<ComponentIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_core_memory_idx(&self, local: usize) -> Result<CoreMemoryIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_core_type_idx(&self, local: usize) -> Result<CoreTypeIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_function_idx(&self, local: usize) -> Result<FuncIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_type_idx(&self, local: usize) -> Result<TypeIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_instance_idx(&self, local: usize) -> Result<InstanceIdx, ComponentParseError> {
+        todo!()
+    }
+
     fn add_core_module(&mut self, module: Module) -> Result<CoreModuleIdx, ComponentParseError> {
         todo!()
     }
@@ -52,6 +77,10 @@ where
     }
 
     fn add_component(&mut self, component: Component) -> Result<ComponentIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn add_instance(&mut self, instance: Instance) -> Result<InstanceIdx, ComponentParseError> {
         todo!()
     }
 }

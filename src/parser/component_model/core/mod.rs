@@ -4,3 +4,4 @@ mod sort;
 
 pub use id::*;
 pub use instance::*;
+pub use sort::*;

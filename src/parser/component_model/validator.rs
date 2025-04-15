@@ -1,8 +1,8 @@
 mod child;
 
 use crate::component_model::{
-    Component, ComponentIdx, CoreFuncIdx, CoreInstance, CoreInstanceIdx, CoreModuleIdx,
-    FlattenComponent, Idx,
+    Component, ComponentIdx, CoreFuncIdx, CoreInstance, CoreInstanceIdx, CoreMemoryIdx,
+    CoreModuleIdx, CoreTypeIdx, FlattenComponent, FuncIdx, Idx, Instance, InstanceIdx, TypeIdx,
 };
 use crate::parser::component_model::error::ComponentParseError;
 use crate::Module;
@@ -18,6 +18,18 @@ pub(crate) trait Validator {
 
     fn validate_core_function_idx(&self, local: usize) -> Result<CoreFuncIdx, ComponentParseError>;
 
+    fn validate_component_idx(&self, local: usize) -> Result<ComponentIdx, ComponentParseError>;
+
+    fn validate_core_memory_idx(&self, local: usize) -> Result<CoreMemoryIdx, ComponentParseError>;
+
+    fn validate_core_type_idx(&self, local: usize) -> Result<CoreTypeIdx, ComponentParseError>;
+
+    fn validate_function_idx(&self, local: usize) -> Result<FuncIdx, ComponentParseError>;
+
+    fn validate_type_idx(&self, local: usize) -> Result<TypeIdx, ComponentParseError>;
+
+    fn validate_instance_idx(&self, local: usize) -> Result<InstanceIdx, ComponentParseError>;
+
     fn add_core_module(&mut self, module: Module) -> Result<CoreModuleIdx, ComponentParseError>;
 
     fn add_core_instance(
@@ -26,6 +38,8 @@ pub(crate) trait Validator {
     ) -> Result<CoreInstanceIdx, ComponentParseError>;
 
     fn add_component(&mut self, component: Component) -> Result<ComponentIdx, ComponentParseError>;
+
+    fn add_instance(&mut self, instance: Instance) -> Result<InstanceIdx, ComponentParseError>;
 }
 
 pub struct ComponentValidator<'a> {
@@ -34,6 +48,7 @@ pub struct ComponentValidator<'a> {
     core_instances: Vec<usize>,
     core_funcs: Vec<usize>,
     components: Vec<usize>,
+    instances: Vec<usize>,
 }
 
 impl<'a> ComponentValidator<'a> {
@@ -44,6 +59,7 @@ impl<'a> ComponentValidator<'a> {
             core_instances: vec![],
             core_funcs: vec![],
             components: vec![],
+            instances: vec![],
         }
     }
 }
@@ -73,6 +89,33 @@ impl<'a> Validator for ComponentValidator<'a> {
         ))
     }
 
+    fn validate_component_idx(&self, local: usize) -> Result<ComponentIdx, ComponentParseError> {
+        Ok(ComponentIdx::new(
+            local,
+            *self.components.get(local).unwrap(),
+        ))
+    }
+
+    fn validate_core_memory_idx(&self, local: usize) -> Result<CoreMemoryIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_core_type_idx(&self, local: usize) -> Result<CoreTypeIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_function_idx(&self, local: usize) -> Result<FuncIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_type_idx(&self, local: usize) -> Result<TypeIdx, ComponentParseError> {
+        todo!()
+    }
+
+    fn validate_instance_idx(&self, local: usize) -> Result<InstanceIdx, ComponentParseError> {
+        todo!()
+    }
+
     fn add_core_module(&mut self, module: Module) -> Result<CoreModuleIdx, ComponentParseError> {
         let global_idx = self.component.core_modules.len();
         let local_idx = self.core_modules.len();
@@ -100,6 +143,15 @@ impl<'a> Validator for ComponentValidator<'a> {
         self.component.components.push(component);
         self.components.push(global_idx);
         let idx = ComponentIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
+
+    fn add_instance(&mut self, instance: Instance) -> Result<InstanceIdx, ComponentParseError> {
+        let global_idx = self.component.instances.iter().len();
+        let local_idx = self.component.instances.len();
+        self.component.instances.push(instance);
+        self.instances.push(global_idx);
+        let idx = InstanceIdx::new(local_idx, global_idx);
         Ok(idx)
     }
 }

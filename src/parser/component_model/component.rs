@@ -3,6 +3,7 @@ use crate::component_model::{Component, FlattenComponent};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
 use crate::parser::component_model::error::ComponentParseError;
+use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::validator::{ChildValidator, ComponentValidator, Validator};
 use crate::parser::component_model::{
@@ -48,7 +49,7 @@ pub fn parse_component<R: BinaryReader, V: Validator>(
                 }
                 ctx.validator.add_component(Component::new(instrs))?;
             }
-            ComponentSectionType::Instance => {}
+            ComponentSectionType::Instance => parse_instance_section(ctx)?,
             ComponentSectionType::Alias => {}
             ComponentSectionType::Type => {}
             ComponentSectionType::Canon => {}
@@ -61,6 +62,7 @@ pub fn parse_component<R: BinaryReader, V: Validator>(
     Ok(())
 }
 
+#[inline]
 fn parse_custom_section<R: BinaryReader>(
     reader: &mut R,
     size: usize,
@@ -72,6 +74,7 @@ fn parse_custom_section<R: BinaryReader>(
     Ok(())
 }
 
+#[inline]
 fn parse_core_module_section<R: BinaryReader>(
     reader: &mut R,
 ) -> Result<Module, ComponentParseError> {
@@ -81,10 +84,20 @@ fn parse_core_module_section<R: BinaryReader>(
     Ok(module)
 }
 
+#[inline]
 fn parse_core_instance_section(
     ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
 ) -> Result<(), ComponentParseError> {
     // Core instance parsing logic
     parse_vec(ctx, |v| v.reader, parse_core_instance)?;
+    Ok(())
+}
+
+#[inline]
+fn parse_instance_section(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> Result<(), ComponentParseError> {
+    // Core instance parsing logic
+    parse_vec(ctx, |v| v.reader, parse_instance)?;
     Ok(())
 }

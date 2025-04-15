@@ -92,7 +92,7 @@ pub struct Instantiate {
 #[derive(Debug)]
 pub struct InstantiateArg {
     pub name: String,
-    pub sort: Sort,
+    pub sort: SortWithIdx,
 }
 
 #[derive(Debug)]
@@ -107,17 +107,28 @@ pub enum SortType {
 }
 
 #[derive(Debug)]
+pub enum SortWithIdx {
+    Core(CoreSortWithIdx),
+    Func(FuncIdx),
+    #[cfg(feature = "value")]
+    Value(usize),
+    Type(TypeIdx),
+    Component(ComponentIdx),
+    Instance(InstanceIdx),
+}
+
+#[derive(Debug)]
 pub enum Sort {
-    Core(CoreSort, usize),
-    Func(FuncIdx, usize),
+    Core(CoreSort),
+    Func,
     Value,
-    Type(TypeIdx, usize),
-    Component(ComponentIdx, usize),
-    Instance(InstanceIdx, usize),
+    Type,
+    Component,
+    Instance,
 }
 
 #[derive(Debug)]
 pub struct InlineExport {
     pub name: String,
-    pub sort: Sort,
+    pub sort: SortWithIdx,
 }
