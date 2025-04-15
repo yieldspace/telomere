@@ -865,41 +865,41 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let instance = &mut instances[instance_addr as usize];
     let dst_table_addr = instance.tables[dst_table_idx] as usize;
 
-    let elem = if let Some(elem) = elems.get(&(instance_addr, src_elem_idx)) {
-        elem
+    if let Some(elem) = elems.get(&(instance_addr, src_elem_idx)) {
+        let dst_table = &mut tables[dst_table_addr];
+        let dst = vm_try!(VMResult::from_option(
+            dst_table.1.get_mut(dst..dst + len),
+            || { VMResult::TableIndexOutOfRange }
+        ));
+        match &elem.init {
+            ElemInit::FuncIdx(idxs) => {
+                let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
+                    VMResult::TableIndexOutOfRange
+                }));
+                for (i, funcidx) in slice.iter().enumerate() {
+                    dst[i] = instance.funcs[*funcidx as usize];
+                }
+            }
+            ElemInit::ConstExpr(exprs) => {
+                let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
+                    VMResult::TableIndexOutOfRange
+                }));
+                for (i, expr) in slice.iter().enumerate() {
+                    dst[i] = vm_try!(execute_elem_init_const_expr(
+                        global_store,
+                        &instance.globals,
+                        &instance.funcs,
+                        expr,
+                        dst_table.0.reftype,
+                    ));
+                }
+            }
+        }
+    } else if len == 0 {
+        // it is ok
     } else {
         return VMResult::TableIndexOutOfRange;
     };
-
-    let dst_table = &mut tables[dst_table_addr];
-    let dst = vm_try!(VMResult::from_option(
-        dst_table.1.get_mut(dst..dst + len),
-        || { VMResult::TableIndexOutOfRange }
-    ));
-    match &elem.init {
-        ElemInit::FuncIdx(idxs) => {
-            let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
-                VMResult::TableIndexOutOfRange
-            }));
-            for (i, funcidx) in slice.iter().enumerate() {
-                dst[i] = instance.funcs[*funcidx as usize];
-            }
-        }
-        ElemInit::ConstExpr(exprs) => {
-            let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
-                VMResult::TableIndexOutOfRange
-            }));
-            for (i, expr) in slice.iter().enumerate() {
-                dst[i] = vm_try!(execute_elem_init_const_expr(
-                    global_store,
-                    &instance.globals,
-                    &instance.funcs,
-                    expr,
-                    dst_table.0.reftype,
-                ));
-            }
-        }
-    }
 
     call_next(tail_code, 2, ctx)
 }
@@ -1769,26 +1769,43 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let n = ctx.stack.pop_u32();
     let s = ctx.stack.pop_u32();
     let d = ctx.stack.pop_u32();
-    let module_addr = ctx.instance().module_addr;
-
-    let m = &ctx.store.modules[module_addr as usize];
-    let data = vm_try!(VMResult::from_option(m.data.get(idx as usize), || {
-        VMResult::MemoryIndexOutOfRange
-    }));
-    let last = vm_try!(VMResult::from_option(s.checked_add(n), || {
-        VMResult::MemoryIndexOutOfRange
-    }));
-    let data = vm_try!(VMResult::from_option(
-        data.init.get(s as usize..last as usize),
-        || { VMResult::MemoryIndexOutOfRange }
-    ));
+    let instance_addr = ctx.instance_addr();
     let memory = if let Some(v) = ctx.instance().memory {
         &mut ctx.store.memory[v as usize]
     } else {
         return VMResult::MemoryIndexOutOfRange;
     };
+    let dst_last = vm_try!(VMResult::from_option(d.checked_add(n), || {
+        VMResult::MemoryIndexOutOfRange
+    })) as usize;
+    let d = d as usize;
+    let dst = vm_try!(VMResult::from_option(memory.get_mut(d..dst_last), || {
+        VMResult::MemoryIndexOutOfRange
+    }));
 
-    vm_try!(memory.init(d, data));
+    let src_last = vm_try!(VMResult::from_option(s.checked_add(n), || {
+        VMResult::MemoryIndexOutOfRange
+    })) as usize;
+    let data = ctx.store.data.get(&(instance_addr, idx));
+    if data.is_none() && n == 0 {
+        // it is ok
+    } else {
+        let data = vm_try!(VMResult::from_option(data, || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        let data = vm_try!(VMResult::from_option(
+            data.init.get(s as usize..src_last),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+        dst.copy_from_slice(data);
+    }
+
+    call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_data_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32;
+    let instance_addr = ctx.instance_addr();
+    ctx.store.data.remove(&(instance_addr, idx));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {

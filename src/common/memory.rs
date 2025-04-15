@@ -31,18 +31,7 @@ impl Memory {
         )));
         VMResult::Success(arr)
     }
-    pub fn init(&mut self, offset: u32, value: &[u8]) -> VMResult<()> {
-        let offset = offset as usize;
-        let last = vm_try!(VMResult::from_option(
-            offset.checked_add(value.len()),
-            || { VMResult::MemoryIndexOutOfRange }
-        ));
-        vm_try!(VMResult::from_option(self.0.get_mut(offset..last), || {
-            VMResult::MemoryIndexOutOfRange
-        }))
-        .copy_from_slice(value);
-        VMResult::Success(())
-    }
+
     fn write_slice(&mut self, memarg: MemArg, offset: u32, value: &[u8]) -> VMResult<()> {
         let offset = vm_try!(compute_offset(memarg, offset));
         let n = value.len();

@@ -59,8 +59,6 @@ pub struct ModuleInstance {
     pub globals: Vec<GlobalType>,
     pub functions: Vec<TypeIdx>,
     pub function_types: Vec<FuncType>,
-    pub data: Vec<Data>,
-    //pub elem: Vec<Elem>,
     pub mems: Vec<MemType>,
 }
 pub struct Store {
@@ -70,6 +68,7 @@ pub struct Store {
     pub instances: Vec<Instance>,
     pub tables: Vec<TableInstance>,
     pub memory: Vec<Memory>,
+    pub data: HashMap<(u32, u32), Data>,
     pub elems: HashMap<(u32, u32), Elem>,
     pub state: StoreState,
 }
@@ -81,16 +80,7 @@ impl Default for Store {
 
 impl Store {
     pub fn new() -> Self {
-        Store {
-            globals: GlobalStore(vec![]),
-            funcs: FunctionStore(vec![]),
-            modules: vec![],
-            instances: vec![],
-            tables: vec![],
-            memory: vec![],
-            elems: HashMap::new(),
-            state: StoreState::default(),
-        }
+        Self::new_with_state(StoreState::default())
     }
 
     pub fn new_with_state(state: StoreState) -> Self {
@@ -101,12 +91,14 @@ impl Store {
             instances: vec![],
             tables: vec![],
             memory: vec![],
+            data: HashMap::new(),
             elems: HashMap::new(),
             state,
         }
     }
 }
 
+#[derive(Default)]
 pub struct StoreState(usize);
 
 impl StoreState {
@@ -132,12 +124,6 @@ impl StoreState {
     pub fn get_mut<T>(&self) -> Option<&mut T> {
         let ptr = self.0 as *mut T;
         unsafe { ptr.as_mut() }
-    }
-}
-
-impl Default for StoreState {
-    fn default() -> Self {
-        Self(0)
     }
 }
 

@@ -69,7 +69,6 @@ fn validate_offset_const_expr(globals: &[GlobalType], exprs: &[ConstExpr]) -> Re
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]
-
 enum WasmSectionType {
     Custom = 0,
     Type = 1,

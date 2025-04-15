@@ -330,6 +330,11 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                 }
             },
             WastDirective::Invoke(invoke) => {
+                tracing::trace!(
+                    "Invoke {} @ {:?}",
+                    invoke.name,
+                    invoke.span.linecol_in(text)
+                );
                 let result = telomere::run_module_function(
                     instance.unwrap(),
                     store,
