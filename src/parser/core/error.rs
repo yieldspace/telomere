@@ -82,6 +82,14 @@ pub enum WasmParserError {
     InvalidLimit,
     #[error("unknown element")]
     UnknownElement,
+    #[error("invalid section type: {0}")]
+    InvalidSectionType(u8),
+    #[error("too many locals")]
+    TooManyLocals,
+    #[error("function and code section have inconsistent lengths")]
+    FunctionAndCodeSectionLengthMismatch,
+    #[error("invalid section order")]
+    InvalidSectionOrder,
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {

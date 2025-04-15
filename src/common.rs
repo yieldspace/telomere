@@ -1,5 +1,6 @@
 #[macro_use]
 mod vm_result;
+use custom_section::NameSubSection;
 use store::GlobalStore;
 pub use vm_result::VMResult;
 mod memory;
@@ -11,8 +12,8 @@ pub use registry::Registry;
 pub(crate) mod store;
 pub(crate) use store::FunctionInstance;
 pub(crate) use store::ModuleInstance;
-
 pub use store::{Store, StoreState};
+pub mod custom_section;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TypeIdx(pub u32);
@@ -209,6 +210,7 @@ pub struct Module {
     pub codes: CodeSection,
     pub data: DataSection,
     pub start: Option<FuncIdx>,
+    pub name: Option<NameSubSection>,
 }
 pub struct HostFunctionDefinition {
     pub name: Option<String>,

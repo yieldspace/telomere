@@ -4,7 +4,7 @@ use common::run_wast;
 fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    d.push("tests");
+    d.push("tests/wasm-testsuite");
     d.push(format!("{name}.wast"));
     let wast = std::fs::read_to_string(d).unwrap();
     run_wast(&wast);
@@ -212,7 +212,7 @@ fn i64() {
 }
 #[test]
 fn inline_module() {
-    run_test_file("inline_module");
+    run_test_file("inline-module");
 }
 #[test]
 fn int_exprs() {
@@ -369,4 +369,32 @@ fn table_size() {
 #[test]
 fn table_fill() {
     run_test_file("table_fill");
+}
+#[test]
+fn binary() {
+    run_test_file("binary");
+}
+#[test]
+fn binary_leb128() {
+    run_test_file("binary-leb128");
+}
+
+#[test]
+fn utf8_custom_section_id() {
+    run_test_file("utf8-custom-section-id");
+}
+
+#[test]
+fn utf8_import_field() {
+    run_test_file("utf8-import-field");
+}
+
+#[test]
+fn utf8_import_module() {
+    run_test_file("utf8-import-module");
+}
+
+#[test]
+fn utf8_invalid_encoding() {
+    run_test_file("utf8-invalid-encoding");
 }

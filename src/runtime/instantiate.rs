@@ -94,6 +94,7 @@ fn convert_native_module_to_module(m: NativeModule) -> Module {
         exs: ExportSection(exs),
         tables: vec![],
         start: None,
+        name: None,
     }
 }
 pub fn instantiate_native_module(
@@ -125,6 +126,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         codes,
         data,
         start,
+        ..
     } = m;
     for import in &imports.0 {
         tracing::trace!("processing import: {import:?}");

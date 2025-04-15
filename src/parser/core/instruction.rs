@@ -2573,10 +2573,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                                 0xFC, 8, idx as u8, op,
                             ]))?;
                         }
-                        trace!("op_mem_init");
+                        trace!("parse_op_mem_init");
                         assert_memory(self.mems)?;
                         assert_data_idx(idx, data_count_section)?;
-
+                        if !matches!(data_count_section, DataCountVerifier::OnePass(_)) {
+                            Err(WasmParserError::InvalidDataSectionCount)?
+                        }
                         if !*unreachable {
                             instrs.push(Instr {
                                 op: vm::op_mem_init,
@@ -2590,8 +2592,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }
                     9 => {
                         let (len2, idx) = self.parse_u32()?;
-                        trace!("op_data_drop");
+                        trace!("parse_op_data_drop");
                         assert_data_idx(idx, data_count_section)?;
+                        if !matches!(data_count_section, DataCountVerifier::OnePass(_)) {
+                            Err(WasmParserError::InvalidDataSectionCount)?
+                        }
                         if !*unreachable {
                             instrs.push(Instr {
                                 op: vm::op_data_drop,
@@ -2611,7 +2616,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         if op != 0 {
                             Err(WasmParserError::InvalidInstruction([0xFC, 10, 0x00, op]))?;
                         }
-                        trace!("op_mem_copy");
+                        trace!("parse_op_mem_copy");
                         assert_memory(self.mems)?;
                         if !*unreachable {
                             instrs.push(Instr {

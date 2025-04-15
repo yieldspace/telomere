@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 use tracing::trace;
 
+use crate::common::custom_section::NameSubSection;
 use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, Operand};
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
 use crate::parser::core::type_checker::TypeChecker;
+use crate::parser::core::validate::validate_locals;
 use crate::parser::core::InstructionParser;
 use crate::runtime::vm;
 use crate::{
@@ -18,6 +20,7 @@ use crate::{
 };
 
 use super::base::WasmBaseParser;
+use super::custom_section::CustomSectionParser;
 use super::validate::{assert_memory, assert_valtype, validate_active_elem};
 use super::{Result, WasmParserError};
 
@@ -48,7 +51,6 @@ fn validate_const_expr_type(
                 Err(WasmParserError::InvalidGlobalAccess)?;
             }
             assert_valtype(expected, Some(gt.0))?;
-            //TODO: index and value type validation
         }
         ConstExpr::RefNull(t) => assert_valtype(expected, Some(t.into()))?,
         ConstExpr::F32(_) => assert_valtype(expected, Some(ValType::F32))?,
@@ -83,8 +85,19 @@ enum WasmSectionType {
     Code = 10,
     Data = 11,
     DataCount = 12,
+    Unknown(u8),
 }
-
+const SECTION_ORDER: [WasmSectionType; 12] = {
+    use WasmSectionType::*;
+    [
+        Type, Import, Function, Table, Memory, Global, Export, Start, Element, DataCount, Code,
+        Data,
+    ]
+};
+enum NameData {
+    NameSection(NameSubSection),
+    Unknown(String),
+}
 pub struct WasmParser<'a, R: BinaryReader> {
     reader: &'a mut R,
 }
@@ -570,7 +583,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             10 => Code,
             11 => Data,
             12 => DataCount,
-            _ => Custom,
+            other => Unknown(other),
         }))
     }
 
@@ -580,6 +593,18 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             Err(WasmParserError::InvalidSectionSize)?
         }
         Ok(TypeSection(funcs))
+    }
+    fn parse_namedata(&mut self, size: u32) -> Result<NameData> {
+        let (len1, name) = self.parse_name()?;
+        if name == "name" {
+            let mut child_reader = self.reader.take(size.saturating_sub(len1 as u32) as usize);
+
+            let subsec = CustomSectionParser::new(&mut child_reader).parse_name_subsec()?;
+            Ok(NameData::NameSection(subsec))
+        } else {
+            self.skip_section(size.saturating_sub(len1 as u32))?;
+            Ok(NameData::Unknown(name))
+        }
     }
     fn parse_import_section(
         &mut self,
@@ -683,6 +708,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         size: u32,
     ) -> Result<Func> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
+        validate_locals(&locals)?;
         let mut instrs = Vec::new();
         let mut checker = TypeChecker::new(typeidx);
         let mut jump_resolver = JumpResolver::new();
@@ -787,28 +813,44 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let mut start: Option<FuncIdx> = None;
         let mut functions = vec![];
         let mut globals = vec![];
+        let mut imported_function_len = 0;
         let mut imported_global_len = 0;
         let mut global_init = vec![];
         let mut tables = vec![];
         let mut mems = vec![];
+        let mut current_section_pos: Option<usize> = None;
         let mut data_count_verifier = DataCountVerifier::Lazy { max_data_idx: None };
-
+        let mut name_section = None;
         loop {
             let st = self.parse_section_type()?;
+
             let st = if let Some(st) = st {
                 st
             } else {
                 let data_section = data_section.unwrap_or_else(|| DataSection(vec![]));
-                if let DataCountVerifier::Lazy {
-                    max_data_idx: Some(max_data_idx),
-                } = data_count_verifier
-                {
-                    if max_data_idx as usize >= data_section.0.len() {
-                        Err(WasmParserError::InvalidDataSectionCount)?;
+                match data_count_verifier {
+                    DataCountVerifier::Lazy {
+                        max_data_idx: Some(max_data_idx),
+                    } => {
+                        if max_data_idx as usize >= data_section.0.len() {
+                            Err(WasmParserError::InvalidDataSectionCount)?;
+                        }
+                    }
+                    DataCountVerifier::Lazy { max_data_idx: None } => {
+                        //ok
+                    }
+                    DataCountVerifier::OnePass(count) => {
+                        if data_section.0.len() != (count as usize) {
+                            Err(WasmParserError::InvalidDataSectionCount)?;
+                        }
                     }
                 }
                 if mems.len() > 1 {
                     Err(WasmParserError::MultipleMemory)?;
+                }
+                let code_section = code_section.unwrap_or_else(|| CodeSection(vec![]));
+                if functions.len() - imported_function_len != code_section.0.len() {
+                    Err(WasmParserError::FunctionAndCodeSectionLengthMismatch)?
                 }
                 return Ok(Module {
                     fts: type_section.unwrap_or_else(|| TypeSection(vec![])),
@@ -820,16 +862,34 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     mems,
                     elems: element_section.unwrap_or_else(|| ElementSection(vec![])),
                     exs: export_section.unwrap_or_else(|| ExportSection(vec![])),
-                    codes: code_section.unwrap_or_else(|| CodeSection(vec![])),
+                    codes: code_section,
                     data: data_section,
                     start,
+                    name: name_section,
                 });
             };
+            let new_pos = SECTION_ORDER.iter().position(|x| *x == st);
+            if let Some(new_pos) = new_pos {
+                if let Some(current_section_pos) = &current_section_pos {
+                    if current_section_pos >= &new_pos {
+                        Err(WasmParserError::InvalidSectionOrder)?;
+                    }
+                }
+                current_section_pos = Some(new_pos);
+            }
+
             match st {
+                WasmSectionType::Unknown(id) => Err(WasmParserError::InvalidSectionType(id))?,
                 WasmSectionType::Custom => {
-                    trace!("custom section");
-                    let (_, size) = self.parse_u32()?;
-                    self.skip_section(size)?;
+                    match self.parse_section_body(Self::parse_namedata)? {
+                        NameData::NameSection(subsec) => {
+                            // TODO: we should validate position
+                            name_section = Some(subsec)
+                        }
+                        NameData::Unknown(name) => {
+                            tracing::warn!("encounted unknown custom section: {name}")
+                        }
+                    }
                 }
                 WasmSectionType::Type => {
                     trace!("type section");
@@ -857,6 +917,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         }
                     }
                     imported_global_len = globals.len();
+                    imported_function_len = functions.len();
                     import_section = Some(section);
                 }
                 WasmSectionType::Function => {

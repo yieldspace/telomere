@@ -88,7 +88,7 @@ pub fn parse_limits<R: BinaryReader>(reader: &mut R) -> Result<(usize, Limits)> 
                 },
             ))
         }
-        _ => todo!(),
+        _ => Err(WasmParserError::InvalidLimit)?,
     }
 }
 
