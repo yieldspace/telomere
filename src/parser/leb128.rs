@@ -15,12 +15,15 @@ macro_rules! parse_leb128impl {
 
             loop {
                 byte = self.reader.read_exact_one()?;
+                tracing::trace!("{read_bytes} {:x}", byte);
                 // Extract the lower 7 bits and shift them into the result.
                 result |= ((byte & 0x7F) as $t) << (read_bytes * 7);
+
                 read_bytes += 1;
 
                 // If the most significant bit is not set, this is the final byte.
                 if byte & 0x80 == 0 {
+                    
                     break;
                 }
 
@@ -33,8 +36,19 @@ macro_rules! parse_leb128impl {
             // For signed numbers, perform sign extension if the sign bit (0x40) is set.
             if $is_signed && (read_bytes * 7) < bit_size && (byte & 0x40) != 0 {
                 result |= (!0 as $t) << read_bytes * 7;
+                
             }
-
+            if !$is_signed{
+                let shift = bit_size.saturating_sub((read_bytes - 1) * 7);
+            
+                let remaining = byte.checked_shr(shift as u32).unwrap_or(0);
+                tracing::trace!("remaining: {shift} {read_bytes} {:x}", remaining);
+    
+                if remaining != 0 {
+                    return Err(WasmParserError::InvalidLeb128Encoding);
+                }
+            }
+            
             Ok((read_bytes, result))
         }
     };

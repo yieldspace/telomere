@@ -18,6 +18,7 @@ use crate::{
 };
 
 use super::base::WasmBaseParser;
+use super::custom_section::CustomSectionParser;
 use super::validate::{assert_memory, assert_valtype, validate_active_elem};
 use super::{Result, WasmParserError};
 
@@ -83,6 +84,7 @@ enum WasmSectionType {
     Code = 10,
     Data = 11,
     DataCount = 12,
+    Unknown(u8),
 }
 
 pub struct WasmParser<'a, R: BinaryReader> {
@@ -570,7 +572,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             10 => Code,
             11 => Data,
             12 => DataCount,
-            _ => Custom,
+            other => Unknown(other),
         }))
     }
 
@@ -580,6 +582,17 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             Err(WasmParserError::InvalidSectionSize)?
         }
         Ok(TypeSection(funcs))
+    }
+    fn parse_namedata(&mut self, size: u32) -> Result<()> {
+        let (len1, name) = self.parse_name()?;
+        if name == "name" {
+            let mut child_reader = self.reader.take(size.saturating_sub(len1 as u32) as usize);
+
+            CustomSectionParser::new(&mut child_reader).parse_name_subsec()?;
+        } else {
+            self.skip_section(size.saturating_sub(len1 as u32))?
+        }
+        Ok(())
     }
     fn parse_import_section(
         &mut self,
@@ -826,10 +839,13 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 });
             };
             match st {
-                WasmSectionType::Custom => {
-                    trace!("custom section");
+                WasmSectionType::Unknown(_) => {
                     let (_, size) = self.parse_u32()?;
+                    trace!("unknown section: {size}");
                     self.skip_section(size)?;
+                }
+                WasmSectionType::Custom => {
+                    self.parse_section_body(Self::parse_namedata)?;
                 }
                 WasmSectionType::Type => {
                     trace!("type section");

@@ -1,4 +1,5 @@
 mod base;
+mod custom_section;
 mod error;
 mod instruction;
 mod jump_resolver;

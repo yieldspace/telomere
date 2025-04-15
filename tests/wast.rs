@@ -370,3 +370,14 @@ fn table_size() {
 fn table_fill() {
     run_test_file("table_fill");
 }
+#[test]
+fn binary() {
+    run_test_file("binary");
+}
+#[test]
+fn binary_leb128() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
+    run_test_file("binary-leb128");
+}
