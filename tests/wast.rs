@@ -126,15 +126,9 @@ fn custom() {
 fn data() {
     run_test_file("data");
 }
-/*
-TODO: dataのdropをちゃんとしないといけないぽい
-*/
 
 #[test]
 fn bulk() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
     run_test_file("bulk");
 }
 
