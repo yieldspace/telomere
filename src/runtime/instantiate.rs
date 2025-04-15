@@ -214,7 +214,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         }
     }
 
-    for (idx, d) in (0..).into_iter().zip(data.0.into_iter()) {
+    for (idx, d) in (0..).zip(data.0.into_iter()) {
         match &d.mode {
             DataMode::Active(mem, offset) => {
                 assert_eq!(mem.0, 0);
