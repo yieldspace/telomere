@@ -4,7 +4,7 @@ use common::run_wast;
 fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    d.push("tests");
+    d.push("tests/wasm-testsuite");
     d.push(format!("{name}.wast"));
     let wast = std::fs::read_to_string(d).unwrap();
     run_wast(&wast);
@@ -212,7 +212,7 @@ fn i64() {
 }
 #[test]
 fn inline_module() {
-    run_test_file("inline_module");
+    run_test_file("inline-module");
 }
 #[test]
 fn int_exprs() {
