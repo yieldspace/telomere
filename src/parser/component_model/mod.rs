@@ -7,7 +7,7 @@ use tracing::trace;
 
 pub use component::parse_component;
 pub use context::ParseContext;
-pub use validator::{Validator, ComponentValidator, ChildValidator};
+pub use validator::{ChildValidator, ComponentValidator, Validator};
 
 mod component;
 mod context;

@@ -35,6 +35,10 @@ where
         self.instrs.push(instr);
     }
 
+    pub fn extend_instr(&mut self, instrs: impl Iterator<Item = InstantiateInstr>) {
+        self.instrs.extend(instrs);
+    }
+
     pub fn add_core_module(&mut self, module: Module) {
         todo!()
     }

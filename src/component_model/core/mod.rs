@@ -2,9 +2,7 @@ mod func;
 mod sort;
 mod types;
 
-use crate::component_model::{
-    CoreFuncIdx, CoreInstanceIdx, CoreModuleIdx,
-};
+use crate::component_model::{CoreFuncIdx, CoreInstanceIdx, CoreModuleIdx};
 pub use func::*;
 pub use sort::*;
 use std::collections::HashMap;

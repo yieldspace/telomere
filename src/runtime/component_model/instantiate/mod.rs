@@ -1,9 +1,9 @@
 use crate::aliasing as core_aliasing;
 use crate::component_model::{
-    CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx,
+    CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx, InstanceIdx,
 };
 use crate::instantiate as core_instantiate;
-use crate::runtime::component_model::instantiate::context::InstantiateContext;
+pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::Registry;
 
 mod context;
@@ -13,14 +13,18 @@ pub type InstantiateResult<T> = Result<T, ()>;
 pub type InstantiateOp =
     unsafe fn(*const InstantiateInstr, &mut InstantiateContext) -> InstantiateResult<()>;
 
+#[derive(Copy, Clone)]
 pub union InstantiateInstr {
-    op: InstantiateOp,
-    operand: InstantiateOperand,
+    pub(crate) op: InstantiateOp,
+    pub(crate) operand: InstantiateOperand,
 }
 
 #[derive(Clone, Copy)]
 pub union InstantiateOperand {
     idx: usize,
+    pub instance_idx: usize,
+    pub module_idx: usize,
+    pub core_instance_idx: usize,
 }
 
 #[inline(always)]
@@ -109,6 +113,20 @@ pub unsafe fn instantiate_instance_start(
     todo!();
 }
 
+pub unsafe fn instantiate_instance_end(
+    tail_code: *const InstantiateInstr,
+    ctx: &mut InstantiateContext,
+) -> InstantiateResult<()> {
+    todo!();
+}
+
+pub unsafe fn instantiate_inline_instance(
+    tail_code: *const InstantiateInstr,
+    ctx: &mut InstantiateContext,
+) -> InstantiateResult<()> {
+    todo!();
+}
+
 pub unsafe fn instantiate_type(
     tail_code: *const InstantiateInstr,
     ctx: &mut InstantiateContext,
@@ -122,5 +140,12 @@ pub unsafe fn instantiate_canon_lower(
 ) -> InstantiateResult<()> {
     let idx = (*tail_code).operand.idx;
 
+    todo!();
+}
+
+pub unsafe fn instantiate_special_end(
+    tail_code: *const InstantiateInstr,
+    ctx: &mut InstantiateContext,
+) -> InstantiateResult<()> {
     todo!();
 }

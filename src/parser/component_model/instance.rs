@@ -1,6 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreSort, CoreSortWithIdx, InlineExport, Instance, InstanceIdx, Instantiate, InstantiateArg, SortWithIdx,
+    CoreSort, CoreSortWithIdx, Idx, InlineExport, Instance, InstanceIdx, Instantiate,
+    InstantiateArg, SortWithIdx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::{
@@ -12,6 +13,10 @@ use crate::parser::component_model::idx::{
 use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::{parse_name, parse_vec};
+use crate::runtime::component_model::instantiate::{
+    instantiate_inline_instance, instantiate_instance_end, instantiate_instance_start,
+    InstantiateInstr, InstantiateOperand,
+};
 
 pub fn parse_instance(
     ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
@@ -22,22 +27,41 @@ pub fn parse_instance(
         0x00 => {
             let (_, component_idx) = parse_component_idx(ctx)?;
             let (_, args) = parse_vec(ctx, |v| v.reader, parse_instantiate_arg)?;
-            Ok((
-                ctx.reader.read_count() - start_count,
-                ctx.validator
-                    .add_instance(Instance::Instantiate(Instantiate {
-                        component_idx,
-                        args,
-                    }))?,
-            ))
+            let idx = ctx
+                .validator
+                .add_instance(Instance::Instantiate(Instantiate {
+                    component_idx,
+                    args,
+                }))?;
+            ctx.push_instr(InstantiateInstr {
+                op: instantiate_instance_start,
+            });
+            ctx.push_instr(InstantiateInstr {
+                operand: InstantiateOperand {
+                    instance_idx: idx.global(),
+                },
+            });
+            let instrs = ctx.validator.get_component(&component_idx).instrs.clone();
+            ctx.extend_instr(instrs.into_iter());
+            ctx.push_instr(InstantiateInstr {
+                op: instantiate_instance_end,
+            });
+            Ok((ctx.reader.read_count() - start_count, idx))
         }
         0x01 => {
             let (_, exports) = parse_vec(ctx, |v| v.reader, parse_inlineexport)?;
-            Ok((
-                ctx.reader.read_count() - start_count,
-                ctx.validator
-                    .add_instance(Instance::InlineExport(exports))?,
-            ))
+            let idx = ctx
+                .validator
+                .add_instance(Instance::InlineExport(exports))?;
+            ctx.push_instr(InstantiateInstr {
+                op: instantiate_inline_instance,
+            });
+            ctx.push_instr(InstantiateInstr {
+                operand: InstantiateOperand {
+                    instance_idx: idx.global(),
+                },
+            });
+            Ok((ctx.reader.read_count() - start_count, idx))
         }
         _ => unreachable!(),
     }

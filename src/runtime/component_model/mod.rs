@@ -7,6 +7,9 @@ mod linker;
 
 use crate::common::InstanceAddr;
 use crate::component_model::FlattenComponent;
+use crate::runtime::component_model::instantiate::{
+    instantiate_next, InstantiateContext, InstantiateInstr,
+};
 use crate::{Registry, Store};
 pub use error::ComponentVMError;
 pub use func::*;
@@ -50,8 +53,15 @@ pub struct CoreFunctionInstantiated {}
 
 pub fn instantiate(
     component: FlattenComponent,
+    instrs: &mut Vec<InstantiateInstr>,
     store: &mut Store,
     linker: &Linker,
 ) -> Result<ComponentInstantiated, ComponentVMError> {
-    todo!()
+    let mut instantiated = ComponentInstantiated::new();
+    let ptr = instrs.as_ptr();
+    let mut ctx = InstantiateContext::new(store, component, &mut instantiated);
+    unsafe {
+        instantiate_next(ptr, 0, &mut ctx).unwrap();
+    }
+    Ok(instantiated)
 }

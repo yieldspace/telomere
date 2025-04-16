@@ -1,6 +1,6 @@
-use tracing::Level;
 use telomere::component_model::FlattenComponent;
 use telomere::parser::component_model::{ComponentValidator, ParseContext};
+use tracing::Level;
 
 #[test]
 fn test_basic_component() {
@@ -19,8 +19,13 @@ fn test_basic_component() {
     telomere::parser::component_model::parse_component(&mut ctx).unwrap();
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();
-    let instance = telomere::runtime::component_model::instantiate(component, &mut store, &linker).unwrap();
-    todo!()
+    let instance = telomere::runtime::component_model::instantiate(
+        component,
+        &mut instrs,
+        &mut store,
+        &linker,
+    )
+    .unwrap();
 }
 
 #[test]

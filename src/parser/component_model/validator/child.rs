@@ -83,4 +83,8 @@ where
     fn add_instance(&mut self, instance: Instance) -> Result<InstanceIdx, ComponentParseError> {
         todo!()
     }
+
+    fn get_component(&self, component_idx: &ComponentIdx) -> &Component {
+        todo!()
+    }
 }

@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreSort,
+    CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreSort, Idx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_core_module_idx};
@@ -9,6 +9,9 @@ use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
+use crate::runtime::component_model::instantiate::{
+    instantiate_core_module, InstantiateInstr, InstantiateOperand,
+};
 use std::collections::HashMap;
 
 pub fn parse_core_instance(
@@ -23,14 +26,19 @@ pub fn parse_core_instance(
                     .1
                     .into_iter(),
             );
-
-            Ok((
-                ctx.reader.read_count() - start,
-                ctx.validator.add_core_instance(CoreInstance::Real {
-                    module_idx: idx,
-                    imports,
-                })?,
-            ))
+            let idx = ctx.validator.add_core_instance(CoreInstance::Real {
+                module_idx: idx,
+                imports,
+            })?;
+            ctx.push_instr(InstantiateInstr {
+                op: instantiate_core_module,
+            });
+            ctx.push_instr(InstantiateInstr {
+                operand: InstantiateOperand {
+                    core_instance_idx: idx.global(),
+                },
+            });
+            Ok((ctx.reader.read_count() - start, idx))
         }
         0x01 => {
             let exports = HashMap::<String, CoreInstanceInlineExport>::from_iter(
@@ -38,11 +46,18 @@ pub fn parse_core_instance(
                     .1
                     .into_iter(),
             );
-            Ok((
-                ctx.reader.read_count() - start,
-                ctx.validator
-                    .add_core_instance(CoreInstance::Alias { exports })?,
-            ))
+            let idx = ctx
+                .validator
+                .add_core_instance(CoreInstance::Alias { exports })?;
+            ctx.push_instr(InstantiateInstr {
+                op: instantiate_core_module,
+            });
+            ctx.push_instr(InstantiateInstr {
+                operand: InstantiateOperand {
+                    core_instance_idx: idx.global(),
+                },
+            });
+            Ok((ctx.reader.read_count() - start, idx))
         }
         _ => todo!(),
     }

@@ -1,18 +1,29 @@
 use crate::binary::BinaryReader;
-use crate::component_model::Component;
+use crate::component_model::{Component, Idx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::validator::{ChildValidator, Validator};
-use crate::parser::component_model::{
-    parse_layer, parse_magic, parse_section_type, parse_version,
-};
+use crate::parser::component_model::{parse_layer, parse_magic, parse_section_type, parse_version};
 use crate::parser::core::{parse_u32, parse_vec};
+use crate::runtime::component_model::instantiate::{
+    instantiate_core_module, instantiate_special_end, InstantiateInstr, InstantiateOperand,
+};
 use crate::{Module, WasmParser};
 
-pub fn parse_component<R: BinaryReader, V: Validator>(
+pub fn parse_component(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> Result<(), ComponentParseError> {
+    _parse_component(ctx)?;
+    ctx.push_instr(InstantiateInstr {
+        op: instantiate_special_end,
+    });
+    Ok(())
+}
+
+pub fn _parse_component<R: BinaryReader, V: Validator>(
     ctx: &mut ParseContext<R, V>,
 ) -> Result<(), ComponentParseError> {
     parse_magic(ctx.reader)?;
@@ -31,9 +42,19 @@ pub fn parse_component<R: BinaryReader, V: Validator>(
                 parse_custom_section(ctx.reader, section_size as usize)?
             }
             ComponentSectionType::CoreModule => {
-                let mut sized_reader = ctx.reader.take(section_size as usize);
-                let module = parse_core_module_section(&mut sized_reader)?;
-                ctx.validator.add_core_module(module)?;
+                let module = {
+                    let mut sized_reader = ctx.reader.take(section_size as usize);
+                    parse_core_module_section(&mut sized_reader)?
+                };
+                let idx = ctx.validator.add_core_module(module)?;
+                ctx.push_instr(InstantiateInstr {
+                    op: instantiate_core_module,
+                });
+                ctx.push_instr(InstantiateInstr {
+                    operand: InstantiateOperand {
+                        module_idx: idx.global(),
+                    },
+                });
             }
             ComponentSectionType::CoreInstance => parse_core_instance_section(ctx)?,
             ComponentSectionType::CoreType => todo!(),
@@ -44,7 +65,7 @@ pub fn parse_component<R: BinaryReader, V: Validator>(
                 {
                     let mut child_ctx =
                         ParseContext::new(&mut sized_reader, &mut instrs, &mut validator);
-                    parse_component(&mut child_ctx)?;
+                    _parse_component(&mut child_ctx)?;
                 }
                 ctx.validator.add_component(Component::new(instrs))?;
             }
@@ -80,6 +101,7 @@ fn parse_core_module_section<R: BinaryReader>(
     // Core module parsing logic
     let mut core_module = WasmParser::new(reader);
     let module = core_module.parse_module()?;
+
     Ok(module)
 }
 

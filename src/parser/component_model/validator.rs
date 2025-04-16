@@ -40,6 +40,8 @@ pub trait Validator {
     fn add_component(&mut self, component: Component) -> Result<ComponentIdx, ComponentParseError>;
 
     fn add_instance(&mut self, instance: Instance) -> Result<InstanceIdx, ComponentParseError>;
+
+    fn get_component(&self, component_idx: &ComponentIdx) -> &Component;
 }
 
 pub struct ComponentValidator<'a> {
@@ -153,5 +155,12 @@ impl<'a> Validator for ComponentValidator<'a> {
         self.instances.push(global_idx);
         let idx = InstanceIdx::new(local_idx, global_idx);
         Ok(idx)
+    }
+
+    fn get_component(&self, component_idx: &ComponentIdx) -> &Component {
+        self.component
+            .components
+            .get(component_idx.global())
+            .unwrap()
     }
 }
