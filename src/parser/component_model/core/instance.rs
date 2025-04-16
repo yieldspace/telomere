@@ -54,7 +54,7 @@ pub fn parse_core_instance(
                 .add_core_instance(Binding::Real(CoreInstance::Alias { exports }))?;
             Ok((ctx.reader.read_count() - start, idx))
         }
-        _ => todo!(),
+        _ => unreachable!(),
     }
 }
 
@@ -86,6 +86,59 @@ pub fn parse_core_instance_inline_export(
                 ),
             ),
         )),
-        _ => todo!(),
+        CoreSort::Table => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Table(
+                    ctx.validator.validate_core_table_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Memory => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Memory(
+                    ctx.validator.validate_core_memory_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Global => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Global(
+                    ctx.validator.validate_core_global_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Type => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Type(
+                    ctx.validator.validate_core_type_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Module => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Module(
+                    ctx.validator.validate_core_module_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Instance => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Instance(
+                    ctx.validator.validate_core_instance_idx(idx as usize)?,
+                ),
+            ),
+        )),
     }
 }
