@@ -9,7 +9,7 @@ use crate::parser::component_model::validator::{ChildValidator, Validator};
 use crate::parser::component_model::{parse_layer, parse_magic, parse_section_type, parse_version};
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{
-    instantiate_core_module, instantiate_special_end, InstantiateInstr, InstantiateOperand,
+    instantiate_special_end, InstantiateInstr, InstantiateOperand,
 };
 use crate::{Module, WasmParser};
 
@@ -46,15 +46,7 @@ pub fn _parse_component<R: BinaryReader, V: Validator>(
                     let mut sized_reader = ctx.reader.take(section_size as usize);
                     parse_core_module_section(&mut sized_reader)?
                 };
-                let idx = ctx.validator.add_core_module(module)?;
-                ctx.push_instr(InstantiateInstr {
-                    op: instantiate_core_module,
-                });
-                ctx.push_instr(InstantiateInstr {
-                    operand: InstantiateOperand {
-                        module_idx: idx.global(),
-                    },
-                });
+                ctx.validator.add_core_module(module)?;
             }
             ComponentSectionType::CoreInstance => parse_core_instance_section(ctx)?,
             ComponentSectionType::CoreType => todo!(),
@@ -65,7 +57,7 @@ pub fn _parse_component<R: BinaryReader, V: Validator>(
                 {
                     let mut child_ctx =
                         ParseContext::new(&mut sized_reader, &mut instrs, &mut validator);
-                    _parse_component(&mut child_ctx)?;
+                    // _parse_component(&mut child_ctx)?;
                 }
                 ctx.validator.add_component(Component::new(instrs))?;
             }

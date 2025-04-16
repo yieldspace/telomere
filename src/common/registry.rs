@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::InstanceAddr;
 
+#[derive(Debug)]
 pub struct Registry(HashMap<String, InstanceAddr>);
 impl Default for Registry {
     fn default() -> Self {

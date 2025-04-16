@@ -22,6 +22,7 @@ pub union InstantiateInstr {
 #[derive(Clone, Copy)]
 pub union InstantiateOperand {
     idx: usize,
+    pub core_module_idx: usize,
     pub instance_idx: usize,
     pub module_idx: usize,
     pub core_instance_idx: usize,
@@ -36,11 +37,11 @@ pub(crate) unsafe fn instantiate_next(
     ((*tail_code.offset(consumed)).op)(tail_code.offset(consumed + 1), ctx)
 }
 
-pub unsafe fn instantiate_core_module(
+pub unsafe fn instantiate_core_instance(
     tail_code: *const InstantiateInstr,
     ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    let idx = (*tail_code).operand.idx;
+    let idx = (*tail_code).operand.core_instance_idx;
     let core_instance = &ctx.component.core_instances[idx];
     let mut registry = Registry::new();
     match core_instance {
@@ -147,5 +148,5 @@ pub unsafe fn instantiate_special_end(
     tail_code: *const InstantiateInstr,
     ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    todo!();
+    Ok(())
 }

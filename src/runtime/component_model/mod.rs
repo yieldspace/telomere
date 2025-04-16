@@ -16,12 +16,13 @@ pub use func::*;
 pub use linker::Linker;
 use std::collections::HashMap;
 
+#[derive(Debug)]
 pub struct ComponentInstantiated {
-    children: Vec<ComponentInstantiated>,
-    core_instances: Vec<CoreInstantiated>,
-    core_functions: Vec<CoreFunctionInstantiated>,
-    functions: Vec<ComponentFunctionInstantiated>,
-    export: HashMap<String, InstanceExport>,
+    pub children: Vec<ComponentInstantiated>,
+    pub core_instances: Vec<CoreInstantiated>,
+    pub core_functions: Vec<CoreFunctionInstantiated>,
+    pub functions: Vec<ComponentFunctionInstantiated>,
+    pub export: HashMap<String, InstanceExport>,
 }
 
 impl ComponentInstantiated {
@@ -40,15 +41,18 @@ impl ComponentInstantiated {
     }
 }
 
+#[derive(Debug)]
 pub enum InstanceExport {
     Instance,
 }
 
+#[derive(Debug)]
 pub struct CoreInstantiated {
     pub(crate) id: InstanceAddr,
     pub(crate) registry: Registry,
 }
 
+#[derive(Debug)]
 pub struct CoreFunctionInstantiated {}
 
 pub fn instantiate(

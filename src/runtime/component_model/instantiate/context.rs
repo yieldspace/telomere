@@ -1,13 +1,7 @@
 use crate::common::InstanceAddr;
 use crate::component_model::FlattenComponent;
-use crate::runtime::component_model::ComponentInstantiated;
+use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated};
 use crate::{Registry, Store};
-
-pub struct ScopedTable {
-    pub core_functions: Vec<(InstanceAddr, String)>,
-    pub core_memories: Vec<(InstanceAddr, String)>,
-    pub core_tables: Vec<(InstanceAddr, String)>,
-}
 
 pub struct InstantiateContext<'a> {
     pub(crate) store: &'a mut Store,
@@ -35,6 +29,9 @@ impl<'a> InstantiateContext<'a> {
     }
 
     pub fn push_core_module_instance(&mut self, instance: InstanceAddr, registry: Registry) {
-        todo!()
+        self.instantiated.core_instances.push(CoreInstantiated {
+            id: instance,
+            registry,
+        });
     }
 }

@@ -8,7 +8,13 @@ fn test_basic_component() {
         .with_max_level(Level::TRACE)
         .init();
     let component = r#"
-       (component)
+       (component
+          (core module
+            (func (export "mod-main") (result i32)
+              (i32.const 42))
+          )
+          (core instance (instantiate 0))
+       )
     "#;
     let binary = wat::parse_str(component).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
@@ -26,6 +32,7 @@ fn test_basic_component() {
         &linker,
     )
     .unwrap();
+    println!("{:?}", instance);
 }
 
 #[test]

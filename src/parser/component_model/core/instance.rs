@@ -10,7 +10,7 @@ use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{
-    instantiate_core_module, InstantiateInstr, InstantiateOperand,
+    instantiate_core_instance, InstantiateInstr, InstantiateOperand,
 };
 use std::collections::HashMap;
 
@@ -31,7 +31,7 @@ pub fn parse_core_instance(
                 imports,
             })?;
             ctx.push_instr(InstantiateInstr {
-                op: instantiate_core_module,
+                op: instantiate_core_instance,
             });
             ctx.push_instr(InstantiateInstr {
                 operand: InstantiateOperand {
@@ -49,14 +49,6 @@ pub fn parse_core_instance(
             let idx = ctx
                 .validator
                 .add_core_instance(CoreInstance::Alias { exports })?;
-            ctx.push_instr(InstantiateInstr {
-                op: instantiate_core_module,
-            });
-            ctx.push_instr(InstantiateInstr {
-                operand: InstantiateOperand {
-                    core_instance_idx: idx.global(),
-                },
-            });
             Ok((ctx.reader.read_count() - start, idx))
         }
         _ => todo!(),
