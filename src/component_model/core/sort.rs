@@ -1,9 +1,10 @@
 use crate::component_model::{
-    CoreFuncIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTypeIdx,
+    CoreFuncIdx, CoreGlobalIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTableIdx,
+    CoreTypeIdx,
 };
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum CoreSort {
     Func = 0x00,
     Table = 0x01,
@@ -14,12 +15,12 @@ pub enum CoreSort {
     Instance = 0x12,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CoreSortWithIdx {
     Func(CoreFuncIdx),
-    Table(usize),
+    Table(CoreTableIdx),
     Memory(CoreMemoryIdx),
-    Global(usize),
+    Global(CoreGlobalIdx),
     Type(CoreTypeIdx),
     Module(CoreModuleIdx),
     Instance(CoreInstanceIdx),

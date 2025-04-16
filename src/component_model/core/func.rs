@@ -1,7 +1,9 @@
-use crate::component_model::{CanonOpt, FuncIdx, TypeIdx};
+use crate::component_model::{
+    CanonOpt, CoreFuncRef, CoreInstanceIdx, FuncIdx, InstanceIdx, TypeIdx,
+};
 
 pub enum CoreFunction {
-    Export(),
+    Export(CoreFuncRef),
     CanonLower(FuncIdx, Vec<CanonOpt>),
     ResourceNew(TypeIdx),
     ResourceDrop(TypeIdx),

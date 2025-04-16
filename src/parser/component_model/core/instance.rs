@@ -1,6 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreSort, Idx,
+    Binding, CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreSort,
+    Idx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_core_module_idx};
@@ -26,10 +27,12 @@ pub fn parse_core_instance(
                     .1
                     .into_iter(),
             );
-            let idx = ctx.validator.add_core_instance(CoreInstance::Real {
-                module_idx: idx,
-                imports,
-            })?;
+            let idx = ctx
+                .validator
+                .add_core_instance(Binding::Real(CoreInstance::Real {
+                    module_idx: idx,
+                    imports,
+                }))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_core_instance,
             });
@@ -48,7 +51,7 @@ pub fn parse_core_instance(
             );
             let idx = ctx
                 .validator
-                .add_core_instance(CoreInstance::Alias { exports })?;
+                .add_core_instance(Binding::Real(CoreInstance::Alias { exports }))?;
             Ok((ctx.reader.read_count() - start, idx))
         }
         _ => todo!(),

@@ -1,12 +1,14 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Component, Idx};
+use crate::component_model::{Binding, Component, Idx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::validator::{ChildValidator, Validator};
-use crate::parser::component_model::{parse_layer, parse_magic, parse_section_type, parse_version};
+use crate::parser::component_model::{
+    parse_alias, parse_layer, parse_magic, parse_section_type, parse_version,
+};
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{
     instantiate_special_end, InstantiateInstr, InstantiateOperand,
@@ -46,7 +48,7 @@ pub fn _parse_component<R: BinaryReader, V: Validator>(
                     let mut sized_reader = ctx.reader.take(section_size as usize);
                     parse_core_module_section(&mut sized_reader)?
                 };
-                ctx.validator.add_core_module(module)?;
+                ctx.validator.add_core_module(Binding::Real(module))?;
             }
             ComponentSectionType::CoreInstance => parse_core_instance_section(ctx)?,
             ComponentSectionType::CoreType => todo!(),
@@ -59,10 +61,11 @@ pub fn _parse_component<R: BinaryReader, V: Validator>(
                         ParseContext::new(&mut sized_reader, &mut instrs, &mut validator);
                     // _parse_component(&mut child_ctx)?;
                 }
-                ctx.validator.add_component(Component::new(instrs))?;
+                ctx.validator
+                    .add_component(Binding::Real(Component::new(instrs)))?;
             }
             ComponentSectionType::Instance => parse_instance_section(ctx)?,
-            ComponentSectionType::Alias => {}
+            ComponentSectionType::Alias => parse_alias_section(ctx)?,
             ComponentSectionType::Type => {}
             ComponentSectionType::Canon => {}
             ComponentSectionType::Start => todo!(),
@@ -112,5 +115,14 @@ fn parse_instance_section(
 ) -> Result<(), ComponentParseError> {
     // Core instance parsing logic
     parse_vec(ctx, |v| v.reader, parse_instance)?;
+    Ok(())
+}
+
+#[inline]
+fn parse_alias_section(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> Result<(), ComponentParseError> {
+    // Alias parsing logic
+    parse_vec(ctx, |v| v.reader, parse_alias)?;
     Ok(())
 }

@@ -1,14 +1,20 @@
 use crate::binary::BinaryReader;
-use crate::parser::component_model::error::ComponentParseError;
-use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::core::parse_u32;
 use crate::WasmParserError;
 use tracing::trace;
 
+pub use alias::*;
 pub use component::parse_component;
 pub use context::ParseContext;
+pub use core::*;
+pub use error::ComponentParseError;
+pub use idx::*;
+pub use instance::*;
+pub use section::*;
+pub use sort::*;
 pub use validator::{ChildValidator, ComponentValidator, Validator};
 
+mod alias;
 mod component;
 mod context;
 mod core;
@@ -16,6 +22,7 @@ mod error;
 mod idx;
 mod instance;
 mod section;
+mod sort;
 mod validator;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;
