@@ -35,5 +35,5 @@ pub enum CoreInstanceImport {
 pub struct CoreMemoryRef(pub CoreInstanceIdx, pub usize);
 pub struct CoreTableRef(pub CoreInstanceIdx, pub usize);
 pub struct CoreGlobalRef(pub CoreInstanceIdx, pub usize);
-pub struct CoreFuncRef(pub CoreInstanceIdx, pub usize, pub CoreFuncType);
+pub struct CoreFuncRef(pub CoreInstanceIdx, pub usize, pub CoreFuncType, pub String);
 pub struct CoreTypeRef(pub CoreInstanceIdx, pub usize);

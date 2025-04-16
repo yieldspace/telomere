@@ -1,12 +1,5 @@
-use crate::component_model::{
-    Binding, Component, ComponentFunction, ComponentIdx, CoreFuncIdx, CoreFunction, CoreGlobalIdx,
-    CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx, CoreMemoryRef, CoreModuleIdx,
-    CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, FlattenComponent, FuncIdx, Instance,
-    InstanceIdx, Type, TypeIdx,
-};
-use crate::parser::component_model::error::ComponentParseError;
+use crate::component_model::FlattenComponent;
 use crate::parser::component_model::validator::Validator;
-use crate::Module;
 
 pub struct ChildValidator<'a, T>
 where

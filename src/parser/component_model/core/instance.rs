@@ -52,6 +52,14 @@ pub fn parse_core_instance(
             let idx = ctx
                 .validator
                 .add_core_instance(Binding::Real(CoreInstance::Alias { exports }))?;
+            ctx.push_instr(InstantiateInstr {
+                op: instantiate_core_instance,
+            });
+            ctx.push_instr(InstantiateInstr {
+                operand: InstantiateOperand {
+                    core_instance_idx: idx.global(),
+                },
+            });
             Ok((ctx.reader.read_count() - start, idx))
         }
         _ => unreachable!(),

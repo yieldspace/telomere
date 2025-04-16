@@ -69,10 +69,10 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) ->
             match sort {
                 Sort::Core(cs) => match cs {
                     CoreSort::Func => {
-                        match core_inst.get_func(ctx, name) {
+                        match core_inst.get_func(ctx, name.clone()) {
                             CoreBinding::Real((idx, ty)) => {
                                 ctx.validator.add_core_func(Binding::Real(
-                                    CoreFunction::Export(CoreFuncRef(core_inst_idx, idx, ty)),
+                                    CoreFunction::Export(CoreFuncRef(core_inst_idx, idx, ty, name)),
                                 ))?;
                             }
                             CoreBinding::Binding(binding) => {

@@ -1,5 +1,7 @@
 use crate::aliasing as core_aliasing;
-use crate::component_model::{CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx};
+use crate::component_model::{
+    CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx,
+};
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::Registry;
@@ -65,9 +67,24 @@ pub unsafe fn instantiate_core_instance(
                 .enumerate()
                 .map(|(nth, (export_name, export))| match export {
                     CoreInstanceInlineExport::Func(idx) => {
-                        let (instance_addr, name) = ctx.core_functions.get(idx.global()).unwrap();
-                        registry.register(nth.to_string(), *instance_addr);
-                        (nth.to_string(), name.clone(), export_name.clone())
+                        let func = ctx.component.get_core_function(idx.global());
+                        match func {
+                            CoreFunction::Export(CoreFuncRef(inst_idx, idx, _, name)) => {
+                                let inst = ctx
+                                    .instantiated
+                                    .core_instances
+                                    .get(inst_idx.global())
+                                    .unwrap();
+                                registry.register(nth.to_string(), inst.id);
+                                (nth.to_string(), name.clone(), export_name.clone())
+                            }
+                            _ => {
+                                let (instance_addr, name) =
+                                    ctx.core_functions.get(idx.global()).unwrap();
+                                registry.register(nth.to_string(), *instance_addr);
+                                (nth.to_string(), name.clone(), export_name.clone())
+                            }
+                        }
                     }
                     CoreInstanceInlineExport::Memory(idx) => {
                         let (instance_addr, name) = ctx.core_memories.get(idx.global()).unwrap();

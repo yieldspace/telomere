@@ -3,7 +3,7 @@ mod child;
 use crate::component_model::{
     Binding, Component, ComponentFunction, ComponentIdx, CoreFuncIdx, CoreFunction, CoreGlobalIdx,
     CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx, CoreMemoryRef, CoreModuleIdx,
-    CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, CoreTypeRef, FlattenComponent, FuncIdx, Idx,
+    CoreTableIdx, CoreTableRef, CoreTypeIdx, CoreTypeRef, FlattenComponent, FuncIdx, Idx,
     Instance, InstanceIdx, Type, TypeIdx,
 };
 use crate::parser::component_model::error::ComponentParseError;
