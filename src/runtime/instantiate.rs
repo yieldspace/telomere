@@ -423,7 +423,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
 #[allow(dead_code)]
 pub fn aliasing(
     registry: &Registry,
-    triplets: &[(&str, &str, &str)],
+    triplets: &[(String, String, String)],
     store: &mut Store,
 ) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;

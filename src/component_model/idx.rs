@@ -1,23 +1,66 @@
-use crate::component_model::{Component, CoreFunction};
-
-pub trait Idx<T> {
-    fn get<'a>(&self, component: &'a Component) -> &'a T;
+pub trait Idx {
+    fn new(local: usize, global: usize) -> Self;
+    fn local(&self) -> usize;
+    fn global(&self) -> usize;
 }
 
-#[derive(Debug)]
-pub struct TypeIdx(usize);
+macro_rules! impl_idx {
+    ($name:ident) => {
+        impl Idx for $name {
+            fn new(local: usize, global: usize) -> Self {
+                Self(local, global)
+            }
 
-#[derive(Debug)]
-pub struct CoreFuncIdx(usize);
+            fn local(&self) -> usize {
+                self.0
+            }
 
-impl Idx<CoreFunction> for CoreFuncIdx {
-    fn get<'a>(&self, component: &'a Component) -> &'a CoreFunction {
-        component.get_core_function(self.0)
-    }
+            fn global(&self) -> usize {
+                self.1
+            }
+        }
+    };
 }
 
-#[derive(Debug)]
-pub struct CoreMemoryIdx(usize);
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct TypeIdx(usize, usize);
 
-#[derive(Debug)]
-pub struct CoreTypeIdx(usize);
+impl_idx!(TypeIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct CoreFuncIdx(usize, usize);
+
+impl_idx!(CoreFuncIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct FuncIdx(usize, usize);
+
+impl_idx!(FuncIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct CoreMemoryIdx(usize, usize);
+
+impl_idx!(CoreMemoryIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct CoreTypeIdx(usize, usize);
+
+impl_idx!(CoreTypeIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct ComponentIdx(usize, usize);
+
+impl_idx!(ComponentIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct InstanceIdx(usize, usize);
+
+impl_idx!(InstanceIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct CoreModuleIdx(usize, usize);
+impl_idx!(CoreModuleIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct CoreInstanceIdx(usize, usize);
+impl_idx!(CoreInstanceIdx);

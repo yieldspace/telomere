@@ -1,3 +1,5 @@
+use telomere::component_model::FlattenComponent;
+use telomere::parser::component_model::{ComponentValidator, ParseContext};
 use tracing::Level;
 
 #[test]
@@ -6,15 +8,31 @@ fn test_basic_component() {
         .with_max_level(Level::TRACE)
         .init();
     let component = r#"
-       (component)
+       (component
+          (core module
+            (func (export "mod-main") (result i32)
+              (i32.const 42))
+          )
+          (core instance (instantiate 0))
+       )
     "#;
     let binary = wat::parse_str(component).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
-    let k = telomere::parser::component_model::parse_component(&mut reader).unwrap();
+    let mut instrs = Vec::new();
+    let mut component = FlattenComponent::new();
+    let mut validator = ComponentValidator::new(&mut component);
+    let mut ctx = ParseContext::new(&mut reader, &mut instrs, &mut validator);
+    telomere::parser::component_model::parse_component(&mut ctx).unwrap();
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();
-    let instance = telomere::runtime::component_model::instantiate(k, &mut store, &linker).unwrap();
-    todo!()
+    let instance = telomere::runtime::component_model::instantiate(
+        component,
+        &mut instrs,
+        &mut store,
+        &linker,
+    )
+    .unwrap();
+    println!("{:?}", instance);
 }
 
 /*#[test]
