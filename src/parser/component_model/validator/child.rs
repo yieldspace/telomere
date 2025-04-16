@@ -60,6 +60,10 @@ where
         &self.parent.get_flatten_component()
     }
 
+    fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent {
+        self.parent.get_flatten_component_mut()
+    }
+
     fn get_local_core_module_indexes(&self) -> &Vec<usize> {
         &self.core_modules
     }
@@ -104,74 +108,47 @@ where
         &self.types
     }
 
-    fn add_core_module(
-        &mut self,
-        module: Binding<Module>,
-    ) -> Result<CoreModuleIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_module_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_modules
     }
 
-    fn add_core_instance(
-        &mut self,
-        instance: Binding<CoreInstance>,
-    ) -> Result<CoreInstanceIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_instance_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_instances
     }
 
-    fn add_core_func(
-        &mut self,
-        func: Binding<CoreFunction>,
-    ) -> Result<CoreFuncIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_function_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_funcs
     }
 
-    fn add_core_type(&mut self, ty: Binding<CoreType>) -> Result<CoreTypeIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_memory_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_memories
     }
 
-    fn add_core_memory(
-        &mut self,
-        memory: Binding<CoreMemoryRef>,
-    ) -> Result<CoreMemoryIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_table_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_tables
     }
 
-    fn add_core_table(
-        &mut self,
-        table: Binding<CoreTableRef>,
-    ) -> Result<CoreTableIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_global_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_globals
     }
 
-    fn add_core_global(
-        &mut self,
-        global: Binding<CoreGlobalRef>,
-    ) -> Result<CoreGlobalIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_type_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_types
     }
 
-    fn add_component(
-        &mut self,
-        component: Binding<Component>,
-    ) -> Result<ComponentIdx, ComponentParseError> {
-        todo!()
+    fn get_local_component_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.components
     }
 
-    fn add_instance(
-        &mut self,
-        instance: Binding<Instance>,
-    ) -> Result<InstanceIdx, ComponentParseError> {
-        todo!()
+    fn get_local_instance_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.instances
     }
 
-    fn add_func(
-        &mut self,
-        func: Binding<ComponentFunction>,
-    ) -> Result<FuncIdx, ComponentParseError> {
-        todo!()
+    fn get_local_function_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.functions
     }
 
-    fn add_type(&mut self, ty: Binding<Type>) -> Result<TypeIdx, ComponentParseError> {
-        todo!()
+    fn get_local_type_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.types
     }
 }

@@ -10,9 +10,7 @@ use crate::parser::component_model::{
     parse_alias, parse_layer, parse_magic, parse_section_type, parse_version,
 };
 use crate::parser::core::{parse_u32, parse_vec};
-use crate::runtime::component_model::instantiate::{
-    instantiate_special_end, InstantiateInstr,
-};
+use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
 use crate::{Module, WasmParser};
 
 pub fn parse_component(

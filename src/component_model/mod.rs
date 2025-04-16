@@ -43,21 +43,30 @@ pub struct FlattenComponent {
     pub core_modules: Vec<Binding<Module>>,
     pub core_instances: Vec<Binding<CoreInstance>>,
     pub core_functions: Vec<Binding<CoreFunction>>,
-    // pub core_types: Vec<CoreType>,
     pub functions: Vec<Binding<ComponentFunction>>,
     pub components: Vec<Binding<Component>>,
     pub instances: Vec<Binding<Instance>>,
+    pub core_types: Vec<Binding<CoreTypeRef>>,
+    pub core_memories: Vec<Binding<CoreMemoryRef>>,
+    pub core_tables: Vec<Binding<CoreTableRef>>,
+    pub core_globals: Vec<Binding<CoreGlobalRef>>,
+    pub types: Vec<Binding<Type>>,
 }
 
 impl FlattenComponent {
     pub fn new() -> Self {
         FlattenComponent {
-            core_modules: Vec::new(),
-            core_instances: Vec::new(),
-            core_functions: Vec::new(),
-            functions: Vec::new(),
+            core_modules: vec![],
+            core_instances: vec![],
+            core_functions: vec![],
+            functions: vec![],
             components: vec![],
-            instances: Vec::new(),
+            instances: vec![],
+            core_types: vec![],
+            core_memories: vec![],
+            core_tables: vec![],
+            core_globals: vec![],
+            types: vec![],
         }
     }
 

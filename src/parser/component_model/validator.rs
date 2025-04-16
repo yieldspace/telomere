@@ -3,8 +3,8 @@ mod child;
 use crate::component_model::{
     Binding, Component, ComponentFunction, ComponentIdx, CoreFuncIdx, CoreFunction, CoreGlobalIdx,
     CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx, CoreMemoryRef, CoreModuleIdx,
-    CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, FlattenComponent, FuncIdx, Idx, Instance,
-    InstanceIdx, Type, TypeIdx,
+    CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, CoreTypeRef, FlattenComponent, FuncIdx, Idx,
+    Instance, InstanceIdx, Type, TypeIdx,
 };
 use crate::parser::component_model::error::ComponentParseError;
 use crate::Module;
@@ -13,6 +13,7 @@ pub use child::ChildValidator;
 pub trait Validator {
     fn get_parent(&self) -> Option<&dyn Validator>;
     fn get_flatten_component(&self) -> &FlattenComponent;
+    fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent;
     fn get_local_core_module_indexes(&self) -> &Vec<usize>;
     fn get_local_core_instance_indexes(&self) -> &Vec<usize>;
     fn get_local_core_function_indexes(&self) -> &Vec<usize>;
@@ -24,6 +25,17 @@ pub trait Validator {
     fn get_local_instance_indexes(&self) -> &Vec<usize>;
     fn get_local_function_indexes(&self) -> &Vec<usize>;
     fn get_local_type_indexes(&self) -> &Vec<usize>;
+    fn get_local_core_module_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_core_instance_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_core_function_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_core_memory_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_core_table_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_core_global_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_core_type_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_component_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_instance_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_function_indexes_mut(&mut self) -> &mut Vec<usize>;
+    fn get_local_type_indexes_mut(&mut self) -> &mut Vec<usize>;
 
     fn validate_core_module_idx(&self, local: usize) -> Result<CoreModuleIdx, ComponentParseError> {
         Ok(CoreModuleIdx::new(
@@ -103,51 +115,133 @@ pub trait Validator {
     fn add_core_module(
         &mut self,
         module: Binding<Module>,
-    ) -> Result<CoreModuleIdx, ComponentParseError>;
+    ) -> Result<CoreModuleIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().core_modules.len();
+        let local_idx = self.get_local_core_module_indexes().len();
+        self.get_flatten_component_mut().core_modules.push(module);
+        self.get_local_core_module_indexes_mut().push(global_idx);
+        let idx = CoreModuleIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn add_core_instance(
         &mut self,
         instance: Binding<CoreInstance>,
-    ) -> Result<CoreInstanceIdx, ComponentParseError>;
+    ) -> Result<CoreInstanceIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().core_instances.len();
+        let local_idx = self.get_local_core_instance_indexes().len();
+        self.get_flatten_component_mut()
+            .core_instances
+            .push(instance);
+        self.get_local_core_instance_indexes_mut().push(global_idx);
+        let idx = CoreInstanceIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn add_core_func(
         &mut self,
         func: Binding<CoreFunction>,
-    ) -> Result<CoreFuncIdx, ComponentParseError>;
+    ) -> Result<CoreFuncIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().core_functions.len();
+        let local_idx = self.get_local_core_function_indexes().len();
+        self.get_flatten_component_mut().core_functions.push(func);
+        self.get_local_core_function_indexes_mut().push(global_idx);
+        let idx = CoreFuncIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
-    fn add_core_type(&mut self, ty: Binding<CoreType>) -> Result<CoreTypeIdx, ComponentParseError>;
+    fn add_core_type(
+        &mut self,
+        ty: Binding<CoreTypeRef>,
+    ) -> Result<CoreTypeIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().core_types.len();
+        let local_idx = self.get_local_core_type_indexes().len();
+        self.get_flatten_component_mut().core_types.push(ty);
+        self.get_local_core_type_indexes_mut().push(global_idx);
+        let idx = CoreTypeIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn add_core_memory(
         &mut self,
         memory: Binding<CoreMemoryRef>,
-    ) -> Result<CoreMemoryIdx, ComponentParseError>;
+    ) -> Result<CoreMemoryIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().core_memories.len();
+        let local_idx = self.get_local_core_memory_indexes().len();
+        self.get_flatten_component_mut().core_memories.push(memory);
+        self.get_local_core_memory_indexes_mut().push(global_idx);
+        let idx = CoreMemoryIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn add_core_table(
         &mut self,
         table: Binding<CoreTableRef>,
-    ) -> Result<CoreTableIdx, ComponentParseError>;
+    ) -> Result<CoreTableIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().core_tables.len();
+        let local_idx = self.get_local_core_table_indexes().len();
+        self.get_flatten_component_mut().core_tables.push(table);
+        self.get_local_core_table_indexes_mut().push(global_idx);
+        let idx = CoreTableIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn add_core_global(
         &mut self,
         global: Binding<CoreGlobalRef>,
-    ) -> Result<CoreGlobalIdx, ComponentParseError>;
+    ) -> Result<CoreGlobalIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().core_globals.len();
+        let local_idx = self.get_local_core_global_indexes().len();
+        self.get_flatten_component_mut().core_globals.push(global);
+        self.get_local_core_global_indexes_mut().push(global_idx);
+        let idx = CoreGlobalIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn add_component(
         &mut self,
         component: Binding<Component>,
-    ) -> Result<ComponentIdx, ComponentParseError>;
+    ) -> Result<ComponentIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().components.len();
+        let local_idx = self.get_local_component_indexes().len();
+        self.get_flatten_component_mut().components.push(component);
+        self.get_local_component_indexes_mut().push(global_idx);
+        let idx = ComponentIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn add_instance(
         &mut self,
         instance: Binding<Instance>,
-    ) -> Result<InstanceIdx, ComponentParseError>;
+    ) -> Result<InstanceIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().instances.len();
+        let local_idx = self.get_local_instance_indexes().len();
+        self.get_flatten_component_mut().instances.push(instance);
+        self.get_local_instance_indexes_mut().push(global_idx);
+        let idx = InstanceIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn add_func(
         &mut self,
         func: Binding<ComponentFunction>,
-    ) -> Result<FuncIdx, ComponentParseError>;
+    ) -> Result<FuncIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().functions.len();
+        let local_idx = self.get_local_function_indexes().len();
+        self.get_flatten_component_mut().functions.push(func);
+        self.get_local_function_indexes_mut().push(global_idx);
+        let idx = FuncIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
-    fn add_type(&mut self, ty: Binding<Type>) -> Result<TypeIdx, ComponentParseError>;
+    fn add_type(&mut self, ty: Binding<Type>) -> Result<TypeIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().types.len();
+        let local_idx = self.get_local_type_indexes().len();
+        self.get_flatten_component_mut().types.push(ty);
+        self.get_local_type_indexes_mut().push(global_idx);
+        let idx = TypeIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
 
     fn get_core_module(&self, core_mod_idx: &CoreModuleIdx) -> &Module {
         self.get_flatten_component()
@@ -217,6 +311,10 @@ impl<'a> Validator for ComponentValidator<'a> {
         &self.component
     }
 
+    fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent {
+        &mut self.component
+    }
+
     fn get_local_core_module_indexes(&self) -> &Vec<usize> {
         &self.core_modules
     }
@@ -261,94 +359,47 @@ impl<'a> Validator for ComponentValidator<'a> {
         &self.types
     }
 
-    fn add_core_module(
-        &mut self,
-        module: Binding<Module>,
-    ) -> Result<CoreModuleIdx, ComponentParseError> {
-        let global_idx = self.component.core_modules.len();
-        let local_idx = self.core_modules.len();
-        self.component.core_modules.push(module);
-        self.core_modules.push(global_idx);
-        let idx = CoreModuleIdx::new(local_idx, global_idx);
-        Ok(idx)
+    fn get_local_core_module_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_modules
     }
 
-    fn add_core_instance(
-        &mut self,
-        instance: Binding<CoreInstance>,
-    ) -> Result<CoreInstanceIdx, ComponentParseError> {
-        let global_idx = self.component.core_instances.len();
-        let local_idx = self.core_instances.len();
-        self.component.core_instances.push(instance);
-        self.core_instances.push(global_idx);
-        let idx = CoreInstanceIdx::new(local_idx, global_idx);
-        Ok(idx)
+    fn get_local_core_instance_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_instances
     }
 
-    fn add_core_func(
-        &mut self,
-        func: Binding<CoreFunction>,
-    ) -> Result<CoreFuncIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_function_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_funcs
     }
 
-    fn add_core_type(&mut self, ty: Binding<CoreType>) -> Result<CoreTypeIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_memory_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_memories
     }
 
-    fn add_core_memory(
-        &mut self,
-        memory: Binding<CoreMemoryRef>,
-    ) -> Result<CoreMemoryIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_table_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_tables
     }
 
-    fn add_core_table(
-        &mut self,
-        table: Binding<CoreTableRef>,
-    ) -> Result<CoreTableIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_global_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_globals
     }
 
-    fn add_core_global(
-        &mut self,
-        global: Binding<CoreGlobalRef>,
-    ) -> Result<CoreGlobalIdx, ComponentParseError> {
-        todo!()
+    fn get_local_core_type_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.core_types
     }
 
-    fn add_component(
-        &mut self,
-        component: Binding<Component>,
-    ) -> Result<ComponentIdx, ComponentParseError> {
-        let global_idx = self.component.components.len();
-        let local_idx = self.components.len();
-        self.component.components.push(component);
-        self.components.push(global_idx);
-        let idx = ComponentIdx::new(local_idx, global_idx);
-        Ok(idx)
+    fn get_local_component_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.components
     }
 
-    fn add_instance(
-        &mut self,
-        instance: Binding<Instance>,
-    ) -> Result<InstanceIdx, ComponentParseError> {
-        let global_idx = self.component.instances.iter().len();
-        let local_idx = self.component.instances.len();
-        self.component.instances.push(instance);
-        self.instances.push(global_idx);
-        let idx = InstanceIdx::new(local_idx, global_idx);
-        Ok(idx)
+    fn get_local_instance_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.instances
     }
 
-    fn add_func(
-        &mut self,
-        func: Binding<ComponentFunction>,
-    ) -> Result<FuncIdx, ComponentParseError> {
-        todo!()
+    fn get_local_function_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.functions
     }
 
-    fn add_type(&mut self, ty: Binding<Type>) -> Result<TypeIdx, ComponentParseError> {
-        todo!()
+    fn get_local_type_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.types
     }
 }

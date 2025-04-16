@@ -117,9 +117,7 @@ pub fn parse_core_instance_inline_export(
             name_len + sort_len + idx_len,
             (
                 name,
-                CoreInstanceInlineExport::Type(
-                    ctx.validator.validate_core_type_idx(idx as usize)?,
-                ),
+                CoreInstanceInlineExport::Type(ctx.validator.validate_core_type_idx(idx as usize)?),
             ),
         )),
         CoreSort::Module => Ok((

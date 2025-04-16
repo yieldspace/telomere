@@ -1,6 +1,4 @@
-use crate::component_model::{
-    CanonOpt, CoreFuncRef, FuncIdx, TypeIdx,
-};
+use crate::component_model::{CanonOpt, CoreFuncRef, FuncIdx, TypeIdx};
 
 pub enum CoreFunction {
     Export(CoreFuncRef),

@@ -1,7 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, Idx, InlineExport, Instance, InstanceIdx, Instantiate,
-    InstantiateArg,
+    Binding, Idx, InlineExport, Instance, InstanceIdx, Instantiate, InstantiateArg,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
