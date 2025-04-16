@@ -1,15 +1,10 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, CoreSort, CoreSortWithIdx, Idx, InlineExport, Instance, InstanceIdx, Instantiate,
-    InstantiateArg, SortWithIdx,
+    Binding, Idx, InlineExport, Instance, InstanceIdx, Instantiate,
+    InstantiateArg,
 };
 use crate::parser::component_model::context::ParseContext;
-use crate::parser::component_model::core::{
-    parse_core_func_idx, parse_core_memory_idx, parse_core_sort, parse_core_type_idx,
-};
-use crate::parser::component_model::idx::{
-    parse_component_idx, parse_func_idx, parse_instance_idx, parse_type_idx,
-};
+use crate::parser::component_model::idx::parse_component_idx;
 use crate::parser::component_model::parse_sort_with_idx;
 use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;

@@ -1,6 +1,6 @@
 use crate::aliasing as core_aliasing;
 use crate::component_model::{
-    CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx, InstanceIdx,
+    CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx,
 };
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;

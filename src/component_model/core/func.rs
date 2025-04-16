@@ -1,5 +1,5 @@
 use crate::component_model::{
-    CanonOpt, CoreFuncRef, CoreInstanceIdx, FuncIdx, InstanceIdx, TypeIdx,
+    CanonOpt, CoreFuncRef, FuncIdx, TypeIdx,
 };
 
 pub enum CoreFunction {

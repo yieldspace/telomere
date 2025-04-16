@@ -3,11 +3,10 @@ mod instance;
 mod sort;
 mod types;
 
-use crate::binary::BinaryReader;
 pub use crate::common::FuncType as CoreFuncType;
 use crate::component_model::{
     Binding, CoreFuncIdx, CoreGlobalIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx,
-    CoreTableIdx, CoreTypeIdx, Idx, Sort,
+    CoreTableIdx, CoreTypeIdx,
 };
 pub use func::*;
 pub use instance::*;

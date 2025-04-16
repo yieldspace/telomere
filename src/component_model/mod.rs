@@ -13,7 +13,6 @@ pub use core::*;
 pub use func::*;
 pub use idx::*;
 use std::cmp::PartialEq;
-use std::collections::HashMap;
 pub use types::*;
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]

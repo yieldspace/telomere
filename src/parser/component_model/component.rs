@@ -11,7 +11,7 @@ use crate::parser::component_model::{
 };
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{
-    instantiate_special_end, InstantiateInstr, InstantiateOperand,
+    instantiate_special_end, InstantiateInstr,
 };
 use crate::{Module, WasmParser};
 
@@ -57,7 +57,7 @@ pub fn _parse_component<R: BinaryReader, V: Validator>(
                 let mut validator = ChildValidator::new(ctx.validator);
                 let mut instrs = Vec::new();
                 {
-                    let mut child_ctx =
+                    let child_ctx =
                         ParseContext::new(&mut sized_reader, &mut instrs, &mut validator);
                     // _parse_component(&mut child_ctx)?;
                 }

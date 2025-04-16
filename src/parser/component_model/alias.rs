@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, CoreBinding, CoreFuncRef, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef,
+    Binding, CoreBinding, CoreFuncRef, CoreFunction, CoreGlobalRef, CoreMemoryRef,
     CoreSort, CoreSortWithIdx, CoreTableRef, Idx, Sort, SortWithIdx,
 };
 use crate::parser::component_model::{
