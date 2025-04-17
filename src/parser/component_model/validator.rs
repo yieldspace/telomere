@@ -6,11 +6,13 @@ use crate::component_model::{
     CoreTableIdx, CoreTableRef, CoreTypeIdx, CoreTypeRef, FlattenComponent, FuncIdx, Idx, Instance,
     InstanceIdx, Type, TypeIdx,
 };
+#[cfg(feature = "component-gated-feature-value-imports-exports")]
+use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
 use crate::Module;
 pub use child::ChildValidator;
 
-pub trait Validator {
+pub(crate) trait Validator {
     fn get_parent(&self) -> Option<&dyn Validator>;
     fn get_flatten_component(&self) -> &FlattenComponent;
     fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent;
@@ -25,6 +27,8 @@ pub trait Validator {
     fn get_local_instance_indexes(&self) -> &Vec<usize>;
     fn get_local_function_indexes(&self) -> &Vec<usize>;
     fn get_local_type_indexes(&self) -> &Vec<usize>;
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    fn get_local_value_indexes(&self) -> &Vec<usize>;
     fn get_local_core_module_indexes_mut(&mut self) -> &mut Vec<usize>;
     fn get_local_core_instance_indexes_mut(&mut self) -> &mut Vec<usize>;
     fn get_local_core_function_indexes_mut(&mut self) -> &mut Vec<usize>;
@@ -36,6 +40,8 @@ pub trait Validator {
     fn get_local_instance_indexes_mut(&mut self) -> &mut Vec<usize>;
     fn get_local_function_indexes_mut(&mut self) -> &mut Vec<usize>;
     fn get_local_type_indexes_mut(&mut self) -> &mut Vec<usize>;
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    fn get_local_value_indexes_mut(&mut self) -> &mut Vec<usize>;
 
     fn validate_core_module_idx(&self, local: usize) -> Result<CoreModuleIdx, ComponentParseError> {
         Ok(CoreModuleIdx::new(
@@ -109,6 +115,14 @@ pub trait Validator {
         Ok(InstanceIdx::new(
             local,
             *self.get_local_instance_indexes().get(local).unwrap(),
+        ))
+    }
+
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    fn validate_value_idx(&self, local: usize) -> Result<ValueIdx, ComponentParseError> {
+        Ok(ValueIdx::new(
+            local,
+            *self.get_local_value_indexes().get(local).unwrap(),
         ))
     }
 
@@ -243,6 +257,16 @@ pub trait Validator {
         Ok(idx)
     }
 
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    fn add_value(&mut self, value: Binding<ValueBound>) -> Result<ValueIdx, ComponentParseError> {
+        let global_idx = self.get_flatten_component().values.len();
+        let local_idx = self.get_local_value_indexes().len();
+        self.get_flatten_component_mut().values.push(value);
+        self.get_local_value_indexes_mut().push(global_idx);
+        let idx = ValueIdx::new(local_idx, global_idx);
+        Ok(idx)
+    }
+
     fn get_core_module(&self, core_mod_idx: &CoreModuleIdx) -> &Module {
         self.get_flatten_component()
             .get_core_module(core_mod_idx.global())
@@ -281,6 +305,7 @@ pub struct ComponentValidator<'a> {
     core_types: Vec<usize>,
     functions: Vec<usize>,
     types: Vec<usize>,
+    values: Vec<usize>,
 }
 
 impl<'a> ComponentValidator<'a> {
@@ -298,6 +323,7 @@ impl<'a> ComponentValidator<'a> {
             core_types: vec![],
             functions: vec![],
             types: vec![],
+            values: vec![],
         }
     }
 }
@@ -359,6 +385,11 @@ impl<'a> Validator for ComponentValidator<'a> {
         &self.types
     }
 
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    fn get_local_value_indexes(&self) -> &Vec<usize> {
+        &self.values
+    }
+
     fn get_local_core_module_indexes_mut(&mut self) -> &mut Vec<usize> {
         &mut self.core_modules
     }
@@ -401,5 +432,10 @@ impl<'a> Validator for ComponentValidator<'a> {
 
     fn get_local_type_indexes_mut(&mut self) -> &mut Vec<usize> {
         &mut self.types
+    }
+
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    fn get_local_value_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.values
     }
 }

@@ -3,8 +3,9 @@ use crate::component_model::{
     Binding, CoreBinding, CoreFuncRef, CoreFunction, CoreGlobalRef, CoreMemoryRef, CoreSort,
     CoreSortWithIdx, CoreTableRef, Idx, Sort, SortWithIdx,
 };
+use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::{
-    parse_core_instance_idx, parse_instance_idx, parse_sort, ParseContext, SizedResult, Validator,
+    parse_core_instance_idx, parse_instance_idx, parse_sort, ParseContext, SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};
 
@@ -51,7 +52,7 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) ->
                 }
                 #[cfg(feature = "component-gated-feature-value-imports-exports")]
                 SortWithIdx::Value(idx) => {
-                    todo!()
+                    ctx.validator.add_value(Binding::Alias(idx.global()))?;
                 }
                 SortWithIdx::Type(idx) => {
                     ctx.validator.add_type(Binding::Alias(idx.global()))?;

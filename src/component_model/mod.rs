@@ -51,6 +51,8 @@ pub struct FlattenComponent {
     pub core_tables: Vec<Binding<CoreTableRef>>,
     pub core_globals: Vec<Binding<CoreGlobalRef>>,
     pub types: Vec<Binding<Type>>,
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    pub values: Vec<Binding<ValueBound>>,
 }
 
 impl FlattenComponent {
@@ -67,6 +69,8 @@ impl FlattenComponent {
             core_tables: vec![],
             core_globals: vec![],
             types: vec![],
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
+            values: vec![],
         }
     }
 
