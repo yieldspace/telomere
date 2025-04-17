@@ -6,15 +6,16 @@ use crate::parser::component_model::{
 };
 use crate::parser::core::parse_name;
 
-pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ComponentImport> {
+pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_import_name_dash(ctx)?;
     let (_, ed) = parse_externdesc(ctx)?;
-    let import = ComponentImport::Instance(name, ed);
-    Ok((ctx.reader.read_count() - start_count, import))
+    let import = ComponentImport { name, ed };
+    ctx.validator.add_import(import)?;
+    Ok((ctx.reader.read_count() - start_count, ()))
 }
 
-pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ComponentExport> {
+pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_export_name_dash(ctx)?;
     let (_, si) = parse_sort_with_idx(ctx)?;
@@ -24,7 +25,8 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Co
         sort: si,
         desc: ed,
     };
-    Ok((ctx.reader.read_count() - start_count, export))
+    ctx.validator.add_export(export)?;
+    Ok((ctx.reader.read_count() - start_count, ()))
 }
 
 pub fn parse_import_name_dash(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<String> {

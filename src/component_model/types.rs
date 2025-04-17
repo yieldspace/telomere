@@ -11,7 +11,7 @@ pub enum Type {
     Resource(ResourceType),
 }
 
-#[derive(Debug, FromPrimitive)]
+#[derive(Debug, FromPrimitive, Clone)]
 #[repr(i32)]
 pub enum PrimValType {
     Bool = compile_i32([0x7f]),
@@ -68,7 +68,7 @@ pub struct Label {
     pub label: String, // TODO: check label format https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#import-and-export-definitions
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ValType {
     TypeId(TypeIdx),
     Primitive(PrimValType),
@@ -118,7 +118,7 @@ pub struct ExportDecl {
     pub ed: ExternDesc,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExternDesc {
     Core(CoreTypeIdx),
     Func(TypeIdx),
@@ -129,13 +129,13 @@ pub enum ExternDesc {
     Instance(TypeIdx),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TypeBound {
     Eq(TypeIdx),
     Sub,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 pub enum ValueBound {
     Eq(usize),

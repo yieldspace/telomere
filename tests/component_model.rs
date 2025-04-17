@@ -35,6 +35,14 @@ fn test_basic_component() {
           (type s32)
           (type (func (result 0)))
           (func (type 1) (canon lift (core func 0)))
+          (type (;2;)
+            (instance
+              (type (;0;) (result))
+              (type (;1;) (func (param "status" 0)))
+              (export (;0;) "exit" (func (type 1)))
+            )
+          )
+          (import "docs:adder/add@0.1.0" (instance (type 2)))
        )
     "#;
     let binary = wat::parse_str(component).unwrap();

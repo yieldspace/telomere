@@ -4,12 +4,13 @@ use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
 use crate::parser::component_model::error::ComponentParseError;
+use crate::parser::component_model::inex::{parse_export, parse_import};
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::validator::ChildValidator;
 use crate::parser::component_model::{
-    parse_alias, parse_layer, parse_magic, parse_section_type, parse_version,
+    parse_alias, parse_layer, parse_magic, parse_section_type, parse_version, Validator,
 };
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
@@ -56,16 +57,20 @@ pub fn _parse_component(
                         ParseContext::new(&mut sized_reader, &mut instrs, &mut validator);
                     _parse_component(&mut child_ctx)?;
                 }
+
+                let imports = validator.get_local_store().imports.clone();
+                let exports = validator.get_local_store().exports.clone();
                 ctx.validator
-                    .add_component(Binding::Real(Component::new(instrs)))?;
+                    .add_component(Binding::Real(Component::new(instrs, imports, exports)))?;
             }
             ComponentSectionType::Instance => parse_instance_section(ctx)?,
             ComponentSectionType::Alias => parse_alias_section(ctx)?,
             ComponentSectionType::Type => parse_type_section(ctx)?,
             ComponentSectionType::Canon => parse_canon_section(ctx)?,
             ComponentSectionType::Start => todo!(),
-            ComponentSectionType::Import => {}
-            ComponentSectionType::Export => {}
+            ComponentSectionType::Import => parse_import_section(ctx)?,
+            ComponentSectionType::Export => parse_export_section(ctx)?,
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
             ComponentSectionType::Value => todo!(),
         }
     }
@@ -137,5 +142,23 @@ fn parse_canon_section(
 ) -> Result<(), ComponentParseError> {
     // Canon parsing logic
     parse_vec(ctx, |v| v.reader, parse_canon)?;
+    Ok(())
+}
+
+#[inline]
+fn parse_import_section(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> Result<(), ComponentParseError> {
+    // Import parsing logic
+    parse_vec(ctx, |v| v.reader, parse_import)?;
+    Ok(())
+}
+
+#[inline]
+fn parse_export_section(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> Result<(), ComponentParseError> {
+    // Export parsing logic
+    parse_vec(ctx, |v| v.reader, parse_export)?;
     Ok(())
 }
