@@ -201,8 +201,8 @@ pub enum SortType {
 pub enum SortWithIdx {
     Core(CoreSortWithIdx),
     Func(FuncIdx),
-    #[cfg(feature = "value")]
-    Value(usize),
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    Value(ValueIdx),
     Type(TypeIdx),
     Component(ComponentIdx),
     Instance(InstanceIdx),
@@ -222,7 +222,7 @@ impl SortWithIdx {
                 _ => false,
             },
             SortWithIdx::Func(_) => sort == &Sort::Func,
-            #[cfg(feature = "component-value")]
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
             SortWithIdx::Value(_) => sort == &Sort::Value,
             SortWithIdx::Type(_) => sort == &Sort::Type,
             SortWithIdx::Component(_) => sort == &Sort::Component,

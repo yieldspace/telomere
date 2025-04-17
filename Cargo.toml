@@ -18,7 +18,19 @@ tracing-subscriber = { version = "0.3.19" }
 wat = "1.228.0"
 
 [features]
-default = ["interpreter", "component-model"]
+default = ["interpreter"]
 interpreter = []
 
-component-model = []
+
+# 🪙
+component-gated-feature-value-imports-exports = []
+# 🪺
+component-gated-feature-nested-namespaces-and-packages = []
+# 🔀
+component-gated-feature-async = []
+# 🧵
+component-gated-feature-threading-builtins = []
+# 🔧
+component-gated-feature-fixed-length-lists = []
+# 📝
+component-gated-feature-error-context-type = []
