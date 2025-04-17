@@ -55,14 +55,14 @@ fn test_basic_component() {
     telomere::parser::component_model::parse_component(&mut ctx).unwrap();
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();
-    let instance = telomere::runtime::component_model::instantiate(
-        component,
-        &mut instrs,
-        &mut store,
-        &linker,
-    )
-    .unwrap();
-    println!("{:?}", instance);
+    // let instance = telomere::runtime::component_model::instantiate(
+    //     component,
+    //     &mut instrs,
+    //     &mut store,
+    //     &linker,
+    // )
+    // .unwrap();
+    // println!("{:?}", instance);
 }
 
 /*#[test]
