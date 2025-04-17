@@ -1,5 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{Binding, Component};
+use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
 use crate::parser::component_model::error::ComponentParseError;
@@ -127,5 +128,14 @@ fn parse_type_section(
 ) -> Result<(), ComponentParseError> {
     // Type parsing logic
     parse_vec(ctx, |v| v.reader, parse_type)?;
+    Ok(())
+}
+
+#[inline]
+fn parse_canon_section(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> Result<(), ComponentParseError> {
+    // Canon parsing logic
+    parse_vec(ctx, |v| v.reader, parse_canon)?;
     Ok(())
 }

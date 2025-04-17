@@ -1,45 +1,79 @@
 use super::idx::TypeIdx;
-use crate::component_model::{CoreFuncIdx, CoreMemoryIdx};
+use crate::component_model::{CoreFuncIdx, CoreMemoryIdx, FuncIdx};
+#[cfg(feature = "component-gated-feature-async")]
+use crate::component_model::{CoreTableIdx, ValType};
 
 #[derive(Debug)]
 pub enum CanonicalFuncKind {
     CanonLift(CoreFuncIdx, Vec<CanonOpt>, TypeIdx),
-    CanonLower(CoreFuncIdx, Vec<CanonOpt>),
+    CanonLower(FuncIdx, Vec<CanonOpt>),
     ResourceNew(TypeIdx),
     ResourceDrop(TypeIdx),
-    // ResourceDropAsync(TypeIdx),
-    // ResourceRep(TypeIdx),
-    // BackPressureSet,
-    // TaskReturn(Option<ValType>, Vec<CanonOpt>),
-    // ContextGet(u32),
-    // ContextSet(u32),
-    // YieldAsync(Option<bool>),
-    // SubtaskDrop,
-    // StreamNew(TypeIdx),
-    // StreamRead(TypeIdx, Vec<CanonOpt>),
-    // StreamWrite(TypeIdx, Vec<CanonOpt>),
-    // StreamCancelRead(TypeIdx, Option<bool>),
-    // StreamCancelWrite(TypeIdx, Option<bool>),
-    // StreamCloseReadable(TypeIdx),
-    // StreamCloseWritable(TypeIdx),
-    // FutureNew(TypeIdx),
-    // FutureRead(TypeIdx, Vec<CanonOpt>),
-    // FutureWrite(TypeIdx, Vec<CanonOpt>),
-    // FutureCancelRead(TypeIdx, Option<bool>),
-    // FutureCancelWrite(TypeIdx, Option<bool>),
-    // FutureCloseReadable(TypeIdx),
-    // FutureCloseWritable(TypeIdx),
-    // ErrorContextNew(Vec<CanonOpt>),
-    // ErrorContextDebugMessage(Vec<CanonOpt>),
-    // ErrorContextDrop,
-    // WaitableSetNew,
-    // WaitableSetWait(Option<bool>, CoreMemoryId),
-    // WaitableSetPoll(Option<bool>, CoreMemoryId),
-    // WaitableSetDrop,
-    // WaitableJoin,
-    // ThreadSpawnRef(TypeIdx),
-    // ThreadSpawnIndirect(TypeIdx, CoreTableId),
-    // ThreadAvailableParallelism,
+    #[cfg(feature = "component-gated-feature-async")]
+    ResourceDropAsync(TypeIdx),
+    ResourceRep(TypeIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    BackPressureSet,
+    #[cfg(feature = "component-gated-feature-async")]
+    TaskReturn(Option<ValType>, Vec<CanonOpt>),
+    #[cfg(feature = "component-gated-feature-async")]
+    ContextGet(u32),
+    #[cfg(feature = "component-gated-feature-async")]
+    ContextSet(u32),
+    #[cfg(feature = "component-gated-feature-async")]
+    YieldAsync(Option<bool>),
+    #[cfg(feature = "component-gated-feature-async")]
+    SubtaskDrop,
+    #[cfg(feature = "component-gated-feature-async")]
+    StreamNew(TypeIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    StreamRead(TypeIdx, Vec<CanonOpt>),
+    #[cfg(feature = "component-gated-feature-async")]
+    StreamWrite(TypeIdx, Vec<CanonOpt>),
+    #[cfg(feature = "component-gated-feature-async")]
+    StreamCancelRead(TypeIdx, Option<bool>),
+    #[cfg(feature = "component-gated-feature-async")]
+    StreamCancelWrite(TypeIdx, Option<bool>),
+    #[cfg(feature = "component-gated-feature-async")]
+    StreamCloseReadable(TypeIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    StreamCloseWritable(TypeIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    FutureNew(TypeIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    FutureRead(TypeIdx, Vec<CanonOpt>),
+    #[cfg(feature = "component-gated-feature-async")]
+    FutureWrite(TypeIdx, Vec<CanonOpt>),
+    #[cfg(feature = "component-gated-feature-async")]
+    FutureCancelRead(TypeIdx, Option<bool>),
+    #[cfg(feature = "component-gated-feature-async")]
+    FutureCancelWrite(TypeIdx, Option<bool>),
+    #[cfg(feature = "component-gated-feature-async")]
+    FutureCloseReadable(TypeIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    FutureCloseWritable(TypeIdx),
+    #[cfg(feature = "component-gated-feature-error-context-type")]
+    ErrorContextNew(Vec<CanonOpt>),
+    #[cfg(feature = "component-gated-feature-error-context-type")]
+    ErrorContextDebugMessage(Vec<CanonOpt>),
+    #[cfg(feature = "component-gated-feature-error-context-type")]
+    ErrorContextDrop,
+    #[cfg(feature = "component-gated-feature-async")]
+    WaitableSetNew,
+    #[cfg(feature = "component-gated-feature-async")]
+    WaitableSetWait(Option<bool>, CoreMemoryIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    WaitableSetPoll(Option<bool>, CoreMemoryIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    WaitableSetDrop,
+    #[cfg(feature = "component-gated-feature-async")]
+    WaitableJoin,
+    #[cfg(feature = "component-gated-feature-threading-builtins")]
+    ThreadSpawnRef(TypeIdx),
+    #[cfg(feature = "component-gated-feature-threading-builtins")]
+    ThreadSpawnIndirect(TypeIdx, CoreTableIdx),
+    #[cfg(feature = "component-gated-feature-threading-builtins")]
+    ThreadAvailableParallelism,
 }
 
 #[derive(Debug)]
@@ -50,10 +84,10 @@ pub enum CanonOpt {
     Memory(CoreMemoryIdx),
     Realloc(CoreFuncIdx),
     PostReturn(CoreFuncIdx),
-    // #[cfg(feature = "async")]
-    // Async,
-    // #[cfg(feature = "async")]
-    // Callback(CoreFuncId),
-    // #[cfg(feature = "async")]
-    // AlwaysTaskReturn,
+    #[cfg(feature = "component-gated-feature-async")]
+    Async,
+    #[cfg(feature = "component-gated-feature-async")]
+    Callback(CoreFuncIdx),
+    #[cfg(feature = "component-gated-feature-async")]
+    AlwaysTaskReturn,
 }

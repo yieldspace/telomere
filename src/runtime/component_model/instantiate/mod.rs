@@ -23,9 +23,12 @@ pub union InstantiateInstr {
 pub union InstantiateOperand {
     idx: usize,
     pub core_module_idx: usize,
+    pub core_instance_idx: usize,
+    pub core_func_idx: usize,
     pub instance_idx: usize,
     pub module_idx: usize,
-    pub core_instance_idx: usize,
+    pub func_idx: usize,
+    pub type_idx: usize,
 }
 
 #[inline(always)]
@@ -142,13 +145,21 @@ pub unsafe fn instantiate_type(
     todo!();
 }
 
-pub unsafe fn instantiate_canon_lower(
+pub unsafe fn instantiate_core_function(
     tail_code: *const InstantiateInstr,
     _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    let _idx = (*tail_code).operand.idx;
+    let _idx = (*tail_code).operand.core_func_idx;
 
     todo!();
+}
+
+pub unsafe fn instantiate_function(
+    tail_code: *const InstantiateInstr,
+    ctx: &mut InstantiateContext,
+) -> InstantiateResult<()> {
+    let idx = (*tail_code).operand.func_idx;
+    todo!()
 }
 
 pub unsafe fn instantiate_special_end(

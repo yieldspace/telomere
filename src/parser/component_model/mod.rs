@@ -12,10 +12,12 @@ pub use idx::*;
 pub use instance::*;
 pub use section::*;
 pub use sort::*;
+pub use types::*;
 pub(crate) use validator::Validator;
 pub use validator::{ChildValidator, ComponentValidator};
 
 mod alias;
+mod canon;
 mod component;
 mod context;
 mod core;
