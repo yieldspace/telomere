@@ -5,7 +5,6 @@ use crate::component_model::{
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
 use crate::parser::component_model::parse_sort_with_idx;
-use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::{parse_name, parse_vec};
 use crate::runtime::component_model::instantiate::{

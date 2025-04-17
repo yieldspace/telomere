@@ -41,7 +41,7 @@ pub(crate) fn validate_locals(locals: &[Locals]) -> Result<()> {
     for local in locals {
         count = count
             .checked_add(local.n)
-            .ok_or_else(|| WasmParserError::TooManyLocals)?;
+            .ok_or(WasmParserError::TooManyLocals)?;
     }
     Ok(())
 }

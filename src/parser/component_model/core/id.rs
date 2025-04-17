@@ -3,7 +3,6 @@ use crate::component_model::{
     CoreFuncIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTypeIdx,
 };
 use crate::parser::component_model::context::ParseContext;
-use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::parse_u32;
 

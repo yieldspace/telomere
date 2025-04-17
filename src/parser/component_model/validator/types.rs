@@ -11,7 +11,7 @@ impl<'a> TypeValidator<'a> {
     }
 }
 
-impl<'a> Validator for TypeValidator<'a> {
+impl Validator for TypeValidator<'_> {
     fn get_parent(&self) -> Option<&dyn Validator> {
         Some(self.parent)
     }

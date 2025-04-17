@@ -11,7 +11,7 @@ use crate::parser::component_model::inex::{parse_export_name_dash, parse_import_
 use crate::parser::component_model::validator::TypeValidator;
 use crate::parser::component_model::{
     parse_core_type_idx, parse_func_idx, parse_option, parse_type_idx, ComponentParseError,
-    ParseContext, SizedResult, Validator,
+    ParseContext, SizedResult,
 };
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
@@ -196,19 +196,6 @@ pub fn parse_resultlist(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResul
         }
     };
     Ok((ctx.reader.read_count() - start_count, t))
-}
-
-pub fn parse_primvaltype(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<PrimValType> {
-    let start_count = ctx.reader.read_count();
-    let n = ctx.reader.read_exact_one()?;
-    let ty = if let Some(s) = PrimValType::from_u8(n) {
-        s
-    } else {
-        return Err(ComponentParseError::InvalidSignature(format!(
-            "Invalid primitive value type: {n}"
-        )));
-    };
-    Ok((ctx.reader.read_count() - start_count, ty))
 }
 
 fn parse_label_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<LabelValType> {

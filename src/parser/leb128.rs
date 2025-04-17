@@ -122,12 +122,10 @@ pub const fn compile_i32<const N: usize>(bytes: [u8; N]) -> i32 {
         } else {
             0
         }
+    } else if let Some(x) = byte.checked_shr(shift as u32) {
+        x
     } else {
-        if let Some(x) = byte.checked_shr(shift as u32) {
-            x
-        } else {
-            0
-        }
+        0
     };
 
     if remaining != 0 {

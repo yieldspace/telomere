@@ -40,24 +40,20 @@ impl<'a, R: BinaryReader> CustomSectionParser<'a, R> {
         let mut mod_name_subsec = None;
         let mut func_name_subsec = None;
         let mut local_name_subsec = None;
-        loop {
-            if let Some(id) = self.parse_name_subsec_id()? {
-                match id {
-                    NameSubsectionId::Unknown => {
-                        self.parse_unknown_sub_sec()?;
-                    }
-                    NameSubsectionId::ModuleName => {
-                        mod_name_subsec = Some(self.parse_module_name_sub_sec()?);
-                    }
-                    NameSubsectionId::FunctionName => {
-                        func_name_subsec = Some(self.parse_func_name_sub_sec()?);
-                    }
-                    NameSubsectionId::LocalName => {
-                        local_name_subsec = Some(self.parse_local_name_sub_sec()?);
-                    }
+        while let Some(id) = self.parse_name_subsec_id()? {
+            match id {
+                NameSubsectionId::Unknown => {
+                    self.parse_unknown_sub_sec()?;
                 }
-            } else {
-                break;
+                NameSubsectionId::ModuleName => {
+                    mod_name_subsec = Some(self.parse_module_name_sub_sec()?);
+                }
+                NameSubsectionId::FunctionName => {
+                    func_name_subsec = Some(self.parse_func_name_sub_sec()?);
+                }
+                NameSubsectionId::LocalName => {
+                    local_name_subsec = Some(self.parse_local_name_sub_sec()?);
+                }
             }
         }
         Ok(NameSubSection {

@@ -5,7 +5,7 @@ mod idx;
 mod types;
 
 use crate::binary::BinaryReader;
-use crate::parser::component_model::{ComponentParseError, ParseContext, Validator};
+use crate::parser::component_model::{ComponentParseError, ParseContext};
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 use crate::Module;
 pub use canon::*;
@@ -53,6 +53,12 @@ pub struct FlattenComponent {
     pub types: Vec<Binding<Type>>,
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     pub values: Vec<Binding<ValueBound>>,
+}
+
+impl Default for FlattenComponent {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FlattenComponent {
@@ -118,11 +124,11 @@ impl FlattenComponent {
         }
     }
 
-    pub fn get_type(&self, idx: usize) -> &Type {
+    pub fn get_type(&self, _idx: usize) -> &Type {
         todo!()
     }
 
-    pub fn get_instance(&self, idx: usize) -> &Instance {
+    pub fn get_instance(&self, _idx: usize) -> &Instance {
         todo!()
     }
 
@@ -215,7 +221,7 @@ pub enum SortWithIdx {
 impl SortWithIdx {
     pub(crate) fn eq_sort(&self, sort: &Sort) -> bool {
         match self {
-            SortWithIdx::Core(cs) => match sort {
+            SortWithIdx::Core(_) => match sort {
                 Sort::Core(CoreSort::Func) => sort == &Sort::Core(CoreSort::Func),
                 Sort::Core(CoreSort::Table) => sort == &Sort::Core(CoreSort::Table),
                 Sort::Core(CoreSort::Memory) => sort == &Sort::Core(CoreSort::Memory),

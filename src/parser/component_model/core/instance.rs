@@ -7,7 +7,6 @@ use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_core_module_idx};
 use crate::parser::component_model::core::sort::parse_core_sort;
 use crate::parser::component_model::error::ComponentParseError;
-use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{
@@ -24,8 +23,7 @@ pub fn parse_core_instance(
             let (_, idx) = parse_core_module_idx(ctx)?;
             let imports = HashMap::from_iter(
                 parse_vec(ctx, |c| c.reader, parse_core_instantiate_arg)?
-                    .1
-                    .into_iter(),
+                    .1,
             );
             let idx = ctx
                 .validator
@@ -46,8 +44,7 @@ pub fn parse_core_instance(
         0x01 => {
             let exports = HashMap::<String, CoreInstanceInlineExport>::from_iter(
                 parse_vec(ctx, |c| c.reader, parse_core_instance_inline_export)?
-                    .1
-                    .into_iter(),
+                    .1,
             );
             let idx = ctx
                 .validator

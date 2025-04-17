@@ -307,6 +307,7 @@ pub struct ComponentValidator<'a> {
     core_types: Vec<usize>,
     functions: Vec<usize>,
     types: Vec<usize>,
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
     values: Vec<usize>,
 }
 
@@ -325,22 +326,23 @@ impl<'a> ComponentValidator<'a> {
             core_types: vec![],
             functions: vec![],
             types: vec![],
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
             values: vec![],
         }
     }
 }
 
-impl<'a> Validator for ComponentValidator<'a> {
+impl Validator for ComponentValidator<'_> {
     fn get_parent(&self) -> Option<&dyn Validator> {
         None
     }
 
     fn get_flatten_component(&self) -> &FlattenComponent {
-        &self.component
+        self.component
     }
 
     fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent {
-        &mut self.component
+        self.component
     }
 
     fn get_local_core_module_indexes(&self) -> &Vec<usize> {
@@ -449,7 +451,7 @@ mod private {
     pub trait Sealed {}
 
     // 同じ型に実装
-    impl<'a> Sealed for ComponentValidator<'a> {}
-    impl<'a> Sealed for ChildValidator<'a> {}
-    impl<'a> Sealed for TypeValidator<'a> {}
+    impl Sealed for ComponentValidator<'_> {}
+    impl Sealed for ChildValidator<'_> {}
+    impl Sealed for TypeValidator<'_> {}
 }
