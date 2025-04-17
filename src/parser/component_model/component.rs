@@ -6,7 +6,7 @@ use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
-use crate::parser::component_model::validator::{ChildValidator};
+use crate::parser::component_model::validator::ChildValidator;
 use crate::parser::component_model::{
     parse_alias, parse_layer, parse_magic, parse_section_type, parse_version,
 };
@@ -30,7 +30,7 @@ pub fn _parse_component(
     parse_magic(ctx.reader)?;
     parse_version(ctx.reader)?;
     parse_layer(ctx.reader)?;
-    
+
     while let Some(st) = parse_section_type(ctx.reader)? {
         let (_, section_size) = parse_u32(ctx.reader)?;
         match st {

@@ -4,7 +4,7 @@ use crate::component_model::{
     Binding, CoreBinding, CoreFuncType, CoreFunction, CoreGlobalRef, CoreInstanceImport,
     CoreInstanceInlineExport, CoreMemoryRef, CoreModuleIdx, CoreTableRef, Idx,
 };
-use crate::parser::component_model::{ParseContext};
+use crate::parser::component_model::ParseContext;
 use std::collections::HashMap;
 
 pub enum CoreInstance {

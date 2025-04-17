@@ -21,10 +21,8 @@ pub fn parse_core_instance(
     match ctx.reader.read_exact_one()? {
         0x00 => {
             let (_, idx) = parse_core_module_idx(ctx)?;
-            let imports = HashMap::from_iter(
-                parse_vec(ctx, |c| c.reader, parse_core_instantiate_arg)?
-                    .1,
-            );
+            let imports =
+                HashMap::from_iter(parse_vec(ctx, |c| c.reader, parse_core_instantiate_arg)?.1);
             let idx = ctx
                 .validator
                 .add_core_instance(Binding::Real(CoreInstance::Real {
@@ -43,8 +41,7 @@ pub fn parse_core_instance(
         }
         0x01 => {
             let exports = HashMap::<String, CoreInstanceInlineExport>::from_iter(
-                parse_vec(ctx, |c| c.reader, parse_core_instance_inline_export)?
-                    .1,
+                parse_vec(ctx, |c| c.reader, parse_core_instance_inline_export)?.1,
             );
             let idx = ctx
                 .validator
