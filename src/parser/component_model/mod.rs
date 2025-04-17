@@ -21,9 +21,11 @@ mod context;
 mod core;
 mod error;
 mod idx;
+mod inex;
 mod instance;
 mod section;
 mod sort;
+mod types;
 mod validator;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;
@@ -104,4 +106,21 @@ where
         read_bytes += len;
     }
     Ok((read_bytes, ()))
+}
+
+pub(crate) fn parse_option<R: BinaryReader, V: Validator, T, E>(
+    ctx: &mut ParseContext<R, V>,
+    mut f: impl FnMut(&mut ParseContext<R, V>) -> Result<(usize, T), E>,
+) -> SizedResult<Option<T>>
+where
+    ComponentParseError: From<E>,
+{
+    match ctx.reader.read_exact_one()? {
+        0x00 => Ok((1, None)),
+        0x01 => {
+            let (len, v) = f(ctx)?;
+            Ok((len + 1, Some(v)))
+        }
+        x => Err(ComponentParseError::WrongMagic(x, "option".to_string())),
+    }
 }

@@ -1,2 +1,7 @@
+use crate::component_model::CoreTypeRef;
+
 #[derive(Debug)]
-pub struct CoreType {}
+pub enum CoreType {
+    Ref(CoreTypeRef),
+    // todo
+}

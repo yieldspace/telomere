@@ -1,4 +1,5 @@
 mod child;
+mod types;
 
 use crate::component_model::{
     Binding, Component, ComponentFunction, ComponentIdx, CoreFuncIdx, CoreFunction, CoreGlobalIdx,
@@ -11,6 +12,7 @@ use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
 use crate::Module;
 pub use child::ChildValidator;
+pub use types::*;
 
 pub(crate) trait Validator {
     fn get_parent(&self) -> Option<&dyn Validator>;

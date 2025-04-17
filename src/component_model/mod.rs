@@ -135,13 +135,13 @@ impl FlattenComponent {
 }
 
 pub enum ComponentImport {
-    Instance(usize),
+    Instance(String, ExternDesc),
 }
 
 pub struct ComponentExport {
-    name: String,
-    sort: SortWithIdx,
-    desc: ExternDesc,
+    pub name: String,
+    pub sort: SortWithIdx,
+    pub desc: Option<ExternDesc>,
 }
 
 #[derive(Debug)]

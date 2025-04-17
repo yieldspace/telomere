@@ -5,6 +5,7 @@ use crate::parser::component_model::core::parse_core_instance;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
+use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::validator::{ChildValidator, Validator};
 use crate::parser::component_model::{
     parse_alias, parse_layer, parse_magic, parse_section_type, parse_version,
@@ -64,7 +65,7 @@ pub fn _parse_component<R: BinaryReader, V: Validator>(
             }
             ComponentSectionType::Instance => parse_instance_section(ctx)?,
             ComponentSectionType::Alias => parse_alias_section(ctx)?,
-            ComponentSectionType::Type => {}
+            ComponentSectionType::Type => parse_type_section(ctx)?,
             ComponentSectionType::Canon => {}
             ComponentSectionType::Start => todo!(),
             ComponentSectionType::Import => {}
@@ -122,5 +123,14 @@ fn parse_alias_section(
 ) -> Result<(), ComponentParseError> {
     // Alias parsing logic
     parse_vec(ctx, |v| v.reader, parse_alias)?;
+    Ok(())
+}
+
+#[inline]
+fn parse_type_section(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> Result<(), ComponentParseError> {
+    // Type parsing logic
+    parse_vec(ctx, |v| v.reader, parse_type)?;
     Ok(())
 }
