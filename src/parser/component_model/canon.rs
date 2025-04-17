@@ -1,21 +1,22 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Binding, CanonOpt, ComponentFunction, CoreFunction, Idx,
-};
+#[cfg(feature = "component-gated-feature-async")]
+use crate::component_model::CanonicalFuncKind;
+use crate::component_model::{Binding, CanonOpt, ComponentFunction, CoreFunction, Idx};
+#[cfg(feature = "component-gated-feature-threading-builtins")]
+use crate::parser::component_model::parse_core_table_idx;
 use crate::parser::component_model::{
-    parse_core_func_idx, parse_core_memory_idx, parse_func_idx,
-    parse_type_idx, ComponentParseError, ParseContext, SizedResult,
+    parse_core_func_idx, parse_core_memory_idx, parse_func_idx, parse_type_idx,
+    ComponentParseError, ParseContext, SizedResult,
 };
+#[cfg(any(
+    feature = "component-gated-feature-async",
+    feature = "component-gated-feature-threading-builtins"
+))]
+use crate::parser::component_model::{parse_option, parse_resultlist, parse_u32};
 use crate::parser::core::parse_vec;
 use crate::runtime::component_model::instantiate::{
     instantiate_core_function, instantiate_function, InstantiateInstr, InstantiateOperand,
 };
-#[cfg(feature = "component-gated-feature-async")]
-use crate::component_model::CanonicalFuncKind;
-#[cfg(any(feature = "component-gated-feature-async", feature = "component-gated-feature-threading-builtins"))]
-use crate::parser::component_model::{parse_resultlist, parse_u32, parse_option};
-#[cfg(feature = "component-gated-feature-threading-builtins")]
-use crate::parser::component_model::parse_core_table_idx;
 
 pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
@@ -93,7 +94,8 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
         }
         0x04 => {
             let (_, rt) = parse_type_idx(ctx)?;
-            let idx = ctx.validator
+            let idx = ctx
+                .validator
                 .add_core_func(Binding::Real(CoreFunction::ResourceRep(rt)))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_core_function,
