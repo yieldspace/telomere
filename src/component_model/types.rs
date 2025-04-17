@@ -1,5 +1,4 @@
-use crate::common::{FuncIdx, TypeIdx};
-use crate::component_model::{CoreType, CoreTypeIdx};
+use crate::component_model::{AliasIdx, CoreTypeIdx, FuncIdx, TypeIdx};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
 use std::sync::Weak;
@@ -113,9 +112,9 @@ pub struct InstanceType(pub Vec<InstanceDecl>);
 
 #[derive(Debug)]
 pub enum InstanceDecl {
-    CoreType(CoreType),
-    Type(Type),
-    Alias(Alias),
+    CoreType(CoreTypeIdx),
+    Type(TypeIdx),
+    Alias(AliasIdx),
     ExportDecl(ExportDecl),
 }
 

@@ -9,6 +9,8 @@ fn test_basic_component() {
         .init();
     let component = r#"
        (component
+          (component )
+          (instance (instantiate 0))
           (core module
             (memory (;0;) 17)
             (export "memory" (memory 0))
@@ -30,9 +32,12 @@ fn test_basic_component() {
             (export "mod-main2" (func 1))
           )
           (alias core export 2 "mod-main" (core func))
+          (type (result))
+          (type (func (result 0)))
        )
     "#;
     let binary = wat::parse_str(component).unwrap();
+    // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     let mut instrs = Vec::new();
     let mut component = FlattenComponent::new();

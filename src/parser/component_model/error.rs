@@ -28,6 +28,8 @@ pub enum ComponentParseError {
     /// Error for invalid core sort.
     #[error("invalid core sort: {0:?}")]
     InvalidCoreSort(u8),
+    #[error("invalid signature: {0:?}")]
+    InvalidSignature(String),
 }
 
 impl ComponentParseError {

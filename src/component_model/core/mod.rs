@@ -32,8 +32,13 @@ pub enum CoreInstanceImport {
     Instance(CoreInstanceIdx),
 }
 
+#[derive(Debug)]
 pub struct CoreMemoryRef(pub CoreInstanceIdx, pub usize);
+#[derive(Debug)]
 pub struct CoreTableRef(pub CoreInstanceIdx, pub usize);
+#[derive(Debug)]
 pub struct CoreGlobalRef(pub CoreInstanceIdx, pub usize);
+#[derive(Debug)]
 pub struct CoreFuncRef(pub CoreInstanceIdx, pub usize, pub CoreFuncType, pub String);
+#[derive(Debug)]
 pub struct CoreTypeRef(pub CoreInstanceIdx, pub usize);

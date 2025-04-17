@@ -1,4 +1,5 @@
 mod child;
+mod types;
 
 use crate::component_model::{
     Binding, Component, ComponentFunction, ComponentIdx, CoreFuncIdx, CoreFunction, CoreGlobalIdx,
@@ -11,8 +12,9 @@ use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
 use crate::Module;
 pub use child::ChildValidator;
+pub use types::*;
 
-pub(crate) trait Validator {
+pub trait Validator: private::Sealed {
     fn get_parent(&self) -> Option<&dyn Validator>;
     fn get_flatten_component(&self) -> &FlattenComponent;
     fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent;
@@ -438,4 +440,16 @@ impl<'a> Validator for ComponentValidator<'a> {
     fn get_local_value_indexes_mut(&mut self) -> &mut Vec<usize> {
         &mut self.values
     }
+}
+
+mod private {
+    use crate::parser::component_model::validator::TypeValidator;
+    use crate::parser::component_model::{ChildValidator, ComponentValidator};
+
+    pub trait Sealed {}
+
+    // 同じ型に実装
+    impl<'a> Sealed for ComponentValidator<'a> {}
+    impl<'a> Sealed for ChildValidator<'a> {}
+    impl<'a> Sealed for TypeValidator<'a> {}
 }

@@ -135,13 +135,13 @@ impl FlattenComponent {
 }
 
 pub enum ComponentImport {
-    Instance(usize),
+    Instance(String, ExternDesc),
 }
 
 pub struct ComponentExport {
-    name: String,
-    sort: SortWithIdx,
-    desc: ExternDesc,
+    pub name: String,
+    pub sort: SortWithIdx,
+    pub desc: Option<ExternDesc>,
 }
 
 #[derive(Debug)]
@@ -153,7 +153,7 @@ pub enum Instance {
 impl Instance {
     pub fn get_export(
         &self,
-        ctx: &ParseContext<impl BinaryReader, impl Validator>,
+        ctx: &ParseContext<impl BinaryReader>,
         name: String,
         sort: Sort,
     ) -> Result<SortWithIdx, ComponentParseError> {

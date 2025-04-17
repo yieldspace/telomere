@@ -78,3 +78,20 @@ impl_idx!(CoreInstanceIdx);
 pub struct ValueIdx(usize, usize);
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 impl_idx!(ValueIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum AliasIdx {
+    CoreFunc(CoreFuncIdx),
+    CoreTable(CoreTableIdx),
+    CoreMemory(CoreMemoryIdx),
+    CoreGlobal(CoreGlobalIdx),
+    CoreType(CoreTypeIdx),
+    CoreModule(CoreModuleIdx),
+    CoreInstance(CoreInstanceIdx),
+    Func(FuncIdx),
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    Value(ValueIdx),
+    Type(TypeIdx),
+    Component(ComponentIdx),
+    Instance(InstanceIdx),
+}

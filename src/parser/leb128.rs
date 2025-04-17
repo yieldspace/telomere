@@ -110,6 +110,30 @@ pub const fn compile_i32<const N: usize>(bytes: [u8; N]) -> i32 {
         result |= (!0i32) << (read_bytes * 7);
     }
 
+    let shift = if is_signed {
+        (bit_size - 1).saturating_sub((read_bytes - 1) * 7)
+    } else {
+        bit_size.saturating_sub((read_bytes - 1) * 7)
+    };
+
+    let remaining = if is_signed && (byte & 0x40) != 0 {
+        if let Some(x) = (!byte & 0x3F).checked_shr(shift as u32) {
+            x
+        } else {
+            0
+        }
+    } else {
+        if let Some(x) = byte.checked_shr(shift as u32) {
+            x
+        } else {
+            0
+        }
+    };
+
+    if remaining != 0 {
+        panic!("InvalidLeb128Encoding");
+    }
+
     result
 }
 
@@ -127,6 +151,16 @@ mod tests {
         let mut reader = IoReadBinaryReader::from(Cursor::new(data));
         let (_, k) = parse_i32(&mut reader).unwrap();
         assert_eq!(k, 63);
+    }
+
+    #[test]
+    fn test_sleb128_2() {
+        use std::io::Cursor;
+
+        let data = [0x6a];
+        let mut reader = IoReadBinaryReader::from(Cursor::new(data));
+        let (_, k) = parse_i32(&mut reader).unwrap();
+        assert_eq!(k, compile_i32([0x6a]));
     }
 
     #[test]
