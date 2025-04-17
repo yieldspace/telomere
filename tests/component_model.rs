@@ -9,6 +9,8 @@ fn test_basic_component() {
         .init();
     let component = r#"
        (component
+          (component )
+          (instance (instantiate 0))
           (core module
             (memory (;0;) 17)
             (export "memory" (memory 0))

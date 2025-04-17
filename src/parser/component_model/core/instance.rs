@@ -16,7 +16,7 @@ use crate::runtime::component_model::instantiate::{
 use std::collections::HashMap;
 
 pub fn parse_core_instance(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<CoreInstanceIdx> {
     let start = ctx.reader.read_count();
     match ctx.reader.read_exact_one()? {
@@ -67,7 +67,7 @@ pub fn parse_core_instance(
 }
 
 pub fn parse_core_instantiate_arg(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<(String, CoreInstanceImport)> {
     let (name_len, name) = parse_name(ctx.reader)?;
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x12], "instantiate arg")?;
@@ -79,7 +79,7 @@ pub fn parse_core_instantiate_arg(
 }
 
 pub fn parse_core_instance_inline_export(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<(String, CoreInstanceInlineExport)> {
     let (name_len, name) = parse_name(ctx.reader)?;
     let (sort_len, sort) = parse_core_sort(ctx)?;

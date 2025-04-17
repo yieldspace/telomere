@@ -2,13 +2,11 @@ use crate::binary::BinaryReader;
 use crate::component_model::{ComponentExport, ComponentImport};
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{
-    parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, SizedResult, Validator,
+    parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, SizedResult,
 };
 use crate::parser::core::parse_name;
 
-pub fn parse_import(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<ComponentImport> {
+pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ComponentImport> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_import_name_dash(ctx)?;
     let (_, ed) = parse_externdesc(ctx)?;
@@ -16,9 +14,7 @@ pub fn parse_import(
     Ok((ctx.reader.read_count() - start_count, import))
 }
 
-pub fn parse_export(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<ComponentExport> {
+pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ComponentExport> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_export_name_dash(ctx)?;
     let (_, si) = parse_sort_with_idx(ctx)?;
@@ -31,18 +27,14 @@ pub fn parse_export(
     Ok((ctx.reader.read_count() - start_count, export))
 }
 
-pub fn parse_import_name_dash(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<String> {
+pub fn parse_import_name_dash(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<String> {
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "import name")?;
     // todo: check name
     let (len, name) = parse_name(ctx.reader)?;
     Ok((len + 1, name))
 }
 
-pub fn parse_export_name_dash(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<String> {
+pub fn parse_export_name_dash(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<String> {
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "export name")?;
     // todo: check name
     let (len, name) = parse_name(ctx.reader)?;

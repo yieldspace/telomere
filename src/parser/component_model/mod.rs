@@ -108,9 +108,9 @@ where
     Ok((read_bytes, ()))
 }
 
-pub(crate) fn parse_option<R: BinaryReader, V: Validator, T, E>(
-    ctx: &mut ParseContext<R, V>,
-    mut f: impl FnMut(&mut ParseContext<R, V>) -> Result<(usize, T), E>,
+pub(crate) fn parse_option<R: BinaryReader, T, E>(
+    ctx: &mut ParseContext<R>,
+    mut f: impl FnMut(&mut ParseContext<R>) -> Result<(usize, T), E>,
 ) -> SizedResult<Option<T>>
 where
     ComponentParseError: From<E>,

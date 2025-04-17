@@ -15,7 +15,7 @@ use crate::runtime::component_model::instantiate::{instantiate_special_end, Inst
 use crate::{Module, WasmParser};
 
 pub fn parse_component(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
     _parse_component(ctx)?;
     ctx.push_instr(InstantiateInstr {
@@ -24,8 +24,8 @@ pub fn parse_component(
     Ok(())
 }
 
-pub fn _parse_component<R: BinaryReader, V: Validator>(
-    ctx: &mut ParseContext<R, V>,
+pub fn _parse_component(
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
     parse_magic(ctx.reader)?;
     parse_version(ctx.reader)?;
@@ -56,9 +56,9 @@ pub fn _parse_component<R: BinaryReader, V: Validator>(
                 let mut validator = ChildValidator::new(ctx.validator);
                 let mut instrs = Vec::new();
                 {
-                    let child_ctx =
+                    let mut child_ctx =
                         ParseContext::new(&mut sized_reader, &mut instrs, &mut validator);
-                    // _parse_component(&mut child_ctx)?;
+                    _parse_component(&mut child_ctx)?;
                 }
                 ctx.validator
                     .add_component(Binding::Real(Component::new(instrs)))?;
@@ -101,7 +101,7 @@ fn parse_core_module_section<R: BinaryReader>(
 
 #[inline]
 fn parse_core_instance_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
     // Core instance parsing logic
     parse_vec(ctx, |v| v.reader, parse_core_instance)?;
@@ -110,7 +110,7 @@ fn parse_core_instance_section(
 
 #[inline]
 fn parse_instance_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
     // Core instance parsing logic
     parse_vec(ctx, |v| v.reader, parse_instance)?;
@@ -119,7 +119,7 @@ fn parse_instance_section(
 
 #[inline]
 fn parse_alias_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
     // Alias parsing logic
     parse_vec(ctx, |v| v.reader, parse_alias)?;
@@ -128,7 +128,7 @@ fn parse_alias_section(
 
 #[inline]
 fn parse_type_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
     // Type parsing logic
     parse_vec(ctx, |v| v.reader, parse_type)?;

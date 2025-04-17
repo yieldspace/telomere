@@ -34,7 +34,7 @@ impl CoreInstance {
 
     pub fn get_func(
         &self,
-        ctx: &ParseContext<impl BinaryReader, impl Validator>,
+        ctx: &ParseContext<impl BinaryReader>,
         name: String,
     ) -> CoreBinding<CoreFunction, (usize, CoreFuncType)> {
         match self {
@@ -74,7 +74,7 @@ impl CoreInstance {
 
     pub fn get_table(
         &self,
-        ctx: &ParseContext<impl BinaryReader, impl Validator>,
+        ctx: &ParseContext<impl BinaryReader>,
         name: String,
     ) -> CoreBinding<CoreTableRef, usize> {
         match self {
@@ -110,7 +110,7 @@ impl CoreInstance {
 
     pub fn get_memory(
         &self,
-        ctx: &ParseContext<impl BinaryReader, impl Validator>,
+        ctx: &ParseContext<impl BinaryReader>,
         name: String,
     ) -> CoreBinding<CoreMemoryRef, usize> {
         match self {
@@ -146,7 +146,7 @@ impl CoreInstance {
 
     pub fn get_global(
         &self,
-        ctx: &ParseContext<impl BinaryReader, impl Validator>,
+        ctx: &ParseContext<impl BinaryReader>,
         name: String,
     ) -> CoreBinding<CoreGlobalRef, usize> {
         match self {
@@ -182,7 +182,7 @@ impl CoreInstance {
 
     pub fn get_type(
         &self,
-        ctx: &ParseContext<impl BinaryReader, impl Validator>,
+        ctx: &ParseContext<impl BinaryReader>,
         name: String,
     ) -> CoreBinding<CoreFuncType, usize> {
         unreachable!("export type proposal")

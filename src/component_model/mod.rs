@@ -153,7 +153,7 @@ pub enum Instance {
 impl Instance {
     pub fn get_export(
         &self,
-        ctx: &ParseContext<impl BinaryReader, impl Validator>,
+        ctx: &ParseContext<impl BinaryReader>,
         name: String,
         sort: Sort,
     ) -> Result<SortWithIdx, ComponentParseError> {

@@ -1,11 +1,8 @@
 use crate::component_model::FlattenComponent;
 use crate::parser::component_model::validator::Validator;
 
-pub struct ChildValidator<'a, T>
-where
-    T: Validator,
-{
-    parent: &'a mut T,
+pub struct ChildValidator<'a> {
+    parent: &'a mut dyn Validator,
     core_modules: Vec<usize>,
     core_instances: Vec<usize>,
     core_funcs: Vec<usize>,
@@ -20,11 +17,8 @@ where
     values: Vec<usize>,
 }
 
-impl<'a, T> ChildValidator<'a, T>
-where
-    T: Validator,
-{
-    pub fn new(parent: &'a mut T) -> Self {
+impl<'a> ChildValidator<'a> {
+    pub fn new(parent: &'a mut dyn Validator) -> Self {
         Self {
             parent,
             core_modules: vec![],
@@ -43,10 +37,7 @@ where
     }
 }
 
-impl<'a, T> Validator for ChildValidator<'a, T>
-where
-    T: Validator,
-{
+impl<'a> Validator for ChildValidator<'a> {
     fn get_parent(&self) -> Option<&dyn Validator> {
         Some(self.parent)
     }

@@ -13,9 +13,7 @@ use crate::runtime::component_model::instantiate::{
     InstantiateInstr, InstantiateOperand,
 };
 
-pub fn parse_instance(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<InstanceIdx> {
+pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstanceIdx> {
     let start_count = ctx.reader.read_count();
 
     match ctx.reader.read_exact_one()? {
@@ -62,9 +60,7 @@ pub fn parse_instance(
     }
 }
 
-fn parse_instantiate_arg(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<InstantiateArg> {
+fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstantiateArg> {
     let start_count = ctx.reader.read_count();
 
     let (_, name) = parse_name(ctx.reader)?;
@@ -75,9 +71,7 @@ fn parse_instantiate_arg(
     ))
 }
 
-fn parse_inlineexport(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<InlineExport> {
+fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InlineExport> {
     let start_count = ctx.reader.read_count();
 
     let (_, name) = parse_name(ctx.reader)?;

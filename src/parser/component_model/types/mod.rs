@@ -64,9 +64,7 @@ fn is_type_opcode(opcode: i32) -> bool {
     opcode <= -1
 }
 
-pub fn parse_type(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<TypeIdx> {
+pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<TypeIdx> {
     let start_count = ctx.reader.read_count();
     let (_, opcode) = parse_i32(ctx.reader)?;
 
@@ -176,9 +174,7 @@ pub fn parse_type(
     Ok((ctx.reader.read_count() - start_count, idx))
 }
 
-pub fn parse_resultlist(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<Option<ValType>> {
+pub fn parse_resultlist(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Option<ValType>> {
     let start_count = ctx.reader.read_count();
     let t = match ctx.reader.read_exact_one()? {
         0x00 => {
@@ -202,9 +198,7 @@ pub fn parse_resultlist(
     Ok((ctx.reader.read_count() - start_count, t))
 }
 
-pub fn parse_primvaltype(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<PrimValType> {
+pub fn parse_primvaltype(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<PrimValType> {
     let start_count = ctx.reader.read_count();
     let n = ctx.reader.read_exact_one()?;
     let ty = if let Some(s) = PrimValType::from_u8(n) {
@@ -217,9 +211,7 @@ pub fn parse_primvaltype(
     Ok((ctx.reader.read_count() - start_count, ty))
 }
 
-fn parse_label_valtype(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<LabelValType> {
+fn parse_label_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<LabelValType> {
     let start_count = ctx.reader.read_count();
     let (_, l) = parse_label_dash(ctx)?;
     let ty = LabelValType {
@@ -229,7 +221,7 @@ fn parse_label_valtype(
     Ok((ctx.reader.read_count() - start_count, ty))
 }
 
-fn parse_case(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<Case> {
+fn parse_case(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Case> {
     let start_count = ctx.reader.read_count();
     let (_, l) = parse_label_dash(ctx)?;
     let (_, t) = parse_option(ctx, parse_valtype)?;
@@ -237,9 +229,7 @@ fn parse_case(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> Size
     Ok((ctx.reader.read_count() - start_count, Case { label: l, t }))
 }
 
-fn parse_valtype(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<ValType> {
+fn parse_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ValType> {
     let start_count = ctx.reader.read_count();
     let (_, value) = parse_i32(ctx.reader)?;
     if is_type_opcode(value) {
@@ -255,16 +245,12 @@ fn parse_valtype(
     }
 }
 
-fn parse_label_dash(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<Label> {
+fn parse_label_dash(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Label> {
     let (len, label) = parse_name(ctx.reader)?;
     Ok((len, Label { len, label }))
 }
 
-fn parse_component_decl(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<ComponentDecl> {
+fn parse_component_decl(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ComponentDecl> {
     let start_count = ctx.reader.read_count();
     let decl = match ctx.reader.read_exact_one()? {
         0x03 => {
@@ -279,9 +265,7 @@ fn parse_component_decl(
     Ok((ctx.reader.read_count() - start_count, decl))
 }
 
-fn parse_import_decl(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<ImportDecl> {
+fn parse_import_decl(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ImportDecl> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_import_name_dash(ctx)?;
     let (_, ed) = parse_externdesc(ctx)?;
@@ -291,9 +275,7 @@ fn parse_import_decl(
     ))
 }
 
-pub fn parse_externdesc(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<ExternDesc> {
+pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ExternDesc> {
     let start_count = ctx.reader.read_count();
     let desc = match ctx.reader.read_exact_one()? {
         0x00 => {
@@ -331,9 +313,7 @@ pub fn parse_externdesc(
     Ok((ctx.reader.read_count() - start_count, desc))
 }
 
-fn parse_typebound(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<TypeBound> {
+fn parse_typebound(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<TypeBound> {
     let start_count = ctx.reader.read_count();
     let bound = match ctx.reader.read_exact_one()? {
         0x00 => {
@@ -347,9 +327,7 @@ fn parse_typebound(
 }
 
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
-fn parse_valuebound(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<ValueBound> {
+fn parse_valuebound(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ValueBound> {
     let start_count = ctx.reader.read_count();
     let bound = match ctx.reader.read_exact_one()? {
         0x00 => {
@@ -365,9 +343,7 @@ fn parse_valuebound(
     Ok((ctx.reader.read_count() - start_count, bound))
 }
 
-fn parse_export_decl(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<ExportDecl> {
+fn parse_export_decl(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ExportDecl> {
     let start_count = ctx.reader.read_count();
     let (_, en) = parse_export_name_dash(ctx)?;
     let (_, ed) = parse_externdesc(ctx)?;

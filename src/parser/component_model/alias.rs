@@ -9,9 +9,7 @@ use crate::parser::component_model::{
 };
 use crate::parser::core::{parse_name, parse_u32};
 
-pub fn parse_alias(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<AliasIdx> {
+pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<AliasIdx> {
     let start_count = ctx.reader.read_count();
 
     let (_, sort) = parse_sort(ctx)?;

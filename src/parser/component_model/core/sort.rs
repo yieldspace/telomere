@@ -2,12 +2,9 @@ use crate::binary::BinaryReader;
 use crate::component_model::CoreSort;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::error::ComponentParseError;
-use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;
 
-pub fn parse_core_sort(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
-) -> SizedResult<CoreSort> {
+pub fn parse_core_sort(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<CoreSort> {
     let sort = match ctx.reader.read_exact_one()? {
         0x00 => CoreSort::Func,
         0x01 => CoreSort::Table,
