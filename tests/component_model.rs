@@ -32,8 +32,9 @@ fn test_basic_component() {
             (export "mod-main2" (func 1))
           )
           (alias core export 2 "mod-main" (core func))
-          (type (result))
+          (type s32)
           (type (func (result 0)))
+          (func (type 1) (canon lift (core func 0)))
        )
     "#;
     let binary = wat::parse_str(component).unwrap();

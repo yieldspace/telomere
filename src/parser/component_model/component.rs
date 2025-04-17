@@ -62,7 +62,7 @@ pub fn _parse_component(
             ComponentSectionType::Instance => parse_instance_section(ctx)?,
             ComponentSectionType::Alias => parse_alias_section(ctx)?,
             ComponentSectionType::Type => parse_type_section(ctx)?,
-            ComponentSectionType::Canon => {}
+            ComponentSectionType::Canon => parse_canon_section(ctx)?,
             ComponentSectionType::Start => todo!(),
             ComponentSectionType::Import => {}
             ComponentSectionType::Export => {}
