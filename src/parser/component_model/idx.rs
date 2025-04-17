@@ -1,4 +1,6 @@
 use crate::binary::BinaryReader;
+#[cfg(feature = "component-gated-feature-value-imports-exports")]
+use crate::component_model::ValueIdx;
 use crate::component_model::{ComponentIdx, FuncIdx, InstanceIdx, TypeIdx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::validator::Validator;
@@ -31,4 +33,12 @@ pub fn parse_instance_idx(
 ) -> SizedResult<InstanceIdx> {
     let (len, idx) = parse_u32(ctx.reader)?;
     Ok((len, ctx.validator.validate_instance_idx(idx as usize)?))
+}
+
+#[cfg(feature = "component-gated-feature-value-imports-exports")]
+pub fn parse_value_idx(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> SizedResult<ValueIdx> {
+    let (len, idx) = parse_u32(ctx.reader)?;
+    Ok((len, ctx.validator.validate_value_idx(idx as usize)?))
 }

@@ -72,3 +72,9 @@ impl_idx!(CoreModuleIdx);
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreInstanceIdx(usize, usize);
 impl_idx!(CoreInstanceIdx);
+
+#[cfg(feature = "component-gated-feature-value-imports-exports")]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct ValueIdx(usize, usize);
+#[cfg(feature = "component-gated-feature-value-imports-exports")]
+impl_idx!(ValueIdx);

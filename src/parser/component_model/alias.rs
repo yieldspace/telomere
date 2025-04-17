@@ -3,8 +3,9 @@ use crate::component_model::{
     Binding, CoreBinding, CoreFuncRef, CoreFunction, CoreGlobalRef, CoreMemoryRef, CoreSort,
     CoreSortWithIdx, CoreTableRef, Idx, Sort, SortWithIdx,
 };
+use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::{
-    parse_core_instance_idx, parse_instance_idx, parse_sort, ParseContext, SizedResult, Validator,
+    parse_core_instance_idx, parse_instance_idx, parse_sort, ParseContext, SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};
 
@@ -19,38 +20,40 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) ->
             let (_, name) = parse_name(ctx.reader)?;
             let sort = instance.get_export(ctx, name, sort)?;
             match sort {
-                SortWithIdx::Core(cs) => {
-                    match &cs {
-                        CoreSortWithIdx::Func(idx) => {
-                            ctx.validator.add_core_func(Binding::Alias(idx.global()))?;
-                        }
-                        CoreSortWithIdx::Table(_) => {
-                            // ctx.validator.add_core_table(Binding::Alias(idx.global()))?;
-                            todo!()
-                        }
-                        CoreSortWithIdx::Memory(idx) => {
-                            ctx.validator
-                                .add_core_memory(Binding::Alias(idx.global()))?;
-                        }
-                        CoreSortWithIdx::Global(_) => todo!(),
-                        CoreSortWithIdx::Type(idx) => {
-                            ctx.validator.add_core_type(Binding::Alias(idx.global()))?;
-                        }
-                        CoreSortWithIdx::Module(idx) => {
-                            ctx.validator
-                                .add_core_module(Binding::Alias(idx.global()))?;
-                        }
-                        CoreSortWithIdx::Instance(idx) => {
-                            ctx.validator
-                                .add_core_instance(Binding::Alias(idx.global()))?;
-                        }
+                SortWithIdx::Core(cs) => match &cs {
+                    CoreSortWithIdx::Func(idx) => {
+                        ctx.validator.add_core_func(Binding::Alias(idx.global()))?;
                     }
-                }
+                    CoreSortWithIdx::Table(idx) => {
+                        ctx.validator.add_core_table(Binding::Alias(idx.global()))?;
+                    }
+                    CoreSortWithIdx::Memory(idx) => {
+                        ctx.validator
+                            .add_core_memory(Binding::Alias(idx.global()))?;
+                    }
+                    CoreSortWithIdx::Global(idx) => {
+                        ctx.validator
+                            .add_core_global(Binding::Alias(idx.global()))?;
+                    }
+                    CoreSortWithIdx::Type(idx) => {
+                        ctx.validator.add_core_type(Binding::Alias(idx.global()))?;
+                    }
+                    CoreSortWithIdx::Module(idx) => {
+                        ctx.validator
+                            .add_core_module(Binding::Alias(idx.global()))?;
+                    }
+                    CoreSortWithIdx::Instance(idx) => {
+                        ctx.validator
+                            .add_core_instance(Binding::Alias(idx.global()))?;
+                    }
+                },
                 SortWithIdx::Func(idx) => {
                     ctx.validator.add_func(Binding::Alias(idx.global()))?;
                 }
-                #[cfg(feature = "component-value")]
-                SortWithIdx::Value(_) => {}
+                #[cfg(feature = "component-gated-feature-value-imports-exports")]
+                SortWithIdx::Value(idx) => {
+                    ctx.validator.add_value(Binding::Alias(idx.global()))?;
+                }
                 SortWithIdx::Type(idx) => {
                     ctx.validator.add_type(Binding::Alias(idx.global()))?;
                 }

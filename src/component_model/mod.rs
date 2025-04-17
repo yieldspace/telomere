@@ -51,6 +51,8 @@ pub struct FlattenComponent {
     pub core_tables: Vec<Binding<CoreTableRef>>,
     pub core_globals: Vec<Binding<CoreGlobalRef>>,
     pub types: Vec<Binding<Type>>,
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    pub values: Vec<Binding<ValueBound>>,
 }
 
 impl FlattenComponent {
@@ -67,6 +69,8 @@ impl FlattenComponent {
             core_tables: vec![],
             core_globals: vec![],
             types: vec![],
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
+            values: vec![],
         }
     }
 
@@ -201,8 +205,8 @@ pub enum SortType {
 pub enum SortWithIdx {
     Core(CoreSortWithIdx),
     Func(FuncIdx),
-    #[cfg(feature = "value")]
-    Value(usize),
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    Value(ValueIdx),
     Type(TypeIdx),
     Component(ComponentIdx),
     Instance(InstanceIdx),
@@ -222,7 +226,7 @@ impl SortWithIdx {
                 _ => false,
             },
             SortWithIdx::Func(_) => sort == &Sort::Func,
-            #[cfg(feature = "component-value")]
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
             SortWithIdx::Value(_) => sort == &Sort::Value,
             SortWithIdx::Type(_) => sort == &Sort::Type,
             SortWithIdx::Component(_) => sort == &Sort::Component,

@@ -40,7 +40,7 @@ pub enum PrimValType {
     F64 = compile_i32([0x75]),
     Char = compile_i32([0x74]),
     String = compile_i32([0x73]),
-    #[cfg(feature = "async")]
+    #[cfg(feature = "component-gated-feature-async")]
     ErrorContext = compile_i32([0x64]),
 }
 
@@ -57,9 +57,9 @@ pub enum DefValType {
     Result(Option<ValType>, Option<ValType>),
     Own(TypeIdx),
     Borrow(TypeIdx),
-    #[cfg(feature = "async")]
+    #[cfg(feature = "component-gated-feature-async")]
     Stream(Option<ValType>),
-    #[cfg(feature = "async")]
+    #[cfg(feature = "component-gated-feature-async")]
     Future(Option<ValType>),
 }
 
@@ -135,7 +135,7 @@ pub struct ExportDecl {
 pub enum ExternDesc {
     Core(CoreTypeIdx),
     Func(TypeIdx),
-    #[cfg(feature = "import_export")]
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
     Value(ValueBound),
     Type(TypeBound),
     Component(TypeIdx),
@@ -149,7 +149,7 @@ pub enum TypeBound {
 }
 
 #[derive(Debug)]
-#[cfg(feature = "import_export")]
+#[cfg(feature = "component-gated-feature-value-imports-exports")]
 pub enum ValueBound {
     Eq(usize),
     Type(ValType),

@@ -1,9 +1,12 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{CoreSort, CoreSortWithIdx, Sort, SortWithIdx};
+#[cfg(feature = "component-gated-feature-value-imports-exports")]
+use crate::parser::component_model::parse_value_idx;
+use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::{
     parse_component_idx, parse_core_func_idx, parse_core_memory_idx, parse_core_sort,
     parse_core_type_idx, parse_func_idx, parse_instance_idx, parse_type_idx, ParseContext,
-    SizedResult, Validator,
+    SizedResult,
 };
 
 pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<Sort> {
@@ -12,7 +15,7 @@ pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> 
     let sort = match ctx.reader.read_exact_one()? {
         0x00 => Sort::Core(parse_core_sort(ctx)?.1),
         0x01 => Sort::Func,
-        #[cfg(feature = "component-value")]
+        #[cfg(feature = "component-gated-feature-value-imports-exports")]
         0x02 => Sort::Value,
         0x03 => Sort::Type,
         0x04 => Sort::Component,
@@ -65,8 +68,14 @@ pub fn parse_sort_with_idx(
                 SortWithIdx::Func(idx),
             ))
         }
-        #[cfg(feature = "component-value")]
-        0x02 => todo!(),
+        #[cfg(feature = "component-gated-feature-value-imports-exports")]
+        0x02 => {
+            let (_, idx) = parse_value_idx(ctx)?;
+            Ok((
+                ctx.reader.read_count() - start_count,
+                SortWithIdx::Value(idx),
+            ))
+        }
         0x03 => {
             let (_, idx) = parse_type_idx(ctx)?;
             Ok((

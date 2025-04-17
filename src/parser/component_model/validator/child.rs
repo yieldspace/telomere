@@ -17,6 +17,7 @@ where
     core_types: Vec<usize>,
     functions: Vec<usize>,
     types: Vec<usize>,
+    values: Vec<usize>,
 }
 
 impl<'a, T> ChildValidator<'a, T>
@@ -37,6 +38,7 @@ where
             core_types: vec![],
             functions: vec![],
             types: vec![],
+            values: vec![],
         }
     }
 }
@@ -101,6 +103,11 @@ where
         &self.types
     }
 
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    fn get_local_value_indexes(&self) -> &Vec<usize> {
+        &self.values
+    }
+
     fn get_local_core_module_indexes_mut(&mut self) -> &mut Vec<usize> {
         &mut self.core_modules
     }
@@ -143,5 +150,10 @@ where
 
     fn get_local_type_indexes_mut(&mut self) -> &mut Vec<usize> {
         &mut self.types
+    }
+
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    fn get_local_value_indexes_mut(&mut self) -> &mut Vec<usize> {
+        &mut self.values
     }
 }
