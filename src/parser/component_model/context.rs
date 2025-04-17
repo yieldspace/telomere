@@ -1,8 +1,6 @@
 use crate::binary::BinaryReader;
-use crate::component_model::CoreInstance;
 use crate::parser::component_model::validator::Validator;
 use crate::runtime::component_model::instantiate::InstantiateInstr;
-use crate::Module;
 
 pub struct ParseContext<'a, R, V>
 where
@@ -38,10 +36,4 @@ where
     pub fn extend_instr(&mut self, instrs: impl Iterator<Item = InstantiateInstr>) {
         self.instrs.extend(instrs);
     }
-
-    pub fn add_core_module(&mut self, module: Module) {
-        todo!()
-    }
-
-    pub fn add_core_instance(&mut self, instance: CoreInstance) {}
 }

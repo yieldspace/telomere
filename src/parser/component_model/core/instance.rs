@@ -1,6 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreSort, Idx,
+    Binding, CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreSort,
+    Idx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_core_module_idx};
@@ -26,10 +27,12 @@ pub fn parse_core_instance(
                     .1
                     .into_iter(),
             );
-            let idx = ctx.validator.add_core_instance(CoreInstance::Real {
-                module_idx: idx,
-                imports,
-            })?;
+            let idx = ctx
+                .validator
+                .add_core_instance(Binding::Real(CoreInstance::Real {
+                    module_idx: idx,
+                    imports,
+                }))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_core_instance,
             });
@@ -48,10 +51,18 @@ pub fn parse_core_instance(
             );
             let idx = ctx
                 .validator
-                .add_core_instance(CoreInstance::Alias { exports })?;
+                .add_core_instance(Binding::Real(CoreInstance::Alias { exports }))?;
+            ctx.push_instr(InstantiateInstr {
+                op: instantiate_core_instance,
+            });
+            ctx.push_instr(InstantiateInstr {
+                operand: InstantiateOperand {
+                    core_instance_idx: idx.global(),
+                },
+            });
             Ok((ctx.reader.read_count() - start, idx))
         }
-        _ => todo!(),
+        _ => unreachable!(),
     }
 }
 
@@ -83,6 +94,57 @@ pub fn parse_core_instance_inline_export(
                 ),
             ),
         )),
-        _ => todo!(),
+        CoreSort::Table => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Table(
+                    ctx.validator.validate_core_table_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Memory => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Memory(
+                    ctx.validator.validate_core_memory_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Global => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Global(
+                    ctx.validator.validate_core_global_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Type => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Type(ctx.validator.validate_core_type_idx(idx as usize)?),
+            ),
+        )),
+        CoreSort::Module => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Module(
+                    ctx.validator.validate_core_module_idx(idx as usize)?,
+                ),
+            ),
+        )),
+        CoreSort::Instance => Ok((
+            name_len + sort_len + idx_len,
+            (
+                name,
+                CoreInstanceInlineExport::Instance(
+                    ctx.validator.validate_core_instance_idx(idx as usize)?,
+                ),
+            ),
+        )),
     }
 }

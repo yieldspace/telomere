@@ -43,6 +43,14 @@ pub struct CoreMemoryIdx(usize, usize);
 impl_idx!(CoreMemoryIdx);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct CoreTableIdx(usize, usize);
+impl_idx!(CoreTableIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct CoreGlobalIdx(usize, usize);
+impl_idx!(CoreGlobalIdx);
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreTypeIdx(usize, usize);
 
 impl_idx!(CoreTypeIdx);

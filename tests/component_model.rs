@@ -10,10 +10,26 @@ fn test_basic_component() {
     let component = r#"
        (component
           (core module
+            (memory (;0;) 17)
+            (export "memory" (memory 0))
             (func (export "mod-main") (result i32)
               (i32.const 42))
           )
+          (core module
+            (memory (;0;) 17)
+            (export "memory" (memory 0))
+            (func (export "mod-main2") (result i32)
+              (i32.const 42))
+          )
           (core instance (instantiate 0))
+          (core instance (instantiate 1))
+          (alias core export 0 "mod-main" (core func))
+          (alias core export 1 "mod-main2" (core func))
+          (core instance
+            (export "mod-main" (func 0))
+            (export "mod-main2" (func 1))
+          )
+          (alias core export 2 "mod-main" (core func))
        )
     "#;
     let binary = wat::parse_str(component).unwrap();

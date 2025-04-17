@@ -1,6 +1,6 @@
 use crate::aliasing as core_aliasing;
 use crate::component_model::{
-    CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx, InstanceIdx,
+    CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx,
 };
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
@@ -42,7 +42,7 @@ pub unsafe fn instantiate_core_instance(
     ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     let idx = (*tail_code).operand.core_instance_idx;
-    let core_instance = &ctx.component.core_instances[idx];
+    let core_instance = ctx.component.get_core_instance(idx);
     let mut registry = Registry::new();
     match core_instance {
         CoreInstance::Real {
@@ -57,16 +57,8 @@ pub unsafe fn instantiate_core_instance(
                     }
                 }
             }
-            let instance = core_instantiate(
-                ctx.component
-                    .core_modules
-                    .get(module_idx.global())
-                    .unwrap()
-                    .clone(),
-                &mut ctx.store,
-                &registry,
-            )
-            .unwrap();
+            let module = ctx.component.get_core_module(module_idx.global());
+            let instance = core_instantiate(module.clone(), &mut ctx.store, &registry).unwrap();
             ctx.push_core_module_instance(instance, registry);
         }
         CoreInstance::Alias { exports } => {
@@ -75,17 +67,32 @@ pub unsafe fn instantiate_core_instance(
                 .enumerate()
                 .map(|(nth, (export_name, export))| match export {
                     CoreInstanceInlineExport::Func(idx) => {
-                        let (instance_addr, name) = ctx.core_functions.get(idx.global()).unwrap();
-                        registry.register(nth.to_string(), *instance_addr);
-                        (nth.to_string(), name.clone(), export_name.clone())
+                        let func = ctx.component.get_core_function(idx.global());
+                        match func {
+                            CoreFunction::Export(CoreFuncRef(inst_idx, idx, _, name)) => {
+                                let inst = ctx
+                                    .instantiated
+                                    .core_instances
+                                    .get(inst_idx.global())
+                                    .unwrap();
+                                registry.register(nth.to_string(), inst.id);
+                                (nth.to_string(), name.clone(), export_name.clone())
+                            }
+                            _ => {
+                                let (instance_addr, name) =
+                                    ctx.core_functions.get(idx.global()).unwrap();
+                                registry.register(nth.to_string(), *instance_addr);
+                                (nth.to_string(), name.clone(), export_name.clone())
+                            }
+                        }
                     }
                     CoreInstanceInlineExport::Memory(idx) => {
-                        let (instance_addr, name) = ctx.core_memories.get(*idx).unwrap();
+                        let (instance_addr, name) = ctx.core_memories.get(idx.global()).unwrap();
                         registry.register(nth.to_string(), *instance_addr);
                         (nth.to_string(), name.clone(), export_name.clone())
                     }
                     CoreInstanceInlineExport::Table(idx) => {
-                        let (instance_addr, name) = ctx.core_tables.get(*idx).unwrap();
+                        let (instance_addr, name) = ctx.core_tables.get(idx.global()).unwrap();
                         registry.register(nth.to_string(), *instance_addr);
                         (nth.to_string(), name.clone(), export_name.clone())
                     }
