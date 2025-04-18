@@ -1,6 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreFuncIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTypeIdx,
+    CoreFuncIdx, CoreGlobalIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTableIdx,
+    CoreTypeIdx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::SizedResult;
@@ -35,4 +36,18 @@ pub fn parse_core_memory_idx(
 pub fn parse_core_type_idx(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<CoreTypeIdx> {
     let (len, idx) = parse_u32(ctx.reader)?;
     Ok((len, ctx.validator.validate_core_type_idx(idx as usize)?))
+}
+
+pub fn parse_core_table_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> SizedResult<CoreTableIdx> {
+    let (len, idx) = parse_u32(ctx.reader)?;
+    Ok((len, ctx.validator.validate_core_table_idx(idx as usize)?))
+}
+
+pub fn parse_core_global_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> SizedResult<CoreGlobalIdx> {
+    let (len, idx) = parse_u32(ctx.reader)?;
+    Ok((len, ctx.validator.validate_core_global_idx(idx as usize)?))
 }

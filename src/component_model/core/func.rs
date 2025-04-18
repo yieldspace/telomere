@@ -5,4 +5,5 @@ pub enum CoreFunction {
     CanonLower(FuncIdx, Vec<CanonOpt>),
     ResourceNew(TypeIdx),
     ResourceDrop(TypeIdx),
+    ResourceRep(TypeIdx),
 }

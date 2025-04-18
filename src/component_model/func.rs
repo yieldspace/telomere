@@ -1,7 +1,7 @@
 use crate::component_model::{CanonOpt, CoreFuncIdx, TypeIdx};
 
 pub struct ComponentFunction {
-    core_func_idx: CoreFuncIdx,
-    opts: Vec<CanonOpt>,
-    ty: TypeIdx,
+    pub core_func_idx: CoreFuncIdx,
+    pub opts: Vec<CanonOpt>,
+    pub ty: TypeIdx,
 }

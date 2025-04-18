@@ -3,7 +3,8 @@ use crate::component_model::{CoreSort, CoreSortWithIdx, Sort, SortWithIdx};
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::parser::component_model::parse_value_idx;
 use crate::parser::component_model::{
-    parse_component_idx, parse_core_func_idx, parse_core_memory_idx, parse_core_sort,
+    parse_component_idx, parse_core_func_idx, parse_core_global_idx, parse_core_instance_idx,
+    parse_core_memory_idx, parse_core_module_idx, parse_core_sort, parse_core_table_idx,
     parse_core_type_idx, parse_func_idx, parse_instance_idx, parse_type_idx, ParseContext,
     SizedResult,
 };
@@ -38,7 +39,13 @@ pub fn parse_sort_with_idx(ctx: &mut ParseContext<impl BinaryReader>) -> SizedRe
                         SortWithIdx::Core(CoreSortWithIdx::Func(func_idx)),
                     ))
                 }
-                CoreSort::Table => todo!(),
+                CoreSort::Table => {
+                    let (_, table_idx) = parse_core_table_idx(ctx)?;
+                    Ok((
+                        ctx.reader.read_count() - start_count,
+                        SortWithIdx::Core(CoreSortWithIdx::Table(table_idx)),
+                    ))
+                }
                 CoreSort::Memory => {
                     let (_, memory_idx) = parse_core_memory_idx(ctx)?;
                     Ok((
@@ -46,7 +53,13 @@ pub fn parse_sort_with_idx(ctx: &mut ParseContext<impl BinaryReader>) -> SizedRe
                         SortWithIdx::Core(CoreSortWithIdx::Memory(memory_idx)),
                     ))
                 }
-                CoreSort::Global => todo!(),
+                CoreSort::Global => {
+                    let (_, global_idx) = parse_core_global_idx(ctx)?;
+                    Ok((
+                        ctx.reader.read_count() - start_count,
+                        SortWithIdx::Core(CoreSortWithIdx::Global(global_idx)),
+                    ))
+                }
                 CoreSort::Type => {
                     let (_, type_idx) = parse_core_type_idx(ctx)?;
                     Ok((
@@ -54,8 +67,20 @@ pub fn parse_sort_with_idx(ctx: &mut ParseContext<impl BinaryReader>) -> SizedRe
                         SortWithIdx::Core(CoreSortWithIdx::Type(type_idx)),
                     ))
                 }
-                CoreSort::Module => todo!(),
-                CoreSort::Instance => todo!(),
+                CoreSort::Module => {
+                    let (_, module_idx) = parse_core_module_idx(ctx)?;
+                    Ok((
+                        ctx.reader.read_count() - start_count,
+                        SortWithIdx::Core(CoreSortWithIdx::Module(module_idx)),
+                    ))
+                }
+                CoreSort::Instance => {
+                    let (_, instance_idx) = parse_core_instance_idx(ctx)?;
+                    Ok((
+                        ctx.reader.read_count() - start_count,
+                        SortWithIdx::Core(CoreSortWithIdx::Instance(instance_idx)),
+                    ))
+                }
             }
         }
         0x01 => {
