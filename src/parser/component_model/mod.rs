@@ -90,7 +90,7 @@ pub fn parse_vec_map<A, R: BinaryReader, V, E>(
     env: &mut A,
     reader: impl FnOnce(&mut A) -> &mut R,
     mut f: impl FnMut(&mut A) -> std::result::Result<(usize, V), E>,
-    mut map: impl FnMut(&mut A, V) -> (),
+    mut map: impl FnMut(&mut A, V),
 ) -> std::result::Result<(usize, ()), E>
 where
     E: From<WasmParserError>,

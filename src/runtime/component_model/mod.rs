@@ -35,10 +35,6 @@ impl ComponentInstantiated {
             export: HashMap::new(),
         }
     }
-
-    pub(crate) fn get_core_instance(&self, idx: usize) -> Option<&CoreInstantiated> {
-        self.core_instances.get(idx)
-    }
 }
 
 #[derive(Debug)]
@@ -57,9 +53,9 @@ pub struct CoreFunctionInstantiated {}
 
 pub fn instantiate(
     component: FlattenComponent,
-    instrs: &mut Vec<InstantiateInstr>,
+    instrs: &mut [InstantiateInstr],
     store: &mut Store,
-    linker: &Linker,
+    _linker: &Linker,
 ) -> Result<ComponentInstantiated, ComponentVMError> {
     let mut instantiated = ComponentInstantiated::new();
     let ptr = instrs.as_ptr();

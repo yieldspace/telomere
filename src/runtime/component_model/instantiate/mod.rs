@@ -58,7 +58,7 @@ pub unsafe fn instantiate_core_instance(
                 }
             }
             let module = ctx.component.get_core_module(module_idx.global());
-            let instance = core_instantiate(module.clone(), &mut ctx.store, &registry).unwrap();
+            let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
             ctx.push_core_module_instance(instance, registry);
         }
         CoreInstance::Alias { exports } => {
@@ -69,7 +69,7 @@ pub unsafe fn instantiate_core_instance(
                     CoreInstanceInlineExport::Func(idx) => {
                         let func = ctx.component.get_core_function(idx.global());
                         match func {
-                            CoreFunction::Export(CoreFuncRef(inst_idx, idx, _, name)) => {
+                            CoreFunction::Export(CoreFuncRef(inst_idx, _, _, name)) => {
                                 let inst = ctx
                                     .instantiated
                                     .core_instances
@@ -99,7 +99,7 @@ pub unsafe fn instantiate_core_instance(
                     _ => todo!(),
                 })
                 .collect::<Vec<_>>();
-            let inst = core_aliasing(&registry, triplets.as_slice(), &mut ctx.store).unwrap();
+            let inst = core_aliasing(&registry, triplets.as_slice(), ctx.store).unwrap();
             ctx.push_core_module_instance(inst, registry)
         }
     }
@@ -108,52 +108,52 @@ pub unsafe fn instantiate_core_instance(
 }
 
 pub unsafe fn instantiate_core_type(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _tail_code: *const InstantiateInstr,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     todo!()
 }
 
 pub unsafe fn instantiate_instance_start(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _tail_code: *const InstantiateInstr,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     todo!();
 }
 
 pub unsafe fn instantiate_instance_end(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _tail_code: *const InstantiateInstr,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     todo!();
 }
 
 pub unsafe fn instantiate_inline_instance(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _tail_code: *const InstantiateInstr,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     todo!();
 }
 
 pub unsafe fn instantiate_type(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _tail_code: *const InstantiateInstr,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     todo!();
 }
 
 pub unsafe fn instantiate_canon_lower(
     tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    let idx = (*tail_code).operand.idx;
+    let _idx = (*tail_code).operand.idx;
 
     todo!();
 }
 
 pub unsafe fn instantiate_special_end(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _tail_code: *const InstantiateInstr,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     Ok(())
 }

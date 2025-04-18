@@ -4,7 +4,7 @@ use crate::component_model::{
     Binding, CoreBinding, CoreFuncType, CoreFunction, CoreGlobalRef, CoreInstanceImport,
     CoreInstanceInlineExport, CoreMemoryRef, CoreModuleIdx, CoreTableRef, Idx,
 };
-use crate::parser::component_model::{ParseContext, Validator};
+use crate::parser::component_model::ParseContext;
 use std::collections::HashMap;
 
 pub enum CoreInstance {
@@ -46,10 +46,7 @@ impl CoreInstance {
                     .iter()
                     .find(|ex| {
                         if ex.0 == name {
-                            match ex.1 {
-                                ExportDesc::Func(_) => true,
-                                _ => false,
-                            }
+                            matches!(ex.1, ExportDesc::Func(_))
                         } else {
                             false
                         }
@@ -182,8 +179,8 @@ impl CoreInstance {
 
     pub fn get_type(
         &self,
-        ctx: &ParseContext<impl BinaryReader>,
-        name: String,
+        _ctx: &ParseContext<impl BinaryReader>,
+        _name: String,
     ) -> CoreBinding<CoreFuncType, usize> {
         unreachable!("export type proposal")
     }

@@ -1,18 +1,6 @@
 use crate::component_model::{AliasIdx, CoreTypeIdx, FuncIdx, TypeIdx};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
-use std::sync::Weak;
-
-// todo
-#[derive(Debug, Clone)]
-struct Alias {}
-
-#[derive(Debug, Clone)]
-pub enum TypeKind {
-    Type(Weak<Type>),
-    Alias(Weak<Alias>),
-    Import,
-}
 
 #[derive(Debug)]
 pub enum Type {

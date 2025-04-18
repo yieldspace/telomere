@@ -3,7 +3,6 @@ use crate::binary::BinaryReader;
 use crate::component_model::ValueIdx;
 use crate::component_model::{ComponentIdx, FuncIdx, InstanceIdx, TypeIdx};
 use crate::parser::component_model::context::ParseContext;
-use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::parse_u32;
 

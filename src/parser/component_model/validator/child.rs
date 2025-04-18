@@ -37,13 +37,13 @@ impl<'a> ChildValidator<'a> {
     }
 }
 
-impl<'a> Validator for ChildValidator<'a> {
+impl Validator for ChildValidator<'_> {
     fn get_parent(&self) -> Option<&dyn Validator> {
         Some(self.parent)
     }
 
     fn get_flatten_component(&self) -> &FlattenComponent {
-        &self.parent.get_flatten_component()
+        self.parent.get_flatten_component()
     }
 
     fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent {
