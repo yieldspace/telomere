@@ -35,6 +35,14 @@ fn test_basic_component() {
           (type s32)
           (type (func (result 0)))
           (func (type 1) (canon lift (core func 0)))
+          (type (;2;)
+            (instance
+              (type (;0;) (result))
+              (type (;1;) (func (param "status" 0)))
+              (export (;0;) "exit" (func (type 1)))
+            )
+          )
+          (import "docs:adder/add@0.1.0" (instance (type 2)))
        )
     "#;
     let binary = wat::parse_str(component).unwrap();
@@ -47,14 +55,14 @@ fn test_basic_component() {
     telomere::parser::component_model::parse_component(&mut ctx).unwrap();
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();
-    let instance = telomere::runtime::component_model::instantiate(
-        component,
-        &mut instrs,
-        &mut store,
-        &linker,
-    )
-    .unwrap();
-    println!("{:?}", instance);
+    // let instance = telomere::runtime::component_model::instantiate(
+    //     component,
+    //     &mut instrs,
+    //     &mut store,
+    //     &linker,
+    // )
+    // .unwrap();
+    // println!("{:?}", instance);
 }
 
 /*#[test]

@@ -80,6 +80,7 @@ pub fn parse_section_type<R: BinaryReader>(
             0x09 => Ok(Some(ComponentSectionType::Start)),
             0x0a => Ok(Some(ComponentSectionType::Import)),
             0x0b => Ok(Some(ComponentSectionType::Export)),
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
             0x0c => Ok(Some(ComponentSectionType::Value)),
             _ => Err(ComponentParseError::InvalidSectionType(kind)),
         }

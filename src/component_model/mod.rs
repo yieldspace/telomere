@@ -25,11 +25,15 @@ pub struct Component {
 }
 
 impl Component {
-    pub(crate) fn new(instrs: Vec<InstantiateInstr>) -> Self {
+    pub(crate) fn new(
+        instrs: Vec<InstantiateInstr>,
+        imports: Vec<ComponentImport>,
+        exports: Vec<ComponentExport>,
+    ) -> Self {
         Self {
             instrs,
-            imports: vec![],
-            exports: vec![],
+            imports,
+            exports,
         }
     }
 }
@@ -37,6 +41,7 @@ impl Component {
 pub enum Binding<T> {
     Real(T),
     Alias(usize),
+    Import(String, ExternDesc),
 }
 
 pub struct FlattenComponent {
@@ -88,6 +93,7 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_module(*idx),
+            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -99,6 +105,7 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_instance(*idx),
+            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -110,6 +117,7 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_function(*idx),
+            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -121,29 +129,42 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_function(*idx),
+            Binding::Import(_, _) => todo!(),
         }
     }
 
-    pub fn get_type(&self, _idx: usize) -> &Type {
-        todo!()
+    pub fn get_type(&self, idx: usize) -> &Type {
+        match self.types.get(idx).expect("Type not found") {
+            Binding::Real(real) => real,
+            Binding::Alias(idx) => self.get_type(*idx),
+            Binding::Import(_, _) => todo!(),
+        }
     }
 
-    pub fn get_instance(&self, _idx: usize) -> &Instance {
-        todo!()
+    pub fn get_instance(&self, idx: usize) -> &Instance {
+        match self.instances.get(idx).expect("Instance not found") {
+            Binding::Real(real) => real,
+            Binding::Alias(idx) => self.get_instance(*idx),
+            Binding::Import(_, _) => todo!(),
+        }
     }
 
     pub fn get_component(&self, idx: usize) -> &Component {
         match self.components.get(idx).expect("Component not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_component(*idx),
+            Binding::Import(_, _) => todo!(),
         }
     }
 }
 
-pub enum ComponentImport {
-    Instance(String, ExternDesc),
+#[derive(Debug, Clone)]
+pub struct ComponentImport {
+    pub name: String,
+    pub ed: ExternDesc,
 }
 
+#[derive(Debug, Clone)]
 pub struct ComponentExport {
     pub name: String,
     pub sort: SortWithIdx,
@@ -180,7 +201,7 @@ impl Instance {
                 }
             }
         }
-        todo!()
+        unreachable!()
     }
 }
 
