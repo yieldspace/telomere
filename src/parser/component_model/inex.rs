@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, Component, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreType, ExternDesc, Instance, Reference, Type, TypeBound};
+use crate::component_model::{Binding, InlineComponent, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreType, ExternDesc, Instance, Reference, Type, TypeBound};
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{
     parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, SizedResult,
@@ -53,7 +53,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
         ExternDesc::Component(idx) => {
             let ty = ctx.validator.get_type(&idx);
             if let Type::Component(comp_type) = ty {
-                let idx = ctx.validator.add_component(Binding::Real(Component::Typed(comp_type.clone(), Reference::Imported(name.clone()))))?;
+                let idx = ctx.validator.add_component(Binding::Real(InlineComponent::Typed(comp_type.clone(), Reference::Imported(name.clone()))))?;
                 ComponentImport::Component(name, idx)
             } else {
                 return Err(ComponentParseError::InvalidSignature(format!(

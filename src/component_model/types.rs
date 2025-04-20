@@ -1,5 +1,5 @@
 use crate::component_model::{
-    AliasIdx, Component, ComponentExportSlot, ComponentFunction, CoreModule, CoreType, CoreTypeIdx,
+    AliasIdx, InlineComponent, ComponentExportSlot, ComponentFunction, CoreModule, CoreType, CoreTypeIdx,
     FuncIdx, Instance, InstanceIdx, Reference, Slot, TypeIdx,
 };
 use crate::parser::component_model::{ComponentParseError, Validator};
@@ -157,7 +157,7 @@ impl InstanceType {
                 let ty = validator.get_type(ty);
                 if let Type::Component(ty) = ty {
                     Ok(ComponentExportSlot::Component(Slot::Value(
-                        Component::Typed(ty.clone(), Reference::Instance(self_idx, name)),
+                        InlineComponent::Typed(ty.clone(), Reference::Instance(self_idx, name)),
                     )))
                 } else {
                     panic!("Expected a component type");

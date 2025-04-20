@@ -14,7 +14,7 @@ pub enum ComponentExportSlot {
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     Value,
     Type(Slot<Type, TypeIdx>),
-    Component(Slot<Component, ComponentIdx>),
+    Component(Slot<InlineComponent, ComponentIdx>),
     Instance(Slot<Instance, InstanceIdx>),
 }
 
@@ -32,7 +32,7 @@ impl SortLike for ComponentExportSlot {
     }
 }
 
-pub enum Component {
+pub enum InlineComponent {
     Defined {
         instrs: Vec<InstantiateInstr>,
         imports: Vec<ComponentImport>,
@@ -42,7 +42,7 @@ pub enum Component {
     SuperTyped(ComponentType, ComponentIdx, Reference),
 }
 
-impl Component {
+impl InlineComponent {
     pub(crate) fn new(
         instrs: Vec<InstantiateInstr>,
         imports: Vec<ComponentImport>,
@@ -62,7 +62,7 @@ impl Component {
         name: String,
     ) -> Result<ComponentExportSlot, ComponentParseError> {
         match self {
-            Component::Defined { exports, .. } => {
+            InlineComponent::Defined { exports, .. } => {
                 let export = exports
                     .iter()
                     .find(|export| export.name == name)
@@ -114,7 +114,7 @@ impl Component {
                             let ty = validator.get_type(&idx);
                             if let Type::Component(ty) = ty {
                                 Ok(ComponentExportSlot::Component(Slot::Value(
-                                    Component::SuperTyped(
+                                    InlineComponent::SuperTyped(
                                         ty.clone(),
                                         export.sort.clone().try_into()?,
                                         Reference::Component(self_idx, name),
@@ -161,7 +161,7 @@ impl Component {
                     }
                 }
             }
-            Component::Typed(ty, _) | Component::SuperTyped(ty, _, _) => {
+            InlineComponent::Typed(ty, _) | InlineComponent::SuperTyped(ty, _, _) => {
                 let desc =
                     ty.0.iter()
                         .find_map(|x| match x {
@@ -207,7 +207,7 @@ impl Component {
                         let ty = validator.get_type(&idx);
                         if let Type::Component(ty) = ty {
                             Ok(ComponentExportSlot::Component(Slot::Value(
-                                Component::Typed(ty.clone(), Reference::Component(self_idx, name)),
+                                InlineComponent::Typed(ty.clone(), Reference::Component(self_idx, name)),
                             )))
                         } else {
                             panic!("Expected a component type");

@@ -56,7 +56,7 @@ pub struct FlattenComponent {
     pub core_instances: Vec<Binding<CoreInstance>>,
     pub core_functions: Vec<Binding<CoreFunction>>,
     pub functions: Vec<Binding<ComponentFunction>>,
-    pub components: Vec<Binding<Component>>,
+    pub components: Vec<Binding<InlineComponent>>,
     pub instances: Vec<Binding<Instance>>,
     pub core_types: Vec<Binding<CoreType>>,
     pub core_memories: Vec<Binding<CoreMemoryRef>>,
@@ -150,7 +150,7 @@ impl FlattenComponent {
         }
     }
 
-    pub fn get_component(&self, idx: usize) -> &Component {
+    pub fn get_component(&self, idx: usize) -> &InlineComponent {
         match self.components.get(idx).expect("Component not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_component(*idx),

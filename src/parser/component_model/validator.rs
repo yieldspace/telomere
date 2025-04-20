@@ -2,7 +2,7 @@ mod child;
 mod types;
 
 use crate::component_model::{
-    Binding, Component, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport,
+    Binding, InlineComponent, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport,
     CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx,
     CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType,
     CoreTypeIdx, CoreTypeRef, ExternDesc, FlattenComponent, FuncIdx, Idx, Instance, InstanceIdx,
@@ -209,7 +209,7 @@ pub trait Validator: private::Sealed {
 
     fn add_component(
         &mut self,
-        component: Binding<Component>,
+        component: Binding<InlineComponent>,
     ) -> Result<ComponentIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().components.len();
         let local_idx = self.get_local_store().components.len();
@@ -287,7 +287,7 @@ pub trait Validator: private::Sealed {
             .get_core_instance(core_inst_idx.global())
     }
 
-    fn get_component(&self, component_idx: &ComponentIdx) -> &Component {
+    fn get_component(&self, component_idx: &ComponentIdx) -> &InlineComponent {
         self.get_flatten_component()
             .get_component(component_idx.global())
     }
