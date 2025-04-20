@@ -9,40 +9,15 @@ fn test_basic_component() {
         .init();
     let component = r#"
        (component
-          (component )
-          (instance (instantiate 0))
-          (core module
-            (memory (;0;) 17)
-            (export "memory" (memory 0))
-            (func (export "mod-main") (result i32)
-              (i32.const 42))
-          )
-          (core module
-            (memory (;0;) 17)
-            (export "memory" (memory 0))
-            (func (export "mod-main2") (result i32)
-              (i32.const 42))
-          )
-          (core instance (instantiate 0))
-          (core instance (instantiate 1))
-          (alias core export 0 "mod-main" (core func))
-          (alias core export 1 "mod-main2" (core func))
-          (core instance
-            (export "mod-main" (func 0))
-            (export "mod-main2" (func 1))
-          )
-          (alias core export 2 "mod-main" (core func))
-          (type s32)
-          (type (func (result 0)))
-          (func (type 1) (canon lift (core func 0)))
-          (type (;2;)
+          (type (;0;)
             (instance
               (type (;0;) (result))
               (type (;1;) (func (param "status" 0)))
               (export (;0;) "exit" (func (type 1)))
             )
           )
-          (import "docs:adder/add@0.1.0" (instance (type 2)))
+          (import "docs:adder/add@0.1.0" (instance (type 0)))
+          (alias export 0 "exit" (func (;0;)))
        )
     "#;
     let binary = wat::parse_str(component).unwrap();
@@ -55,14 +30,14 @@ fn test_basic_component() {
     telomere::parser::component_model::parse_component(&mut ctx).unwrap();
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();
-    // let instance = telomere::runtime::component_model::instantiate(
-    //     component,
-    //     &mut instrs,
-    //     &mut store,
-    //     &linker,
-    // )
-    // .unwrap();
-    // println!("{:?}", instance);
+    let instance = telomere::runtime::component_model::instantiate(
+        component,
+        &mut instrs,
+        &mut store,
+        &linker,
+    )
+    .unwrap();
+    println!("{:?}", instance);
 }
 
 /*#[test]

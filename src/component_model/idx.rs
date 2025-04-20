@@ -1,4 +1,4 @@
-pub trait Idx {
+pub trait Idx: Clone {
     fn new(local: usize, global: usize) -> Self;
     fn local(&self) -> usize;
     fn global(&self) -> usize;

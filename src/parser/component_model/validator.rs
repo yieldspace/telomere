@@ -4,8 +4,9 @@ mod types;
 use crate::component_model::{
     Binding, Component, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport,
     CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx,
-    CoreMemoryIdx, CoreMemoryRef, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreTypeIdx,
-    CoreTypeRef, ExternDesc, FlattenComponent, FuncIdx, Idx, Instance, InstanceIdx, Type, TypeIdx,
+    CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType,
+    CoreTypeIdx, CoreTypeRef, ExternDesc, FlattenComponent, FuncIdx, Idx, Instance, InstanceIdx,
+    Type, TypeIdx,
 };
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::{ValueBound, ValueIdx};
@@ -125,7 +126,7 @@ pub trait Validator: private::Sealed {
 
     fn add_core_module(
         &mut self,
-        module: Binding<Module>,
+        module: Binding<CoreModule>,
     ) -> Result<CoreModuleIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_modules.len();
         let local_idx = self.get_local_store().core_modules.len();
@@ -161,10 +162,7 @@ pub trait Validator: private::Sealed {
         Ok(idx)
     }
 
-    fn add_core_type(
-        &mut self,
-        ty: Binding<CoreTypeRef>,
-    ) -> Result<CoreTypeIdx, ComponentParseError> {
+    fn add_core_type(&mut self, ty: Binding<CoreType>) -> Result<CoreTypeIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_types.len();
         let local_idx = self.get_local_store().core_types.len();
         self.get_flatten_component_mut().core_types.push(ty);
@@ -295,9 +293,14 @@ pub trait Validator: private::Sealed {
         Ok(())
     }
 
-    fn get_core_module(&self, core_mod_idx: &CoreModuleIdx) -> &Module {
+    fn get_core_module(&self, core_mod_idx: &CoreModuleIdx) -> &CoreModule {
         self.get_flatten_component()
             .get_core_module(core_mod_idx.global())
+    }
+
+    fn get_core_type(&self, core_type_idx: &CoreTypeIdx) -> &CoreType {
+        self.get_flatten_component()
+            .get_core_type(core_type_idx.global())
     }
 
     fn get_core_instance(&self, core_inst_idx: &CoreInstanceIdx) -> &CoreInstance {

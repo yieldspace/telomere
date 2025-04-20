@@ -1,6 +1,7 @@
 use crate::aliasing as core_aliasing;
 use crate::component_model::{
-    CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, Idx,
+    CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport,
+    CoreModule, Idx,
 };
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
@@ -61,8 +62,14 @@ pub unsafe fn instantiate_core_instance(
                 }
             }
             let module = ctx.component.get_core_module(module_idx.global());
-            let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
-            ctx.push_core_module_instance(instance, registry);
+            match module {
+                CoreModule::Defined(m) => {
+                    let instance = core_instantiate(m.clone(), ctx.store, &registry).unwrap();
+                    ctx.push_core_module_instance(instance, registry);
+                }
+                CoreModule::Typed(_, _) => {}
+                CoreModule::SuperTyped(_, _, _) => {}
+            }
         }
         CoreInstance::Alias { exports } => {
             let triplets = exports
@@ -72,7 +79,7 @@ pub unsafe fn instantiate_core_instance(
                     CoreInstanceInlineExport::Func(idx) => {
                         let func = ctx.component.get_core_function(idx.global());
                         match func {
-                            CoreFunction::Export(CoreFuncRef(inst_idx, _, _, name)) => {
+                            CoreFunction::Export(CoreFuncRef(inst_idx, idx, name)) => {
                                 let inst = ctx
                                     .instantiated
                                     .core_instances
