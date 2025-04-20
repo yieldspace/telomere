@@ -131,6 +131,7 @@ impl Component {
                                     Instance::SuperTyped(
                                         ty.clone(),
                                         export.sort.clone().try_into()?,
+                                        Reference::Component(self_idx, name),
                                     ),
                                 )))
                             } else {
@@ -184,9 +185,16 @@ impl Component {
                             panic!("Expected a module type");
                         }
                     }
-                    ExternDesc::Func(idx) => Ok(ComponentExportSlot::Func(Slot::Value(
-                        ComponentFunction::Typed(idx, Reference::Component(self_idx, name)),
-                    ))),
+                    ExternDesc::Func(idx) => {
+                        let ty = validator.get_type(&idx);
+                        if let Type::Func(ty) = ty {
+                            Ok(ComponentExportSlot::Func(Slot::Value(
+                                ComponentFunction::Typed(ty.clone(), Reference::Component(self_idx, name)),
+                            )))
+                        } else {
+                            panic!("Expected a function type");
+                        }
+                    },
                     #[cfg(feature = "component-gated-feature-value-imports-exports")]
                     ExternDesc::Value(_) => todo!(),
                     ExternDesc::Type(bound) => match bound {
@@ -210,6 +218,7 @@ impl Component {
                         if let Type::Instance(ty) = ty {
                             Ok(ComponentExportSlot::Instance(Slot::Value(Instance::Typed(
                                 ty.clone(),
+                                Reference::Component(self_idx, name)
                             ))))
                         } else {
                             panic!("Expected an instance type");
@@ -222,9 +231,14 @@ impl Component {
 }
 
 #[derive(Debug, Clone)]
-pub struct ComponentImport {
-    pub name: String,
-    pub ed: ExternDesc,
+pub enum ComponentImport {
+    CoreModule(String, CoreModuleIdx),
+    Func(String, FuncIdx),
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    Value(String),
+    Type(String, TypeIdx),
+    Component(String, ComponentIdx),
+    Instance(String, InstanceIdx),
 }
 
 #[derive(Debug, Clone)]

@@ -1,17 +1,13 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Component, ComponentExportSlot, ComponentFunction, ComponentIdx, CoreModule, CoreModuleIdx,
-    CoreSortWithIdx, FuncIdx, InlineExport, InstanceIdx, InstanceType, Slot, Sort, SortLike,
-    SortWithIdx, Type, TypeIdx,
-};
+use crate::component_model::{Component, ComponentExportSlot, ComponentFunction, ComponentIdx, CoreModule, CoreModuleIdx, CoreSortWithIdx, FuncIdx, InlineExport, InstanceIdx, InstanceType, Reference, Slot, Sort, SortLike, SortWithIdx, Type, TypeIdx};
 use crate::parser::component_model::{ComponentParseError, ParseContext};
 
 #[derive(Debug)]
 pub enum Instance {
     Instantiate(Instantiate),
     InlineExport(Vec<InlineExport>),
-    Typed(InstanceType),
-    SuperTyped(InstanceType, InstanceIdx),
+    Typed(InstanceType, Reference),
+    SuperTyped(InstanceType, InstanceIdx, Reference),
 }
 
 impl Instance {
@@ -62,7 +58,7 @@ impl Instance {
                     }
                 }
             }
-            Instance::Typed(ty) | Instance::SuperTyped(ty, _) => {
+            Instance::Typed(ty, _) | Instance::SuperTyped(ty, _, _) => {
                 return Ok(ty.get_export(ctx.validator, self_idx, name.clone())?);
             }
         }

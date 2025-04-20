@@ -263,27 +263,6 @@ pub trait Validator: private::Sealed {
     }
 
     fn add_import(&mut self, import: ComponentImport) -> Result<(), ComponentParseError> {
-        match &import.ed {
-            ExternDesc::Core(_) => {
-                self.add_core_module(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            ExternDesc::Func(_) => {
-                self.add_func(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            ExternDesc::Value(_) => {
-                self.add_value(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            ExternDesc::Type(_) => {
-                self.add_type(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            ExternDesc::Component(_) => {
-                self.add_component(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            ExternDesc::Instance(_) => {
-                self.add_instance(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-        }
         self.get_local_store_mut().imports.push(import);
         Ok(())
     }

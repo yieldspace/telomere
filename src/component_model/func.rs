@@ -7,5 +7,5 @@ pub enum ComponentFunction {
         ty: TypeIdx,
     },
     SuperTyped(FuncType, FuncIdx, Reference),
-    Typed(TypeIdx, Reference),
+    Typed(FuncType, Reference),
 }

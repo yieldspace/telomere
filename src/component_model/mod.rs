@@ -36,16 +36,19 @@ impl<T, I: Idx> From<Slot<T, I>> for Binding<T> {
     }
 }
 
-#[derive(Clone)]
+pub type ExportName = String;
+pub type ImportName = String;
+
+#[derive(Debug, Clone)]
 pub enum Reference {
-    Instance(InstanceIdx, String),
-    Component(ComponentIdx, String),
+    Instance(InstanceIdx, ExportName),
+    Component(ComponentIdx, ExportName),
+    Imported(ImportName),
 }
 
 pub enum Binding<T> {
     Real(T),
     Alias(usize),
-    Import(String, ExternDesc),
 }
 
 pub struct FlattenComponent {
@@ -97,7 +100,6 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_module(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -109,7 +111,6 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_instance(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -121,7 +122,6 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_function(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -133,7 +133,6 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_function(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -141,7 +140,6 @@ impl FlattenComponent {
         match self.types.get(idx).expect("Type not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_type(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -149,7 +147,6 @@ impl FlattenComponent {
         match self.instances.get(idx).expect("Instance not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_instance(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -157,7 +154,6 @@ impl FlattenComponent {
         match self.components.get(idx).expect("Component not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_component(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -165,7 +161,6 @@ impl FlattenComponent {
         match self.core_types.get(idx).expect("Core Type not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_type(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 }

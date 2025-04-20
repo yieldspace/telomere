@@ -15,7 +15,9 @@ pub enum Type {
     Resource(ResourceType),
     // from (sub resource)
     UniqueResource,
+    Eq(TypeIdx),
     SuperTypedUniqueResource(TypeIdx),
+    Referenced(Box<Type>, Reference),
 }
 
 #[derive(Debug, FromPrimitive, Clone)]
@@ -131,9 +133,18 @@ impl InstanceType {
                     panic!("Expected a module type");
                 }
             }
-            ExternDesc::Func(idx) => Ok(ComponentExportSlot::Func(Slot::Value(
-                ComponentFunction::Typed(idx.clone(), Reference::Instance(self_idx, name)),
-            ))),
+            ExternDesc::Func(idx) => {
+                let ty = validator.get_type(idx);
+                if let Type::Func(ty) = ty {
+                    Ok(ComponentExportSlot::Func(Slot::Value(
+                        ComponentFunction::Typed(ty.clone(), Reference::Instance(self_idx, name)),
+                    )))
+                } else {
+                    Err(ComponentParseError::InvalidSignature(format!(
+                        "Invalid core type for export: {ty:?}"
+                    )))
+                }
+            },
             #[cfg(feature = "component-gated-feature-value-imports-exports")]
             ExternDesc::Value(_) => {
                 todo!();
@@ -157,6 +168,7 @@ impl InstanceType {
                 if let Type::Instance(ty) = ty {
                     Ok(ComponentExportSlot::Instance(Slot::Value(Instance::Typed(
                         ty.clone(),
+                        Reference::Instance(self_idx, name)
                     ))))
                 } else {
                     panic!("Expected an instance type");
