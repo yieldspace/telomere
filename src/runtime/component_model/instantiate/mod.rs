@@ -1,5 +1,8 @@
 use crate::aliasing as core_aliasing;
-use crate::component_model::{CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, CoreModule, Idx, Reference};
+use crate::component_model::{
+    CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport,
+    CoreModule, Idx, Reference,
+};
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::Registry;
@@ -64,15 +67,12 @@ pub unsafe fn instantiate_core_instance(
                     let instance = core_instantiate(m.clone(), ctx.store, &registry).unwrap();
                     ctx.push_core_module_instance(instance, registry);
                 }
-                CoreModule::Typed(ty, reference) => {
-                    match reference {
-                        Reference::Instance(idx, name) => {
-                            
-                        }
-                        Reference::Component(idx, name) => {}
-                        Reference::Imported(name) => {}
-                    }
-                }
+                CoreModule::Typed(ty, reference) => match reference {
+                    Reference::Instance(idx, name) => {}
+                    Reference::Component(idx, name) => {}
+                    Reference::Imported(name) => {}
+                    Reference::Exported(name) => {}
+                },
                 CoreModule::SuperTyped(_, _, _) => {}
             }
         }

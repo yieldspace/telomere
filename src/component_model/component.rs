@@ -189,12 +189,15 @@ impl InlineComponent {
                         let ty = validator.get_type(&idx);
                         if let Type::Func(ty) = ty {
                             Ok(ComponentExportSlot::Func(Slot::Value(
-                                ComponentFunction::Typed(ty.clone(), Reference::Component(self_idx, name)),
+                                ComponentFunction::Typed(
+                                    ty.clone(),
+                                    Reference::Component(self_idx, name),
+                                ),
                             )))
                         } else {
                             panic!("Expected a function type");
                         }
-                    },
+                    }
                     #[cfg(feature = "component-gated-feature-value-imports-exports")]
                     ExternDesc::Value(_) => todo!(),
                     ExternDesc::Type(bound) => match bound {
@@ -207,7 +210,10 @@ impl InlineComponent {
                         let ty = validator.get_type(&idx);
                         if let Type::Component(ty) = ty {
                             Ok(ComponentExportSlot::Component(Slot::Value(
-                                InlineComponent::Typed(ty.clone(), Reference::Component(self_idx, name)),
+                                InlineComponent::Typed(
+                                    ty.clone(),
+                                    Reference::Component(self_idx, name),
+                                ),
                             )))
                         } else {
                             panic!("Expected a component type");
@@ -218,7 +224,7 @@ impl InlineComponent {
                         if let Type::Instance(ty) = ty {
                             Ok(ComponentExportSlot::Instance(Slot::Value(Instance::Typed(
                                 ty.clone(),
-                                Reference::Component(self_idx, name)
+                                Reference::Component(self_idx, name),
                             ))))
                         } else {
                             panic!("Expected an instance type");

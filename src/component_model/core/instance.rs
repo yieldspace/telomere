@@ -1,11 +1,10 @@
-use crate::binary::BinaryReader;
 use crate::common::ExportDesc;
 use crate::component_model::{
-    Binding, CoreBinding, CoreExportSlot, CoreFuncRef, CoreFuncType, CoreFunction, CoreGlobalRef,
+    Binding, CoreBinding, CoreExportSlot, CoreFuncRef, CoreFunction, CoreGlobalRef,
     CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreMemoryRef, CoreModule,
-    CoreModuleIdx, CoreReference, CoreSort, CoreTableRef, Idx, InstanceIdx, Slot,
+    CoreModuleIdx, CoreReference, CoreSort, CoreTableRef, Idx, Slot,
 };
-use crate::parser::component_model::{ComponentParseError, ParseContext, Validator};
+use crate::parser::component_model::{ComponentParseError, Validator};
 use std::collections::HashMap;
 
 pub enum CoreInstance {

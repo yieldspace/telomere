@@ -7,10 +7,6 @@ mod instance;
 mod sort;
 mod types;
 
-use crate::binary::BinaryReader;
-use crate::parser::component_model::{ComponentParseError, ParseContext};
-use crate::runtime::component_model::instantiate::InstantiateInstr;
-use crate::Module;
 pub use canon::*;
 pub use component::*;
 pub use core::*;
@@ -18,7 +14,6 @@ pub use func::*;
 pub use idx::*;
 pub use instance::*;
 pub use sort::*;
-use std::cmp::PartialEq;
 pub use types::*;
 
 #[derive(Clone)]
@@ -44,8 +39,10 @@ pub enum Reference {
     Instance(InstanceIdx, ExportName),
     Component(ComponentIdx, ExportName),
     Imported(ImportName),
+    Exported(ExportName),
 }
 
+#[derive(Debug)]
 pub enum Binding<T> {
     Real(T),
     Alias(usize),

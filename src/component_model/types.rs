@@ -1,6 +1,6 @@
 use crate::component_model::{
-    AliasIdx, InlineComponent, ComponentExportSlot, ComponentFunction, CoreModule, CoreType, CoreTypeIdx,
-    FuncIdx, Instance, InstanceIdx, Reference, Slot, TypeIdx,
+    AliasIdx, ComponentExportSlot, ComponentFunction, CoreModule, CoreType, CoreTypeIdx, FuncIdx,
+    InlineComponent, Instance, InstanceIdx, Reference, Slot, TypeIdx,
 };
 use crate::parser::component_model::{ComponentParseError, Validator};
 use crate::parser::leb128::compile_i32;
@@ -144,7 +144,7 @@ impl InstanceType {
                         "Invalid core type for export: {ty:?}"
                     )))
                 }
-            },
+            }
             #[cfg(feature = "component-gated-feature-value-imports-exports")]
             ExternDesc::Value(_) => {
                 todo!();
@@ -168,7 +168,7 @@ impl InstanceType {
                 if let Type::Instance(ty) = ty {
                     Ok(ComponentExportSlot::Instance(Slot::Value(Instance::Typed(
                         ty.clone(),
-                        Reference::Instance(self_idx, name)
+                        Reference::Instance(self_idx, name),
                     ))))
                 } else {
                     panic!("Expected an instance type");

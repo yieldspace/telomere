@@ -1,8 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasIdx, Binding, ComponentExportSlot, CoreBinding, CoreExportSlot, CoreFuncRef, CoreFunction,
-    CoreGlobalRef, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreSort, CoreSortWithIdx,
-    CoreTableRef, Idx, Slot, Sort, SortWithIdx,
+    AliasIdx, Binding, ComponentExportSlot, CoreExportSlot, Idx, Sort,
 };
 use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::{

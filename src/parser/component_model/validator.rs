@@ -2,16 +2,14 @@ mod child;
 mod types;
 
 use crate::component_model::{
-    Binding, InlineComponent, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport,
-    CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx,
-    CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType,
-    CoreTypeIdx, CoreTypeRef, ExternDesc, FlattenComponent, FuncIdx, Idx, Instance, InstanceIdx,
-    Type, TypeIdx,
+    Binding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, CoreFuncIdx,
+    CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx,
+    CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, FlattenComponent, FuncIdx, Idx, InlineComponent, Instance,
+    InstanceIdx, Type, TypeIdx,
 };
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
-use crate::Module;
 pub use child::ChildValidator;
 pub use types::*;
 
