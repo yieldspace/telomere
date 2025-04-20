@@ -4,8 +4,8 @@ mod types;
 use crate::component_model::{
     Binding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, CoreFuncIdx,
     CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx,
-    CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, FlattenComponent, FuncIdx, Idx, InlineComponent, Instance,
-    InstanceIdx, Type, TypeIdx,
+    CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx,
+    FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceIdx, Type, TypeIdx,
 };
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::{ValueBound, ValueIdx};

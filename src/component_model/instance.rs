@@ -1,8 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    ComponentExportSlot, ComponentIdx,
-    CoreSortWithIdx, InlineExport, InstanceIdx, InstanceType, Reference,
-    Slot, Sort, SortLike, SortWithIdx,
+    ComponentExportSlot, ComponentIdx, CoreSortWithIdx, InlineExport, InstanceIdx, InstanceType,
+    Reference, Slot, Sort, SortLike, SortWithIdx,
 };
 use crate::parser::component_model::{ComponentParseError, ParseContext};
 

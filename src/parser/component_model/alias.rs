@@ -1,7 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    AliasIdx, Binding, ComponentExportSlot, CoreExportSlot, Idx, Sort,
-};
+use crate::component_model::{AliasIdx, Binding, ComponentExportSlot, CoreExportSlot, Idx, Sort};
 use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::{
     parse_core_instance_idx, parse_instance_idx, parse_sort, ParseContext, SizedResult,
