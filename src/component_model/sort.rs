@@ -87,7 +87,7 @@ impl TryFrom<SortWithIdx> for TypeIdx {
         if let SortWithIdx::Type(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(value, "Func".to_string()))
+            Err(ComponentParseError::InvalidSort(value, "Type".to_string()))
         }
     }
 }
