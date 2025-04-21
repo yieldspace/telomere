@@ -111,7 +111,7 @@ impl TryFrom<SortWithIdx> for InstanceIdx {
         if let SortWithIdx::Instance(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(value, "Func".to_string()))
+            Err(ComponentParseError::InvalidSort(value, "Instance".to_string()))
         }
     }
 }
