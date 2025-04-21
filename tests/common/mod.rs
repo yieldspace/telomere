@@ -1,3 +1,5 @@
+pub mod component_model;
+
 use telomere::{
     common::InstanceAddr, get_global, instantiate, IoReadBinaryReader, Registry, ResultValue,
     Store, VMResult, WasmParser, WasmValue,
@@ -6,7 +8,7 @@ use tracing::error;
 use wast::{
     core::{AbstractHeapType, HeapType, NanPattern, WastRetCore},
     parser::ParseBuffer,
-    Wast, WastArg, WastRet, Wat,
+    QuoteWat, Wast, WastArg, WastRet, Wat,
 };
 pub fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceAddr {
     let buf = ParseBuffer::new(wat).unwrap();

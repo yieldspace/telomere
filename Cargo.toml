@@ -16,7 +16,7 @@ num-traits = "0.2.19"
 typed-arena = "2.0.2"
 
 [dev-dependencies]
-wast = { version = "226.0.0" }
+wast = { version = "229.0.0", features = ["component-model"] }
 tracing-subscriber = { version = "0.3.19" }
 wat = "1.228.0"
 
