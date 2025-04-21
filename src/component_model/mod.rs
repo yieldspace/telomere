@@ -1,57 +1,61 @@
 mod canon;
+mod component;
 mod core;
 mod func;
 mod idx;
+mod instance;
+mod sort;
 mod types;
 
-use crate::binary::BinaryReader;
-use crate::parser::component_model::{ComponentParseError, ParseContext};
-use crate::runtime::component_model::instantiate::InstantiateInstr;
-use crate::Module;
 pub use canon::*;
+pub use component::*;
 pub use core::*;
 pub use func::*;
 pub use idx::*;
-use std::cmp::PartialEq;
+pub use instance::*;
+pub use sort::*;
 pub use types::*;
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
-pub struct ComponentId(pub usize);
-
-pub struct Component {
-    pub instrs: Vec<InstantiateInstr>,
-    pub imports: Vec<ComponentImport>,
-    pub exports: Vec<ComponentExport>,
+#[derive(Clone)]
+pub enum Slot<T, I: Idx> {
+    Value(T),
+    Idx(I),
 }
 
-impl Component {
-    pub(crate) fn new(
-        instrs: Vec<InstantiateInstr>,
-        imports: Vec<ComponentImport>,
-        exports: Vec<ComponentExport>,
-    ) -> Self {
-        Self {
-            instrs,
-            imports,
-            exports,
+impl<T, I: Idx> From<Slot<T, I>> for Binding<T> {
+    fn from(value: Slot<T, I>) -> Self {
+        match value {
+            Slot::Value(data) => Binding::Real(data),
+            Slot::Idx(idx) => Binding::Alias(idx.global()),
         }
     }
 }
 
+pub type ExportName = String;
+pub type ImportName = String;
+
+#[derive(Debug, Clone)]
+pub enum Reference {
+    Instance(InstanceIdx, ExportName),
+    Component(ComponentIdx, ExportName),
+    Imported(ImportName),
+    Exported(ExportName),
+}
+
+#[derive(Debug)]
 pub enum Binding<T> {
     Real(T),
     Alias(usize),
-    Import(String, ExternDesc),
 }
 
 pub struct FlattenComponent {
-    pub core_modules: Vec<Binding<Module>>,
+    pub core_modules: Vec<Binding<CoreModule>>,
     pub core_instances: Vec<Binding<CoreInstance>>,
     pub core_functions: Vec<Binding<CoreFunction>>,
     pub functions: Vec<Binding<ComponentFunction>>,
-    pub components: Vec<Binding<Component>>,
+    pub components: Vec<Binding<InlineComponent>>,
     pub instances: Vec<Binding<Instance>>,
-    pub core_types: Vec<Binding<CoreTypeRef>>,
+    pub core_types: Vec<Binding<CoreType>>,
     pub core_memories: Vec<Binding<CoreMemoryRef>>,
     pub core_tables: Vec<Binding<CoreTableRef>>,
     pub core_globals: Vec<Binding<CoreGlobalRef>>,
@@ -85,7 +89,7 @@ impl FlattenComponent {
         }
     }
 
-    pub(crate) fn get_core_module(&self, idx: usize) -> &Module {
+    pub(crate) fn get_core_module(&self, idx: usize) -> &CoreModule {
         match self
             .core_modules
             .get(idx)
@@ -93,7 +97,6 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_module(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -105,7 +108,6 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_instance(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -117,7 +119,6 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_function(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -129,7 +130,6 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_function(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -137,7 +137,6 @@ impl FlattenComponent {
         match self.types.get(idx).expect("Type not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_type(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
@@ -145,131 +144,22 @@ impl FlattenComponent {
         match self.instances.get(idx).expect("Instance not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_instance(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
 
-    pub fn get_component(&self, idx: usize) -> &Component {
+    pub fn get_component(&self, idx: usize) -> &InlineComponent {
         match self.components.get(idx).expect("Component not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_component(*idx),
-            Binding::Import(_, _) => todo!(),
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct ComponentImport {
-    pub name: String,
-    pub ed: ExternDesc,
-}
-
-#[derive(Debug, Clone)]
-pub struct ComponentExport {
-    pub name: String,
-    pub sort: SortWithIdx,
-    pub desc: Option<ExternDesc>,
-}
-
-#[derive(Debug)]
-pub enum Instance {
-    Instantiate(Instantiate),
-    InlineExport(Vec<InlineExport>),
-}
-
-impl Instance {
-    pub fn get_export(
-        &self,
-        ctx: &ParseContext<impl BinaryReader>,
-        name: String,
-        sort: Sort,
-    ) -> Result<SortWithIdx, ComponentParseError> {
-        match self {
-            Instance::Instantiate(Instantiate { component_idx, .. }) => {
-                let component = ctx.validator.get_component(component_idx);
-                for export in &component.exports {
-                    if export.name == name && export.sort.eq_sort(&sort) {
-                        return Ok(export.sort.clone());
-                    }
-                }
-            }
-            Instance::InlineExport(exports) => {
-                for export in exports {
-                    if export.sort.eq_sort(&sort) && export.name == name {
-                        return Ok(export.sort.clone());
-                    }
-                }
-            }
-        }
-        unreachable!()
-    }
-}
-
-#[derive(Debug)]
-pub struct Instantiate {
-    pub component_idx: ComponentIdx,
-    pub args: Vec<InstantiateArg>,
-}
-
-#[derive(Debug)]
-pub struct InstantiateArg {
-    pub name: String,
-    pub sort: SortWithIdx,
-}
-
-#[derive(Debug)]
-#[repr(u8)]
-pub enum SortType {
-    Core(CoreSort) = 0x00,
-    Func = 0x01,
-    Value = 0x02,
-    Type = 0x03,
-    Component = 0x04,
-    Instance = 0x05,
-}
-
-#[derive(Debug, Clone)]
-pub enum SortWithIdx {
-    Core(CoreSortWithIdx),
-    Func(FuncIdx),
-    #[cfg(feature = "component-gated-feature-value-imports-exports")]
-    Value(ValueIdx),
-    Type(TypeIdx),
-    Component(ComponentIdx),
-    Instance(InstanceIdx),
-}
-
-impl SortWithIdx {
-    pub(crate) fn eq_sort(&self, sort: &Sort) -> bool {
-        match self {
-            SortWithIdx::Core(_) => match sort {
-                Sort::Core(CoreSort::Func) => sort == &Sort::Core(CoreSort::Func),
-                Sort::Core(CoreSort::Table) => sort == &Sort::Core(CoreSort::Table),
-                Sort::Core(CoreSort::Memory) => sort == &Sort::Core(CoreSort::Memory),
-                Sort::Core(CoreSort::Global) => sort == &Sort::Core(CoreSort::Global),
-                Sort::Core(CoreSort::Type) => sort == &Sort::Core(CoreSort::Type),
-                Sort::Core(CoreSort::Module) => sort == &Sort::Core(CoreSort::Module),
-                Sort::Core(CoreSort::Instance) => sort == &Sort::Core(CoreSort::Instance),
-                _ => false,
-            },
-            SortWithIdx::Func(_) => sort == &Sort::Func,
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            SortWithIdx::Value(_) => sort == &Sort::Value,
-            SortWithIdx::Type(_) => sort == &Sort::Type,
-            SortWithIdx::Component(_) => sort == &Sort::Component,
-            SortWithIdx::Instance(_) => sort == &Sort::Instance,
+    pub fn get_core_type(&self, idx: usize) -> &CoreType {
+        match self.core_types.get(idx).expect("Core Type not found") {
+            Binding::Real(real) => real,
+            Binding::Alias(idx) => self.get_core_type(*idx),
         }
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Sort {
-    Core(CoreSort),
-    Func,
-    Value,
-    Type,
-    Component,
-    Instance,
 }
 
 #[derive(Debug)]

@@ -1,10 +1,10 @@
-use crate::binary::BinaryReader;
 use crate::common::ExportDesc;
 use crate::component_model::{
-    Binding, CoreBinding, CoreFuncType, CoreFunction, CoreGlobalRef, CoreInstanceImport,
-    CoreInstanceInlineExport, CoreMemoryRef, CoreModuleIdx, CoreTableRef, Idx,
+    Binding, CoreBinding, CoreExportSlot, CoreFuncRef, CoreFunction, CoreGlobalRef,
+    CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreMemoryRef, CoreModule,
+    CoreModuleIdx, CoreReference, CoreSort, CoreTableRef, Idx, Slot,
 };
-use crate::parser::component_model::ParseContext;
+use crate::parser::component_model::{ComponentParseError, Validator};
 use std::collections::HashMap;
 
 pub enum CoreInstance {
@@ -32,156 +32,96 @@ impl CoreInstance {
         }
     }
 
-    pub fn get_func(
+    pub fn get_export(
         &self,
-        ctx: &ParseContext<impl BinaryReader>,
+        validator: &dyn Validator,
+        self_idx: CoreInstanceIdx,
+        sort: CoreSort,
         name: String,
-    ) -> CoreBinding<CoreFunction, (usize, CoreFuncType)> {
+    ) -> Result<CoreExportSlot, ComponentParseError> {
         match self {
             CoreInstance::Real { module_idx, .. } => {
-                let module = ctx.validator.get_core_module(module_idx);
-                let export = module
-                    .exs
-                    .0
-                    .iter()
-                    .find(|ex| {
-                        if ex.0 == name {
-                            matches!(ex.1, ExportDesc::Func(_))
-                        } else {
-                            false
+                let module = validator.get_core_module(module_idx);
+                match module {
+                    CoreModule::Defined(module) => {
+                        let export = module
+                            .exs
+                            .0
+                            .iter()
+                            .find(|ex| ex.0 == name)
+                            .ok_or(ComponentParseError::ExportNotFound(name.clone()))?;
+                        match (sort, export.1) {
+                            (CoreSort::Func, ExportDesc::Func(idx)) => Ok(CoreExportSlot::Func(
+                                Slot::Value(CoreFunction::Export(CoreFuncRef(
+                                    self_idx,
+                                    idx,
+                                    name.clone(),
+                                ))),
+                                CoreReference::Instance(self_idx, name),
+                            )),
+                            (CoreSort::Global, ExportDesc::Global(idx)) => {
+                                Ok(CoreExportSlot::Global(
+                                    Slot::Value(CoreGlobalRef(self_idx, idx, name.clone())),
+                                    CoreReference::Instance(self_idx, name),
+                                ))
+                            }
+                            (CoreSort::Table, ExportDesc::Table(idx)) => Ok(CoreExportSlot::Table(
+                                Slot::Value(CoreTableRef(self_idx, idx, name.clone())),
+                                CoreReference::Instance(self_idx, name),
+                            )),
+                            (CoreSort::Memory, ExportDesc::Mem(idx)) => Ok(CoreExportSlot::Memory(
+                                Slot::Value(CoreMemoryRef(self_idx, idx, name.clone())),
+                                CoreReference::Instance(self_idx, name),
+                            )),
+                            _ => {
+                                panic!("Invalid export")
+                            }
                         }
-                    })
-                    .unwrap();
-                match export.1 {
-                    ExportDesc::Func(f) => {
-                        let ty = module.fts.0.get(f.0 as usize).unwrap().clone();
-                        CoreBinding::Real((f.0 as usize, ty))
                     }
-                    _ => unreachable!(),
+                    CoreModule::Typed(ty, _) | CoreModule::SuperTyped(ty, _, _) => {
+                        ty.get_export(self_idx, sort, name)
+                    }
                 }
             }
-            CoreInstance::Alias { exports } => match exports.get(&name).unwrap() {
-                CoreInstanceInlineExport::Func(idx) => {
-                    CoreBinding::Binding(Binding::Alias(idx.global()))
-                }
-                _ => unreachable!(),
+            CoreInstance::Alias { exports } => match exports.get(&name) {
+                None => Err(ComponentParseError::ExportNotFound(name)),
+                Some(export) => match (export, sort) {
+                    (CoreInstanceInlineExport::Func(idx), CoreSort::Func) => {
+                        Ok(CoreExportSlot::Func(
+                            Slot::Idx(idx.clone()),
+                            CoreReference::Instance(self_idx, name),
+                        ))
+                    }
+                    (CoreInstanceInlineExport::Table(idx), CoreSort::Table) => {
+                        Ok(CoreExportSlot::Table(
+                            Slot::Idx(idx.clone()),
+                            CoreReference::Instance(self_idx, name),
+                        ))
+                    }
+                    (CoreInstanceInlineExport::Memory(idx), CoreSort::Memory) => {
+                        Ok(CoreExportSlot::Memory(
+                            Slot::Idx(idx.clone()),
+                            CoreReference::Instance(self_idx, name),
+                        ))
+                    }
+                    (CoreInstanceInlineExport::Global(idx), CoreSort::Global) => {
+                        Ok(CoreExportSlot::Global(
+                            Slot::Idx(idx.clone()),
+                            CoreReference::Instance(self_idx, name),
+                        ))
+                    }
+                    (CoreInstanceInlineExport::Type(_), _) => {
+                        unimplemented!("because of export type proposal")
+                    }
+                    (CoreInstanceInlineExport::Module(_), _) => {
+                        unimplemented!("because of module link proposal")
+                    }
+                    (CoreInstanceInlineExport::Instance(_), _) => {
+                        unimplemented!("because of instance link proposal")
+                    }
+                    _ => panic!("Mismatch between export and sort"),
+                },
             },
         }
-    }
-
-    pub fn get_table(
-        &self,
-        ctx: &ParseContext<impl BinaryReader>,
-        name: String,
-    ) -> CoreBinding<CoreTableRef, usize> {
-        match self {
-            CoreInstance::Real { module_idx, .. } => {
-                let module = ctx.validator.get_core_module(module_idx);
-                let idx = module
-                    .exs
-                    .0
-                    .iter()
-                    .find_map(|ex| {
-                        if ex.0 == name {
-                            if let ExportDesc::Table(idx) = ex.1 {
-                                Some(idx)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap();
-                CoreBinding::Real(idx.0 as usize)
-            }
-            CoreInstance::Alias { exports } => {
-                if let CoreInstanceInlineExport::Table(idx) = exports.get(&name).unwrap() {
-                    CoreBinding::Binding(Binding::Alias(idx.global()))
-                } else {
-                    unreachable!()
-                }
-            }
-        }
-    }
-
-    pub fn get_memory(
-        &self,
-        ctx: &ParseContext<impl BinaryReader>,
-        name: String,
-    ) -> CoreBinding<CoreMemoryRef, usize> {
-        match self {
-            CoreInstance::Real { module_idx, .. } => {
-                let module = ctx.validator.get_core_module(module_idx);
-                let idx = module
-                    .exs
-                    .0
-                    .iter()
-                    .find_map(|ex| {
-                        if ex.0 == name {
-                            if let ExportDesc::Mem(idx) = ex.1 {
-                                Some(idx)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap();
-                CoreBinding::Real(idx.0 as usize)
-            }
-            CoreInstance::Alias { exports } => {
-                if let CoreInstanceInlineExport::Memory(idx) = exports.get(&name).unwrap() {
-                    CoreBinding::Binding(Binding::Alias(idx.global()))
-                } else {
-                    unreachable!()
-                }
-            }
-        }
-    }
-
-    pub fn get_global(
-        &self,
-        ctx: &ParseContext<impl BinaryReader>,
-        name: String,
-    ) -> CoreBinding<CoreGlobalRef, usize> {
-        match self {
-            CoreInstance::Real { module_idx, .. } => {
-                let module = ctx.validator.get_core_module(module_idx);
-                let idx = module
-                    .exs
-                    .0
-                    .iter()
-                    .find_map(|ex| {
-                        if ex.0 == name {
-                            if let ExportDesc::Global(idx) = ex.1 {
-                                Some(idx)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap();
-                CoreBinding::Real(idx.0 as usize)
-            }
-            CoreInstance::Alias { exports } => {
-                if let CoreInstanceInlineExport::Global(idx) = exports.get(&name).unwrap() {
-                    CoreBinding::Binding(Binding::Alias(idx.global()))
-                } else {
-                    unreachable!()
-                }
-            }
-        }
-    }
-
-    pub fn get_type(
-        &self,
-        _ctx: &ParseContext<impl BinaryReader>,
-        _name: String,
-    ) -> CoreBinding<CoreFuncType, usize> {
-        unreachable!("export type proposal")
     }
 }

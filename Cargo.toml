@@ -4,9 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [profile.release]
-opt-level = "s"
-codegen-units = 1
-lto = true
+codegen-units = 16
 
 [dependencies]
 thiserror = "2.0.11"

@@ -18,7 +18,6 @@ use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct ComponentInstantiated {
-    pub children: Vec<ComponentInstantiated>,
     pub core_instances: Vec<CoreInstantiated>,
     pub core_functions: Vec<CoreFunctionInstantiated>,
     pub functions: Vec<ComponentFunctionInstantiated>,
@@ -28,7 +27,6 @@ pub struct ComponentInstantiated {
 impl ComponentInstantiated {
     fn new() -> Self {
         Self {
-            children: vec![],
             core_instances: vec![],
             core_functions: vec![],
             functions: vec![],

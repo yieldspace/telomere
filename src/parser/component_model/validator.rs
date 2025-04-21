@@ -2,15 +2,14 @@ mod child;
 mod types;
 
 use crate::component_model::{
-    Binding, Component, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport,
-    CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx,
-    CoreMemoryIdx, CoreMemoryRef, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreTypeIdx,
-    CoreTypeRef, ExternDesc, FlattenComponent, FuncIdx, Idx, Instance, InstanceIdx, Type, TypeIdx,
+    Binding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, CoreFuncIdx,
+    CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx,
+    CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx,
+    FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceIdx, Type, TypeIdx,
 };
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
-use crate::Module;
 pub use child::ChildValidator;
 pub use types::*;
 
@@ -125,7 +124,7 @@ pub trait Validator: private::Sealed {
 
     fn add_core_module(
         &mut self,
-        module: Binding<Module>,
+        module: Binding<CoreModule>,
     ) -> Result<CoreModuleIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_modules.len();
         let local_idx = self.get_local_store().core_modules.len();
@@ -161,10 +160,7 @@ pub trait Validator: private::Sealed {
         Ok(idx)
     }
 
-    fn add_core_type(
-        &mut self,
-        ty: Binding<CoreTypeRef>,
-    ) -> Result<CoreTypeIdx, ComponentParseError> {
+    fn add_core_type(&mut self, ty: Binding<CoreType>) -> Result<CoreTypeIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_types.len();
         let local_idx = self.get_local_store().core_types.len();
         self.get_flatten_component_mut().core_types.push(ty);
@@ -211,7 +207,7 @@ pub trait Validator: private::Sealed {
 
     fn add_component(
         &mut self,
-        component: Binding<Component>,
+        component: Binding<InlineComponent>,
     ) -> Result<ComponentIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().components.len();
         let local_idx = self.get_local_store().components.len();
@@ -265,27 +261,6 @@ pub trait Validator: private::Sealed {
     }
 
     fn add_import(&mut self, import: ComponentImport) -> Result<(), ComponentParseError> {
-        match &import.ed {
-            ExternDesc::Core(_) => {
-                self.add_core_module(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            ExternDesc::Func(_) => {
-                self.add_func(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            ExternDesc::Value(_) => {
-                self.add_value(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            ExternDesc::Type(_) => {
-                self.add_type(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            ExternDesc::Component(_) => {
-                self.add_component(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-            ExternDesc::Instance(_) => {
-                self.add_instance(Binding::Import(import.name.clone(), import.ed.clone()))?;
-            }
-        }
         self.get_local_store_mut().imports.push(import);
         Ok(())
     }
@@ -295,9 +270,14 @@ pub trait Validator: private::Sealed {
         Ok(())
     }
 
-    fn get_core_module(&self, core_mod_idx: &CoreModuleIdx) -> &Module {
+    fn get_core_module(&self, core_mod_idx: &CoreModuleIdx) -> &CoreModule {
         self.get_flatten_component()
             .get_core_module(core_mod_idx.global())
+    }
+
+    fn get_core_type(&self, core_type_idx: &CoreTypeIdx) -> &CoreType {
+        self.get_flatten_component()
+            .get_core_type(core_type_idx.global())
     }
 
     fn get_core_instance(&self, core_inst_idx: &CoreInstanceIdx) -> &CoreInstance {
@@ -305,7 +285,7 @@ pub trait Validator: private::Sealed {
             .get_core_instance(core_inst_idx.global())
     }
 
-    fn get_component(&self, component_idx: &ComponentIdx) -> &Component {
+    fn get_component(&self, component_idx: &ComponentIdx) -> &InlineComponent {
         self.get_flatten_component()
             .get_component(component_idx.global())
     }

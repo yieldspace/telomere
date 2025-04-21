@@ -33,8 +33,9 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
                     instance_idx: idx.global(),
                 },
             });
-            let instrs = ctx.validator.get_component(&component_idx).instrs.clone();
-            ctx.extend_instr(instrs.into_iter());
+            // todo: instantiateしている間にやる
+            // let instrs = ctx.validator.get_component(&component_idx).instrs.clone();
+            // ctx.extend_instr(instrs.into_iter());
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_instance_end,
             });
