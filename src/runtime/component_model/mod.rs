@@ -55,11 +55,11 @@ pub fn instantiate(
     component: FlattenComponent,
     instrs: &mut [InstantiateInstr],
     store: &mut Store,
-    _linker: &Linker,
+    linker: &Linker,
 ) -> Result<ComponentInstantiated, ComponentVMError> {
     let mut instantiated = ComponentInstantiated::new();
     let ptr = instrs.as_ptr();
-    let mut ctx = InstantiateContext::new(store, component, &mut instantiated);
+    let mut ctx = InstantiateContext::new(store, component, &mut instantiated, linker);
     unsafe {
         instantiate_next(ptr, 0, &mut ctx).unwrap();
     }

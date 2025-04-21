@@ -103,8 +103,29 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
     let (_, ed) = parse_option(ctx, parse_externdesc)?;
     match si {
         SortWithIdx::Core(CoreSortWithIdx::Module(idx)) => {
-            ctx.validator
-                .add_core_module(Binding::Alias(idx.global()))?;
+            if ed.is_some() {
+                if let ExternDesc::Core(type_idx) = ed.clone().unwrap() {
+                    if let CoreType::ModuleType(ty) = ctx.validator.get_core_type(&type_idx) {
+                        ctx.validator
+                            .add_core_module(Binding::Real(CoreModule::SuperTyped(
+                                ty.clone(),
+                                idx.clone(),
+                                Reference::Exported(name.clone()),
+                            )))?;
+                    } else {
+                        return Err(ComponentParseError::InvalidSignature(format!(
+                            "Invalid core type for import: {si:?}"
+                        )));
+                    }
+                } else {
+                    return Err(ComponentParseError::InvalidSignature(format!(
+                        "Invalid core type for import: {si:?}"
+                    )));
+                }
+            } else {
+                ctx.validator
+                    .add_core_module(Binding::Alias(idx.global()))?;
+            }
         }
         SortWithIdx::Func(idx) => {
             ctx.validator.add_func(Binding::Alias(idx.global()))?;

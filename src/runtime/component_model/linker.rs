@@ -1,4 +1,9 @@
-pub struct Linker {}
+use crate::Module;
+use std::collections::HashMap;
+
+pub struct Linker {
+    modules: HashMap<String, Module>,
+}
 
 impl Default for Linker {
     fn default() -> Self {
@@ -8,6 +13,16 @@ impl Default for Linker {
 
 impl Linker {
     pub fn new() -> Self {
-        Linker {}
+        Linker {
+            modules: Default::default(),
+        }
+    }
+
+    pub fn register_module<IntoString: Into<String>>(&mut self, name: IntoString, module: Module) {
+        self.modules.insert(name.into(), module);
+    }
+
+    pub(crate) fn get_module<IntoString: Into<String>>(&self, name: IntoString) -> Option<&Module> {
+        self.modules.get(&name.into())
     }
 }
