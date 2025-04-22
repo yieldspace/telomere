@@ -1,6 +1,7 @@
+use crate::common::ExportDesc;
 use crate::component_model::{CoreExportSlot, CoreInstanceIdx, CoreSort, CoreTypeRef};
-use crate::Module;
 use crate::parser::component_model::ComponentParseError;
+use crate::Module;
 
 #[derive(Debug, Clone)]
 pub enum CoreType {
@@ -18,16 +19,23 @@ impl TryFrom<CoreType> for CoreModuleType {
         if let CoreType::ModuleType(module_type) = value {
             Ok(module_type)
         } else {
-            Err(ComponentParseError::InvalidType(
-                "ModuleType".to_string(),
-            ))
+            Err(ComponentParseError::InvalidType("ModuleType".to_string()))
         }
     }
 }
 
 impl CoreModuleType {
     pub fn from_module(module: &Module) -> Self {
-        todo!()
+        for export in module.exs.0.iter() {
+            let name = export.0.clone();
+            match export.1 {
+                ExportDesc::Func(_) => {}
+                ExportDesc::Table(_) => {}
+                ExportDesc::Mem(_) => {}
+                ExportDesc::Global(_) => {}
+            }
+        }
+        Self {}
     }
 
     pub fn get_export(

@@ -1,5 +1,9 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreModuleReference, CoreSortWithIdx, CoreType, ExternDesc, Idx, InlineComponent, Instance, Reference, SortWithIdx, Type, TypeBound};
+use crate::component_model::{
+    Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreModuleReference,
+    CoreSortWithIdx, CoreType, ExternDesc, Idx, InlineComponent, Instance, Reference, SortWithIdx,
+    Type, TypeBound,
+};
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{
     parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, SizedResult,
@@ -20,7 +24,8 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
                 //         mod_type.clone(),
                 //         Reference::Imported(name.clone()),
                 //     )))?;
-                let idx = ctx.validator
+                let idx = ctx
+                    .validator
                     .add_core_module(Binding::Real(CoreModule::new(
                         None,
                         mod_type.clone(),
@@ -80,9 +85,9 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
         ExternDesc::Instance(idx) => {
             let ty = ctx.validator.get_type(&idx);
             if let Type::Instance(inst_type) = ty {
-                let idx = ctx.validator.add_instance(Binding::Real(Instance::new(
-                    None, inst_type.clone()
-                )))?;
+                let idx = ctx
+                    .validator
+                    .add_instance(Binding::Real(Instance::new(None, inst_type.clone())))?;
                 ComponentImport::Instance(idx)
             } else {
                 return Err(ComponentParseError::InvalidSignature(format!(
@@ -111,11 +116,12 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
                         //         idx.clone(),
                         //         Reference::Exported(name.clone()),
                         //     )))?;
-                        let idx = ctx.validator
+                        let idx = ctx
+                            .validator
                             .add_core_module(Binding::Real(CoreModule::new(
                                 None,
                                 ty.clone(),
-                                Some(CoreModuleReference::TypeOverwritten(idx))
+                                Some(CoreModuleReference::TypeOverwritten(idx)),
                             )))?;
                         SortWithIdx::Core(CoreSortWithIdx::Module(idx))
                     } else {
@@ -129,7 +135,8 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
                     )));
                 }
             } else {
-                let idx = ctx.validator
+                let idx = ctx
+                    .validator
                     .add_core_module(Binding::Alias(idx.global()))?;
                 SortWithIdx::Core(CoreSortWithIdx::Module(idx))
             }
@@ -158,10 +165,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
             )));
         }
     };
-    let export = ComponentExport {
-        sort: si,
-        desc: ed,
-    };
+    let export = ComponentExport { sort: si, desc: ed };
     ctx.validator.add_export(name, export)?;
     Ok((ctx.reader.read_count() - start_count, ()))
 }

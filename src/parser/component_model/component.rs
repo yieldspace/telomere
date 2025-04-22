@@ -1,5 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, CoreModule, CoreModuleType, InlineComponent, InlineComponentValue};
+use crate::component_model::{
+    Binding, CoreModule, CoreModuleType, InlineComponent, InlineComponentValue,
+};
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
@@ -65,7 +67,8 @@ pub fn _parse_component(
                 let ty = validator.get_local_store().make_component_type();
                 ctx.validator
                     .add_component(Binding::Real(InlineComponent::new(
-                        Some(InlineComponentValue::new(instrs, imports, exports)), ty
+                        Some(InlineComponentValue::new(instrs, imports, exports)),
+                        ty,
                     )))?;
             }
             ComponentSectionType::Instance => parse_instance_section(ctx)?,

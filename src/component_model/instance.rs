@@ -1,12 +1,15 @@
-use std::collections::HashMap;
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentExport, ComponentExportSlot, ComponentIdx, CoreSortWithIdx, InlineExport, InstanceExportType, InstanceIdx, InstanceType, Reference, Slot, Sort, SortLike, SortWithIdx};
+use crate::component_model::{
+    ComponentExport, ComponentExportSlot, ComponentIdx, CoreSortWithIdx, InlineExport,
+    InstanceExportType, InstanceIdx, InstanceType, Reference, Slot, Sort, SortLike, SortWithIdx,
+};
 use crate::parser::component_model::{ComponentParseError, ParseContext};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum LazyValue<V> {
     Value(V),
-    Lazy
+    Lazy,
 }
 
 impl<V> LazyValue<V> {
@@ -26,21 +29,20 @@ impl<V> LazyValue<V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Instance {
-    value: Option<InstanceValue>,
-    ty: InstanceType,
+    pub(crate) value: Option<InstanceValue>,
+    pub(crate) ty: InstanceType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InstanceValue {
     pub component_idx: Option<ComponentIdx>,
     pub args: HashMap<String, SortWithIdx>,
-    pub exports: HashMap<String, ComponentExport>,
+    pub exports: HashMap<String, SortWithIdx>,
 }
 
 impl InstanceValue {
-
     pub fn get_type(&self) -> InstanceType {
         InstanceType {
             core_types: vec![],
@@ -52,27 +54,25 @@ impl InstanceValue {
 }
 
 impl Instance {
-    pub fn new(
-        value: Option<InstanceValue>,
-        ty: InstanceType,
-    ) -> Self {
+    pub fn new(value: Option<InstanceValue>, ty: InstanceType) -> Self {
         Self { value, ty }
     }
-    pub fn get_export(
-        &self,
-        name: &String,
-    ) -> Result<Option<ComponentExport>, ComponentParseError> {
+    pub fn get_export(&self, name: &String) -> Result<Option<SortWithIdx>, ComponentParseError> {
         match &self.value {
-            Some(value) => {
-                value.exports.get(name).cloned().map(|x| Some(x)).ok_or_else(
-                    || ComponentParseError::ExportNotFound(name.clone())
-                )
-            }
+            Some(value) => value
+                .exports
+                .get(name)
+                .cloned()
+                .map(|x| Some(x))
+                .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone())),
             None => Ok(None),
         }
     }
 
-    pub fn get_export_type(&self, name: &String) -> Result<InstanceExportType, ComponentParseError> {
+    pub fn get_export_type(
+        &self,
+        name: &String,
+    ) -> Result<InstanceExportType, ComponentParseError> {
         self.ty.get_export(name)
     }
     // pub fn get_export(

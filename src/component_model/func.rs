@@ -14,12 +14,8 @@ pub struct ComponentFunction {
 
 impl ComponentFunction {
     pub fn new(value: Option<FuncValue>, ty: FuncType) -> Self {
-        Self {
-            value,
-            ty,
-        }
+        Self { value, ty }
     }
-    
 }
 
 pub enum FuncValue {

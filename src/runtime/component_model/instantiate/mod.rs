@@ -1,10 +1,15 @@
-use crate::{aliasing as core_aliasing, Module};
-use crate::component_model::{CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, CoreModule, CoreModuleReference, Idx, Reference};
+use crate::component_model::{
+    CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport,
+    CoreModule, CoreModuleReference, CoreSortWithIdx, Idx, Reference, SortWithIdx,
+};
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
-use crate::runtime::component_model::instantiate::context::InstantiatedInstanceExport;
+use crate::runtime::component_model::instantiate::context::{
+    InstantiatedInstance, InstantiatedInstanceExport,
+};
 use crate::runtime::component_model::ComponentVMError;
 use crate::Registry;
+use crate::{aliasing as core_aliasing, Module};
 
 mod context;
 // FIXME: what is this?
@@ -47,87 +52,44 @@ pub(crate) unsafe fn instantiate_next(
 
 fn instantiate_core_module_rec(
     ctx: &mut InstantiateContext,
-    mut registry: Registry,
-    module: &CoreModule,
+    registry: Registry,
+    module: CoreModule,
 ) -> InstantiateResult<()> {
-    let CoreModule { value, reference, .. } = module;
+    let CoreModule {
+        value, reference, ..
+    } = module;
     match value {
-        None => {
-            match reference.clone().unwrap() {
-                CoreModuleReference::Imported(name) => {
-                    
+        None => match reference.clone().unwrap() {
+            CoreModuleReference::Imported(name) => match ctx.current {
+                None => {
+                    let module = ctx.linker.get_module(&name).unwrap();
+                    let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
+                    ctx.push_core_module_instance(instance, registry);
+                    Ok(())
                 }
-                CoreModuleReference::Instance(idx, name) => {
-                    let inst = ctx.instances.get(&idx.global()).unwrap();
-                    let export = inst.exports.get(&name).unwrap();
+                Some(idx) => {
+                    let inst = ctx.component.get_instance(idx);
+                    todo!("instanceにreferenceをつけてやる")
                 }
-                CoreModuleReference::TypeOverwritten(idx) => {
-                    let core_module = ctx.component.get_core_module(idx.global());
+            },
+            CoreModuleReference::Instance(idx, name) => {
+                let inst = ctx.instances.get(&idx.global()).unwrap();
+                if let InstantiatedInstanceExport::Module(idx) = inst.exports.get(&name).unwrap() {
+                    let core_module = ctx.component.get_core_module(idx.global()).clone();
                     return instantiate_core_module_rec(ctx, registry, core_module);
-                }
-                CoreModuleReference::Exported(_) => unreachable!(),
+                };
+                panic!("Invalid instance export");
             }
-        }
+            CoreModuleReference::TypeOverwritten(idx) => {
+                let core_module = ctx.component.get_core_module(idx.global()).clone();
+                instantiate_core_module_rec(ctx, registry, core_module)
+            }
+            CoreModuleReference::Exported(_) => unreachable!(),
+        },
         Some(module) => {
             let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
             ctx.push_core_module_instance(instance, registry);
-        }
-    }
-    match module {
-        CoreModule::Defined(m) => {
-            let instance = core_instantiate(m.clone(), ctx.store, &registry).unwrap();
-            ctx.push_core_module_instance(instance, registry);
             Ok(())
-        }
-        // todo: moduleのtypeをvalidateする
-        CoreModule::Typed(_, reference) => match reference {
-            Reference::Instance(idx, name) => {
-                let inst = ctx.instances.get(&idx.global()).unwrap();
-                if let Some(InstantiatedInstanceExport::Module(module)) = inst.exports.get(&name) {
-                    let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
-                    ctx.push_core_module_instance(instance, registry);
-                    Ok(())
-                } else {
-                    panic!("Invalid instance export");
-                }
-            }
-            Reference::Imported(name) => {
-                if ctx.current.is_none() {
-                    let module =
-                        ctx.linker
-                            .get_module(&name)
-                            .ok_or(ComponentVMError::LinkError(format!(
-                                "Module {name} not found in linker"
-                            )))?;
-                    let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
-                    ctx.push_core_module_instance(instance, registry);
-                    Ok(())
-                } else {
-                    let current = ctx.current.unwrap();
-                    let inst = ctx.instances.get(&current).unwrap();
-                    let export =
-                        inst.exports
-                            .get(&name)
-                            .ok_or(ComponentVMError::LinkError(format!(
-                                "Module {name} not found in current instance"
-                            )))?;
-                    if let InstantiatedInstanceExport::Module(module) = export {
-                        let instance =
-                            core_instantiate(module.clone(), ctx.store, &registry).unwrap();
-                        ctx.push_core_module_instance(instance, registry);
-                        Ok(())
-                    } else {
-                        panic!("Invalid instance export");
-                    }
-                }
-            }
-            Reference::Exported(_) => unreachable!(),
-            Reference::Component(_, _) => unreachable!(), // Question: really?
-        },
-        // todo: moduleのtypeをvalidateする
-        CoreModule::SuperTyped(ty, idx, reference) => {
-            let core_module = ctx.component.get_core_module(idx.global());
-            instantiate_core_module_rec(ctx, registry, core_module.clone())
         }
     }
 }
@@ -152,7 +114,7 @@ pub unsafe fn instantiate_core_instance(
                     }
                 }
             }
-            let module = ctx.component.get_core_module(module_idx.global());
+            let module = ctx.component.get_core_module(module_idx.global()).clone();
             instantiate_core_module_rec(ctx, registry, module)?;
         }
         CoreInstance::Alias { exports } => {
@@ -224,8 +186,30 @@ pub unsafe fn instantiate_instance_end(
     ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     let target = ctx.current.unwrap();
-    let inst = ctx
-        .component.get_instance(target);
+    let inst = ctx.component.get_instance(target);
+    let value = inst.value.clone().unwrap();
+    let instantiated = InstantiatedInstance {
+        exports: value
+            .exports
+            .into_iter()
+            .map(|(name, sort)| {
+                let value = match sort {
+                    SortWithIdx::Core(CoreSortWithIdx::Module(idx)) => {
+                        InstantiatedInstanceExport::Module(idx)
+                    }
+                    SortWithIdx::Func(idx) => todo!(),
+                    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+                    SortWithIdx::Value(idx) => {}
+                    SortWithIdx::Type(idx) => todo!(),
+                    SortWithIdx::Component(idx) => todo!(),
+                    SortWithIdx::Instance(idx) => InstantiatedInstanceExport::Instance(idx),
+                    _ => unreachable!(),
+                };
+                (name, value)
+            })
+            .collect(),
+    };
+    instantiate_next(tail_code, 0, ctx)
 }
 
 pub unsafe fn instantiate_inline_instance(

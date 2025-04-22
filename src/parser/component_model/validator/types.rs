@@ -52,20 +52,23 @@ impl Validator for TypeValidator<'_> {
     }
 
     fn validate_type_idx(&self, local: usize) -> Result<TypeIdx, ComponentParseError> {
-        self.types.get(local)
+        self.types
+            .get(local)
             .copied()
             .ok_or_else(|| ComponentParseError::InvalidIdx(local, "type".to_string()))
     }
 
     fn validate_instance_idx(&self, local: usize) -> Result<InstanceIdx, ComponentParseError> {
-        self.instances.get(local)
+        self.instances
+            .get(local)
             .copied()
             .ok_or_else(|| ComponentParseError::InvalidIdx(local, "instance".to_string()))
     }
 
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     fn validate_value_idx(&self, local: usize) -> Result<ValueIdx, ComponentParseError> {
-        self.values.get(local)
+        self.values
+            .get(local)
             .copied()
             .ok_or_else(|| ComponentParseError::InvalidIdx(local, "value".to_string()))
     }

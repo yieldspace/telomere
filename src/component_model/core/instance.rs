@@ -5,8 +5,8 @@ use crate::component_model::{
     CoreModuleIdx, CoreReference, CoreSort, CoreTableRef, Idx, Slot,
 };
 use crate::parser::component_model::{ComponentParseError, Validator};
-use std::collections::HashMap;
 use crate::Module;
+use std::collections::HashMap;
 
 pub enum CoreInstance {
     Real {
@@ -44,9 +44,7 @@ impl CoreInstance {
             CoreInstance::Real { module_idx, .. } => {
                 let module = validator.get_core_module(module_idx);
                 match &module.value {
-                    None => {
-                        module.ty.get_export(self_idx, sort, name)
-                    }
+                    None => module.ty.get_export(self_idx, sort, name),
                     Some(module) => {
                         let export = module
                             .exs

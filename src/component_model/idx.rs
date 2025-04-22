@@ -11,12 +11,12 @@ macro_rules! impl_idx {
             fn new(global: usize) -> Self {
                 Self(global)
             }
-            
+
             fn global(&self) -> usize {
                 self.0
             }
         }
-        
+
         impl Deref for $name {
             type Target = usize;
             fn deref(&self) -> &Self::Target {

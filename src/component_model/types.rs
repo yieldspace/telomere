@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use crate::component_model::{
     AliasIdx, ComponentExportSlot, ComponentFunction, CoreModule, CoreType, CoreTypeIdx, FuncIdx,
     InlineComponent, Instance, InstanceIdx, Reference, Slot, TypeIdx,
@@ -6,12 +5,13 @@ use crate::component_model::{
 use crate::parser::component_model::{ComponentParseError, Validator};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
+use std::collections::HashMap;
 
 macro_rules! impl_try_into_type {
     ($from:ident, $variant:ident) => {
         impl TryFrom<Type> for $from {
             type Error = ComponentParseError;
-            fn try_from(value: Type) -> Result<Self, Self::Error> {        
+            fn try_from(value: Type) -> Result<Self, Self::Error> {
                 if let Type::$variant(value) = value {
                     Ok(value)
                 } else {
@@ -41,7 +41,6 @@ pub enum Type {
 impl_try_into_type!(FuncType, Func);
 impl_try_into_type!(ComponentType, Component);
 impl_try_into_type!(InstanceType, Instance);
-
 
 #[derive(Debug, FromPrimitive, Clone)]
 #[repr(i32)]
@@ -119,14 +118,10 @@ pub struct FuncType {
 }
 
 #[derive(Debug, Clone)]
-pub struct ComponentExportType {
-    a: Box<>
-}
+pub struct ComponentExportType {}
 
 #[derive(Debug, Clone)]
-pub struct ComponentImportType {
-
-}
+pub struct ComponentImportType {}
 
 #[derive(Debug, Clone)]
 pub struct ComponentType {
@@ -150,20 +145,18 @@ impl From<Vec<ComponentDecl>> for ComponentType {
                 ComponentDecl::Import(import_decl) => {
                     imports.insert(import_decl.name, ComponentImportType {});
                 }
-                ComponentDecl::Instance(instance_decl) => {
-                    match instance_decl {
-                        InstanceDecl::CoreType(idx) => core_types.push(idx),
-                        InstanceDecl::Type(idx) => types.push(idx),
-                        InstanceDecl::Alias(idx) => match idx {
-                            AliasIdx::Type(idx) => types.push(idx),
-                            AliasIdx::Instance(idx) => instances.push(idx),
-                            _ => unreachable!(),
-                        },
-                        InstanceDecl::ExportDecl(export_decl) => {
-                            exports.insert(export_decl.name, ComponentExportType {});
-                        }
+                ComponentDecl::Instance(instance_decl) => match instance_decl {
+                    InstanceDecl::CoreType(idx) => core_types.push(idx),
+                    InstanceDecl::Type(idx) => types.push(idx),
+                    InstanceDecl::Alias(idx) => match idx {
+                        AliasIdx::Type(idx) => types.push(idx),
+                        AliasIdx::Instance(idx) => instances.push(idx),
+                        _ => unreachable!(),
+                    },
+                    InstanceDecl::ExportDecl(export_decl) => {
+                        exports.insert(export_decl.name, ComponentExportType {});
                     }
-                }
+                },
             }
         }
 
@@ -208,7 +201,12 @@ impl From<Vec<InstanceDecl>> for InstanceType {
                     _ => unreachable!(),
                 },
                 InstanceDecl::ExportDecl(export_decl) => {
-                    exports.insert(export_decl.name, InstanceExportType { desc: export_decl.ed });
+                    exports.insert(
+                        export_decl.name,
+                        InstanceExportType {
+                            desc: export_decl.ed,
+                        },
+                    );
                 }
             }
         }
@@ -224,17 +222,15 @@ impl From<Vec<InstanceDecl>> for InstanceType {
 
 #[derive(Debug, Clone)]
 pub struct InstanceExportType {
-    pub(crate) desc: ExternDesc
+    pub(crate) desc: ExternDesc,
 }
 
 impl InstanceType {
-    pub fn get_export(
-        &self,
-        name: &String,
-    ) -> Result<InstanceExportType, ComponentParseError> {
-        self.exports.get(name).cloned().ok_or_else(
-            || ComponentParseError::ExportNotFound(name.clone())
-        )
+    pub fn get_export(&self, name: &String) -> Result<InstanceExportType, ComponentParseError> {
+        self.exports
+            .get(name)
+            .cloned()
+            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
     }
 }
 

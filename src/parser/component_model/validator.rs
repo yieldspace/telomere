@@ -1,12 +1,18 @@
 mod child;
 mod types;
 
-use std::collections::HashMap;
-use crate::component_model::{Binding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, ComponentType, CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceIdx, Type, TypeIdx};
+use crate::component_model::{
+    Binding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, ComponentType,
+    CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx,
+    CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType,
+    CoreTypeIdx, FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceIdx, Type,
+    TypeIdx,
+};
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
 pub use child::ChildValidator;
+use std::collections::HashMap;
 pub use types::*;
 
 #[derive(Default)]
@@ -48,77 +54,65 @@ pub trait Validator: private::Sealed {
     fn get_local_store_mut(&mut self) -> &mut LocalStore;
 
     fn validate_core_module_idx(&self, local: usize) -> Result<CoreModuleIdx, ComponentParseError> {
-        self.get_local_store().core_modules.get(local).copied().ok_or_else(|| ComponentParseError::InvalidIdx(
-            local,
-            "core module".to_string(),
-        ))
+        self.get_local_store()
+            .core_modules
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "core module".to_string()))
     }
 
     fn validate_core_instance_idx(
         &self,
         local: usize,
     ) -> Result<CoreInstanceIdx, ComponentParseError> {
-        self.get_local_store().core_instances.get(local).copied().ok_or_else(|| ComponentParseError::InvalidIdx(
-            local,
-            "core instance".to_string(),
-        ))
+        self.get_local_store()
+            .core_instances
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "core instance".to_string()))
     }
 
     fn validate_core_function_idx(&self, local: usize) -> Result<CoreFuncIdx, ComponentParseError> {
-        self.get_local_store().core_funcs.get(local).copied().ok_or_else(|| ComponentParseError::InvalidIdx(
-            local,
-            "core function".to_string(),
-        ))
+        self.get_local_store()
+            .core_funcs
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "core function".to_string()))
     }
     fn validate_core_memory_idx(&self, local: usize) -> Result<CoreMemoryIdx, ComponentParseError> {
         self.get_local_store()
             .core_memories
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "core memory".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "core memory".to_string()))
     }
     fn validate_core_table_idx(&self, local: usize) -> Result<CoreTableIdx, ComponentParseError> {
         self.get_local_store()
             .core_tables
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "core table".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "core table".to_string()))
     }
     fn validate_core_type_idx(&self, local: usize) -> Result<CoreTypeIdx, ComponentParseError> {
         self.get_local_store()
             .core_types
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "core type".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "core type".to_string()))
     }
     fn validate_core_global_idx(&self, local: usize) -> Result<CoreGlobalIdx, ComponentParseError> {
         self.get_local_store()
             .core_globals
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "core global".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "core global".to_string()))
     }
     fn validate_component_idx(&self, local: usize) -> Result<ComponentIdx, ComponentParseError> {
         self.get_local_store()
             .components
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "component".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "component".to_string()))
     }
 
     fn validate_function_idx(&self, local: usize) -> Result<FuncIdx, ComponentParseError> {
@@ -126,10 +120,7 @@ pub trait Validator: private::Sealed {
             .functions
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "function".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "function".to_string()))
     }
 
     fn validate_type_idx(&self, local: usize) -> Result<TypeIdx, ComponentParseError> {
@@ -137,10 +128,7 @@ pub trait Validator: private::Sealed {
             .types
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "type".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "type".to_string()))
     }
 
     fn validate_instance_idx(&self, local: usize) -> Result<InstanceIdx, ComponentParseError> {
@@ -148,10 +136,7 @@ pub trait Validator: private::Sealed {
             .instances
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "instance".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "instance".to_string()))
     }
 
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
@@ -160,10 +145,7 @@ pub trait Validator: private::Sealed {
             .values
             .get(local)
             .copied()
-            .ok_or_else(|| ComponentParseError::InvalidIdx(
-                local,
-                "value".to_string(),
-            ))
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "value".to_string()))
     }
 
     fn add_core_module(
@@ -292,12 +274,20 @@ pub trait Validator: private::Sealed {
         Ok(idx)
     }
 
-    fn add_import(&mut self, name: String, import: ComponentImport) -> Result<(), ComponentParseError> {
+    fn add_import(
+        &mut self,
+        name: String,
+        import: ComponentImport,
+    ) -> Result<(), ComponentParseError> {
         self.get_local_store_mut().imports.insert(name, import);
         Ok(())
     }
 
-    fn add_export(&mut self, name: String, export: ComponentExport) -> Result<(), ComponentParseError> {
+    fn add_export(
+        &mut self,
+        name: String,
+        export: ComponentExport,
+    ) -> Result<(), ComponentParseError> {
         self.get_local_store_mut().exports.insert(name, export);
         Ok(())
     }

@@ -1,5 +1,5 @@
 use crate::common::InstanceAddr;
-use crate::component_model::{FlattenComponent, InstanceIdx};
+use crate::component_model::{CoreModuleIdx, FlattenComponent, InstanceIdx};
 use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
 use crate::{Module, Registry, Store};
 use std::collections::HashMap;
@@ -45,8 +45,8 @@ impl<'a> InstantiateContext<'a> {
 }
 
 pub enum InstantiatedInstanceExport {
-    Module(Module),
-    Instance,
+    Module(CoreModuleIdx),
+    Instance(InstanceIdx),
 }
 
 pub struct InstantiatedInstance {

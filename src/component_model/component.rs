@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use crate::component_model::{
     ComponentDecl, ComponentFunction, ComponentIdx, ComponentType, CoreModule, CoreModuleIdx,
     CoreSort, CoreSortWithIdx, CoreType, ExternDesc, FuncIdx, Instance, InstanceDecl, InstanceIdx,
@@ -6,6 +5,7 @@ use crate::component_model::{
 };
 use crate::parser::component_model::{ComponentParseError, Validator};
 use crate::runtime::component_model::instantiate::InstantiateInstr;
+use std::collections::HashMap;
 
 /// コンポーネントからexportされた型を表します．
 /// exportされた型に明示的にexterndescが設定されている場合，externdescの型として表されます．
@@ -69,23 +69,8 @@ impl InlineComponentValue {
 }
 
 impl InlineComponent {
-    pub(crate) fn new(
-        value: Option<InlineComponentValue>,
-        ty: ComponentType,
-    ) -> Self {
-        Self {
-            value,
-            ty,
-        }
-    }
-    
-    pub(crate) fn get_exports(&self) {
-        match self.value {
-            Some(ref value) => {
-                
-            }
-            _ => {}
-        }
+    pub(crate) fn new(value: Option<InlineComponentValue>, ty: ComponentType) -> Self {
+        Self { value, ty }
     }
 
     // pub(crate) fn get_export(

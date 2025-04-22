@@ -23,7 +23,11 @@ pub struct CoreModule {
 }
 
 impl CoreModule {
-    pub fn new(value: Option<Module>, ty: CoreModuleType, reference: Option<CoreModuleReference>) -> Self {
+    pub fn new(
+        value: Option<Module>,
+        ty: CoreModuleType,
+        reference: Option<CoreModuleReference>,
+    ) -> Self {
         Self {
             value,
             ty,

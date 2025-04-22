@@ -1,5 +1,8 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{AliasIdx, Binding, ComponentFunction, CoreModule, CoreModuleReference, CoreType, ExternDesc, InlineComponent, Instance, InstanceDecl, InstanceType, Reference, Type, TypeBound};
+use crate::component_model::{
+    AliasIdx, Binding, ComponentFunction, CoreModule, CoreModuleReference, CoreType, ExternDesc,
+    InlineComponent, Instance, InstanceDecl, InstanceType, Reference, Type, TypeBound,
+};
 use crate::parser::component_model::types::{parse_export_decl, parse_type};
 use crate::parser::component_model::{
     parse_alias, parse_core_type, ComponentParseError, ParseContext, SizedResult,
@@ -78,10 +81,11 @@ pub fn _parse_instance_decl(
                         //         func_type.clone(),
                         //         Reference::Exported(decl.name.clone()),
                         //     )))?;
-                        ctx.validator.add_func(Binding::Real(ComponentFunction::new(
-                            None,
-                            func_type.clone(),
-                        )))?;
+                        ctx.validator
+                            .add_func(Binding::Real(ComponentFunction::new(
+                                None,
+                                func_type.clone(),
+                            )))?;
                     } else {
                         return Err(ComponentParseError::InvalidSignature(format!(
                             "Invalid core type for import: {ty:?}"
@@ -130,10 +134,8 @@ pub fn _parse_instance_decl(
                         //     inst_type.clone(),
                         //     Reference::Exported(decl.name.clone()),
                         // )))?;
-                        ctx.validator.add_instance(Binding::Real(Instance::new(
-                            None,
-                            inst_type.clone(),
-                        )))?;
+                        ctx.validator
+                            .add_instance(Binding::Real(Instance::new(None, inst_type.clone())))?;
                     } else {
                         return Err(ComponentParseError::InvalidSignature(format!(
                             "Invalid core type for import: {ty:?}"

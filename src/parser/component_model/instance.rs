@@ -1,5 +1,8 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, ComponentExport, ComponentExportType, ComponentExportValue, Idx, InlineExport, Instance, InstanceIdx, InstanceValue, Instantiate, InstantiateArg};
+use crate::component_model::{
+    Binding, ComponentExport, ComponentExportType, Idx, InlineExport, Instance, InstanceIdx,
+    InstanceValue, Instantiate, InstantiateArg,
+};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
 use crate::parser::component_model::parse_sort_with_idx;
@@ -9,6 +12,7 @@ use crate::runtime::component_model::instantiate::{
     instantiate_inline_instance, instantiate_instance_end, instantiate_instance_start,
     InstantiateInstr, InstantiateOperand,
 };
+use std::collections::HashMap;
 
 pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstanceIdx> {
     let start_count = ctx.reader.read_count();
@@ -17,7 +21,9 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
         0x00 => {
             let (_, component_idx) = parse_component_idx(ctx)?;
             let (_, args) = parse_vec(ctx, |v| v.reader, parse_instantiate_arg)?;
-            let args = args.into_iter().map(|InstantiateArg {name, sort}| (name, sort))
+            let args = args
+                .into_iter()
+                .map(|InstantiateArg { name, sort }| (name, sort))
                 .collect();
             // let idx = ctx
             //     .validator
@@ -26,16 +32,16 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
             //         args,
             //     })))?;
             let component = ctx.validator.get_component(&component_idx);
-            let exports = component.get_exports();
+            // let exports = component.get_exports();
             let value = InstanceValue {
                 component_idx: Some(component_idx),
                 args,
-                exports,
+                exports: HashMap::default(),
             };
             let ty = value.get_type();
-            let idx = ctx.validator.add_instance(
-                Binding::Real(Instance::new(Some(value), ty)),
-            )?;
+            let idx = ctx
+                .validator
+                .add_instance(Binding::Real(Instance::new(Some(value), ty)))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_instance_start,
             });
@@ -60,13 +66,15 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
             let value = InstanceValue {
                 component_idx: None,
                 args: Default::default(),
-                exports: exports.into_iter().map(|InlineExport {name, sort}| (name, ComponentExport::new(ComponentExportValue::new())))
+                exports: exports
+                    .into_iter()
+                    .map(|InlineExport { name, sort }| (name, sort))
                     .collect(),
             };
             let ty = value.get_type();
-            let idx = ctx.validator.add_instance(
-                Binding::Real(Instance::new(Some(value), ty)),
-            )?;
+            let idx = ctx
+                .validator
+                .add_instance(Binding::Real(Instance::new(Some(value), ty)))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_inline_instance,
             });
