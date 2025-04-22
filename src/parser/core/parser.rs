@@ -46,7 +46,7 @@ fn validate_const_expr_type(
         ConstExpr::GlobalGet(idx) => {
             let gt = globals
                 .get(idx as usize)
-                .ok_or(WasmParserError::InvalidGlobalAccess)?;
+                .ok_or(WasmParserError::UnknownGlobal)?;
             if gt.1 != Mut::Const {
                 Err(WasmParserError::InvalidGlobalAccess)?;
             }

@@ -276,11 +276,16 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                         let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
                         let mut parser = telomere::WasmParser::new(&mut reader);
                         // TODO: test error message
-                        assert!(
-                            parser.parse_module().is_err(),
-                            "{:?}",
-                            span.linecol_in(text)
-                        )
+                        let res = parser.parse_module();
+                        
+                        match res {
+                            Err(_err)=>{
+                                // FIXME: 
+                                //assert!(err.to_string().starts_with(message),"{} == {},message validation failed@{:?}",err.to_string(),message,span.linecol_in(text));
+                            }
+                            Ok(_) => panic!("AssertInvalid failed@{:?}",span.linecol_in(text))
+                        }
+
                     }
                 } else {
                     tracing::warn!("now we ignoring alignment error")
