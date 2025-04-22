@@ -15,7 +15,7 @@ pub enum CoreSort {
     Instance = 0x12,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum CoreSortWithIdx {
     Func(CoreFuncIdx),
     Table(CoreTableIdx),

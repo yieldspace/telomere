@@ -11,7 +11,7 @@ use crate::component_model::{
 };
 pub use func::*;
 pub use instance::*;
-pub use module::CoreModule;
+pub use module::*;
 pub use sort::*;
 pub use types::*;
 
@@ -48,17 +48,17 @@ pub enum CoreInstanceImport {
     Instance(CoreInstanceIdx),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoreMemoryRef(pub CoreInstanceIdx, pub crate::common::MemIdx, pub String);
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoreTableRef(pub CoreInstanceIdx, pub crate::common::TableIdx, pub String);
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoreGlobalRef(
     pub CoreInstanceIdx,
     pub crate::common::GlobalIdx,
     pub String,
 );
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoreFuncRef(pub CoreInstanceIdx, pub crate::common::FuncIdx, pub String);
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoreTypeRef(pub CoreInstanceIdx, pub crate::common::TypeIdx, pub String);

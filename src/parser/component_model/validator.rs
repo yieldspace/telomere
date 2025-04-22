@@ -1,12 +1,8 @@
 mod child;
 mod types;
 
-use crate::component_model::{
-    Binding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, CoreFuncIdx,
-    CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx,
-    CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx,
-    FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceIdx, Type, TypeIdx,
-};
+use std::collections::HashMap;
+use crate::component_model::{Binding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, ComponentType, CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceIdx, Type, TypeIdx};
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
@@ -15,21 +11,33 @@ pub use types::*;
 
 #[derive(Default)]
 pub struct LocalStore {
-    pub core_modules: Vec<usize>,
-    pub core_instances: Vec<usize>,
-    pub core_funcs: Vec<usize>,
-    pub components: Vec<usize>,
-    pub instances: Vec<usize>,
-    pub core_memories: Vec<usize>,
-    pub core_tables: Vec<usize>,
-    pub core_globals: Vec<usize>,
-    pub core_types: Vec<usize>,
-    pub functions: Vec<usize>,
-    pub types: Vec<usize>,
+    pub core_modules: Vec<CoreModuleIdx>,
+    pub core_instances: Vec<CoreInstanceIdx>,
+    pub core_funcs: Vec<CoreFuncIdx>,
+    pub components: Vec<ComponentIdx>,
+    pub instances: Vec<InstanceIdx>,
+    pub core_memories: Vec<CoreMemoryIdx>,
+    pub core_tables: Vec<CoreTableIdx>,
+    pub core_globals: Vec<CoreGlobalIdx>,
+    pub core_types: Vec<CoreTypeIdx>,
+    pub functions: Vec<FuncIdx>,
+    pub types: Vec<TypeIdx>,
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
-    pub values: Vec<usize>,
-    pub imports: Vec<ComponentImport>,
-    pub exports: Vec<ComponentExport>,
+    pub values: Vec<ValueIdx>,
+    pub imports: HashMap<String, ComponentImport>,
+    pub exports: HashMap<String, ComponentExport>,
+}
+
+impl LocalStore {
+    pub fn make_component_type(&self) -> ComponentType {
+        ComponentType {
+            imports: Default::default(),
+            exports: Default::default(),
+            core_types: self.core_types.clone(),
+            types: self.types.clone(),
+            instances: self.instances.clone(),
+        }
+    }
 }
 
 pub trait Validator: private::Sealed {
@@ -40,9 +48,9 @@ pub trait Validator: private::Sealed {
     fn get_local_store_mut(&mut self) -> &mut LocalStore;
 
     fn validate_core_module_idx(&self, local: usize) -> Result<CoreModuleIdx, ComponentParseError> {
-        Ok(CoreModuleIdx::new(
+        self.get_local_store().core_modules.get(local).copied().ok_or_else(|| ComponentParseError::InvalidIdx(
             local,
-            *self.get_local_store().core_modules.get(local).unwrap(),
+            "core module".to_string(),
         ))
     }
 
@@ -50,76 +58,112 @@ pub trait Validator: private::Sealed {
         &self,
         local: usize,
     ) -> Result<CoreInstanceIdx, ComponentParseError> {
-        Ok(CoreInstanceIdx::new(
+        self.get_local_store().core_instances.get(local).copied().ok_or_else(|| ComponentParseError::InvalidIdx(
             local,
-            *self.get_local_store().core_instances.get(local).unwrap(),
+            "core instance".to_string(),
         ))
     }
 
     fn validate_core_function_idx(&self, local: usize) -> Result<CoreFuncIdx, ComponentParseError> {
-        Ok(CoreFuncIdx::new(
+        self.get_local_store().core_funcs.get(local).copied().ok_or_else(|| ComponentParseError::InvalidIdx(
             local,
-            *self.get_local_store().core_funcs.get(local).unwrap(),
+            "core function".to_string(),
         ))
     }
     fn validate_core_memory_idx(&self, local: usize) -> Result<CoreMemoryIdx, ComponentParseError> {
-        Ok(CoreMemoryIdx::new(
-            local,
-            *self.get_local_store().core_memories.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .core_memories
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "core memory".to_string(),
+            ))
     }
     fn validate_core_table_idx(&self, local: usize) -> Result<CoreTableIdx, ComponentParseError> {
-        Ok(CoreTableIdx::new(
-            local,
-            *self.get_local_store().core_tables.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .core_tables
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "core table".to_string(),
+            ))
     }
     fn validate_core_type_idx(&self, local: usize) -> Result<CoreTypeIdx, ComponentParseError> {
-        Ok(CoreTypeIdx::new(
-            local,
-            *self.get_local_store().core_types.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .core_types
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "core type".to_string(),
+            ))
     }
     fn validate_core_global_idx(&self, local: usize) -> Result<CoreGlobalIdx, ComponentParseError> {
-        Ok(CoreGlobalIdx::new(
-            local,
-            *self.get_local_store().core_globals.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .core_globals
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "core global".to_string(),
+            ))
     }
     fn validate_component_idx(&self, local: usize) -> Result<ComponentIdx, ComponentParseError> {
-        Ok(ComponentIdx::new(
-            local,
-            *self.get_local_store().components.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .components
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "component".to_string(),
+            ))
     }
 
     fn validate_function_idx(&self, local: usize) -> Result<FuncIdx, ComponentParseError> {
-        Ok(FuncIdx::new(
-            local,
-            *self.get_local_store().functions.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .functions
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "function".to_string(),
+            ))
     }
 
     fn validate_type_idx(&self, local: usize) -> Result<TypeIdx, ComponentParseError> {
-        Ok(TypeIdx::new(
-            local,
-            *self.get_local_store().types.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .types
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "type".to_string(),
+            ))
     }
 
     fn validate_instance_idx(&self, local: usize) -> Result<InstanceIdx, ComponentParseError> {
-        Ok(InstanceIdx::new(
-            local,
-            *self.get_local_store().instances.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .instances
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "instance".to_string(),
+            ))
     }
 
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     fn validate_value_idx(&self, local: usize) -> Result<ValueIdx, ComponentParseError> {
-        Ok(ValueIdx::new(
-            local,
-            *self.get_local_store().values.get(local).unwrap(),
-        ))
+        self.get_local_store()
+            .values
+            .get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(
+                local,
+                "value".to_string(),
+            ))
     }
 
     fn add_core_module(
@@ -127,10 +171,9 @@ pub trait Validator: private::Sealed {
         module: Binding<CoreModule>,
     ) -> Result<CoreModuleIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_modules.len();
-        let local_idx = self.get_local_store().core_modules.len();
+        let idx = CoreModuleIdx::new(global_idx);
         self.get_flatten_component_mut().core_modules.push(module);
-        self.get_local_store_mut().core_modules.push(global_idx);
-        let idx = CoreModuleIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().core_modules.push(idx);
         Ok(idx)
     }
 
@@ -139,12 +182,11 @@ pub trait Validator: private::Sealed {
         instance: Binding<CoreInstance>,
     ) -> Result<CoreInstanceIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_instances.len();
-        let local_idx = self.get_local_store().core_instances.len();
+        let idx = CoreInstanceIdx::new(global_idx);
         self.get_flatten_component_mut()
             .core_instances
             .push(instance);
-        self.get_local_store_mut().core_instances.push(global_idx);
-        let idx = CoreInstanceIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().core_instances.push(idx);
         Ok(idx)
     }
 
@@ -153,19 +195,17 @@ pub trait Validator: private::Sealed {
         func: Binding<CoreFunction>,
     ) -> Result<CoreFuncIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_functions.len();
-        let local_idx = self.get_local_store().core_funcs.len();
+        let idx = CoreFuncIdx::new(global_idx);
         self.get_flatten_component_mut().core_functions.push(func);
-        self.get_local_store_mut().core_funcs.push(global_idx);
-        let idx = CoreFuncIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().core_funcs.push(idx);
         Ok(idx)
     }
 
     fn add_core_type(&mut self, ty: Binding<CoreType>) -> Result<CoreTypeIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_types.len();
-        let local_idx = self.get_local_store().core_types.len();
+        let idx = CoreTypeIdx::new(global_idx);
         self.get_flatten_component_mut().core_types.push(ty);
-        self.get_local_store_mut().core_types.push(global_idx);
-        let idx = CoreTypeIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().core_types.push(idx);
         Ok(idx)
     }
 
@@ -174,10 +214,9 @@ pub trait Validator: private::Sealed {
         memory: Binding<CoreMemoryRef>,
     ) -> Result<CoreMemoryIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_memories.len();
-        let local_idx = self.get_local_store().core_memories.len();
+        let idx = CoreMemoryIdx::new(global_idx);
         self.get_flatten_component_mut().core_memories.push(memory);
-        self.get_local_store_mut().core_memories.push(global_idx);
-        let idx = CoreMemoryIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().core_memories.push(idx);
         Ok(idx)
     }
 
@@ -186,10 +225,9 @@ pub trait Validator: private::Sealed {
         table: Binding<CoreTableRef>,
     ) -> Result<CoreTableIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_tables.len();
-        let local_idx = self.get_local_store().core_tables.len();
+        let idx = CoreTableIdx::new(global_idx);
         self.get_flatten_component_mut().core_tables.push(table);
-        self.get_local_store_mut().core_tables.push(global_idx);
-        let idx = CoreTableIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().core_tables.push(idx);
         Ok(idx)
     }
 
@@ -198,10 +236,9 @@ pub trait Validator: private::Sealed {
         global: Binding<CoreGlobalRef>,
     ) -> Result<CoreGlobalIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_globals.len();
-        let local_idx = self.get_local_store().core_globals.len();
+        let idx = CoreGlobalIdx::new(global_idx);
         self.get_flatten_component_mut().core_globals.push(global);
-        self.get_local_store_mut().core_globals.push(global_idx);
-        let idx = CoreGlobalIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().core_globals.push(idx);
         Ok(idx)
     }
 
@@ -210,10 +247,9 @@ pub trait Validator: private::Sealed {
         component: Binding<InlineComponent>,
     ) -> Result<ComponentIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().components.len();
-        let local_idx = self.get_local_store().components.len();
+        let idx = ComponentIdx::new(global_idx);
         self.get_flatten_component_mut().components.push(component);
-        self.get_local_store_mut().components.push(global_idx);
-        let idx = ComponentIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().components.push(idx);
         Ok(idx)
     }
 
@@ -222,10 +258,9 @@ pub trait Validator: private::Sealed {
         instance: Binding<Instance>,
     ) -> Result<InstanceIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().instances.len();
-        let local_idx = self.get_local_store().instances.len();
+        let idx = InstanceIdx::new(global_idx);
         self.get_flatten_component_mut().instances.push(instance);
-        self.get_local_store_mut().instances.push(global_idx);
-        let idx = InstanceIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().instances.push(idx);
         Ok(idx)
     }
 
@@ -234,39 +269,36 @@ pub trait Validator: private::Sealed {
         func: Binding<ComponentFunction>,
     ) -> Result<FuncIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().functions.len();
-        let local_idx = self.get_local_store().functions.len();
+        let idx = FuncIdx::new(global_idx);
         self.get_flatten_component_mut().functions.push(func);
-        self.get_local_store_mut().functions.push(global_idx);
-        let idx = FuncIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().functions.push(idx);
         Ok(idx)
     }
 
     fn add_type(&mut self, ty: Binding<Type>) -> Result<TypeIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().types.len();
-        let local_idx = self.get_local_store().types.len();
+        let idx = TypeIdx::new(global_idx);
         self.get_flatten_component_mut().types.push(ty);
-        self.get_local_store_mut().types.push(global_idx);
-        let idx = TypeIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().types.push(idx);
         Ok(idx)
     }
 
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     fn add_value(&mut self, value: Binding<ValueBound>) -> Result<ValueIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().values.len();
-        let local_idx = self.get_local_store().values.len();
+        let idx = ValueIdx::new(global_idx);
         self.get_flatten_component_mut().values.push(value);
-        self.get_local_store_mut().values.push(global_idx);
-        let idx = ValueIdx::new(local_idx, global_idx);
+        self.get_local_store_mut().values.push(idx);
         Ok(idx)
     }
 
-    fn add_import(&mut self, import: ComponentImport) -> Result<(), ComponentParseError> {
-        self.get_local_store_mut().imports.push(import);
+    fn add_import(&mut self, name: String, import: ComponentImport) -> Result<(), ComponentParseError> {
+        self.get_local_store_mut().imports.insert(name, import);
         Ok(())
     }
 
-    fn add_export(&mut self, export: ComponentExport) -> Result<(), ComponentParseError> {
-        self.get_local_store_mut().exports.push(export);
+    fn add_export(&mut self, name: String, export: ComponentExport) -> Result<(), ComponentParseError> {
+        self.get_local_store_mut().exports.insert(name, export);
         Ok(())
     }
 

@@ -151,7 +151,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
             let mut validator = TypeValidator::new(ctx.validator);
             let mut new_ctx = ParseContext::new(ctx.reader, ctx.instrs, &mut validator);
             let (_, cd) = parse_vec(&mut new_ctx, |v| v.reader, parse_component_decl)?;
-            Type::Component(ComponentType(cd))
+            Type::Component(ComponentType::from(cd))
         }
         INSTANCE_TYPE => {
             let mut validator = TypeValidator::new(ctx.validator);

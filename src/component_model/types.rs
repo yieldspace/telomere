@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::component_model::{
     AliasIdx, ComponentExportSlot, ComponentFunction, CoreModule, CoreType, CoreTypeIdx, FuncIdx,
     InlineComponent, Instance, InstanceIdx, Reference, Slot, TypeIdx,
@@ -6,7 +7,24 @@ use crate::parser::component_model::{ComponentParseError, Validator};
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
 
-#[derive(Debug)]
+macro_rules! impl_try_into_type {
+    ($from:ident, $variant:ident) => {
+        impl TryFrom<Type> for $from {
+            type Error = ComponentParseError;
+            fn try_from(value: Type) -> Result<Self, Self::Error> {        
+                if let Type::$variant(value) = value {
+                    Ok(value)
+                } else {
+                    Err(ComponentParseError::InvalidType(
+                        stringify!($variant).to_string(),
+                    ))
+                }
+            }
+        }
+    };
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     DefVal(DefValType),
     Func(FuncType),
@@ -19,6 +37,11 @@ pub enum Type {
     SuperTypedUniqueResource(TypeIdx),
     Referenced(Box<Type>, Reference),
 }
+
+impl_try_into_type!(FuncType, Func);
+impl_try_into_type!(ComponentType, Component);
+impl_try_into_type!(InstanceType, Instance);
+
 
 #[derive(Debug, FromPrimitive, Clone)]
 #[repr(i32)]
@@ -40,7 +63,7 @@ pub enum PrimValType {
     ErrorContext = compile_i32([0x64]),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DefValType {
     Primitive(PrimValType),
     Record(Vec<LabelValType>),
@@ -65,7 +88,7 @@ pub struct LabelValType {
     pub t: ValType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Case {
     pub label: Label,
     pub t: Option<ValType>,
@@ -83,7 +106,7 @@ pub enum ValType {
     Primitive(PrimValType),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ResourceType {
     Resource(Option<FuncIdx>),
     ResourceWithAsyncCallback(FuncIdx, Option<FuncIdx>),
@@ -96,7 +119,63 @@ pub struct FuncType {
 }
 
 #[derive(Debug, Clone)]
-pub struct ComponentType(pub Vec<ComponentDecl>);
+pub struct ComponentExportType {
+    a: Box<>
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentImportType {
+
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentType {
+    pub(crate) imports: HashMap<String, ComponentImportType>,
+    pub(crate) exports: HashMap<String, ComponentExportType>,
+    pub(crate) core_types: Vec<CoreTypeIdx>,
+    pub(crate) types: Vec<TypeIdx>,
+    pub(crate) instances: Vec<InstanceIdx>,
+}
+
+impl From<Vec<ComponentDecl>> for ComponentType {
+    fn from(value: Vec<ComponentDecl>) -> Self {
+        let mut imports = HashMap::new();
+        let mut exports = HashMap::new();
+        let mut core_types = vec![];
+        let mut types = vec![];
+        let mut instances = vec![];
+
+        for decl in value {
+            match decl {
+                ComponentDecl::Import(import_decl) => {
+                    imports.insert(import_decl.name, ComponentImportType {});
+                }
+                ComponentDecl::Instance(instance_decl) => {
+                    match instance_decl {
+                        InstanceDecl::CoreType(idx) => core_types.push(idx),
+                        InstanceDecl::Type(idx) => types.push(idx),
+                        InstanceDecl::Alias(idx) => match idx {
+                            AliasIdx::Type(idx) => types.push(idx),
+                            AliasIdx::Instance(idx) => instances.push(idx),
+                            _ => unreachable!(),
+                        },
+                        InstanceDecl::ExportDecl(export_decl) => {
+                            exports.insert(export_decl.name, ComponentExportType {});
+                        }
+                    }
+                }
+            }
+        }
+
+        Self {
+            imports,
+            exports,
+            core_types,
+            types,
+            instances,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum ComponentDecl {
@@ -105,76 +184,57 @@ pub enum ComponentDecl {
 }
 
 #[derive(Debug, Clone)]
-pub struct InstanceType(pub Vec<InstanceDecl>);
+pub struct InstanceType {
+    pub(crate) core_types: Vec<CoreTypeIdx>,
+    pub(crate) types: Vec<TypeIdx>,
+    pub(crate) instances: Vec<InstanceIdx>,
+    pub(crate) exports: HashMap<String, InstanceExportType>,
+}
+
+impl From<Vec<InstanceDecl>> for InstanceType {
+    fn from(value: Vec<InstanceDecl>) -> Self {
+        let mut core_types = vec![];
+        let mut types = vec![];
+        let mut instances = vec![];
+        let mut exports = HashMap::new();
+
+        for decl in value {
+            match decl {
+                InstanceDecl::CoreType(idx) => core_types.push(idx),
+                InstanceDecl::Type(idx) => types.push(idx),
+                InstanceDecl::Alias(idx) => match idx {
+                    AliasIdx::Type(idx) => types.push(idx),
+                    AliasIdx::Instance(idx) => instances.push(idx),
+                    _ => unreachable!(),
+                },
+                InstanceDecl::ExportDecl(export_decl) => {
+                    exports.insert(export_decl.name, InstanceExportType { desc: export_decl.ed });
+                }
+            }
+        }
+
+        Self {
+            core_types,
+            types,
+            instances,
+            exports,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InstanceExportType {
+    pub(crate) desc: ExternDesc
+}
 
 impl InstanceType {
     pub fn get_export(
         &self,
-        validator: &dyn Validator,
-        self_idx: InstanceIdx,
-        name: String,
-    ) -> Result<ComponentExportSlot, ComponentParseError> {
-        let decl = self
-            .0
-            .iter()
-            .find_map(|decl| match decl {
-                InstanceDecl::ExportDecl(decl) if decl.name == name => Some(decl),
-                _ => None,
-            })
-            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))?;
-        match &decl.ed {
-            ExternDesc::Core(idx) => {
-                let ty = validator.get_core_type(idx);
-                if let CoreType::ModuleType(ty) = ty {
-                    Ok(ComponentExportSlot::CoreModule(Slot::Value(
-                        CoreModule::Typed(ty.clone(), Reference::Instance(self_idx, name)),
-                    )))
-                } else {
-                    panic!("Expected a module type");
-                }
-            }
-            ExternDesc::Func(idx) => {
-                let ty = validator.get_type(idx);
-                if let Type::Func(ty) = ty {
-                    Ok(ComponentExportSlot::Func(Slot::Value(
-                        ComponentFunction::Typed(ty.clone(), Reference::Instance(self_idx, name)),
-                    )))
-                } else {
-                    Err(ComponentParseError::InvalidSignature(format!(
-                        "Invalid core type for export: {ty:?}"
-                    )))
-                }
-            }
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            ExternDesc::Value(_) => {
-                todo!();
-            }
-            ExternDesc::Type(ty) => match ty {
-                TypeBound::Eq(idx) => Ok(ComponentExportSlot::Type(Slot::Idx(*idx))),
-                TypeBound::Sub => Ok(ComponentExportSlot::Type(Slot::Value(Type::UniqueResource))),
-            },
-            ExternDesc::Component(ty) => {
-                let ty = validator.get_type(ty);
-                if let Type::Component(ty) = ty {
-                    Ok(ComponentExportSlot::Component(Slot::Value(
-                        InlineComponent::Typed(ty.clone(), Reference::Instance(self_idx, name)),
-                    )))
-                } else {
-                    panic!("Expected a component type");
-                }
-            }
-            ExternDesc::Instance(ty) => {
-                let ty = validator.get_type(ty);
-                if let Type::Instance(ty) = ty {
-                    Ok(ComponentExportSlot::Instance(Slot::Value(Instance::Typed(
-                        ty.clone(),
-                        Reference::Instance(self_idx, name),
-                    ))))
-                } else {
-                    panic!("Expected an instance type");
-                }
-            }
-        }
+        name: &String,
+    ) -> Result<InstanceExportType, ComponentParseError> {
+        self.exports.get(name).cloned().ok_or_else(
+            || ComponentParseError::ExportNotFound(name.clone())
+        )
     }
 }
 

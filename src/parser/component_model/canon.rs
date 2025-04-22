@@ -1,7 +1,7 @@
 use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::CanonicalFuncKind;
-use crate::component_model::{Binding, CanonOpt, ComponentFunction, CoreFunction, Idx};
+use crate::component_model::{Binding, CanonOpt, ComponentFunction, CoreFunction, FuncType, FuncValue, Idx};
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;
 use crate::parser::component_model::{
@@ -27,12 +27,19 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
             let (_, func_idx) = parse_core_func_idx(ctx)?;
             let (_, opts) = parse_vec(ctx, |v| v.reader, parse_canon_opt)?;
             let (_, ft) = parse_type_idx(ctx)?;
+            let ty = ctx
+                .validator
+                .get_type(&ft);
+            let value = FuncValue::CanonLift {
+                core_func_idx: func_idx,
+                opts,
+                ty: ft.clone(),
+            };
             let idx = ctx
                 .validator
-                .add_func(Binding::Real(ComponentFunction::CanonLift {
-                    core_func_idx: func_idx,
-                    opts,
-                    ty: ft,
+                .add_func(Binding::Real(ComponentFunction {
+                    ty: ty.clone().try_into()?,
+                    value: Some(value),
                 }))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_function,

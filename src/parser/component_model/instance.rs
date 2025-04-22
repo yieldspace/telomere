@@ -1,7 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Binding, Idx, InlineExport, Instance, InstanceIdx, Instantiate, InstantiateArg,
-};
+use crate::component_model::{Binding, ComponentExport, ComponentExportType, ComponentExportValue, Idx, InlineExport, Instance, InstanceIdx, InstanceValue, Instantiate, InstantiateArg};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
 use crate::parser::component_model::parse_sort_with_idx;
@@ -19,12 +17,25 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
         0x00 => {
             let (_, component_idx) = parse_component_idx(ctx)?;
             let (_, args) = parse_vec(ctx, |v| v.reader, parse_instantiate_arg)?;
-            let idx = ctx
-                .validator
-                .add_instance(Binding::Real(Instance::Instantiate(Instantiate {
-                    component_idx,
-                    args,
-                })))?;
+            let args = args.into_iter().map(|InstantiateArg {name, sort}| (name, sort))
+                .collect();
+            // let idx = ctx
+            //     .validator
+            //     .add_instance(Binding::Real(Instance::Instantiate(Instantiate {
+            //         component_idx,
+            //         args,
+            //     })))?;
+            let component = ctx.validator.get_component(&component_idx);
+            let exports = component.get_exports();
+            let value = InstanceValue {
+                component_idx: Some(component_idx),
+                args,
+                exports,
+            };
+            let ty = value.get_type();
+            let idx = ctx.validator.add_instance(
+                Binding::Real(Instance::new(Some(value), ty)),
+            )?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_instance_start,
             });
@@ -43,9 +54,19 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
         }
         0x01 => {
             let (_, exports) = parse_vec(ctx, |v| v.reader, parse_inlineexport)?;
-            let idx = ctx
-                .validator
-                .add_instance(Binding::Real(Instance::InlineExport(exports)))?;
+            // let idx = ctx
+            //     .validator
+            //     .add_instance(Binding::Real(Instance::InlineExport(exports)))?;
+            let value = InstanceValue {
+                component_idx: None,
+                args: Default::default(),
+                exports: exports.into_iter().map(|InlineExport {name, sort}| (name, ComponentExport::new(ComponentExportValue::new())))
+                    .collect(),
+            };
+            let ty = value.get_type();
+            let idx = ctx.validator.add_instance(
+                Binding::Real(Instance::new(Some(value), ty)),
+            )?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_inline_instance,
             });

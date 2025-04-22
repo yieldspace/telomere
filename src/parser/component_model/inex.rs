@@ -1,8 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreSortWithIdx,
-    CoreType, ExternDesc, Idx, InlineComponent, Instance, Reference, SortWithIdx, Type, TypeBound,
-};
+use crate::component_model::{Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreModuleReference, CoreSortWithIdx, CoreType, ExternDesc, Idx, InlineComponent, Instance, Reference, SortWithIdx, Type, TypeBound};
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{
     parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, SizedResult,
@@ -17,13 +14,19 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
         ExternDesc::Core(idx) => {
             let ty = ctx.validator.get_core_type(&idx);
             if let CoreType::ModuleType(mod_type) = ty {
-                let idx = ctx
-                    .validator
-                    .add_core_module(Binding::Real(CoreModule::Typed(
+                // let idx = ctx
+                //     .validator
+                //     .add_core_module(Binding::Real(CoreModule::Typed(
+                //         mod_type.clone(),
+                //         Reference::Imported(name.clone()),
+                //     )))?;
+                let idx = ctx.validator
+                    .add_core_module(Binding::Real(CoreModule::new(
+                        None,
                         mod_type.clone(),
-                        Reference::Imported(name.clone()),
+                        Some(CoreModuleReference::Imported(name.clone())),
                     )))?;
-                ComponentImport::CoreModule(name, idx)
+                ComponentImport::CoreModule(idx)
             } else {
                 return Err(ComponentParseError::InvalidSignature(format!(
                     "Invalid core type for import: {ty:?}"
@@ -35,11 +38,11 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
             if let Type::Func(func_type) = ty {
                 let idx = ctx
                     .validator
-                    .add_func(Binding::Real(ComponentFunction::Typed(
+                    .add_func(Binding::Real(ComponentFunction::new(
+                        None,
                         func_type.clone(),
-                        Reference::Imported(name.clone()),
                     )))?;
-                ComponentImport::Func(name, idx)
+                ComponentImport::Func(idx)
             } else {
                 return Err(ComponentParseError::InvalidSignature(format!(
                     "Invalid core type for import: {ty:?}"
@@ -59,18 +62,15 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
                     Reference::Imported(name.clone()),
                 )))?,
             };
-            ComponentImport::Type(name, idx)
+            ComponentImport::Type(idx)
         }
         ExternDesc::Component(idx) => {
             let ty = ctx.validator.get_type(&idx);
             if let Type::Component(comp_type) = ty {
                 let idx = ctx
                     .validator
-                    .add_component(Binding::Real(InlineComponent::Typed(
-                        comp_type.clone(),
-                        Reference::Imported(name.clone()),
-                    )))?;
-                ComponentImport::Component(name, idx)
+                    .add_component(Binding::Real(InlineComponent::new(None, comp_type.clone())))?;
+                ComponentImport::Component(idx)
             } else {
                 return Err(ComponentParseError::InvalidSignature(format!(
                     "Invalid core type for import: {ty:?}"
@@ -80,11 +80,10 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
         ExternDesc::Instance(idx) => {
             let ty = ctx.validator.get_type(&idx);
             if let Type::Instance(inst_type) = ty {
-                let idx = ctx.validator.add_instance(Binding::Real(Instance::Typed(
-                    inst_type.clone(),
-                    Reference::Imported(name.clone()),
+                let idx = ctx.validator.add_instance(Binding::Real(Instance::new(
+                    None, inst_type.clone()
                 )))?;
-                ComponentImport::Instance(name, idx)
+                ComponentImport::Instance(idx)
             } else {
                 return Err(ComponentParseError::InvalidSignature(format!(
                     "Invalid core type for import: {ty:?}"
@@ -92,7 +91,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
             }
         }
     };
-    ctx.validator.add_import(import)?;
+    ctx.validator.add_import(name, import)?;
     Ok((ctx.reader.read_count() - start_count, ()))
 }
 
@@ -101,17 +100,24 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
     let (_, name) = parse_export_name_dash(ctx)?;
     let (_, si) = parse_sort_with_idx(ctx)?;
     let (_, ed) = parse_option(ctx, parse_externdesc)?;
-    match si {
+    let sort = match si {
         SortWithIdx::Core(CoreSortWithIdx::Module(idx)) => {
             if ed.is_some() {
                 if let ExternDesc::Core(type_idx) = ed.clone().unwrap() {
                     if let CoreType::ModuleType(ty) = ctx.validator.get_core_type(&type_idx) {
-                        ctx.validator
-                            .add_core_module(Binding::Real(CoreModule::SuperTyped(
+                        // ctx.validator
+                        //     .add_core_module(Binding::Real(CoreModule::SuperTyped(
+                        //         ty.clone(),
+                        //         idx.clone(),
+                        //         Reference::Exported(name.clone()),
+                        //     )))?;
+                        let idx = ctx.validator
+                            .add_core_module(Binding::Real(CoreModule::new(
+                                None,
                                 ty.clone(),
-                                idx.clone(),
-                                Reference::Exported(name.clone()),
+                                Some(CoreModuleReference::TypeOverwritten(idx))
                             )))?;
+                        SortWithIdx::Core(CoreSortWithIdx::Module(idx))
                     } else {
                         return Err(ComponentParseError::InvalidSignature(format!(
                             "Invalid core type for import: {si:?}"
@@ -123,36 +129,40 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
                     )));
                 }
             } else {
-                ctx.validator
+                let idx = ctx.validator
                     .add_core_module(Binding::Alias(idx.global()))?;
+                SortWithIdx::Core(CoreSortWithIdx::Module(idx))
             }
         }
         SortWithIdx::Func(idx) => {
-            ctx.validator.add_func(Binding::Alias(idx.global()))?;
+            let idx = ctx.validator.add_func(Binding::Alias(idx.global()))?;
+            SortWithIdx::Func(idx)
         }
         #[cfg(feature = "component-gated-feature-value-imports-exports")]
         SortWithIdx::Value(_) => todo!(),
         SortWithIdx::Type(idx) => {
-            ctx.validator.add_type(Binding::Alias(idx.global()))?;
+            let idx = ctx.validator.add_type(Binding::Alias(idx.global()))?;
+            SortWithIdx::Type(idx)
         }
         SortWithIdx::Component(idx) => {
-            ctx.validator.add_component(Binding::Alias(idx.global()))?;
+            let idx = ctx.validator.add_component(Binding::Alias(idx.global()))?;
+            SortWithIdx::Component(idx)
         }
         SortWithIdx::Instance(idx) => {
-            ctx.validator.add_instance(Binding::Alias(idx.global()))?;
+            let idx = ctx.validator.add_instance(Binding::Alias(idx.global()))?;
+            SortWithIdx::Instance(idx)
         }
         _ => {
             return Err(ComponentParseError::InvalidSignature(format!(
                 "Invalid core type for import: {si:?}"
             )));
         }
-    }
+    };
     let export = ComponentExport {
-        name,
         sort: si,
         desc: ed,
     };
-    ctx.validator.add_export(export)?;
+    ctx.validator.add_export(name, export)?;
     Ok((ctx.reader.read_count() - start_count, ()))
 }
 

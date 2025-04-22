@@ -35,6 +35,10 @@ pub enum ComponentParseError {
     ExportNotFound(String),
     #[error("Sort `{0:?}` is invalid (expected {1})")]
     InvalidSort(SortWithIdx, String),
+    #[error("Index `{0:?}` is not found in {1}")]
+    InvalidIdx(usize, String),
+    #[error("Expected {0} Type")]
+    InvalidType(String),
 }
 
 impl ComponentParseError {

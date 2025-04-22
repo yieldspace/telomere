@@ -8,10 +8,10 @@ use crate::parser::component_model::{ComponentParseError, Validator};
 
 pub struct TypeValidator<'a> {
     parent: &'a mut dyn Validator,
-    types: Vec<usize>,
-    #[allow(dead_code)]
-    values: Vec<usize>,
-    instances: Vec<usize>,
+    types: Vec<TypeIdx>,
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    values: Vec<ValueIdx>,
+    instances: Vec<InstanceIdx>,
 }
 
 /// types, values, instancesのみ新しいindexにするValidator
@@ -21,6 +21,7 @@ impl<'a> TypeValidator<'a> {
         Self {
             parent,
             types: vec![],
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
             values: vec![],
             instances: vec![],
         }
@@ -51,16 +52,22 @@ impl Validator for TypeValidator<'_> {
     }
 
     fn validate_type_idx(&self, local: usize) -> Result<TypeIdx, ComponentParseError> {
-        Ok(TypeIdx::new(local, *self.types.get(local).unwrap()))
+        self.types.get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "type".to_string()))
     }
 
     fn validate_instance_idx(&self, local: usize) -> Result<InstanceIdx, ComponentParseError> {
-        Ok(InstanceIdx::new(local, *self.instances.get(local).unwrap()))
+        self.instances.get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "instance".to_string()))
     }
 
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     fn validate_value_idx(&self, local: usize) -> Result<ValueIdx, ComponentParseError> {
-        Ok(ValueIdx::new(local, *self.values.get(local).unwrap()))
+        self.values.get(local)
+            .copied()
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local, "value".to_string()))
     }
 
     fn add_instance(
@@ -68,29 +75,26 @@ impl Validator for TypeValidator<'_> {
         instance: Binding<Instance>,
     ) -> Result<InstanceIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().instances.len();
-        let local_idx = self.instances.len();
+        let idx = InstanceIdx::new(global_idx);
         self.get_flatten_component_mut().instances.push(instance);
-        self.instances.push(global_idx);
-        let idx = InstanceIdx::new(local_idx, global_idx);
+        self.instances.push(idx);
         Ok(idx)
     }
 
     fn add_type(&mut self, ty: Binding<Type>) -> Result<TypeIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().types.len();
-        let local_idx = self.types.len();
+        let idx = TypeIdx::new(global_idx);
         self.get_flatten_component_mut().types.push(ty);
-        self.types.push(global_idx);
-        let idx = TypeIdx::new(local_idx, global_idx);
+        self.types.push(idx);
         Ok(idx)
     }
 
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     fn add_value(&mut self, value: Binding<ValueBound>) -> Result<ValueIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().values.len();
-        let local_idx = self.values.len();
+        let idx = ValueIdx::new(global_idx);
         self.get_flatten_component_mut().values.push(value);
-        self.values.push(global_idx);
-        let idx = ValueIdx::new(local_idx, global_idx);
+        self.values.push(idx);
         Ok(idx)
     }
 }

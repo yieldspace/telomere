@@ -6,6 +6,7 @@ use crate::component_model::{
 };
 use crate::parser::component_model::{ComponentParseError, Validator};
 use std::collections::HashMap;
+use crate::Module;
 
 pub enum CoreInstance {
     Real {
@@ -42,8 +43,11 @@ impl CoreInstance {
         match self {
             CoreInstance::Real { module_idx, .. } => {
                 let module = validator.get_core_module(module_idx);
-                match module {
-                    CoreModule::Defined(module) => {
+                match &module.value {
+                    None => {
+                        module.ty.get_export(self_idx, sort, name)
+                    }
+                    Some(module) => {
                         let export = module
                             .exs
                             .0
@@ -77,9 +81,6 @@ impl CoreInstance {
                                 panic!("Invalid export")
                             }
                         }
-                    }
-                    CoreModule::Typed(ty, _) | CoreModule::SuperTyped(ty, _, _) => {
-                        ty.get_export(self_idx, sort, name)
                     }
                 }
             }

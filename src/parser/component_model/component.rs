@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, CoreModule, InlineComponent};
+use crate::component_model::{Binding, CoreModule, CoreModuleType, InlineComponent, InlineComponentValue};
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
@@ -44,8 +44,9 @@ pub fn _parse_component(
                     let mut sized_reader = ctx.reader.take(section_size as usize);
                     parse_core_module_section(&mut sized_reader)?
                 };
+                let ty = CoreModuleType::from_module(&module);
                 ctx.validator
-                    .add_core_module(Binding::Real(CoreModule::Defined(module)))?;
+                    .add_core_module(Binding::Real(CoreModule::new(Some(module), ty, None)))?;
             }
             ComponentSectionType::CoreInstance => parse_core_instance_section(ctx)?,
             ComponentSectionType::CoreType => todo!(),
@@ -61,9 +62,10 @@ pub fn _parse_component(
 
                 let imports = validator.get_local_store().imports.clone();
                 let exports = validator.get_local_store().exports.clone();
+                let ty = validator.get_local_store().make_component_type();
                 ctx.validator
                     .add_component(Binding::Real(InlineComponent::new(
-                        instrs, imports, exports,
+                        Some(InlineComponentValue::new(instrs, imports, exports)), ty
                     )))?;
             }
             ComponentSectionType::Instance => parse_instance_section(ctx)?,

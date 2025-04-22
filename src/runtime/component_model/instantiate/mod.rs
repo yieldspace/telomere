@@ -1,8 +1,5 @@
-use crate::aliasing as core_aliasing;
-use crate::component_model::{
-    CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport,
-    CoreModule, Idx, Reference,
-};
+use crate::{aliasing as core_aliasing, Module};
+use crate::component_model::{CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, CoreModule, CoreModuleReference, Idx, Reference};
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::runtime::component_model::instantiate::context::InstantiatedInstanceExport;
@@ -51,8 +48,31 @@ pub(crate) unsafe fn instantiate_next(
 fn instantiate_core_module_rec(
     ctx: &mut InstantiateContext,
     mut registry: Registry,
-    module: CoreModule,
+    module: &CoreModule,
 ) -> InstantiateResult<()> {
+    let CoreModule { value, reference, .. } = module;
+    match value {
+        None => {
+            match reference.clone().unwrap() {
+                CoreModuleReference::Imported(name) => {
+                    
+                }
+                CoreModuleReference::Instance(idx, name) => {
+                    let inst = ctx.instances.get(&idx.global()).unwrap();
+                    let export = inst.exports.get(&name).unwrap();
+                }
+                CoreModuleReference::TypeOverwritten(idx) => {
+                    let core_module = ctx.component.get_core_module(idx.global());
+                    return instantiate_core_module_rec(ctx, registry, core_module);
+                }
+                CoreModuleReference::Exported(_) => unreachable!(),
+            }
+        }
+        Some(module) => {
+            let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
+            ctx.push_core_module_instance(instance, registry);
+        }
+    }
     match module {
         CoreModule::Defined(m) => {
             let instance = core_instantiate(m.clone(), ctx.store, &registry).unwrap();
@@ -132,7 +152,7 @@ pub unsafe fn instantiate_core_instance(
                     }
                 }
             }
-            let module = ctx.component.get_core_module(module_idx.global()).clone();
+            let module = ctx.component.get_core_module(module_idx.global());
             instantiate_core_module_rec(ctx, registry, module)?;
         }
         CoreInstance::Alias { exports } => {
@@ -200,10 +220,12 @@ pub unsafe fn instantiate_instance_start(
 }
 
 pub unsafe fn instantiate_instance_end(
-    _tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
+    tail_code: *const InstantiateInstr,
+    ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    todo!();
+    let target = ctx.current.unwrap();
+    let inst = ctx
+        .component.get_instance(target);
 }
 
 pub unsafe fn instantiate_inline_instance(

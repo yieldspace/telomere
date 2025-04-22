@@ -1,9 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{AliasIdx, Binding, ComponentExportSlot, CoreExportSlot, Idx, Sort};
+use crate::component_model::{AliasIdx, Binding, ComponentExportSlot, ComponentExportValue, ComponentFunction, CoreExportSlot, CoreModule, CoreModuleReference, CoreModuleType, CoreSortWithIdx, ExternDesc, Idx, InlineComponent, Instance, Sort, SortWithIdx, Type, TypeBound};
 use crate::parser::component_model::validator::Validator;
-use crate::parser::component_model::{
-    parse_core_instance_idx, parse_instance_idx, parse_sort, ParseContext, SizedResult,
-};
+use crate::parser::component_model::{parse_core_instance_idx, parse_instance_idx, parse_sort, ComponentParseError, ParseContext, SizedResult};
 use crate::parser::core::{parse_name, parse_u32};
 
 pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<AliasIdx> {
@@ -15,24 +13,80 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Ali
             let (_, instance_idx) = parse_instance_idx(ctx)?;
             let instance = ctx.validator.get_instance(&instance_idx);
             let (_, name) = parse_name(ctx.reader)?;
-            let export = instance.get_export(ctx, instance_idx, name, sort)?;
-            match export {
-                ComponentExportSlot::CoreModule(slot) => {
-                    AliasIdx::CoreModule(ctx.validator.add_core_module(slot.into())?)
+            let export = instance.get_export(&name)?;
+            if export.is_none() {
+                let export_type = instance.get_export_type(&name)?;
+                match export_type.desc {
+                    ExternDesc::Core(module_idx) => {
+                        let ty: CoreModuleType = ctx.validator.get_core_type(&module_idx).clone().try_into()?;
+                        AliasIdx::CoreModule(
+                            ctx.validator.add_core_module(Binding::Real(
+                                CoreModule::new(None, ty, Some(CoreModuleReference::Instance(instance_idx, name.clone()))),
+                            ))?
+                        )
+                    }
+                    ExternDesc::Func(idx) => {
+                        let func = ctx.validator.get_type(&idx);
+                        let func = func.clone().try_into()?;
+                        AliasIdx::Func(ctx.validator.add_func(Binding::Real(ComponentFunction::new(None, func)))?)
+                    }
+                    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+                    ExternDesc::Value(_) => todo!(),
+                    ExternDesc::Type(bound) => match bound {
+                        TypeBound::Eq(idx) => {
+                            AliasIdx::Type(ctx.validator.add_type(Binding::Alias(idx.global()))?)
+                        }
+                        TypeBound::Sub => {
+                            AliasIdx::Type(ctx.validator.add_type(Binding::Real(Type::UniqueResource))?)
+                        }
+                    }
+                    ExternDesc::Component(idx) => {
+                        let component = ctx.validator.get_type(&idx);
+                        let component = component.clone().try_into()?;
+                        AliasIdx::Component(ctx.validator.add_component(Binding::Real(
+                            InlineComponent::new(None, component)
+                        ))?)
+                    }
+                    ExternDesc::Instance(idx) => {
+                        let instance = ctx.validator.get_type(&idx);
+                        let instance = instance.clone().try_into()?;
+                        AliasIdx::Instance(ctx.validator.add_instance(Binding::Real(
+                            Instance::new(None, instance)
+                        ))?)
+                    }
                 }
-                ComponentExportSlot::Func(slot) => {
-                    AliasIdx::Func(ctx.validator.add_func(slot.into())?)
-                }
-                #[cfg(feature = "component-gated-feature-value-imports-exports")]
-                ComponentExportSlot::Value => todo!(),
-                ComponentExportSlot::Type(slot) => {
-                    AliasIdx::Type(ctx.validator.add_type(slot.into())?)
-                }
-                ComponentExportSlot::Component(slot) => {
-                    AliasIdx::Component(ctx.validator.add_component(slot.into())?)
-                }
-                ComponentExportSlot::Instance(slot) => {
-                    AliasIdx::Instance(ctx.validator.add_instance(slot.into())?)
+            } else {
+                let export = export.unwrap();
+                match export.value {
+                    None => {
+                        export.ty
+                    }
+                    Some(value) => {
+                        match value.sort {
+                            SortWithIdx::Core(CoreSortWithIdx::Module(idx)) => {
+                                AliasIdx::CoreModule(ctx.validator.add_core_module(Binding::Alias(*idx))?)
+                            }
+                            SortWithIdx::Func(idx) => {
+                                AliasIdx::Func(ctx.validator.add_func(Binding::Alias(*idx))?)
+                            }
+                            #[cfg(feature = "component-gated-feature-value-imports-exports")]
+                            SortWithIdx::Value(idx) => {
+                                AliasIdx::Value(ctx.validator.add_value(Binding::Alias(*idx))?)
+                            }
+                            SortWithIdx::Type(idx) => {
+                                AliasIdx::Type(ctx.validator.add_type(Binding::Alias(*idx))?)
+                            }
+                            SortWithIdx::Component(idx) => {
+                                AliasIdx::Component(ctx.validator.add_component(Binding::Alias(*idx))?)
+                            }
+                            SortWithIdx::Instance(idx) => {
+                                AliasIdx::Instance(ctx.validator.add_instance(Binding::Alias(*idx))?)
+                            }
+                            _ => {
+                                panic!()
+                            }
+                        }                        
+                    }
                 }
             }
         }
