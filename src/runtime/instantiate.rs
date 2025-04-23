@@ -1,7 +1,7 @@
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{encode::{compute_instance_size, size_of_instance, InstanceSizeData}, GcRef, ObjectType},
+        gc::{word_size, GcRef, InstanceData, ObjectType},
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance,
         GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceAddr,
@@ -110,7 +110,7 @@ pub fn instantiate_native_module(
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
     let instance_id = store.new_instance_id();
-    
+
     // -> addr
     let mut memory: Option<u32> = None;
     let mut globals = vec![];
@@ -137,7 +137,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             tracing::error!("unknown instance");
             VMResult::Unlinkable
         }));
-        let ext_inst = unsafe { &store.get_instance_unchecked(ext_inst_addr.0) };
+        let ext_inst = unsafe { &*store.get_instance_unchecked(ext_inst_addr.0) };
         let ext_module = &store.modules[ext_inst.module_addr as usize];
         let export = vm_try!(VMResult::from_option(
             ext_module.exports.find(&import.name),
@@ -158,7 +158,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     tracing::trace!("import function type");
                     return VMResult::Unlinkable;
                 }
-                let funcaddr = ext_inst.funcs[funcidx.0 as usize];
+                let funcaddr = ext_inst.funcs.as_slice(&store.gc)[funcidx.0 as usize];
                 let funcidx = funcs.len();
                 funcs.push(funcaddr);
                 tracing::trace!("linking: {mod_addr} {funcidx} => {funcaddr}")
@@ -170,7 +170,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
 
                     return VMResult::Unlinkable;
                 }
-                globals.push(ext_inst.globals[global_idx.0 as usize]);
+                globals.push(ext_inst.globals.as_slice(&store.gc)[global_idx.0 as usize]);
             }
             (ImportDesc::TableType(import_tt), ExportDesc::Table(idx)) => {
                 let export_tt = ext_module.tables[idx.0 as usize];
@@ -181,16 +181,16 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
 
                     return VMResult::Unlinkable;
                 }
-                let addr = ext_inst.tables[idx.0 as usize];
+                let addr = ext_inst.tables.as_slice(&store.gc)[idx.0 as usize];
                 vm_try!(validate_limit(
                     import_tt.limits,
                     store.tables[addr as usize].1.len() as u32,
                     export_tt.limits
                 ));
-                tables.push(ext_inst.tables[idx.0 as usize]);
+                tables.push(ext_inst.tables.as_slice(&store.gc)[idx.0 as usize]);
             }
             (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                memory = ext_inst.mems.get(0).copied();
+                memory = ext_inst.mems.as_slice(&store.gc).get(0).copied();
                 if let Some(memory_addr) = &memory {
                     let memory = &store.memory[*memory_addr as usize];
                     vm_try!(validate_limit(
@@ -209,14 +209,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             }
         }
     }
-    let size_data = InstanceSizeData{
-        funcs_len: funcs.len() + functions.len(),
-        globals_len: globals.len() + m_globals.len(),
-        memories_len: memory.map(|_|1).unwrap_or_else(||0) + mems.len(),
-        tables_len: tables.len() + m_tables.len()
-    };
-    let instance_size = compute_instance_size(&size_data);
-    let inst_addr = store.allocate(ObjectType::Instance, instance_size);
+    let inst_addr = store.allocate(ObjectType::Instance, word_size::<InstanceData>());
     if memory.is_none() {
         if let Some(mem) = mems.first() {
             memory = Some(store.memory.len() as u32);
@@ -361,6 +354,12 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         globals: m_globals,
         mems,
     });
+    tracing::trace!(
+        "module: {} {:?}",
+        mod_addr,
+        store.modules[mod_addr as usize]
+    );
+
     let instance = Instance {
         module_addr: mod_addr,
         instance_id,
@@ -374,7 +373,9 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         let mut stack = Stack::new(128 * 1024);
 
         let funcaddr = instance.funcs[start.0 as usize];
-        unsafe { store.place_instance_unchecked(inst_addr, &instance); }
+        unsafe {
+            store.place_instance_unchecked(inst_addr, &instance);
+        }
         vm_try!(res);
 
         let funcinst = &store.funcs.0[funcaddr as usize];
@@ -426,7 +427,9 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             }
         }
     } else {
-        unsafe{store.place_instance_unchecked(inst_addr, &instance);}
+        unsafe {
+            store.place_instance_unchecked(inst_addr, &instance);
+        }
         vm_try!(res);
     }
     VMResult::Success(addr)
@@ -455,7 +458,7 @@ pub fn aliasing(
             VMResult::Unlinkable
         }));
 
-        let ext_instance =unsafe { store.get_instance_unchecked(instance_addr.0) };
+        let ext_instance = unsafe { &*store.get_instance_unchecked(instance_addr.0) };
         let ext_module = &store.modules[ext_instance.module_addr as usize];
         let export_desc = vm_try!(VMResult::from_option(
             ext_module.exports.find(importname),
@@ -470,7 +473,7 @@ pub fn aliasing(
                 let new_funcidx = functions.len();
                 function_types.push(ft.clone());
                 functions.push(TypeIdx(new_tidx as u32));
-                let addr = ext_instance.funcs[idx.0 as usize];
+                let addr = ext_instance.funcs.as_slice(&store.gc)[idx.0 as usize];
                 function_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -481,7 +484,7 @@ pub fn aliasing(
                 let gt = ext_module.globals[idx.0 as usize];
                 let new_gidx = globals.len();
                 globals.push(gt);
-                let addr = ext_instance.globals[idx.0 as usize];
+                let addr = ext_instance.globals.as_slice(&store.gc)[idx.0 as usize];
                 global_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -492,7 +495,7 @@ pub fn aliasing(
                 let mt = ext_module.mems[idx.0 as usize];
                 let new_memidx = memories.len();
                 memories.push(mt);
-                mem_addr = ext_instance.mems.get(0).copied();
+                mem_addr = ext_instance.mems.as_slice(&store.gc).get(0).copied();
                 exports.push(Export(
                     exportname,
                     ExportDesc::Mem(MemIdx(new_memidx as u32)),
@@ -502,7 +505,7 @@ pub fn aliasing(
                 let tt = ext_module.tables[idx.0 as usize];
                 let new_tableidx = tables.len();
                 tables.push(tt);
-                table_addrs.push(ext_instance.tables[idx.0 as usize]);
+                table_addrs.push(ext_instance.tables.as_slice(&store.gc)[idx.0 as usize]);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Table(TableIdx(new_tableidx as u32)),
@@ -518,16 +521,14 @@ pub fn aliasing(
         function_types,
         mems: memories,
     });
-    let inst_addr = store.gc.new_instance(
-        &Instance {
-            module_addr: mod_addr,
-            memory: mem_addr,
-            globals: global_addrs,
-            funcs: function_addrs,
-            tables: table_addrs,
-            instance_id: inst_id,
-        },
-    );
+    let inst_addr = store.gc.new_instance(&Instance {
+        module_addr: mod_addr,
+        memory: mem_addr,
+        globals: global_addrs,
+        funcs: function_addrs,
+        tables: table_addrs,
+        instance_id: inst_id,
+    });
     VMResult::Success(InstanceAddr(inst_addr))
 }
 pub fn link_host_function_with_function_idx(
@@ -536,8 +537,8 @@ pub fn link_host_function_with_function_idx(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let instance = unsafe {store.get_instance_unchecked(addr.0)};
-    let funcaddr = instance.funcs[funcidx as usize];
+    let instance = unsafe { &*store.get_instance_unchecked(addr.0) };
+    let funcaddr = instance.funcs.as_slice(&store.gc)[funcidx as usize];
     let func = &mut store.funcs.0[funcaddr as usize];
     func.body = FunctionBody::Host(f);
 }
@@ -547,7 +548,7 @@ pub fn link_host_function_with_export_name(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let instance = unsafe {store.get_instance_unchecked(addr.0) };
+    let instance = unsafe { &*store.get_instance_unchecked(addr.0) };
     let module = &store.modules[instance.module_addr as usize];
     let export = &module.exports.find(name).unwrap();
     let func_idx = if let ExportDesc::Func(v) = export {
@@ -555,7 +556,7 @@ pub fn link_host_function_with_export_name(
     } else {
         unreachable!()
     };
-    let funcaddr = instance.funcs[func_idx.0 as usize];
+    let funcaddr = instance.funcs.as_slice(&store.gc)[func_idx.0 as usize];
     let func = &mut store.funcs.0[funcaddr as usize];
     func.body = FunctionBody::Host(f);
 }

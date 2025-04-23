@@ -58,7 +58,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let arg = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push_i32(arg + 40));
     let funcidx = 1;
-    let func_addr = ctx.instance().funcs[funcidx];
+    let func_addr = ctx.instance().funcs.as_slice(&ctx.store.gc)[funcidx];
 
     let func = &ctx.store.funcs.0[func_addr as usize];
     match &func.body {

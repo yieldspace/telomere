@@ -1,5 +1,5 @@
 use super::{
-    gc::{GcRef, Header, InstanceView, MemoryPool, ObjectType},
+    gc::{GcRef, Header, InstanceData, MemoryPool, ObjectType},
     ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
     Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
@@ -54,6 +54,7 @@ pub struct FunctionInstance {
     pub body: FunctionBody,
 }
 pub struct FunctionStore(pub Vec<FunctionInstance>);
+#[derive(Debug)]
 pub struct ModuleInstance {
     pub exports: ExportSection,
     pub tables: Vec<TableType>,
@@ -64,7 +65,7 @@ pub struct ModuleInstance {
 }
 
 pub struct Store {
-    pub(crate) gc: MemoryPool,
+    pub gc: MemoryPool,
     pub instance_id: u32,
     pub globals: GlobalStore,
     pub funcs: FunctionStore,
@@ -100,7 +101,7 @@ impl Store {
             state,
         }
     }
-    pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> InstanceView {
+    pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
         self.gc.get_instance_unchecked(addr)
     }
     pub(crate) fn allocate(&mut self, object_type: ObjectType, size: usize) -> GcRef {

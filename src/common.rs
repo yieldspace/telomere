@@ -4,6 +4,7 @@ use std::fmt::Display;
 
 use custom_section::NameSubSection;
 
+use gc::InstanceData;
 use store::GlobalStore;
 pub use vm_result::VMResult;
 mod memory;
@@ -17,7 +18,6 @@ pub(crate) use store::FunctionInstance;
 pub(crate) use store::ModuleInstance;
 pub(crate) mod gc;
 use gc::GcRef;
-use gc::InstanceView;
 
 pub use store::{Store, StoreState};
 pub mod custom_section;
@@ -410,8 +410,8 @@ impl ExecuteContext<'_> {
     pub fn instance_id(&self) -> u32 {
         self.instance().instance_id
     }
-    pub fn instance(&self) -> InstanceView {
-        unsafe { self.store.get_instance_unchecked(self.instance_addr()) }
+    pub fn instance(&self) -> &InstanceData {
+        unsafe { &*self.store.get_instance_unchecked(self.instance_addr()) }
     }
     pub fn local_reference(&self) -> LocalReference {
         self.local_reference
@@ -419,6 +419,7 @@ impl ExecuteContext<'_> {
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.instance()
             .mems
+            .as_slice(&self.store.gc)
             .get(0)
             .copied()
             .and_then(|v| self.store.memory.get_mut(v as usize))
