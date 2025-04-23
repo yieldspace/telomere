@@ -47,7 +47,7 @@ pub struct InstanceData {
     pub globals: U32FixedArray,
     pub funcs: U32FixedArray,
     pub tables: U32FixedArray,
-    pub mems: U32FixedArray,
+    pub mems: GcRefFixedArray,
 }
 impl GCView for InstanceData {
     fn trace(&self, pool: &mut MemoryPool) {
@@ -57,7 +57,8 @@ impl GCView for InstanceData {
         self.mems.trace(pool);
     }
 
-    fn update(&mut self, _pool: &mut MemoryPool) {
+    fn update(&mut self, pool: &mut MemoryPool) {
+        self.mems.update(pool);
         // do nothing
     }
 }

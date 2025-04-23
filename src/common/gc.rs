@@ -1,4 +1,6 @@
-use super::Instance;
+use std::mem::MaybeUninit;
+
+use super::{Instance, Memory};
 mod view;
 pub use view::*;
 mod root_handle;
@@ -10,6 +12,7 @@ pub enum ObjectType {
     Raw = 1,
     Instance = 2,
     RootTable = 3,
+    ExternMemoryRef = 4,
 }
 const INIT_MASK: u32 = 1 << 30;
 const MARK_MASK: u32 = 1 << 29;
@@ -62,6 +65,7 @@ impl Header {
 #[derive(Debug)]
 pub struct MemoryPool {
     memory: Vec<u32>,
+    wasm_linear_memory: Vec<Option<Memory>>,
     allocated: u32,
     root: GcRef,
 }
@@ -78,6 +82,7 @@ impl MemoryPool {
         Self {
             memory,
             allocated,
+            wasm_linear_memory: vec![],
             root: GcRef(1),
         }
     }
@@ -134,8 +139,11 @@ impl MemoryPool {
     fn new_u32_fixed_array(&mut self, data: &[u32]) -> U32FixedArray {
         U32FixedArray(self.new_raw_region(data.as_ptr() as *const u32, data.len()))
     }
-    fn gc_ref_fixed_array(&mut self, data: &[GcRef]) -> GcRefFixedArray {
+    fn new_gc_ref_fixed_array(&mut self, data: &[GcRef]) -> GcRefFixedArray {
         GcRefFixedArray(self.new_raw_region(data.as_ptr() as *const u32, data.len()))
+    }
+    fn new_extern_memory(&mut self) -> GcRef {
+        self.allocate(Header::new(ObjectType::ExternMemoryRef, 1))
     }
     pub(crate) fn new_instance(&mut self, instance: &Instance) -> GcRef {
         let size = word_size::<InstanceData>();
@@ -145,7 +153,7 @@ impl MemoryPool {
             instance_id: instance.instance_id,
             funcs: self.new_u32_fixed_array(&instance.funcs),
             globals: self.new_u32_fixed_array(&instance.globals),
-            mems: self.new_u32_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
+            mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
             module_addr: instance.module_addr,
             tables: self.new_u32_fixed_array(&instance.tables),
         };
@@ -167,7 +175,7 @@ impl MemoryPool {
             instance_id: instance.instance_id,
             funcs: self.new_u32_fixed_array(&instance.funcs),
             globals: self.new_u32_fixed_array(&instance.globals),
-            mems: self.new_u32_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
+            mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
             module_addr: instance.module_addr,
             tables: self.new_u32_fixed_array(&instance.tables),
         };
@@ -343,6 +351,9 @@ impl MemoryPool {
                     // do nothing
                 }
                 ObjectType::RootTable => (&*self.get_value::<RootTable>(item, 0)).trace(self),
+                ObjectType::ExternMemoryRef => {
+                    // do nothing
+                }
             }
         }
     }
@@ -352,27 +363,7 @@ impl MemoryPool {
     fn compact_phase(&mut self) {
         tracing::trace!("compact");
         let free = self.compute_forward_addr();
-        for addr in self.scan_heap() {
-            let header = self.read_header(addr);
-            tracing::trace!(
-                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
-                header.object_type(),
-                header.word_size(),
-                header.is_initialized(),
-                header.is_marked()
-            );
-        }
         self.update_pointer();
-        for addr in self.scan_heap() {
-            let header = self.read_header(addr);
-            tracing::trace!(
-                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
-                header.object_type(),
-                header.word_size(),
-                header.is_initialized(),
-                header.is_marked()
-            );
-        }
         self.move_object();
         self.allocated = free;
     }
@@ -417,7 +408,13 @@ impl MemoryPool {
                         }
                         .update(self);
                     }
+                    ObjectType::ExternMemoryRef => {
+                        // ok
+                    }
                 }
+            }
+            if header.object_type() == ObjectType::ExternMemoryRef && !header.is_marked() {
+                // TODO: drop memory
             }
             ptr += HEADER_LEN as u32 + header.word_size() as u32;
             if ptr == self.allocated {
@@ -479,7 +476,24 @@ impl MemoryPool {
             Some(r)
         })
     }
+    pub(crate) fn new_memory(&mut self, page_count: u32, max_page_size: u32) -> GcRef {
+        let idx = self.wasm_linear_memory.len() as u32;
+        self.wasm_linear_memory
+            .push(Some(Memory::new(page_count, max_page_size)));
+        let gc_ref = self.allocate(Header::new(ObjectType::ExternMemoryRef, 1).initialized());
+        unsafe {
+            *self.memory.as_mut_ptr().add(gc_ref.get_value_addr_usize()) = idx;
+        }
+        gc_ref
+    }
+    pub(crate) unsafe fn get_memory(&mut self, addr: GcRef) -> &mut Memory {
+        let mem_idx = *self.memory.as_ptr().add(addr.get_value_addr_usize());
+        self.wasm_linear_memory[mem_idx as usize]
+            .as_mut()
+            .unwrap_unchecked()
+    }
 }
+
 #[cfg(test)]
 mod tests {
     use super::MemoryPool;

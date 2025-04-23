@@ -6,6 +6,7 @@ pub struct MemArg {
     pub align: u32,
     pub offset: u32,
 }
+#[derive(Debug)]
 pub struct Memory(Vec<u8>, u32);
 fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
     VMResult::from_option(

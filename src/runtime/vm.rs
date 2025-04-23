@@ -3,8 +3,7 @@ use std::ops::BitXor;
 use crate::{
     common::{
         execute_elem_init_const_expr, gc::InstanceData, ElemInit, ExecuteContext, ExportDesc,
-        FunctionBody, InstanceHandle, Instr, LocalReference, Stack, VMResult, ValType,
-        WasmValue,
+        FunctionBody, InstanceHandle, Instr, LocalReference, Stack, VMResult, ValType, WasmValue,
     },
     Store,
 };
@@ -701,7 +700,10 @@ unsafe fn internal_op_call_indirect(
     let i = ctx.stack.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
     let table_addr = *vm_try!(VMResult::from_option(
-        ctx.instance().tables.as_slice(&ctx.store.gc.borrow()).get(tableidx),
+        ctx.instance()
+            .tables
+            .as_slice(&ctx.store.gc.borrow())
+            .get(tableidx),
         || { VMResult::TableIndexOutOfRange }
     ));
     let table = &mut ctx.store.tables[table_addr as usize];
@@ -917,8 +919,10 @@ pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let dst_table_idx = (*tail_code).operand.u32 as usize;
     let src_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
 
-    let src_table_addr = ctx.instance().tables.as_slice(&ctx.store.gc.borrow())[src_table_idx] as usize;
-    let dst_table_addr = ctx.instance().tables.as_slice(&ctx.store.gc.borrow())[dst_table_idx] as usize;
+    let src_table_addr =
+        ctx.instance().tables.as_slice(&ctx.store.gc.borrow())[src_table_idx] as usize;
+    let dst_table_addr =
+        ctx.instance().tables.as_slice(&ctx.store.gc.borrow())[dst_table_idx] as usize;
     let src_table = &ctx.store.tables[src_table_addr].1;
     let src_ptr = vm_try!(VMResult::from_option(src_table.get(src..src + len), || {
         VMResult::TableIndexOutOfRange
@@ -1749,12 +1753,12 @@ pub unsafe fn op_i32_ge_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    if let Some(addr) = ctx.instance().mems.as_slice(&ctx.store.gc.borrow()).get(0).copied() {
-        let memory = &mut ctx.store.memory[addr as usize];
-        vm_try!(ctx.stack.push_u32(memory.page_size()));
+    let page_size = if let Some(mem) = ctx.memory() {
+        mem.page_size()
     } else {
-        return VMResult::MemoryIndexOutOfRange
-    }
+        return VMResult::MemoryIndexOutOfRange;
+    };
+    vm_try!(ctx.stack.push_u32(page_size));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1769,37 +1773,39 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let n = ctx.stack.pop_u32();
     let s = ctx.stack.pop_u32();
     let d = ctx.stack.pop_u32();
-    let instance_id = ctx.instance_id();
-    let memory = if let Some(v) = ctx.instance().mems.as_slice(&ctx.store.gc.borrow()).get(0).copied() {
-        &mut ctx.store.memory[v as usize]
-    } else {
-        return VMResult::MemoryIndexOutOfRange;
-    };
-    let dst_last = vm_try!(VMResult::from_option(d.checked_add(n), || {
-        VMResult::MemoryIndexOutOfRange
-    })) as usize;
-    let d = d as usize;
-    let dst = vm_try!(VMResult::from_option(memory.get_mut(d..dst_last), || {
-        VMResult::MemoryIndexOutOfRange
-    }));
-
-    let src_last = vm_try!(VMResult::from_option(s.checked_add(n), || {
-        VMResult::MemoryIndexOutOfRange
-    })) as usize;
-    let data = ctx.store.data.get(&(instance_id, idx));
-    if data.is_none() && n == 0 {
-        // it is ok
-    } else {
-        let data = vm_try!(VMResult::from_option(data, || {
+    {
+        let mut gc = ctx.store.gc.borrow_mut();
+        let instance_id = ctx.instance_id();
+        let memory = if let Some(v) = ctx.instance().mems.as_slice(&gc).get(0).copied() {
+            gc.get_memory(v)
+        } else {
+            return VMResult::MemoryIndexOutOfRange;
+        };
+        let dst_last = vm_try!(VMResult::from_option(d.checked_add(n), || {
+            VMResult::MemoryIndexOutOfRange
+        })) as usize;
+        let d = d as usize;
+        let dst = vm_try!(VMResult::from_option(memory.get_mut(d..dst_last), || {
             VMResult::MemoryIndexOutOfRange
         }));
-        let data = vm_try!(VMResult::from_option(
-            data.init.get(s as usize..src_last),
-            || { VMResult::MemoryIndexOutOfRange }
-        ));
-        dst.copy_from_slice(data);
-    }
 
+        let src_last = vm_try!(VMResult::from_option(s.checked_add(n), || {
+            VMResult::MemoryIndexOutOfRange
+        })) as usize;
+        let data = ctx.store.data.get(&(instance_id, idx));
+        if data.is_none() && n == 0 {
+            // it is ok
+        } else {
+            let data = vm_try!(VMResult::from_option(data, || {
+                VMResult::MemoryIndexOutOfRange
+            }));
+            let data = vm_try!(VMResult::from_option(
+                data.init.get(s as usize..src_last),
+                || { VMResult::MemoryIndexOutOfRange }
+            ));
+            dst.copy_from_slice(data);
+        }
+    }
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_data_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {

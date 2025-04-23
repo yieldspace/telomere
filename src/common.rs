@@ -242,7 +242,7 @@ pub struct Instance {
     pub module_addr: u32,
     pub instance_id: u32,
     //  -> addr
-    pub memory: Option<u32>,
+    pub memory: Vec<GcRef>,
     // idx -> addr
     pub globals: Vec<u32>,
     // idx -> addr
@@ -425,7 +425,8 @@ impl ExecuteContext<'_> {
             .as_slice(&self.store.gc.borrow())
             .get(0)
             .copied()
-            .and_then(|v| self.store.memory.get_mut(v as usize))
+            // FIXME: life time escape technique
+            .map(|v| unsafe { &mut *(self.store.gc.borrow_mut().get_memory(v) as *mut Memory) })
     }
 }
 

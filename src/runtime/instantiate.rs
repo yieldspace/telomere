@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{word_size, GcRootHandle, InstanceData, ObjectType},
+        gc::{word_size, GcRef, GcRootHandle, InstanceData, ObjectType},
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance,
         GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle,
@@ -114,7 +114,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     let instance_id = store.new_instance_id();
 
     // -> addr
-    let mut memory: Option<u32> = None;
+    let mut memory: Option<GcRef> = None;
     let mut globals = vec![];
     let mut funcs: Vec<u32> = vec![];
     let mut tables = vec![];
@@ -214,11 +214,12 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     let inst_addr = store.allocate(ObjectType::Instance, word_size::<InstanceData>());
     if memory.is_none() {
         if let Some(mem) = mems.first() {
-            memory = Some(store.memory.len() as u32);
-            store.memory.push(Memory::new(
-                mem.0.min,
-                (mem.0.max).unwrap_or(PAGE_SIZE_MAX as u32),
-            ));
+            memory = Some(unsafe {
+                store
+                    .gc
+                    .borrow_mut()
+                    .new_memory(mem.0.min, mem.0.max.unwrap_or_else(|| PAGE_SIZE_MAX as u32))
+            })
         }
     }
 
@@ -497,7 +498,11 @@ pub fn aliasing(
                 let mt = ext_module.mems[idx.0 as usize];
                 let new_memidx = memories.len();
                 memories.push(mt);
-                mem_addr = ext_instance.mems.as_slice(&store.gc.borrow()).get(0).copied();
+                mem_addr = ext_instance
+                    .mems
+                    .as_slice(&store.gc.borrow())
+                    .get(0)
+                    .copied();
                 exports.push(Export(
                     exportname,
                     ExportDesc::Mem(MemIdx(new_memidx as u32)),
@@ -525,16 +530,17 @@ pub fn aliasing(
     });
     let inst_addr = store.gc.borrow_mut().new_instance(&Instance {
         module_addr: mod_addr,
-        memory: mem_addr,
+        memory: mem_addr.into_iter().collect::<Vec<_>>(),
         globals: global_addrs,
         funcs: function_addrs,
         tables: table_addrs,
         instance_id: inst_id,
     });
-    
-    VMResult::Success(InstanceHandle(Rc::new(
-        GcRootHandle::new(inst_addr, store.gc.clone())
-    )))
+
+    VMResult::Success(InstanceHandle(Rc::new(GcRootHandle::new(
+        inst_addr,
+        store.gc.clone(),
+    ))))
 }
 pub fn link_host_function_with_function_idx(
     addr: &InstanceHandle,
