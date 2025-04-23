@@ -310,7 +310,7 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
 
     Ok((ctx.reader.read_count() - start_count, ()))
 }
-
+#[allow(dead_code)]
 fn parse_async(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<bool> {
     let a = match ctx.reader.read_exact_one()? {
         0x00 => false,

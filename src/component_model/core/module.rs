@@ -1,6 +1,6 @@
 use crate::component_model::{CoreModuleIdx, CoreModuleType, Reference};
 use crate::Module;
-
+#[allow(clippy::large_enum_variant)]
 pub enum CoreModule {
     Defined(Module),
     Typed(CoreModuleType, Reference),

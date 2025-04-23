@@ -2,10 +2,11 @@ mod canon;
 mod context;
 mod error;
 mod func;
+#[allow(clippy::missing_safety_doc)]
 pub mod instantiate;
 mod linker;
 
-use crate::common::InstanceAddr;
+use crate::common::InstanceHandle;
 use crate::component_model::FlattenComponent;
 use crate::runtime::component_model::instantiate::{
     instantiate_next, InstantiateContext, InstantiateInstr,
@@ -42,7 +43,8 @@ pub enum InstanceExport {
 
 #[derive(Debug)]
 pub struct CoreInstantiated {
-    pub(crate) id: InstanceAddr,
+    pub(crate) id: InstanceHandle,
+    #[allow(dead_code)]
     pub(crate) registry: Registry,
 }
 

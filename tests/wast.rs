@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 mod common;
 use common::run_wast;
+
 fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
@@ -9,6 +10,7 @@ fn run_test_file(name: &str) {
     let wast = std::fs::read_to_string(d).unwrap();
     run_wast(&wast);
 }
+
 #[test]
 fn int_literals() {
     run_test_file("int_literals");
@@ -240,6 +242,9 @@ fn load() {
 }
 #[test]
 fn local_get() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
     run_test_file("local_get");
 }
 #[test]

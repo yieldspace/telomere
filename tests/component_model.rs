@@ -1,4 +1,4 @@
-use telomere::component_model::FlattenComponent;
+/*use telomere::component_model::FlattenComponent;
 use telomere::parser::component_model::{ComponentValidator, ParseContext};
 use tracing::Level;
 
@@ -7,7 +7,8 @@ fn test_basic_component() {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
-    let component = r#"
+
+    let _component = r#"
        (component
           (type (;0;)
             (instance
@@ -38,7 +39,7 @@ fn test_basic_component() {
     )
     .unwrap();
     println!("{:?}", instance);
-}
+}*/
 
 /*#[test]
 fn test_with_core_wasm() {

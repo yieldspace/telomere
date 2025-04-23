@@ -1,7 +1,7 @@
 mod common;
 use common::{instantiate_wat, run_wast_with};
 use telomere::{
-    common::{ExecuteContext, FunctionBody, Instr},
+    common::{ExecuteContext, Instr},
     link_host_function_with_function_idx, vm_try, Registry, Store, VMResult,
 };
 static mut PRINT_CALL: Vec<()> = vec![];
@@ -28,8 +28,8 @@ fn test_print() {
         &mut store,
         &registry,
     );
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, print, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, print, &mut store);
     let wast = r#"
     (module
       (import "host" "print" (func $print))
@@ -58,30 +58,30 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let arg = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push_i32(arg + 40));
     let funcidx = 1;
-    let func_addr = ctx.instance().funcs[funcidx];
+    let func_addr = ctx.instance().funcs.as_slice(ctx.gc)[funcidx];
 
-    let func = &ctx.store.funcs.0[func_addr as usize];
-    match &func.body {
-        FunctionBody::Wasm(code) => {
-            ctx.local_reference = vm_try!(ctx.stack.function_call(
-                4,
-                code.local_size(),
-                func_addr,
-                ctx.local_reference,
-                TAIL_CALL_FUNCTION_RETURN.as_ptr()
-            ));
-            VMResult::Success(code.expr.as_ptr())
-        }
-        FunctionBody::Host(f) => {
-            ctx.local_reference = vm_try!(ctx.stack.function_call(
-                4,
-                0,
-                func_addr,
-                ctx.local_reference,
-                TAIL_CALL_FUNCTION_RETURN.as_ptr()
-            ));
-            f(ctx)
-        }
+    let func = ctx.func_by_addr(func_addr);
+    if func.is_host_func() {
+        let fp = func.host_code_pointer(ctx.gc);
+        ctx.local_reference = vm_try!(ctx.stack.function_call(
+            4,
+            0,
+            func_addr,
+            ctx.local_reference,
+            TAIL_CALL_FUNCTION_RETURN.as_ptr()
+        ));
+        fp(ctx)
+    } else {
+        let (locals_data, code_offset) = func.locals_and_code_offset(ctx.gc);
+        let instr = unsafe { ctx.gc.get_value::<Instr>(func.body, code_offset) };
+        ctx.local_reference = vm_try!(ctx.stack.function_call(
+            4,
+            locals_data.byte_size(),
+            func_addr,
+            ctx.local_reference,
+            TAIL_CALL_FUNCTION_RETURN.as_ptr()
+        ));
+        VMResult::Success(instr)
     }
 }
 
@@ -99,8 +99,8 @@ fn test_tail_call_wasm() {
         &mut store,
         &registry,
     );
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, tail_call, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
     let wast = r#"
     (module
       (import "host" "tail_call" (func $tail_call (param i32) (result i32)))
@@ -135,9 +135,9 @@ pub fn test_tail_call_native() {
         &mut store,
         &registry,
     );
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, tail_call, &mut store);
-    link_host_function_with_function_idx(host, 1, plus60, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
+    link_host_function_with_function_idx(&host, 1, plus60, &mut store);
 
     let wast = r#"
     (module

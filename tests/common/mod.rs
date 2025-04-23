@@ -1,7 +1,7 @@
 pub mod component_model;
 
 use telomere::{
-    common::InstanceAddr, get_global, instantiate, IoReadBinaryReader, Registry, ResultValue,
+    common::InstanceHandle, get_global, instantiate, IoReadBinaryReader, Registry, ResultValue,
     Store, VMResult, WasmParser, WasmValue,
 };
 use tracing::error;
@@ -10,7 +10,7 @@ use wast::{
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
-pub fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceAddr {
+pub fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceHandle {
     let buf = ParseBuffer::new(wat).unwrap();
     let mut wat = wast::parser::parse::<Wat>(&buf).unwrap();
     let source = wat.encode().unwrap();
@@ -70,7 +70,7 @@ const SPECTEST_WAT: &str = r#"
     (func (export "print_f64_f64") (param f64 f64))
 )
 "#;
-fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceAddr {
+fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceHandle {
     instantiate_wat(SPECTEST_WAT, store, registry)
 }
 #[allow(dead_code)]
@@ -84,7 +84,7 @@ pub fn run_wast(text: &str) {
 pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
-    let mut instance: Option<InstanceAddr> = None;
+    let mut instance: Option<InstanceHandle> = None;
 
     for directive in wast.directives {
         use wast::WastDirective;
@@ -104,7 +104,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                 tracing::trace!("{:?}", m.elems);
                 let inst = instantiate(m, store, registry).unwrap();
                 if let Some(name) = name {
-                    registry.register(name.name(), inst);
+                    registry.register(name.name(), inst.clone());
                 }
                 instance = Some(inst);
             }
@@ -123,7 +123,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     let actual = if let Some(id) = v.module {
                         let instance = registry.get(id.name()).unwrap();
                         telomere::run_module_function(
-                            instance,
+                            &instance,
                             store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
@@ -131,7 +131,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                         .unwrap()
                     } else {
                         telomere::run_module_function(
-                            instance.unwrap(),
+                            instance.as_ref().unwrap(),
                             store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
@@ -230,9 +230,9 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                 } => {
                     if let Some(id) = id {
                         let instance = registry.get(id.name()).unwrap();
-                        get_global(instance, store, global).unwrap();
+                        get_global(&instance, store, global).unwrap();
                     } else {
-                        get_global(instance.unwrap(), store, global).unwrap();
+                        get_global(instance.as_ref().unwrap(), store, global).unwrap();
                     }
                 }
                 unknown => unimplemented!("{:?}", unknown),
@@ -297,7 +297,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                 message: _,
             } => {
                 let result = telomere::run_module_function(
-                    instance.unwrap(),
+                    instance.as_ref().unwrap(),
                     store,
                     call.name,
                     &ResultValue::new(convert_args(&call.args)),
@@ -320,7 +320,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     if let Some(id) = v.module {
                         let instance = registry.get(id.name()).unwrap();
                         let result = telomere::run_module_function(
-                            instance,
+                            &instance,
                             store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
@@ -328,7 +328,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                         assert!(result.is_err(), "{:?}", span.linecol_in(text))
                     } else {
                         let result = telomere::run_module_function(
-                            instance.unwrap(),
+                            instance.as_ref().unwrap(),
                             store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
@@ -358,7 +358,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     invoke.span.linecol_in(text)
                 );
                 let result = telomere::run_module_function(
-                    instance.unwrap(),
+                    instance.as_ref().unwrap(),
                     store,
                     invoke.name,
                     &ResultValue::new(convert_args(&invoke.args)),
@@ -374,7 +374,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                 module: _id,
             } => {
                 //assert!(id.is_none());
-                registry.register(name, instance.unwrap());
+                registry.register(name, instance.clone().unwrap());
             }
             WastDirective::AssertUnlinkable {
                 span,

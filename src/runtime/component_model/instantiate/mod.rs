@@ -8,8 +8,10 @@ pub use crate::runtime::component_model::instantiate::context::InstantiateContex
 use crate::Registry;
 
 mod context;
-
-pub type InstantiateResult<T> = Result<T, ()>;
+// FIXME: what is this?
+#[derive(Debug)]
+pub enum Void {}
+pub type InstantiateResult<T> = Result<T, Void>;
 
 pub type InstantiateOp =
     unsafe fn(*const InstantiateInstr, &mut InstantiateContext) -> InstantiateResult<()>;
@@ -22,6 +24,7 @@ pub union InstantiateInstr {
 
 #[derive(Clone, Copy)]
 pub union InstantiateOperand {
+    #[allow(dead_code)]
     idx: usize,
     pub core_module_idx: usize,
     pub core_instance_idx: usize,
@@ -56,7 +59,7 @@ pub unsafe fn instantiate_core_instance(
             for (name, import) in imports {
                 match import {
                     CoreInstanceImport::Instance(idx) => {
-                        let addr = ctx.instantiated.core_instances[idx.global()].id;
+                        let addr = ctx.instantiated.core_instances[idx.global()].id.clone();
                         registry.register(name, addr);
                     }
                 }
@@ -67,11 +70,11 @@ pub unsafe fn instantiate_core_instance(
                     let instance = core_instantiate(m.clone(), ctx.store, &registry).unwrap();
                     ctx.push_core_module_instance(instance, registry);
                 }
-                CoreModule::Typed(ty, reference) => match reference {
-                    Reference::Instance(idx, name) => {}
-                    Reference::Component(idx, name) => {}
-                    Reference::Imported(name) => {}
-                    Reference::Exported(name) => {}
+                CoreModule::Typed(_ty, reference) => match reference {
+                    Reference::Instance(_idx, _name) => {}
+                    Reference::Component(_idx, _name) => {}
+                    Reference::Imported(_name) => {}
+                    Reference::Exported(_name) => {}
                 },
                 CoreModule::SuperTyped(_, _, _) => {}
             }
@@ -84,31 +87,31 @@ pub unsafe fn instantiate_core_instance(
                     CoreInstanceInlineExport::Func(idx) => {
                         let func = ctx.component.get_core_function(idx.global());
                         match func {
-                            CoreFunction::Export(CoreFuncRef(inst_idx, idx, name)) => {
+                            CoreFunction::Export(CoreFuncRef(inst_idx, _idx, name)) => {
                                 let inst = ctx
                                     .instantiated
                                     .core_instances
                                     .get(inst_idx.global())
                                     .unwrap();
-                                registry.register(nth.to_string(), inst.id);
+                                registry.register(nth.to_string(), inst.id.clone());
                                 (nth.to_string(), name.clone(), export_name.clone())
                             }
                             _ => {
                                 let (instance_addr, name) =
                                     ctx.core_functions.get(idx.global()).unwrap();
-                                registry.register(nth.to_string(), *instance_addr);
+                                registry.register(nth.to_string(), instance_addr.clone());
                                 (nth.to_string(), name.clone(), export_name.clone())
                             }
                         }
                     }
                     CoreInstanceInlineExport::Memory(idx) => {
                         let (instance_addr, name) = ctx.core_memories.get(idx.global()).unwrap();
-                        registry.register(nth.to_string(), *instance_addr);
+                        registry.register(nth.to_string(), instance_addr.clone());
                         (nth.to_string(), name.clone(), export_name.clone())
                     }
                     CoreInstanceInlineExport::Table(idx) => {
                         let (instance_addr, name) = ctx.core_tables.get(idx.global()).unwrap();
-                        registry.register(nth.to_string(), *instance_addr);
+                        registry.register(nth.to_string(), instance_addr.clone());
                         (nth.to_string(), name.clone(), export_name.clone())
                     }
                     _ => todo!(),
@@ -165,15 +168,16 @@ pub unsafe fn instantiate_core_function(
 
     todo!();
 }
-
+#[allow(clippy::result_unit_err)]
 pub unsafe fn instantiate_function(
     tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    let idx = (*tail_code).operand.func_idx;
+    let _idx = (*tail_code).operand.func_idx;
     todo!()
 }
 
+#[allow(clippy::result_unit_err)]
 pub unsafe fn instantiate_special_end(
     _tail_code: *const InstantiateInstr,
     _ctx: &mut InstantiateContext,

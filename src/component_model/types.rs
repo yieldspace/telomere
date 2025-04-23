@@ -150,7 +150,7 @@ impl InstanceType {
                 todo!();
             }
             ExternDesc::Type(ty) => match ty {
-                TypeBound::Eq(idx) => Ok(ComponentExportSlot::Type(Slot::Idx(idx.clone()))),
+                TypeBound::Eq(idx) => Ok(ComponentExportSlot::Type(Slot::Idx(*idx))),
                 TypeBound::Sub => Ok(ComponentExportSlot::Type(Slot::Value(Type::UniqueResource))),
             },
             ExternDesc::Component(ty) => {

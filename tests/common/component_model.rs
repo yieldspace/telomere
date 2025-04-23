@@ -2,7 +2,7 @@ use telomere::component_model::FlattenComponent;
 use telomere::parser::component_model::{ComponentValidator, ParseContext};
 use wast::parser::ParseBuffer;
 use wast::Wast;
-
+#[allow(dead_code)]
 pub fn run_component_wast(text: &str) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
