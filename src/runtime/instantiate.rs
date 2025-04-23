@@ -107,7 +107,7 @@ pub fn instantiate_native_module(
 
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
-    let inst_addr = store.instances.len() as u32;
+    let inst_addr = store.allocate(std::mem::size_of::<Instance>() as u32 / 4);
     // -> addr
     let mut memory: Option<u32> = None;
     let mut globals = vec![];
@@ -134,7 +134,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             tracing::error!("unknown instance");
             VMResult::Unlinkable
         }));
-        let ext_inst = &store.instances[ext_inst_addr.0 as usize];
+        let ext_inst = &store.get_instance(ext_inst_addr.0);
         let ext_module = &store.modules[ext_inst.module_addr as usize];
         let export = vm_try!(VMResult::from_option(
             ext_module.exports.find(&import.name),
@@ -362,7 +362,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         let mut stack = Stack::new(128 * 1024);
 
         let funcaddr = instance.funcs[start.0 as usize];
-        store.instances.push(instance);
+        store.place_instance(inst_addr, instance);
         vm_try!(res);
 
         let funcinst = &store.funcs.0[funcaddr as usize];
@@ -414,7 +414,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             }
         }
     } else {
-        store.instances.push(instance);
+        store.place_instance(inst_addr, instance);
         vm_try!(res);
     }
     VMResult::Success(addr)
@@ -427,7 +427,7 @@ pub fn aliasing(
     store: &mut Store,
 ) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
-    let inst_addr: u32 = store.instances.len() as u32;
+    let inst_addr: u32 = store.allocate(std::mem::size_of::<Instance>() as u32 / 4);
     let mut functions = vec![];
     let mut function_types = vec![];
     let mut globals = vec![];
@@ -442,13 +442,9 @@ pub fn aliasing(
         let instance_addr = vm_try!(VMResult::from_option(registry.get(modname), || {
             VMResult::Unlinkable
         }));
-        let Store {
-            instances: s_instances,
-            modules: s_modules,
-            ..
-        } = store;
-        let ext_instance = &s_instances[instance_addr.0 as usize];
-        let ext_module = &s_modules[ext_instance.module_addr as usize];
+
+        let ext_instance = store.get_instance(instance_addr.0);
+        let ext_module = &store.modules[ext_instance.module_addr as usize];
         let export_desc = vm_try!(VMResult::from_option(
             ext_module.exports.find(importname),
             || { VMResult::Unlinkable }
@@ -510,13 +506,16 @@ pub fn aliasing(
         function_types,
         mems: memories,
     });
-    store.instances.push(Instance {
-        module_addr: mod_addr,
-        memory: mem_addr,
-        globals: global_addrs,
-        funcs: function_addrs,
-        tables: table_addrs,
-    });
+    store.place_instance(
+        inst_addr,
+        Instance {
+            module_addr: mod_addr,
+            memory: mem_addr,
+            globals: global_addrs,
+            funcs: function_addrs,
+            tables: table_addrs,
+        },
+    );
     VMResult::Success(InstanceAddr(inst_addr))
 }
 pub fn link_host_function_with_function_idx(
@@ -525,7 +524,7 @@ pub fn link_host_function_with_function_idx(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let instance = &store.instances[addr.0 as usize];
+    let instance = &store.get_instance(addr.0);
     let funcaddr = instance.funcs[funcidx as usize];
     let func = &mut store.funcs.0[funcaddr as usize];
     func.body = FunctionBody::Host(f);
@@ -536,7 +535,7 @@ pub fn link_host_function_with_export_name(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let instance = &store.instances[addr.0 as usize];
+    let instance = &store.get_instance(addr.0);
     let module = &store.modules[instance.module_addr as usize];
     let export = &module.exports.find(name).unwrap();
     let func_idx = if let ExportDesc::Func(v) = export {

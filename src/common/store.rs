@@ -1,6 +1,6 @@
 use super::{
-    ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
-    Memory, TableInstance, TableType, TypeIdx, VMResult,
+    gc::MemoryPool, ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType,
+    Instance, MemType, Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
 use std::{collections::HashMap, io::Write};
 
@@ -61,11 +61,12 @@ pub struct ModuleInstance {
     pub function_types: Vec<FuncType>,
     pub mems: Vec<MemType>,
 }
+
 pub struct Store {
+    pub(crate) gc: MemoryPool,
     pub globals: GlobalStore,
     pub funcs: FunctionStore,
     pub modules: Vec<ModuleInstance>,
-    pub instances: Vec<Instance>,
     pub tables: Vec<TableInstance>,
     pub memory: Vec<Memory>,
     pub data: HashMap<(u32, u32), Data>,
@@ -88,13 +89,22 @@ impl Store {
             globals: GlobalStore(vec![]),
             funcs: FunctionStore(vec![]),
             modules: vec![],
-            instances: vec![],
             tables: vec![],
             memory: vec![],
             data: HashMap::new(),
             elems: HashMap::new(),
+            gc: MemoryPool::new(),
             state,
         }
+    }
+    pub(crate) fn get_instance(&self, addr: u32) -> &Instance {
+        self.gc.get_instance(addr as usize)
+    }
+    pub(crate) fn allocate(&mut self, size: u32) -> u32 {
+        self.gc.allocate(size as usize) as u32
+    }
+    pub(crate) fn place_instance(&mut self, addr: u32, instance: Instance) {
+        self.gc.place_instance(instance, addr as usize)
     }
 }
 
@@ -129,6 +139,8 @@ impl StoreState {
 
 #[cfg(test)]
 mod test {
+    use crate::Instance;
+
     #[test]
     fn test_state() {
         use super::StoreState;

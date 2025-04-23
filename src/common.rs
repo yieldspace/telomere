@@ -14,6 +14,7 @@ pub use registry::Registry;
 pub(crate) mod store;
 pub(crate) use store::FunctionInstance;
 pub(crate) use store::ModuleInstance;
+mod gc;
 pub use store::{Store, StoreState};
 pub mod custom_section;
 
@@ -402,7 +403,7 @@ impl ExecuteContext<'_> {
         self.func().instance_addr
     }
     pub fn instance(&self) -> &Instance {
-        &self.store.instances[self.instance_addr() as usize]
+        &self.store.get_instance(self.instance_addr())
     }
     pub fn local_reference(&self) -> LocalReference {
         self.local_reference

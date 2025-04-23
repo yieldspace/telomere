@@ -644,7 +644,7 @@ pub(crate) unsafe fn internal_op_call(
 ) -> VMResult<*const Instr> {
     let funcinst = &ctx.store.funcs.0[funcaddr as usize];
     let instance_addr = funcinst.instance_addr;
-    let instance = &ctx.store.instances[instance_addr as usize];
+    let instance = &ctx.store.get_instance(instance_addr);
     let module_addr = instance.module_addr;
     let module = &ctx.store.modules[module_addr as usize];
     let typeidx = module
@@ -713,7 +713,7 @@ unsafe fn internal_op_call_indirect(
     }
 
     let funcinst = &ctx.store.funcs.0[func_addr as usize];
-    let instance = &ctx.store.instances[funcinst.instance_addr as usize];
+    let instance = &ctx.store.get_instance(funcinst.instance_addr);
     let module = &ctx.store.modules[instance.module_addr as usize];
     let actual_typeidx = module.functions.get(funcinst.funcidx as usize).unwrap();
     let actual_ft = &module.function_types[actual_typeidx.0 as usize];
@@ -855,51 +855,51 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let instance_addr = ctx.instance_addr();
 
     let ExecuteContext { store, .. } = ctx;
+
     let Store {
-        instances,
         tables,
         globals: global_store,
         elems,
+        gc,
         ..
     } = store;
-    let instance = &mut instances[instance_addr as usize];
+    let instance = gc.get_instance(instance_addr as usize);
     let dst_table_addr = instance.tables[dst_table_idx] as usize;
-
-    if let Some(elem) = elems.get(&(instance_addr, src_elem_idx)) {
-        let dst_table = &mut tables[dst_table_addr];
-        let dst = vm_try!(VMResult::from_option(
-            dst_table.1.get_mut(dst..dst + len),
-            || { VMResult::TableIndexOutOfRange }
-        ));
-        match &elem.init {
-            ElemInit::FuncIdx(idxs) => {
-                let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
-                    VMResult::TableIndexOutOfRange
-                }));
-                for (i, funcidx) in slice.iter().enumerate() {
-                    dst[i] = instance.funcs[*funcidx as usize];
-                }
-            }
-            ElemInit::ConstExpr(exprs) => {
-                let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
-                    VMResult::TableIndexOutOfRange
-                }));
-                for (i, expr) in slice.iter().enumerate() {
-                    dst[i] = vm_try!(execute_elem_init_const_expr(
-                        global_store,
-                        &instance.globals,
-                        &instance.funcs,
-                        expr,
-                        dst_table.0.reftype,
-                    ));
-                }
-            }
-        }
-    } else if len == 0 {
-        // it is ok
+    let elem = if let Some(elem) = elems.get(&(instance_addr, src_elem_idx)) {
+        elem
     } else {
         return VMResult::TableIndexOutOfRange;
     };
+
+    let dst_table = &mut tables[dst_table_addr];
+    let dst = vm_try!(VMResult::from_option(
+        dst_table.1.get_mut(dst..dst + len),
+        || { VMResult::TableIndexOutOfRange }
+    ));
+    match &elem.init {
+        ElemInit::FuncIdx(idxs) => {
+            let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
+                VMResult::TableIndexOutOfRange
+            }));
+            for (i, funcidx) in slice.iter().enumerate() {
+                dst[i] = instance.funcs[*funcidx as usize];
+            }
+        }
+        ElemInit::ConstExpr(exprs) => {
+            let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
+                VMResult::TableIndexOutOfRange
+            }));
+            for (i, expr) in slice.iter().enumerate() {
+                dst[i] = vm_try!(execute_elem_init_const_expr(
+                    global_store,
+                    &instance.globals,
+                    &instance.funcs,
+                    expr,
+                    dst_table.0.reftype,
+                ));
+            }
+        }
+    }
 
     call_next(tail_code, 2, ctx)
 }
@@ -1932,7 +1932,7 @@ pub fn run_module_function(
         tables: _,
         globals: _,
         funcs,
-    } = &store.instances[instance.0 as usize];
+    } = &store.get_instance(instance.0);
     let module_inst = &store.modules[*module_addr as usize];
     if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
         let code_addr = funcs[idx.0 as usize];
@@ -2007,7 +2007,7 @@ pub fn run_module_function(
     }
 }
 pub fn get_global(instance: InstanceAddr, store: &mut Store, name: &str) -> VMResult<WasmValue> {
-    let instance = &store.instances[instance.0 as usize];
+    let instance = &store.get_instance(instance.0);
     let module_inst = &store.modules[instance.module_addr as usize];
     if let Some(ExportDesc::Global(idx)) = module_inst.exports.find(name) {
         let addr = instance.globals[idx.0 as usize] as usize;
