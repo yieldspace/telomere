@@ -26,53 +26,55 @@ pub enum WasmParserError {
     IoError(#[from] std::io::Error),
     #[error("invalid instruction: {0:?}")]
     InvalidInstruction([u8; 4]),
-    #[error("invalid const instruction: {0}")]
+    #[error("constant expression required")]
     InvalidConstInstruction(u8),
     #[error("invalid blocktype")]
     InvalidBlockType(i64),
-    #[error("invalid stack valtype: expected: {0:?}, actual: {1:?}")]
+    #[error("type mismatch")]
     InvalidStackValType(ValType, Option<ValType>),
-    #[error("invalid stack valtype")]
+    #[error("type mismatch")]
     InvalidStackValTypeAny,
-    #[error("invalid funcidx: {0:?}")]
+    #[error("unknown function {0}")]
     InvalidFuncIdx(FuncIdx),
-    #[error("invalid typeidx: {0:?}")]
+    #[error("unknown type")]
     InvalidTypeIdx(TypeIdx),
-    #[error("invalid localidx: {0:?}")]
+    #[error("unknown local")]
     InvalidLocalIndex(u32),
     #[error("invalid globalidx: {0:?}")]
     InvalidGlobalIndex(u32),
     #[error("invalid mut: {0:?}")]
     InvalidMut(u8),
-    #[error("invalid global access")]
+    #[error("unknown global")]
+    UnknownGlobal,
+    #[error("global is immutable")]
     InvalidGlobalAccess,
     #[error("invalid elem kind: {0}")]
     InvalidElemKind(u8),
-    #[error("invalid element section size: {0}")]
+    #[error("type mismatch")]
     InvalidElementSectionType(u32),
-    #[error("invalid table index: {0}")]
+    #[error("unknown table")]
     InvalidTableIndex(u32),
     #[error("invalid table type: {0}")]
     InvalidTableType(u32),
-    #[error("multiple memory")]
+    #[error("multiple memories")]
     MultipleMemory,
     #[error("invalid import desc: {0}")]
     InvalidImportDesc(u8),
     #[error("invalid data kind: {0}")]
     InvalidDataKind(u32),
-    #[error("invalid memidx: {0}")]
+    #[error("unknown memory {0}")]
     InvalidMemIdx(u32),
-    #[error("invalid memory size: {0:?}")]
+    #[error("memory size must be at most 65536 pages (4GiB)")]
     InvalidMemorySize(Limits),
     #[error("invalid alignment: {0}")]
     InvalidAlignment(u32),
-    #[error("invalid dataidx: {0}")]
+    #[error("unknown data segment {0}")]
     InvalidDataIdx(u32),
     #[error("invalid data section count")]
     InvalidDataSectionCount,
-    #[error("unknown export")]
+    #[error("unknown function")]
     UnknownExport,
-    #[error("duplicated export")]
+    #[error("duplicate export name")]
     DuplicatedExport(String),
     #[error("invalid result arity")]
     InvalidResultArity,
@@ -80,8 +82,8 @@ pub enum WasmParserError {
     StartFunction,
     #[error("size minimum must not be greater than maximum")]
     InvalidLimit,
-    #[error("unknown element")]
-    UnknownElement,
+    #[error("unknown elem segment {0}")]
+    UnknownElement(u32),
     #[error("invalid section type: {0}")]
     InvalidSectionType(u8),
     #[error("too many locals")]
@@ -90,6 +92,10 @@ pub enum WasmParserError {
     FunctionAndCodeSectionLengthMismatch,
     #[error("invalid section order")]
     InvalidSectionOrder,
+    #[error("undeclared function reference")]
+    UndeclaredFunctionReference,
+    #[error("unknown label")]
+    UnknownLabel,
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {

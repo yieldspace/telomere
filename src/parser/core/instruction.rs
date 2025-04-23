@@ -837,7 +837,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let ty = self
                     .globals
                     .get(idx as usize)
-                    .ok_or(WasmParserError::InvalidGlobalAccess)?;
+                    .ok_or(WasmParserError::UnknownGlobal)?;
                 checker.op(&[], &[ty.0])?;
 
                 if !*unreachable {
@@ -863,7 +863,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let ty = self
                     .globals
                     .get(idx as usize)
-                    .ok_or(WasmParserError::InvalidGlobalAccess)?;
+                    .ok_or(WasmParserError::UnknownGlobal)?;
                 if ty.1 != Mut::Var {
                     Err(WasmParserError::InvalidGlobalAccess)?
                 }
@@ -2647,7 +2647,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         let elem = self
                             .elems
                             .get(elemidx as usize)
-                            .ok_or(WasmParserError::UnknownElement)?;
+                            .ok_or(WasmParserError::UnknownElement(elemidx))?;
 
                         validate_active_elem(self.tables, tableidx, elem.kind)?;
                         trace!("parse_op_table_init");
@@ -2668,7 +2668,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     13 => {
                         let (len2, elemidx) = self.parse_u32()?;
                         if self.elems.get(elemidx as usize).is_none() {
-                            Err(WasmParserError::UnknownElement)?;
+                            Err(WasmParserError::UnknownElement(elemidx))?;
                         }
                         trace!("parse_op_elem_drop");
                         if !*unreachable {
@@ -2877,7 +2877,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }
                     }
                     if !found {
-                        Err(WasmParserError::InvalidFuncIdx(FuncIdx(idx)))?
+                        Err(WasmParserError::UndeclaredFunctionReference)?
                     }
                 }
 

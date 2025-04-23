@@ -1,5 +1,7 @@
 #[macro_use]
 mod vm_result;
+use std::fmt::Display;
+
 use custom_section::NameSubSection;
 use store::GlobalStore;
 pub use vm_result::VMResult;
@@ -19,6 +21,11 @@ pub mod custom_section;
 pub struct TypeIdx(pub u32);
 #[derive(Debug, Clone, Copy)]
 pub struct FuncIdx(pub u32);
+impl Display for FuncIdx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 #[derive(Debug, Clone, Copy)]
 pub struct TableIdx(pub u32);
 #[derive(Debug, Clone, Copy)]
