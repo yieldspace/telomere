@@ -62,8 +62,7 @@ impl MemoryPool {
             memory: vec![
                 Header::new(ObjectType::RootTable, 3).get(),
                 0,
-                0,
-                4,
+                3,
                 Header::new(ObjectType::Raw, 0).get(),
             ],
             allocated: 5,
@@ -102,13 +101,16 @@ impl MemoryPool {
         self.write_header(addr, header.marked());
         is_marked
     }
-    fn new_raw_region(&mut self, data: &[u32]) -> GcRef {
-        let addr = self.allocate(Header::new(ObjectType::Raw, data.len()).initialized());
-        unsafe { self.write(addr, 0, data) };
+    fn new_raw_region(&mut self, data: *const u32, len: usize) -> GcRef {
+        let addr = self.allocate(Header::new(ObjectType::Raw, len).initialized());
+        unsafe { self.write(addr, 0, data, len) };
         addr
     }
     fn new_u32_fixed_array(&mut self, data: &[u32]) -> U32FixedArray {
-        U32FixedArray(self.new_raw_region(data))
+        U32FixedArray(self.new_raw_region(data.as_ptr() as *const u32, data.len()))
+    }
+    fn gc_ref_fixed_array(&mut self, data: &[GcRef]) -> GcRefFixedArray {
+        GcRefFixedArray(self.new_raw_region(data.as_ptr() as *const u32, data.len()))
     }
     pub(crate) fn new_instance(&mut self, instance: &Instance) -> GcRef {
         let size = word_size::<InstanceData>();
@@ -160,14 +162,20 @@ impl MemoryPool {
 
         ptr
     }
-    pub(crate) unsafe fn write(&mut self, addr: GcRef, offset: usize, values: &[u32]) {
+    pub(crate) unsafe fn write(
+        &mut self,
+        addr: GcRef,
+        offset: usize,
+        values: *const u32,
+        len: usize,
+    ) {
         std::ptr::copy_nonoverlapping(
-            values.as_ptr(),
+            values,
             self.memory
                 .as_mut_ptr()
                 .add(addr.get_value_addr_usize())
                 .add(offset),
-            values.len(),
+            len,
         );
     }
     pub(crate) unsafe fn relocate(&mut self, old: GcRef, new: GcRef) {
@@ -182,14 +190,57 @@ impl MemoryPool {
         self.relocate(old_region, new_region);
         new_region
     }
-    // TODO:
-    /*pub(crate) unsafe fn push_vec(&mut self, array: &mut GcRefDynamicArray, values: &[u32]) {
+    pub(crate) unsafe fn u32_array_push_vec(
+        &mut self,
+        array: &mut U32DynamicArray,
+        values: &[u32],
+    ) {
         let expected_len = array.len + values.len() as u32;
-        let expected_cap = expected_len; // TODO:
-        if array.cap < expected_cap {
-            self.extend_cap(array, expected_cap);
-        }
-        self.write(array.data, array.len(), values);
+        let dst_ref = if (array.cap(self) as u32) < expected_len {
+            let new_cap = expected_len * 2;
+            self.raw_region_extend(array.array.0, new_cap)
+        } else {
+            array.array.0
+        };
+        self.write(dst_ref, array.len as usize, values.as_ptr(), values.len());
+        array.array = U32FixedArray(dst_ref);
         array.len = expected_len
-    }*/
+    }
+    pub(crate) unsafe fn gc_ref_array_push_vec(
+        &mut self,
+        array: &mut GcRefDynamicArray,
+        values: &[GcRef],
+    ) {
+        let expected_len = array.len + values.len() as u32;
+        let dst_ref = if (array.cap(self) as u32) < expected_len {
+            let new_cap = expected_len * 2;
+            self.raw_region_extend(array.array.0, new_cap)
+        } else {
+            array.array.0
+        };
+        self.write(
+            dst_ref,
+            array.len as usize,
+            values.as_ptr() as *const u32,
+            values.len(),
+        );
+        array.array = GcRefFixedArray(dst_ref);
+        array.len = expected_len
+    }
+    // NOTE: can't trace raw section
+    pub(crate) fn trace(&mut self, item: GcRef) {
+        if self.mark(item) {
+            return;
+        }
+        let ty = self.read_header(item).object_type();
+        match ty {
+            ObjectType::Instance => (unsafe { &*self.get_instance_unchecked(item) }).trace(self),
+            ObjectType::Raw => {
+                // do nothing
+            }
+            ObjectType::RootTable => {
+                // TODO:
+            }
+        }
+    }
 }
