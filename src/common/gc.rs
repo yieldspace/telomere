@@ -49,9 +49,6 @@ pub struct MemoryPool {
 
 const HEADER_LEN: usize = 1;
 impl MemoryPool {
-    unsafe fn get_object<'a, T>(&'a self, offset: usize) -> &'a T {
-        std::mem::transmute::<*const u32, &'a T>(self.memory.as_ptr().add(offset))
-    }
     pub fn new() -> Self {
         Self { memory: vec![] }
     }
@@ -61,17 +58,13 @@ impl MemoryPool {
         if expected_len > self.memory.capacity() {
             let additional = expected_len - self.memory.len();
             // FIXME: handle memory allocation fail
-            self.memory.try_reserve(additional).unwrap();
+            self.memory.try_reserve_exact(additional).unwrap();
         }
+        self.memory.push(header.get());
         GcRef(offset as u32)
     }
-    unsafe fn place(&mut self, header: Header, addr: GcRef, data: &[u32]) {
-        let header_pos = self.memory.as_mut_ptr().add(addr.get_usize());
-        *header_pos = header.get();
-        std::ptr::copy_nonoverlapping(data.as_ptr(), header_pos.add(HEADER_LEN), data.len());
-    }
     pub(crate) fn write_header(&mut self, addr: GcRef, header: Header) {
-        self.memory[addr.get_usize()] = header.get();
+        unsafe { std::ptr::write(self.memory.as_mut_ptr().add(addr.get_usize()), header.get()) };
     }
     pub(crate) fn read_header(&mut self, addr: GcRef) -> Header {
         Header(self.memory[addr.get_usize()])
@@ -87,14 +80,16 @@ impl MemoryPool {
     pub(crate) unsafe fn place_instance_unchecked(&mut self, dst: GcRef, instance: &Instance) {
         let size = encode::size_of_instance(&instance);
         let value_dst = dst.get_value_addr_usize();
-        let mut value_ptr = self.memory[value_dst..].as_mut_ptr();
+        let mut value_ptr = self.memory.as_mut_ptr().add(value_dst);
         unsafe { encode::encode_instance(instance, &mut value_ptr) };
         #[cfg(debug_assertions)]
         {
             let header = self.read_header(dst);
             debug_assert_eq!(header.object_type(), ObjectType::Instance);
+            debug_assert_eq!(header.word_size() as usize, size);
         }
         self.write_header(dst, Header::new(ObjectType::Instance, size));
+        self.memory.set_len((dst.get_usize() + HEADER_LEN + size).max(self.memory.len()));
     }
     pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> InstanceView {
         InstanceView::from_ptr(self.memory.as_ptr().add(addr.get_value_addr_usize()))

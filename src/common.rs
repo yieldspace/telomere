@@ -237,6 +237,7 @@ pub struct TableInstance(pub TableType, pub Vec<u32>);
 #[derive(Clone)]
 pub struct Instance {
     pub module_addr: u32,
+    pub instance_id: u32,
     //  -> addr
     pub memory: Option<u32>,
     // idx -> addr
@@ -406,6 +407,9 @@ impl ExecuteContext<'_> {
     pub fn instance_addr(&self) -> GcRef {
         self.func().instance_addr
     }
+    pub fn instance_id(&self) -> u32 {
+        self.instance().instance_id
+    }
     pub fn instance(&self) -> InstanceView {
         unsafe { self.store.get_instance_unchecked(self.instance_addr()) }
     }
@@ -422,7 +426,7 @@ impl ExecuteContext<'_> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct InstanceAddr(pub(crate) u32);
+pub struct InstanceAddr(pub(crate) GcRef);
 
 pub fn execute_elem_init_const_expr(
     global_store: &GlobalStore,

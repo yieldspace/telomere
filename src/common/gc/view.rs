@@ -128,10 +128,10 @@ macro_rules! gc_object {
         }
     };
 }
-// マクロ呼び出し例
 gc_object! {
   struct InstanceView {
       reference_count: u32,
+      instance_id: u32,
       module_addr: u32,
       globals: [u32],
       funcs: [u32],
@@ -151,6 +151,9 @@ mod tests {
             let mut v = Vec::new();
             // reference_count: 7
             v.push(7u32);
+            // instance_id: 7
+            v.push(7u32);
+
             // module_addr: 42
             v.push(42u32);
             // globals: len = 3, [1, 2, 3]

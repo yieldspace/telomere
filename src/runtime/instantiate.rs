@@ -1,7 +1,7 @@
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{encode::size_of_instance, GcRef, ObjectType},
+        gc::{encode::{compute_instance_size, size_of_instance, InstanceSizeData}, GcRef, ObjectType},
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance,
         GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceAddr,
@@ -109,7 +109,8 @@ pub fn instantiate_native_module(
 
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
-    let inst_addr = store.allocate(ObjectType::Instance, size_of_instance(instance));
+    let instance_id = store.new_instance_id();
+    
     // -> addr
     let mut memory: Option<u32> = None;
     let mut globals = vec![];
@@ -136,7 +137,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             tracing::error!("unknown instance");
             VMResult::Unlinkable
         }));
-        let ext_inst = unsafe { &store.get_instance_unchecked(GcRef(ext_inst_addr.0)) };
+        let ext_inst = unsafe { &store.get_instance_unchecked(ext_inst_addr.0) };
         let ext_module = &store.modules[ext_inst.module_addr as usize];
         let export = vm_try!(VMResult::from_option(
             ext_module.exports.find(&import.name),
@@ -189,7 +190,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 tables.push(ext_inst.tables[idx.0 as usize]);
             }
             (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                memory = ext_inst.memory;
+                memory = ext_inst.mems.get(0).copied();
                 if let Some(memory_addr) = &memory {
                     let memory = &store.memory[*memory_addr as usize];
                     vm_try!(validate_limit(
@@ -208,6 +209,14 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             }
         }
     }
+    let size_data = InstanceSizeData{
+        funcs_len: funcs.len() + functions.len(),
+        globals_len: globals.len() + m_globals.len(),
+        memories_len: memory.map(|_|1).unwrap_or_else(||0) + mems.len(),
+        tables_len: tables.len() + m_tables.len()
+    };
+    let instance_size = compute_instance_size(&size_data);
+    let inst_addr = store.allocate(ObjectType::Instance, instance_size);
     if memory.is_none() {
         if let Some(mem) = mems.first() {
             memory = Some(store.memory.len() as u32);
@@ -233,10 +242,10 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 } else {
                     return VMResult::MemoryIndexOutOfRange;
                 }
-                store.data.insert((inst_addr, idx), d);
+                store.data.insert((instance_id, idx), d);
             }
             DataMode::Passive => {
-                store.data.insert((inst_addr, idx), d);
+                store.data.insert((instance_id, idx), d);
             }
         }
     }
@@ -332,7 +341,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     }
                 },
                 ElemMode::Passive => {
-                    store.elems.insert((inst_addr, idx), elem);
+                    store.elems.insert((instance_id, idx), elem);
                 }
                 ElemMode::Declarative => {
                     //do nothing
@@ -354,6 +363,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     });
     let instance = Instance {
         module_addr: mod_addr,
+        instance_id,
         memory,
         tables,
         globals,
@@ -364,7 +374,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         let mut stack = Stack::new(128 * 1024);
 
         let funcaddr = instance.funcs[start.0 as usize];
-        store.place_instance(inst_addr, instance);
+        unsafe { store.place_instance_unchecked(inst_addr, &instance); }
         vm_try!(res);
 
         let funcinst = &store.funcs.0[funcaddr as usize];
@@ -416,7 +426,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             }
         }
     } else {
-        store.place_instance(inst_addr, instance);
+        unsafe{store.place_instance_unchecked(inst_addr, &instance);}
         vm_try!(res);
     }
     VMResult::Success(addr)
@@ -429,7 +439,7 @@ pub fn aliasing(
     store: &mut Store,
 ) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
-    let inst_addr: u32 = store.allocate(ObjectType::Instance);
+    let inst_id = store.new_instance_id();
     let mut functions = vec![];
     let mut function_types = vec![];
     let mut globals = vec![];
@@ -445,7 +455,7 @@ pub fn aliasing(
             VMResult::Unlinkable
         }));
 
-        let ext_instance = store.get_instance(instance_addr.0);
+        let ext_instance =unsafe { store.get_instance_unchecked(instance_addr.0) };
         let ext_module = &store.modules[ext_instance.module_addr as usize];
         let export_desc = vm_try!(VMResult::from_option(
             ext_module.exports.find(importname),
@@ -482,7 +492,7 @@ pub fn aliasing(
                 let mt = ext_module.mems[idx.0 as usize];
                 let new_memidx = memories.len();
                 memories.push(mt);
-                mem_addr = ext_instance.memory;
+                mem_addr = ext_instance.mems.get(0).copied();
                 exports.push(Export(
                     exportname,
                     ExportDesc::Mem(MemIdx(new_memidx as u32)),
@@ -508,14 +518,14 @@ pub fn aliasing(
         function_types,
         mems: memories,
     });
-    store.place_instance(
-        inst_addr,
-        Instance {
+    let inst_addr = store.gc.new_instance(
+        &Instance {
             module_addr: mod_addr,
             memory: mem_addr,
             globals: global_addrs,
             funcs: function_addrs,
             tables: table_addrs,
+            instance_id: inst_id,
         },
     );
     VMResult::Success(InstanceAddr(inst_addr))
@@ -526,7 +536,7 @@ pub fn link_host_function_with_function_idx(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let instance = &store.get_instance(addr.0);
+    let instance = unsafe {store.get_instance_unchecked(addr.0)};
     let funcaddr = instance.funcs[funcidx as usize];
     let func = &mut store.funcs.0[funcaddr as usize];
     func.body = FunctionBody::Host(f);
@@ -537,7 +547,7 @@ pub fn link_host_function_with_export_name(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let instance = &store.get_instance(addr.0);
+    let instance = unsafe {store.get_instance_unchecked(addr.0) };
     let module = &store.modules[instance.module_addr as usize];
     let export = &module.exports.find(name).unwrap();
     let func_idx = if let ExportDesc::Func(v) = export {

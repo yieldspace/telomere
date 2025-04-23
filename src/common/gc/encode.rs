@@ -3,8 +3,9 @@ fn size_of_ref_vec(v: &[u32]) -> usize {
     1 + v.len()
 }
 pub fn size_of_instance(instance: &Instance) -> usize {
-    1 // mod_addr
-     + 1 // reference counter
+    1 // reference counter
+     + 1 // instance id
+     +    1 // mod_addr
      + size_of_ref_vec(&instance.funcs)
         + size_of_ref_vec(&instance.globals)
         + size_of_ref_vec(&instance.tables)
@@ -13,6 +14,21 @@ pub fn size_of_instance(instance: &Instance) -> usize {
         } else {
             2
         }
+}
+pub struct InstanceSizeData {
+    pub funcs_len: usize,
+    pub globals_len: usize,
+    pub tables_len: usize,
+    pub memories_len: usize,
+}
+pub fn compute_instance_size(d: &InstanceSizeData) -> usize {
+    1 // reference counter
+    + 1 // instance id
+    +    1 // mod_addr
+    + 1 + d.funcs_len
+    + 1 + d.globals_len
+    + 1 + d.tables_len
+    + 1 + d.memories_len
 }
 pub unsafe fn encode_value(v: u32, dst: &mut *mut u32) {
     **dst = v;
@@ -24,8 +40,9 @@ pub unsafe fn encode_slice(src: &[u32], dst: &mut *mut u32) {
     *dst = dst.add(src.len());
 }
 pub unsafe fn encode_instance(instance: &Instance, dst: &mut *mut u32) {
-    encode_value(instance.module_addr, dst);
     encode_value(0, dst); // reference counter
+    encode_value(instance.instance_id, dst);
+    encode_value(instance.module_addr, dst);
     encode_slice(&instance.globals, dst);
     encode_slice(&instance.funcs, dst);
     encode_slice(&instance.tables, dst);

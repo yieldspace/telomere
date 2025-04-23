@@ -65,6 +65,7 @@ pub struct ModuleInstance {
 
 pub struct Store {
     pub(crate) gc: MemoryPool,
+    pub instance_id: u32,
     pub globals: GlobalStore,
     pub funcs: FunctionStore,
     pub modules: Vec<ModuleInstance>,
@@ -95,6 +96,7 @@ impl Store {
             data: HashMap::new(),
             elems: HashMap::new(),
             gc: MemoryPool::new(),
+            instance_id: 0,
             state,
         }
     }
@@ -106,6 +108,11 @@ impl Store {
     }
     pub(crate) unsafe fn place_instance_unchecked(&mut self, addr: GcRef, instance: &Instance) {
         self.gc.place_instance_unchecked(addr, instance)
+    }
+    pub(crate) fn new_instance_id(&mut self) -> u32 {
+        let instance_id = self.instance_id;
+        self.instance_id += 1;
+        instance_id
     }
 }
 
