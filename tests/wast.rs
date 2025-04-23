@@ -242,7 +242,9 @@ fn load() {
 }
 #[test]
 fn local_get() {
-    tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
     run_test_file("local_get");
 }
 #[test]

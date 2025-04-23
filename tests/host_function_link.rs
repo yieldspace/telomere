@@ -1,7 +1,7 @@
 mod common;
 use common::{instantiate_wat, run_wast_with};
 use telomere::{
-    common::{ExecuteContext, FunctionBody, Instr},
+    common::{ExecuteContext, Instr},
     link_host_function_with_function_idx, vm_try, Registry, Store, VMResult,
 };
 static mut PRINT_CALL: Vec<()> = vec![];

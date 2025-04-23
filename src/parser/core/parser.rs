@@ -2,9 +2,7 @@ use std::collections::HashSet;
 use tracing::trace;
 
 use crate::common::custom_section::NameSubSection;
-use crate::common::{
-    ConstExpr, ElemInit, Func, FunctionBody, Instr, LocalReassignTable, Locals, LocalsData, Operand,
-};
+use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, LocalsData, Operand};
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::validate::validate_locals;

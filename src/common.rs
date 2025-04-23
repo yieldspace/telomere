@@ -412,7 +412,7 @@ impl ExecuteContext<'_> {
     }
     pub(crate) fn code(&self) -> *const Instr {
         let func = self.func();
-        let (local_data,offset) = func.locals_and_code_offset(&self.gc);
+        let (local_data, offset) = func.locals_and_code_offset(&self.gc);
         unsafe { self.gc.get_value::<Instr>(func.body, offset) }
     }
     pub unsafe fn module(&self) -> &ModuleInstance {

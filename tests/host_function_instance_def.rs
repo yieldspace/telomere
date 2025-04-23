@@ -2,8 +2,7 @@ mod common;
 use common::run_wast_with;
 use telomere::{
     common::{
-        ExecuteContext, FuncType, FunctionBody, GcRef, HostFunctionDefinition, Instr, NativeModule,
-        ValType,
+        ExecuteContext, FuncType, GcRef, HostFunctionDefinition, Instr, NativeModule, ValType,
     },
     link_host_function_with_function_idx,
     runtime::instantiate_native_module,

@@ -1,6 +1,5 @@
 use super::{
-    gc::{GcRef, MemoryPool},
-    Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, MemType, TableType, TypeIdx,
+    gc::MemoryPool, Data, Elem, ExportSection, FuncType, GlobalType, MemType, TableType, TypeIdx,
 };
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 

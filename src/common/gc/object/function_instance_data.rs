@@ -1,6 +1,6 @@
 use crate::common::{
     gc::{GcRef, GcView, MemoryPool},
-    HostFunction, Locals, LocalsData, ValType,
+    HostFunction, LocalsData,
 };
 
 const HOST_FUNC_MASK: u32 = 0x80000000;

@@ -686,7 +686,7 @@ mod tests {
         let free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         let marked_arr = pool.new_u32_fixed_array(&[4]);
         pool.add_root(marked_arr.0);
-        debug_pool(&pool);        
+        debug_pool(&pool);
         pool.mark_phase();
         debug_pool(&pool);
         let mut marked = vec![];

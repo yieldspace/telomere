@@ -4,8 +4,8 @@ use crate::{
     common::{
         execute_elem_init_const_expr,
         gc::{GcRef, InstanceData},
-        ElemInit, ExecuteContext, ExportDesc, FunctionBody, InstanceHandle, Instr, LocalReference,
-        Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
+        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, Stack,
+        VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     Store,
 };

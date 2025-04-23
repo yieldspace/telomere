@@ -18,8 +18,8 @@ use crate::parser::core::type_checker::MaybeUnreachable;
 use crate::runtime::vm;
 use crate::{
     common::{
-        BlockType, DataCountVerifier, Elem, FuncIdx, FuncType, Instr, LocalReassignTable, Locals,
-        MemType, Operand, TableType, TypeIdx, TypeSection, ValType, ValueSize,
+        BlockType, DataCountVerifier, Elem, FuncIdx, FuncType, Instr, LocalReassignTable, MemType,
+        Operand, TableType, TypeIdx, TypeSection, ValType, ValueSize,
     },
     WasmParserError,
 };
