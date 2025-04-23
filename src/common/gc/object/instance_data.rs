@@ -4,7 +4,7 @@ use super::{GcRefFixedArray, U32FixedArray};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct InstanceData {
+pub struct InstanceData {
     pub instance_id: u32,
     pub module_addr: u32,
     pub globals: U32FixedArray,
