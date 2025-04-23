@@ -69,7 +69,6 @@ pub struct Store {
     pub instance_id: u32,
     pub globals: GlobalStore,
     pub funcs: FunctionStore,
-    pub modules: Vec<ModuleInstance>,
     pub data: HashMap<(u32, u32), Data>,
     pub elems: HashMap<(u32, u32), Elem>,
     pub state: StoreState,
@@ -89,7 +88,6 @@ impl Store {
         Store {
             globals: GlobalStore(vec![]),
             funcs: FunctionStore(vec![]),
-            modules: vec![],
             data: HashMap::new(),
             elems: HashMap::new(),
             gc: Rc::new(RefCell::new(MemoryPool::new())),

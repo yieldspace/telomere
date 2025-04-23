@@ -646,14 +646,14 @@ pub(crate) unsafe fn internal_op_call(
     let instance_addr = funcinst.instance_addr;
     let instance = &*ctx.gc.get_instance_unchecked(instance_addr);
     let module_addr = instance.module_addr;
-    let module = &ctx.store.modules[module_addr as usize];
+    let module = ctx.gc.get_module(module_addr);
     let typeidx = module
         .functions
         .get(funcinst.funcidx as usize)
         .unwrap_unchecked();
     let ft = &module.function_types[typeidx.0 as usize];
     let code = &funcinst.body;
-    trace!("op_call_internal: {instance_addr:?}({module_addr})  {funcaddr}");
+    trace!("op_call_internal: {instance_addr:?}({module_addr:?})  {funcaddr}");
     let mut param_size = 0usize;
     for param in ft.0.iter() {
         param_size += param.stack_size().usize();
@@ -714,7 +714,7 @@ unsafe fn internal_op_call_indirect(
 
     let funcinst = &ctx.store.funcs.0[func_addr as usize];
     let instance = &*ctx.gc.get_instance_unchecked(funcinst.instance_addr);
-    let module = &ctx.store.modules[instance.module_addr as usize];
+    let module = ctx.gc.get_module(instance.module_addr);
     let actual_typeidx = module.functions.get(funcinst.funcidx as usize).unwrap();
     let actual_ft = &module.function_types[actual_typeidx.0 as usize];
     let expected_typeidx = (*tail_code.offset(1)).operand.u32;
@@ -1933,17 +1933,16 @@ pub fn run_module_function(
     name: &str,
     args: &ResultValue,
 ) -> VMResult<ResultValue> {
+    let gc = store.gc.clone();
+    let mut gc = gc.borrow_mut();
+    let gc = &mut gc;
     let InstanceData {
         module_addr, funcs, ..
-    } = unsafe {
-        let gc = store.gc.borrow();
-        *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(&gc))
-    };
-    trace!("{module_addr}");
-    let module_inst = &store.modules[module_addr as usize];
+    } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(&gc)) };
+    let module_inst = unsafe { gc.get_module(module_addr) };
     trace!("{:?}", module_inst.exports);
     if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
-        let code_addr = funcs.as_slice(&store.gc.borrow())[idx.0 as usize];
+        let code_addr = funcs.as_slice(gc)[idx.0 as usize];
         let funcinst = &store.funcs.0[code_addr as usize];
         let mut stack = Stack::new(128 * 1024);
         let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
@@ -1990,13 +1989,11 @@ pub fn run_module_function(
 
         let ptr = code.expr.as_ptr();
 
-        let gc = store.gc.clone();
-        let mut gc = gc.borrow_mut();
         let mut ctx = ExecuteContext {
             stack: &mut stack,
             local_reference,
             store,
-            gc: &mut gc,
+            gc,
         };
         vm_try!(unsafe { call_next(ptr, 0, &mut ctx) });
 
@@ -2019,11 +2016,10 @@ pub fn run_module_function(
     }
 }
 pub fn get_global(instance: &InstanceHandle, store: &mut Store, name: &str) -> VMResult<WasmValue> {
-    let instance = unsafe {
-        let gc = store.gc.borrow();
-        &*gc.get_instance_unchecked(instance.get_gc_ref_with_pool(&gc))
-    };
-    let module_inst = &store.modules[instance.module_addr as usize];
+    let gc = store.gc.borrow();
+
+    let instance = unsafe { &*gc.get_instance_unchecked(instance.get_gc_ref_with_pool(&gc)) };
+    let module_inst = unsafe { gc.get_module(instance.module_addr) };
     if let Some(ExportDesc::Global(idx)) = module_inst.exports.find(name) {
         let addr = instance.globals.as_slice(&store.gc.borrow())[idx.0 as usize] as usize;
         let gt = module_inst.globals[idx.0 as usize];

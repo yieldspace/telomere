@@ -251,7 +251,7 @@ impl TableInstance {
 }
 #[derive(Clone)]
 pub struct Instance {
-    pub module_addr: u32,
+    pub module_addr: GcRef,
     pub instance_id: u32,
     //  -> addr
     pub memory: Vec<GcRef>,
@@ -418,7 +418,7 @@ impl ExecuteContext<'_> {
         }
     }
     pub unsafe fn module(&self) -> &ModuleInstance {
-        &self.store.modules[self.instance().module_addr as usize]
+        &self.gc.get_module(self.instance().module_addr)
     }
     pub fn instance_addr(&self) -> GcRef {
         self.func().instance_addr

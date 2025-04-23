@@ -8,6 +8,7 @@ pub enum ObjectType {
     RootTable = 3,
     ExternMemoryRef = 4,
     ExternTableRef = 5,
+    ExternModuleRef = 6,
 }
 const INIT_MASK: u32 = 1 << 30;
 const MARK_MASK: u32 = 1 << 29;

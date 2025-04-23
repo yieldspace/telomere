@@ -1,4 +1,4 @@
-use crate::common::gc::{GCView, MemoryPool};
+use crate::common::gc::{GCView, GcRef, MemoryPool};
 
 use super::{GcRefFixedArray, U32FixedArray};
 
@@ -6,7 +6,7 @@ use super::{GcRefFixedArray, U32FixedArray};
 #[derive(Debug, Clone, Copy)]
 pub struct InstanceData {
     pub instance_id: u32,
-    pub module_addr: u32,
+    pub module_addr: GcRef,
     pub globals: U32FixedArray,
     pub funcs: U32FixedArray,
     pub tables: GcRefFixedArray,

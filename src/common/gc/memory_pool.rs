@@ -4,7 +4,7 @@ use crate::{
             object::{GcRefFixedArray, U32DynamicArray},
             HEADER_LEN,
         },
-        word_size, Memory, TableInstance, TableType, PAGE_SIZE,
+        word_size, Memory, ModuleInstance, TableInstance, TableType, PAGE_SIZE,
     },
     Instance,
 };
@@ -19,6 +19,7 @@ pub struct MemoryPool {
     pub(crate) memory: Vec<u32>,
     wasm_linear_memory: Vec<Option<Memory>>,
     wasm_table: Vec<Option<TableInstance>>,
+    wasm_module: Vec<Option<ModuleInstance>>,
     allocated: u32,
     root: GcRef,
 }
@@ -34,6 +35,7 @@ impl MemoryPool {
             allocated,
             wasm_linear_memory: vec![],
             wasm_table: vec![],
+            wasm_module: vec![],
             root: GcRef(1),
         }
     }
@@ -299,7 +301,9 @@ impl MemoryPool {
                     // do nothing
                 }
                 ObjectType::RootTable => (&*self.get_value::<RootTable>(item, 0)).trace(self),
-                ObjectType::ExternMemoryRef | ObjectType::ExternTableRef => {
+                ObjectType::ExternMemoryRef
+                | ObjectType::ExternTableRef
+                | ObjectType::ExternModuleRef => {
                     // do nothing
                 }
             }
@@ -356,7 +360,9 @@ impl MemoryPool {
                         }
                         .update(self);
                     }
-                    ObjectType::ExternMemoryRef | ObjectType::ExternTableRef => {
+                    ObjectType::ExternMemoryRef
+                    | ObjectType::ExternTableRef
+                    | ObjectType::ExternModuleRef => {
                         // ok
                     }
                 }
@@ -371,6 +377,10 @@ impl MemoryPool {
                     ObjectType::ExternTableRef => {
                         let idx = unsafe { *self.memory.as_ptr().add(item.get_value_addr_usize()) };
                         self.wasm_table[idx as usize] = None;
+                    }
+                    ObjectType::ExternModuleRef => {
+                        let idx = unsafe { *self.memory.as_ptr().add(item.get_value_addr_usize()) };
+                        self.wasm_module[idx as usize] = None;
                     }
                     _ => {}
                 }
@@ -464,6 +474,21 @@ impl MemoryPool {
         let idx = *self.memory.as_ptr().add(addr.get_value_addr_usize());
         self.wasm_table[idx as usize].as_mut().unwrap_unchecked()
     }
+
+    pub(crate) fn new_module(&mut self, instance: ModuleInstance) -> GcRef {
+        let idx = self.wasm_module.len() as u32;
+        self.wasm_module.push(Some(instance));
+        let gc_ref = self.allocate(Header::new(ObjectType::ExternModuleRef, 1).initialized());
+        unsafe {
+            *self.memory.as_mut_ptr().add(gc_ref.get_value_addr_usize()) = idx;
+        }
+        gc_ref
+    }
+    pub(crate) unsafe fn get_module(&self, addr: GcRef) -> &ModuleInstance {
+        let idx = *self.memory.as_ptr().add(addr.get_value_addr_usize());
+        self.wasm_module[idx as usize].as_ref().unwrap_unchecked()
+    }
+
     pub fn get_total_linear_memory_size(&self) -> usize {
         self.wasm_linear_memory
             .iter()
