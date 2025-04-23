@@ -72,8 +72,8 @@ const HEADER_LEN: usize = word_size::<Header>();
 #[allow(dead_code)]
 impl MemoryPool {
     pub fn new() -> Self {
-        let rt_header = Header::new(ObjectType::RootTable, 4).initialized().get();
-        let memory = vec![0xFFFFFFFF, rt_header[0], rt_header[1], 0, 0, 0, 0];
+        let rt_header = Header::new(ObjectType::RootTable, 2).initialized().get();
+        let memory = vec![0xFFFFFFFF, rt_header[0], rt_header[1], 0, 0];
         let allocated = memory.len() as u32;
         Self {
             memory,
