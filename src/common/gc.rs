@@ -1,4 +1,4 @@
-use super::{Instance, Memory};
+use super::{Instance, Memory, PAGE_SIZE};
 mod view;
 pub use view::*;
 mod root_handle;
@@ -139,9 +139,6 @@ impl MemoryPool {
     }
     fn new_gc_ref_fixed_array(&mut self, data: &[GcRef]) -> GcRefFixedArray {
         GcRefFixedArray(self.new_raw_region(data.as_ptr() as *const u32, data.len()))
-    }
-    fn new_extern_memory(&mut self) -> GcRef {
-        self.allocate(Header::new(ObjectType::ExternMemoryRef, 1))
     }
     pub(crate) fn new_instance(&mut self, instance: &Instance) -> GcRef {
         let size = word_size::<InstanceData>();
@@ -412,7 +409,8 @@ impl MemoryPool {
                 }
             }
             if header.object_type() == ObjectType::ExternMemoryRef && !header.is_marked() {
-                // TODO: drop memory
+                let idx = unsafe { *self.memory.as_ptr().add(item.get_value_addr_usize()) };
+                self.wasm_linear_memory[idx as usize] = None;
             }
             ptr += HEADER_LEN as u32 + header.word_size() as u32;
             if ptr == self.allocated {
@@ -490,10 +488,20 @@ impl MemoryPool {
             .as_mut()
             .unwrap_unchecked()
     }
+    pub fn get_total_linear_memory_size(&self) -> usize {
+        self.wasm_linear_memory
+            .iter()
+            .filter_map(|v| v.as_ref())
+            .map(|v| v.page_size() as usize)
+            .sum::<usize>()
+            * PAGE_SIZE
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::common::PAGE_SIZE;
+
     use super::MemoryPool;
     fn debug_pool(pool: &MemoryPool) {
         for addr in pool.scan_heap() {
@@ -620,5 +628,18 @@ mod tests {
             count_object += 1;
         }
         assert_eq!(count_object, 2); // root table, root table buf
+    }
+    #[test]
+    fn linear_memory() {
+        let mut pool = MemoryPool::new();
+        let id = pool.new_memory(1, 1);
+        assert_eq!(pool.get_total_linear_memory_size(), PAGE_SIZE);
+        let idx = pool.add_root(id);
+        pool.gc();
+        assert_eq!(pool.get_total_linear_memory_size(), PAGE_SIZE);
+        pool.remove_root(idx);
+        assert_eq!(pool.get_total_linear_memory_size(), PAGE_SIZE);
+        pool.gc();
+        assert_eq!(pool.get_total_linear_memory_size(), 0);
     }
 }

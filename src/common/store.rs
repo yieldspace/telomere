@@ -1,7 +1,7 @@
 use super::{
-    gc::{GcRef, Header, InstanceData, MemoryPool, ObjectType},
+    gc::{GcRef, Header, MemoryPool, ObjectType},
     ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
-    Memory, TableInstance, TableType, TypeIdx, VMResult,
+    TableInstance, TableType, TypeIdx, VMResult,
 };
 use std::{cell::RefCell, collections::HashMap, io::Write, rc::Rc};
 
