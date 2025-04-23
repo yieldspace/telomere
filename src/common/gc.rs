@@ -1,5 +1,3 @@
-use std::mem::MaybeUninit;
-
 use super::{Instance, Memory};
 mod view;
 pub use view::*;

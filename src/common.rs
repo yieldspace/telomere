@@ -8,6 +8,7 @@ use custom_section::NameSubSection;
 
 use gc::GcRootHandle;
 use gc::InstanceData;
+use gc::MemoryPool;
 use store::GlobalStore;
 pub use vm_result::VMResult;
 mod memory;
@@ -393,6 +394,7 @@ pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     pub local_reference: LocalReference,
     pub store: &'a mut Store,
+    pub gc: &'a mut MemoryPool,
 }
 impl ExecuteContext<'_> {
     pub fn func(&self) -> &FunctionInstance {
@@ -414,7 +416,7 @@ impl ExecuteContext<'_> {
         self.instance().instance_id
     }
     pub fn instance(&self) -> &InstanceData {
-        unsafe { &*self.store.get_instance_unchecked(self.instance_addr()) }
+        unsafe { &*self.gc.get_instance_unchecked(self.instance_addr()) }
     }
     pub fn local_reference(&self) -> LocalReference {
         self.local_reference
@@ -422,11 +424,10 @@ impl ExecuteContext<'_> {
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.instance()
             .mems
-            .as_slice(&self.store.gc.borrow())
+            .as_slice(&self.gc)
             .get(0)
             .copied()
-            // FIXME: life time escape technique
-            .map(|v| unsafe { &mut *(self.store.gc.borrow_mut().get_memory(v) as *mut Memory) })
+            .map(|v| unsafe { self.gc.get_memory(v) })
     }
 }
 

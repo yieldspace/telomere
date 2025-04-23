@@ -99,14 +99,15 @@ impl Store {
             state,
         }
     }
-    pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
-        self.gc.borrow().get_instance_unchecked(addr)
-    }
     pub(crate) fn allocate(&mut self, object_type: ObjectType, size: usize) -> GcRef {
-        self.gc.borrow_mut().allocate(Header::new(object_type, size))
+        self.gc
+            .borrow_mut()
+            .allocate(Header::new(object_type, size))
     }
     pub(crate) unsafe fn place_instance_unchecked(&mut self, addr: GcRef, instance: &Instance) {
-        self.gc.borrow_mut().place_instance_unchecked(addr, instance)
+        self.gc
+            .borrow_mut()
+            .place_instance_unchecked(addr, instance)
     }
     pub(crate) fn new_instance_id(&mut self) -> u32 {
         let instance_id = self.instance_id;
@@ -151,6 +152,6 @@ mod test {
         use super::StoreState;
         let data = vec![1, 2, 3];
         let state = StoreState::new(Some(&data));
-            assert_eq!(state.get::<Vec<i32>>().unwrap(), &data);
+        assert_eq!(state.get::<Vec<i32>>().unwrap(), &data);
     }
 }
