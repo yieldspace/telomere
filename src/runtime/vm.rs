@@ -653,7 +653,6 @@ pub(crate) unsafe fn internal_op_call(
         .get(funcinst.funcidx as usize)
         .unwrap_unchecked();
     let ft = &module.function_types[typeidx.0 as usize];
-    let code = funcinst.body;
     trace!("op_call_internal: {instance_addr:?}({module_addr:?})  {funcaddr:?}");
     let mut param_size = 0usize;
     for param in ft.0.iter() {

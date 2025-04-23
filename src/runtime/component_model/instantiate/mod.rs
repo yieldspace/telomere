@@ -56,7 +56,7 @@ pub unsafe fn instantiate_core_instance(
             for (name, import) in imports {
                 match import {
                     CoreInstanceImport::Instance(idx) => {
-                        let addr = ctx.instantiated.core_instances[idx.global()].id;
+                        let addr = ctx.instantiated.core_instances[idx.global()].id.clone();
                         registry.register(name, addr);
                     }
                 }
@@ -90,25 +90,25 @@ pub unsafe fn instantiate_core_instance(
                                     .core_instances
                                     .get(inst_idx.global())
                                     .unwrap();
-                                registry.register(nth.to_string(), inst.id);
+                                registry.register(nth.to_string(), inst.id.clone());
                                 (nth.to_string(), name.clone(), export_name.clone())
                             }
                             _ => {
                                 let (instance_addr, name) =
                                     ctx.core_functions.get(idx.global()).unwrap();
-                                registry.register(nth.to_string(), *instance_addr);
+                                registry.register(nth.to_string(), instance_addr.clone());
                                 (nth.to_string(), name.clone(), export_name.clone())
                             }
                         }
                     }
                     CoreInstanceInlineExport::Memory(idx) => {
                         let (instance_addr, name) = ctx.core_memories.get(idx.global()).unwrap();
-                        registry.register(nth.to_string(), *instance_addr);
+                        registry.register(nth.to_string(), instance_addr.clone());
                         (nth.to_string(), name.clone(), export_name.clone())
                     }
                     CoreInstanceInlineExport::Table(idx) => {
                         let (instance_addr, name) = ctx.core_tables.get(idx.global()).unwrap();
-                        registry.register(nth.to_string(), *instance_addr);
+                        registry.register(nth.to_string(), instance_addr.clone());
                         (nth.to_string(), name.clone(), export_name.clone())
                     }
                     _ => todo!(),
