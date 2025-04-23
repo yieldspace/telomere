@@ -11,7 +11,7 @@ use crate::{
 
 use super::{
     object::{GcRefDynamicArray, InstanceData, RootTable, U32FixedArray},
-    GCView, GcRef, Header, ObjectType,
+    GcView, GcRef, Header, ObjectType,
 };
 
 #[derive(Debug)]

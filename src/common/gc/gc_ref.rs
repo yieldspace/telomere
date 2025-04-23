@@ -1,4 +1,4 @@
-use super::{GCView, MemoryPool, HEADER_LEN};
+use super::{GcView, MemoryPool, HEADER_LEN};
 
 // NOTE: GcRef will disabled after gc
 #[repr(transparent)]
@@ -22,7 +22,7 @@ impl GcRef {
         self.0 == 0
     }
 }
-impl GCView for GcRef {
+impl GcView for GcRef {
     fn trace(&self, pool: &mut MemoryPool) {
         pool.trace(*self);
     }

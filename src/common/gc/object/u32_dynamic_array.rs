@@ -1,4 +1,4 @@
-use crate::common::gc::{GCView, MemoryPool};
+use crate::common::gc::{GcView, MemoryPool};
 
 use super::U32FixedArray;
 
@@ -24,7 +24,7 @@ impl U32DynamicArray {
         unsafe { std::slice::from_raw_parts(self.as_ptr(pool), self.len(pool).into()) }
     }
 }
-impl GCView for U32DynamicArray {
+impl GcView for U32DynamicArray {
     fn trace(&self, pool: &mut MemoryPool) {
         self.array.trace(pool);
     }

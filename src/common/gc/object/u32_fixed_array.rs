@@ -1,4 +1,4 @@
-use crate::common::gc::{GCView, GcRef, MemoryPool};
+use crate::common::gc::{GcView, GcRef, MemoryPool};
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
@@ -25,7 +25,7 @@ impl U32FixedArray {
         unsafe { std::slice::from_raw_parts(self.as_ptr(pool), self.len(pool).into()) }
     }
 }
-impl GCView for U32FixedArray {
+impl GcView for U32FixedArray {
     fn trace(&self, pool: &mut MemoryPool) {
         self.0.trace(pool);
     }

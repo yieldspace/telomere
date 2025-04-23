@@ -1,4 +1,4 @@
-use crate::common::gc::{GCView, GcRef, MemoryPool};
+use crate::common::gc::{GcView, GcRef, MemoryPool};
 
 use super::{GcRefFixedArray, U32FixedArray};
 
@@ -12,7 +12,7 @@ pub struct InstanceData {
     pub tables: GcRefFixedArray,
     pub mems: GcRefFixedArray,
 }
-impl GCView for InstanceData {
+impl GcView for InstanceData {
     fn trace(&self, pool: &mut MemoryPool) {
         self.globals.trace(pool);
         self.funcs.trace(pool);

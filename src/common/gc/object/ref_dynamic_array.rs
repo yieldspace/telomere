@@ -1,4 +1,4 @@
-use crate::common::gc::{GCView, GcRef, MemoryPool};
+use crate::common::gc::{GcView, GcRef, MemoryPool};
 
 use super::GcRefFixedArray;
 
@@ -34,7 +34,7 @@ impl GcRefDynamicArray {
         unsafe { std::slice::from_raw_parts_mut(self.as_ptr_mut(pool), self.len(pool).into()) }
     }
 }
-impl GCView for GcRefDynamicArray {
+impl GcView for GcRefDynamicArray {
     fn trace(&self, pool: &mut MemoryPool) {
         pool.mark(self.array.0);
         for v in self.as_slice(pool) {
