@@ -483,9 +483,7 @@ impl MemoryPool {
 #[cfg(test)]
 mod tests {
     use super::MemoryPool;
-    #[test]
-    fn init() {
-        let mut pool = MemoryPool::new();
+    fn debug_pool(pool: &MemoryPool) {
         for addr in pool.scan_heap() {
             let header = pool.read_header(addr);
             tracing::trace!(
@@ -499,19 +497,17 @@ mod tests {
             assert!(header.is_initialized());
             assert!(!header.is_marked());
         }
+    }
+    #[test]
+    fn init() {
+        let mut pool = MemoryPool::new();
+        debug_pool(&pool);
         pool.mark_phase();
+        debug_pool(&pool);
         let mut marked = vec![];
         let mut free = vec![];
         for addr in pool.scan_heap() {
             let header = pool.read_header(addr);
-            tracing::trace!(
-                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
-                header.object_type(),
-                header.word_size(),
-                header.is_initialized(),
-                header.is_marked()
-            );
-
             assert!(header.is_initialized());
             if header.is_marked() {
                 marked.push(addr);
@@ -524,39 +520,17 @@ mod tests {
     }
     #[test]
     fn mark() {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .init();
         let mut pool = MemoryPool::new();
         let free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         let marked_arr = pool.new_u32_fixed_array(&[4]);
         pool.add_root(marked_arr.0);
-        for addr in pool.scan_heap() {
-            let header = pool.read_header(addr);
-            tracing::trace!(
-                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
-                header.object_type(),
-                header.word_size(),
-                header.is_initialized(),
-                header.is_marked()
-            );
-
-            assert!(header.is_initialized());
-            assert!(!header.is_marked());
-        }
+        debug_pool(&pool);
         pool.mark_phase();
+        debug_pool(&pool);
         let mut marked = vec![];
         let mut free = vec![];
         for addr in pool.scan_heap() {
             let header = pool.read_header(addr);
-            tracing::trace!(
-                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
-                header.object_type(),
-                header.word_size(),
-                header.is_initialized(),
-                header.is_marked()
-            );
-
             assert!(header.is_initialized());
             if header.is_marked() {
                 marked.push(addr);
@@ -575,16 +549,10 @@ mod tests {
         let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         let _free_arr2 = pool.new_u32_fixed_array(&[1, 2, 3]);
         pool.gc();
+        debug_pool(&pool);
         let mut count_object = 0;
         for addr in pool.scan_heap() {
-            let header = pool.read_header(addr);
-            tracing::trace!(
-                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
-                header.object_type(),
-                header.word_size(),
-                header.is_initialized(),
-                header.is_marked()
-            );
+            let _header = pool.read_header(addr);
             count_object += 1;
         }
         assert_eq!(count_object, 1); // only root table
@@ -598,16 +566,47 @@ mod tests {
         pool.gc();
         let mut count_object = 0;
         for addr in pool.scan_heap() {
-            let header = pool.read_header(addr);
-            tracing::trace!(
-                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
-                header.object_type(),
-                header.word_size(),
-                header.is_initialized(),
-                header.is_marked()
-            );
+            let _header = pool.read_header(addr);
             count_object += 1;
         }
         assert_eq!(count_object, 3); // root table, root table buf, tracked_arr
+    }
+    #[test]
+    fn remove_root_before_gc() {
+        let mut pool = MemoryPool::new();
+        let tracked_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
+        let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
+        let idx = pool.add_root(tracked_arr.0);
+        pool.remove_root(idx);
+
+        pool.gc();
+        let mut count_object = 0;
+        for addr in pool.scan_heap() {
+            let _header = pool.read_header(addr);
+            count_object += 1;
+        }
+        assert_eq!(count_object, 2); // root table, root table buf
+    }
+    #[test]
+    fn remove_root_after_gc() {
+        let mut pool = MemoryPool::new();
+        let tracked_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
+        let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
+        let idx = pool.add_root(tracked_arr.0);
+        pool.gc();
+        let mut count_object = 0;
+        for addr in pool.scan_heap() {
+            let _header = pool.read_header(addr);
+            count_object += 1;
+        }
+        assert_eq!(count_object, 3); // root table, root table buf, tracked_arr
+        pool.remove_root(idx);
+        pool.gc();
+        let mut count_object = 0;
+        for addr in pool.scan_heap() {
+            let _header = pool.read_header(addr);
+            count_object += 1;
+        }
+        assert_eq!(count_object, 2); // root table, root table buf
     }
 }
