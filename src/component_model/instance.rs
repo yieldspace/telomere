@@ -25,7 +25,7 @@ impl Instance {
             Instance::Instantiate(Instantiate { component_idx, .. }) => {
                 let component = ctx.validator.get_component(component_idx);
                 let export =
-                    component.get_export(ctx.validator, component_idx.clone(), name.clone())?;
+                    component.get_export(ctx.validator, *component_idx, name.clone())?;
                 if export.eq_sort(sort) {
                     return Ok(export);
                 }
@@ -62,7 +62,7 @@ impl Instance {
                 }
             }
             Instance::Typed(ty, _) | Instance::SuperTyped(ty, _, _) => {
-                return Ok(ty.get_export(ctx.validator, self_idx, name.clone())?);
+                return ty.get_export(ctx.validator, self_idx, name.clone());
             }
         }
         Err(ComponentParseError::ExportNotFound(name))

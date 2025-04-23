@@ -73,7 +73,7 @@ impl InlineComponent {
                     // core module, component, instanceは型情報だけに落とし込む事ができないため，SuperTypedを用意する．
                     match desc {
                         ExternDesc::Core(idx) => {
-                            let ty = validator.get_core_type(&idx);
+                            let ty = validator.get_core_type(idx);
                             if let CoreType::ModuleType(ty) = ty {
                                 Ok(ComponentExportSlot::CoreModule(Slot::Value(
                                     CoreModule::SuperTyped(
@@ -87,7 +87,7 @@ impl InlineComponent {
                             }
                         }
                         ExternDesc::Func(idx) => {
-                            let ty = validator.get_type(&idx);
+                            let ty = validator.get_type(idx);
                             if let Type::Func(ty) = ty {
                                 Ok(ComponentExportSlot::Func(Slot::Value(
                                     ComponentFunction::SuperTyped(
@@ -104,14 +104,14 @@ impl InlineComponent {
                         ExternDesc::Value(bound) => todo!(),
                         ExternDesc::Type(ty) => match ty {
                             TypeBound::Eq(idx) => {
-                                Ok(ComponentExportSlot::Type(Slot::Idx(idx.clone())))
+                                Ok(ComponentExportSlot::Type(Slot::Idx(*idx)))
                             }
                             TypeBound::Sub => Ok(ComponentExportSlot::Type(Slot::Value(
                                 Type::SuperTypedUniqueResource(export.sort.clone().try_into()?),
                             ))),
                         },
                         ExternDesc::Component(idx) => {
-                            let ty = validator.get_type(&idx);
+                            let ty = validator.get_type(idx);
                             if let Type::Component(ty) = ty {
                                 Ok(ComponentExportSlot::Component(Slot::Value(
                                     InlineComponent::SuperTyped(
@@ -125,7 +125,7 @@ impl InlineComponent {
                             }
                         }
                         ExternDesc::Instance(idx) => {
-                            let ty = validator.get_type(&idx);
+                            let ty = validator.get_type(idx);
                             if let Type::Instance(ty) = ty {
                                 Ok(ComponentExportSlot::Instance(Slot::Value(
                                     Instance::SuperTyped(

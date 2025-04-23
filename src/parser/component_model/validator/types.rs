@@ -9,6 +9,7 @@ use crate::parser::component_model::{ComponentParseError, Validator};
 pub struct TypeValidator<'a> {
     parent: &'a mut dyn Validator,
     types: Vec<usize>,
+    #[allow(dead_code)]
     values: Vec<usize>,
     instances: Vec<usize>,
 }

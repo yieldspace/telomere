@@ -69,7 +69,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let func_addr = GcRef(arg0);
     let func = ctx.func_by_addr(func_addr);
     if func.is_host_func() {
-        let f = func.host_code_pointer(&ctx.gc);
+        let f = func.host_code_pointer(ctx.gc);
         ctx.local_reference = vm_try!(ctx.stack.function_call(
             4,
             0,
@@ -79,7 +79,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
         ));
         f(ctx)
     } else {
-        let (locals_data, code_offset) = func.locals_and_code_offset(&ctx.gc);
+        let (locals_data, code_offset) = func.locals_and_code_offset(ctx.gc);
         let code_addr = func.body;
         ctx.local_reference = vm_try!(ctx.stack.function_call(
             4,

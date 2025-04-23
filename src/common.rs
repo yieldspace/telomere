@@ -405,18 +405,18 @@ pub struct ExecuteContext<'a> {
 impl ExecuteContext<'_> {
     pub fn func(&self) -> &FunctionInstanceData {
         let code_addr = self.stack.code_addr(&self.local_reference());
-        unsafe { &self.gc.get_func(code_addr) }
+        unsafe { self.gc.get_func(code_addr) }
     }
     pub fn func_by_addr(&self, addr: GcRef) -> &FunctionInstanceData {
-        unsafe { &self.gc.get_func(addr) }
+        unsafe { self.gc.get_func(addr) }
     }
     pub(crate) fn code(&self) -> *const Instr {
         let func = self.func();
-        let (local_data, offset) = func.locals_and_code_offset(&self.gc);
+        let (_local_data, offset) = func.locals_and_code_offset(self.gc);
         unsafe { self.gc.get_value::<Instr>(func.body, offset) }
     }
     pub unsafe fn module(&self) -> &ModuleInstance {
-        &self.gc.get_module(self.instance().module_addr)
+        self.gc.get_module(self.instance().module_addr)
     }
     pub fn instance_addr(&self) -> GcRef {
         self.func().instance_addr
@@ -433,8 +433,7 @@ impl ExecuteContext<'_> {
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.instance()
             .mems
-            .as_slice(&self.gc)
-            .get(0)
+            .as_slice(self.gc).first()
             .copied()
             .map(|v| unsafe { self.gc.get_memory(v) })
     }
@@ -490,7 +489,7 @@ pub fn execute_elem_init_const_expr(
                 VMResult::Unlinkable
             }));
             let mut buf = [0u8; 4];
-            buf.copy_from_slice(unsafe { &gc.get_global(addr) });
+            buf.copy_from_slice(unsafe { gc.get_global(addr) });
             VMResult::Success(GcRef(u32::from_le_bytes(buf)))
         }
         unknown => todo!("{unknown:?}"),

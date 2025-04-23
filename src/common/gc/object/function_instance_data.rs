@@ -12,7 +12,6 @@ const LOCALS_ENCODED_EXTERN_REF: u32 = LOCALS_ENCODED_I32 << 3;
 const LOCALS_ENCODED_I64: u32 = LOCALS_ENCODED_I32 << 4;
 const LOCALS_ENCODED_F64: u32 = LOCALS_ENCODED_I32 << 5;
 const LOCALS_ENCODED_V128: u32 = 0x1 << 6;
-const LOCALS_ENCODED_MASK: u32 = 0xF;
 
 #[repr(C)]
 pub struct FunctionInstanceData {

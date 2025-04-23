@@ -13,9 +13,9 @@ pub struct CoreModuleType {}
 impl CoreModuleType {
     pub fn get_export(
         &self,
-        self_idx: CoreInstanceIdx,
-        sort: CoreSort,
-        name: String,
+        _self_idx: CoreInstanceIdx,
+        _sort: CoreSort,
+        _name: String,
     ) -> Result<CoreExportSlot, ComponentParseError> {
         todo!()
     }

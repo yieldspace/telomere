@@ -88,25 +88,25 @@ impl CoreInstance {
                 Some(export) => match (export, sort) {
                     (CoreInstanceInlineExport::Func(idx), CoreSort::Func) => {
                         Ok(CoreExportSlot::Func(
-                            Slot::Idx(idx.clone()),
+                            Slot::Idx(*idx),
                             CoreReference::Instance(self_idx, name),
                         ))
                     }
                     (CoreInstanceInlineExport::Table(idx), CoreSort::Table) => {
                         Ok(CoreExportSlot::Table(
-                            Slot::Idx(idx.clone()),
+                            Slot::Idx(*idx),
                             CoreReference::Instance(self_idx, name),
                         ))
                     }
                     (CoreInstanceInlineExport::Memory(idx), CoreSort::Memory) => {
                         Ok(CoreExportSlot::Memory(
-                            Slot::Idx(idx.clone()),
+                            Slot::Idx(*idx),
                             CoreReference::Instance(self_idx, name),
                         ))
                     }
                     (CoreInstanceInlineExport::Global(idx), CoreSort::Global) => {
                         Ok(CoreExportSlot::Global(
-                            Slot::Idx(idx.clone()),
+                            Slot::Idx(*idx),
                             CoreReference::Instance(self_idx, name),
                         ))
                     }

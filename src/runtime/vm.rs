@@ -659,7 +659,7 @@ pub(crate) unsafe fn internal_op_call(
         param_size += param.stack_size().usize();
     }
     if funcinst.is_host_func() {
-        let fp = funcinst.host_code_pointer(&ctx.gc);
+        let fp = funcinst.host_code_pointer(ctx.gc);
         ctx.local_reference = vm_try!(ctx.stack.function_call(
             param_size,
             0,
@@ -670,7 +670,7 @@ pub(crate) unsafe fn internal_op_call(
         let return_addr = vm_try!(fp(ctx));
         VMResult::Success(return_addr)
     } else {
-        let (locals, code_offset) = funcinst.locals_and_code_offset(&ctx.gc);
+        let (locals, code_offset) = funcinst.locals_and_code_offset(ctx.gc);
         let addr = funcinst.body;
         ctx.local_reference = vm_try!(ctx.stack.function_call(
             param_size,
@@ -686,7 +686,7 @@ pub(crate) unsafe fn internal_op_call(
 
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice(&ctx.gc)[funcidx as usize];
+    let funcaddr = ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize];
     let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx));
     call_next(ptr, 0, ctx)
 }
@@ -699,7 +699,7 @@ unsafe fn internal_op_call_indirect(
     let i = ctx.stack.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
     let table_addr = *vm_try!(VMResult::from_option(
-        ctx.instance().tables.as_slice(&ctx.gc).get(tableidx),
+        ctx.instance().tables.as_slice(ctx.gc).get(tableidx),
         || { VMResult::TableIndexOutOfRange }
     ));
     let table = ctx.gc.get_table(table_addr);
@@ -795,19 +795,19 @@ pub unsafe fn op_local_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 }
 pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx];
-    vm_try!(ctx.stack.push_slice(&ctx.gc.get_global(addr)));
+    let addr = ctx.instance().globals.as_slice(ctx.gc)[idx];
+    vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx];
-    vm_try!(ctx.stack.push_slice(&ctx.gc.get_global(addr)));
+    let addr = ctx.instance().globals.as_slice(ctx.gc)[idx];
+    vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx];
+    let addr = ctx.instance().globals.as_slice(ctx.gc)[idx];
     ctx.gc
         .get_global_mut(addr)
         .copy_from_slice(&ctx.stack.pop_u8_array::<4>());
@@ -815,7 +815,7 @@ pub unsafe fn op_global_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 }
 pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx];
+    let addr = ctx.instance().globals.as_slice(ctx.gc)[idx];
     ctx.gc
         .get_global_mut(addr)
         .copy_from_slice(&ctx.stack.pop_u8_array::<8>());
@@ -823,7 +823,7 @@ pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 }
 pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().tables.as_slice(&ctx.gc)[idx];
+    let addr = ctx.instance().tables.as_slice(ctx.gc)[idx];
     let inst = ctx.gc.get_table(addr);
     let i = ctx.stack.pop_u32();
     if i as usize >= inst.1.len() {
@@ -837,7 +837,7 @@ pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 }
 pub unsafe fn op_table_set(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().tables.as_slice(&ctx.gc)[idx];
+    let addr = ctx.instance().tables.as_slice(ctx.gc)[idx];
     let inst = &mut ctx.gc.get_table(addr);
     let val = ctx.stack.pop_u32();
     let i = ctx.stack.pop_u32();
@@ -885,8 +885,8 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
                 for (i, expr) in slice.iter().enumerate() {
                     let res = vm_try!(execute_elem_init_const_expr(
                         gc,
-                        instance.globals.as_slice(&gc),
-                        instance.funcs.as_slice(&gc),
+                        instance.globals.as_slice(gc),
+                        instance.funcs.as_slice(gc),
                         expr,
                         reftype,
                     ));
@@ -920,8 +920,8 @@ pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let dst_table_idx = (*tail_code).operand.u32 as usize;
     let src_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
 
-    let src_table_addr = ctx.instance().tables.as_slice(&ctx.gc)[src_table_idx];
-    let dst_table_addr = ctx.instance().tables.as_slice(&ctx.gc)[dst_table_idx];
+    let src_table_addr = ctx.instance().tables.as_slice(ctx.gc)[src_table_idx];
+    let dst_table_addr = ctx.instance().tables.as_slice(ctx.gc)[dst_table_idx];
     let src_table = &ctx.gc.get_table(src_table_addr).1;
     let src_ptr = vm_try!(VMResult::from_option(src_table.get(src..src + len), || {
         VMResult::TableIndexOutOfRange
@@ -938,7 +938,7 @@ pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 }
 pub unsafe fn op_table_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let table_idx = (*tail_code).operand.u32 as usize;
-    let table_addr = ctx.instance().tables.as_slice(&ctx.gc)[table_idx];
+    let table_addr = ctx.instance().tables.as_slice(ctx.gc)[table_idx];
     let table_inst = &mut ctx.gc.get_table(table_addr);
     let n = ctx.stack.pop_i32();
     let val = ctx.stack.pop_u32();
@@ -965,7 +965,7 @@ pub unsafe fn op_table_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 }
 pub unsafe fn op_table_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let table_idx = (*tail_code).operand.u32 as usize;
-    let table_addr = ctx.instance().tables.as_slice(&ctx.gc)[table_idx];
+    let table_addr = ctx.instance().tables.as_slice(ctx.gc)[table_idx];
     let table_inst = &mut ctx.gc.get_table(table_addr);
     let val = table_inst.1.len() as u32;
     trace!("op_table_size: {table_idx} {table_addr:?} {table_inst:?} => {val}");
@@ -978,7 +978,7 @@ pub unsafe fn op_table_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let i = ctx.stack.pop_u32() as usize;
     let table_idx = (*tail_code).operand.u32 as usize;
 
-    let table_addr = ctx.instance().tables.as_slice(&ctx.gc)[table_idx];
+    let table_addr = ctx.instance().tables.as_slice(ctx.gc)[table_idx];
     let table = &mut ctx.gc.get_table(table_addr).1;
     let slice = vm_try!(VMResult::from_option(table.get_mut(i..i + n), || {
         VMResult::TableIndexOutOfRange
@@ -1774,7 +1774,7 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let d = ctx.stack.pop_u32();
     {
         let instance_id = ctx.instance_id();
-        let memory = if let Some(v) = ctx.instance().mems.as_slice(&ctx.gc).get(0).copied() {
+        let memory = if let Some(v) = ctx.instance().mems.as_slice(ctx.gc).first().copied() {
             ctx.gc.get_memory(v)
         } else {
             return VMResult::MemoryIndexOutOfRange;
@@ -1880,7 +1880,7 @@ pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let funcidx = (*tail_code).operand.u32;
     vm_try!(ctx
         .stack
-        .push_u32(ctx.instance().funcs.as_slice(&ctx.gc)[funcidx as usize].get()));
+        .push_u32(ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize].get()));
     call_next(tail_code, 1, ctx)
 }
 
@@ -1937,7 +1937,7 @@ pub fn run_module_function(
     let gc = &mut gc;
     let InstanceData {
         module_addr, funcs, ..
-    } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(&gc)) };
+    } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(gc)) };
     let module_inst = unsafe { gc.get_module(module_addr) };
     trace!("{:?}", module_inst.exports);
     if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
@@ -2020,12 +2020,12 @@ pub fn get_global(instance: &InstanceHandle, store: &mut Store, name: &str) -> V
         VMResult::Success(match gt.0 {
             ValType::I32 => {
                 let mut buf = [0u8; 4];
-                buf.copy_from_slice(unsafe { &gc.get_global(addr) });
+                buf.copy_from_slice(unsafe { gc.get_global(addr) });
                 WasmValue::I32(i32::from_le_bytes(buf))
             }
             ValType::I64 => {
                 let mut buf = [0u8; 8];
-                buf.copy_from_slice(unsafe { &gc.get_global(addr) });
+                buf.copy_from_slice(unsafe { gc.get_global(addr) });
                 WasmValue::I64(i64::from_le_bytes(buf))
             }
             _ => todo!(),

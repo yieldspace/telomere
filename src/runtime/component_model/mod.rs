@@ -43,6 +43,7 @@ pub enum InstanceExport {
 #[derive(Debug)]
 pub struct CoreInstantiated {
     pub(crate) id: InstanceHandle,
+    #[allow(dead_code)]
     pub(crate) registry: Registry,
 }
 

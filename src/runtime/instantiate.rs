@@ -8,7 +8,7 @@ use crate::{
         },
         word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
         ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
-        GlobalIdx, GlobalType, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection,
+        GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection,
         InstanceHandle, Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule,
         TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
@@ -21,7 +21,6 @@ pub(crate) fn init_global(
     init: &ConstExpr,
     globals: &[GcRef],
     funcs: &[GcRef],
-    gts: &[GlobalType],
 ) -> VMResult<GcRef> {
     tracing::trace!("global init: {init:?}");
 
@@ -86,7 +85,7 @@ fn execute_offset_const_expr(
                     VMResult::Unlinkable
                 }));
                 let mut buf = [0u8; 4];
-                buf.copy_from_slice(unsafe { &gc.get_global(addr) });
+                buf.copy_from_slice(unsafe { gc.get_global(addr) });
                 u32::from_le_bytes(buf)
             }
             _ => {
@@ -193,7 +192,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     tracing::trace!("import function type");
                     return VMResult::Unlinkable;
                 }
-                let funcaddr = ext_inst.funcs.as_slice(&gc)[funcidx.0 as usize];
+                let funcaddr = ext_inst.funcs.as_slice(gc)[funcidx.0 as usize];
                 let funcidx = funcs.len();
                 funcs.push(funcaddr);
                 tracing::trace!("linking: {funcidx} => {funcaddr:?}")
@@ -205,7 +204,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
 
                     return VMResult::Unlinkable;
                 }
-                globals.push(ext_inst.globals.as_slice(&gc)[global_idx.0 as usize]);
+                globals.push(ext_inst.globals.as_slice(gc)[global_idx.0 as usize]);
             }
             (ImportDesc::TableType(import_tt), ExportDesc::Table(idx)) => {
                 let export_tt = ext_module.tables[idx.0 as usize];
@@ -225,7 +224,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 tables.push(ext_inst.tables.as_slice(gc)[idx.0 as usize]);
             }
             (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                memory = ext_inst.mems.as_slice(gc).get(0).copied();
+                memory = ext_inst.mems.as_slice(gc).first().copied();
                 let limits = ext_module.mems[0].0;
 
                 if let Some(memory_addr) = memory {
@@ -249,7 +248,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     if memory.is_none() {
         if let Some(mem) = mems.first() {
             memory = Some({
-                gc.new_memory(mem.0.min, mem.0.max.unwrap_or_else(|| PAGE_SIZE_MAX as u32))
+                gc.new_memory(mem.0.min, mem.0.max.unwrap_or(PAGE_SIZE_MAX as u32))
             })
         }
     }
@@ -310,7 +309,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     }
 
     for init in &global_init {
-        globals.push(vm_try!(init_global(gc, init, &globals, &funcs, &m_globals)));
+        globals.push(vm_try!(init_global(gc, init, &globals, &funcs)));
     }
     let mut table_instances: Vec<GcRef> = m_tables.iter().map(|v| gc.new_table(*v)).collect();
     tables.append(&mut table_instances);
@@ -408,7 +407,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         vm_try!(res);
 
         let funcinst = unsafe { gc.get_func(funcaddr) };
-        let code = &funcinst.body;
         if funcinst.is_host_func() {
             let fp = funcinst.host_code_pointer(gc);
             let local_reference = vm_try!(stack.function_call(
@@ -426,7 +424,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 stack: &mut stack,
                 store,
                 local_reference,
-                gc: gc,
+                gc,
             };
             let return_addr = vm_try!(fp(&mut ctx));
             vm_try!(unsafe { vm::call_next(return_addr, 0, &mut ctx) });
@@ -529,8 +527,7 @@ pub fn aliasing(
                 memories.push(mt);
                 mem_addr = ext_instance
                     .mems
-                    .as_slice(&store.gc.borrow())
-                    .get(0)
+                    .as_slice(&store.gc.borrow()).first()
                     .copied();
                 exports.push(Export(
                     exportname,

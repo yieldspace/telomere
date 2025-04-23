@@ -4,9 +4,8 @@ mod ref_dynamic_array;
 pub(crate) use ref_dynamic_array::GcRefDynamicArray;
 mod ref_fixed_array;
 pub(crate) use ref_fixed_array::GcRefFixedArray;
-mod u32_dynamic_array;
-pub(crate) use u32_dynamic_array::U32DynamicArray;
 mod u32_fixed_array;
+#[cfg(test)]
 pub(crate) use u32_fixed_array::U32FixedArray;
 mod instance_data;
 pub(crate) use instance_data::InstanceData;

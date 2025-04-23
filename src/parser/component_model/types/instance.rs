@@ -40,8 +40,8 @@ pub fn _parse_instance_decl(
             let (_, a) = parse_alias(ctx)?;
             // validate alias sort is in [type, instance]
             match a {
-                AliasIdx::Type(idx) => {}
-                AliasIdx::Instance(idx) => {}
+                AliasIdx::Type(_idx) => {}
+                AliasIdx::Instance(_idx) => {}
                 _ => {
                     return Err(ComponentParseError::InvalidSignature(format!(
                         "Invalid alias type for instance decl: {a:?}"

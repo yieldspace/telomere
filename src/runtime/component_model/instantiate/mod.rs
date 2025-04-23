@@ -22,6 +22,7 @@ pub union InstantiateInstr {
 
 #[derive(Clone, Copy)]
 pub union InstantiateOperand {
+    #[allow(dead_code)]
     idx: usize,
     pub core_module_idx: usize,
     pub core_instance_idx: usize,
@@ -67,11 +68,11 @@ pub unsafe fn instantiate_core_instance(
                     let instance = core_instantiate(m.clone(), ctx.store, &registry).unwrap();
                     ctx.push_core_module_instance(instance, registry);
                 }
-                CoreModule::Typed(ty, reference) => match reference {
-                    Reference::Instance(idx, name) => {}
-                    Reference::Component(idx, name) => {}
-                    Reference::Imported(name) => {}
-                    Reference::Exported(name) => {}
+                CoreModule::Typed(_ty, reference) => match reference {
+                    Reference::Instance(_idx, _name) => {}
+                    Reference::Component(_idx, _name) => {}
+                    Reference::Imported(_name) => {}
+                    Reference::Exported(_name) => {}
                 },
                 CoreModule::SuperTyped(_, _, _) => {}
             }
@@ -84,7 +85,7 @@ pub unsafe fn instantiate_core_instance(
                     CoreInstanceInlineExport::Func(idx) => {
                         let func = ctx.component.get_core_function(idx.global());
                         match func {
-                            CoreFunction::Export(CoreFuncRef(inst_idx, idx, name)) => {
+                            CoreFunction::Export(CoreFuncRef(inst_idx, _idx, name)) => {
                                 let inst = ctx
                                     .instantiated
                                     .core_instances
@@ -168,9 +169,9 @@ pub unsafe fn instantiate_core_function(
 
 pub unsafe fn instantiate_function(
     tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    let idx = (*tail_code).operand.func_idx;
+    let _idx = (*tail_code).operand.func_idx;
     todo!()
 }
 

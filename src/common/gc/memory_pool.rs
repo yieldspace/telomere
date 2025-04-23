@@ -1,7 +1,7 @@
 use crate::{
     common::{
         gc::{
-            object::{GcRefFixedArray, U32DynamicArray},
+            object::GcRefFixedArray,
             HEADER_LEN,
         },
         word_size, Instr, LocalsData, Memory, ModuleInstance, TableInstance, TableType, PAGE_SIZE,
@@ -12,11 +12,12 @@ use crate::{
 use super::{
     object::{
         FunctionInstanceData, GcRefDynamicArray, Global4Data, Global8Data, GlobalRefData,
-        InstanceData, RootTable, U32FixedArray,
+        InstanceData, RootTable,
     },
     GcRef, GcView, Header, ObjectType,
 };
-
+#[cfg(test)]
+use super::object::U32FixedArray;
 #[derive(Debug)]
 pub struct MemoryPool {
     pub(crate) memory: Vec<u32>,
@@ -28,6 +29,12 @@ pub struct MemoryPool {
 }
 
 #[allow(dead_code)]
+impl Default for MemoryPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryPool {
     pub fn new() -> Self {
         let rt_header = Header::new(ObjectType::RootTable, 2).initialized().get();
@@ -92,6 +99,7 @@ impl MemoryPool {
         unsafe { self.write(addr, 0, data, len) };
         addr
     }
+    #[cfg(test)]
     fn new_u32_fixed_array(&mut self, data: &[u32]) -> U32FixedArray {
         U32FixedArray(self.new_raw_region(data.as_ptr() as *const u32, data.len()))
     }
@@ -106,7 +114,7 @@ impl MemoryPool {
             instance_id: instance.instance_id,
             funcs: self.new_gc_ref_fixed_array(&instance.funcs),
             globals: self.new_gc_ref_fixed_array(&instance.globals),
-            mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
+            mems: self.new_gc_ref_fixed_array(&instance.memory.to_vec()),
             module_addr: instance.module_addr,
             tables: self.new_gc_ref_fixed_array(&instance.tables),
         };
@@ -128,7 +136,7 @@ impl MemoryPool {
             instance_id: instance.instance_id,
             funcs: self.new_gc_ref_fixed_array(&instance.funcs),
             globals: self.new_gc_ref_fixed_array(&instance.globals),
-            mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
+            mems: self.new_gc_ref_fixed_array(&instance.memory.to_vec()),
             module_addr: instance.module_addr,
             tables: self.new_gc_ref_fixed_array(&instance.tables),
         };
@@ -151,12 +159,12 @@ impl MemoryPool {
             .add(addr.get_value_addr_usize() + offset) as *mut T
     }
     pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
-        let ptr = self.memory.as_ptr().add(addr.get_value_addr_usize()) as *const InstanceData;
-        ptr
+        
+        self.memory.as_ptr().add(addr.get_value_addr_usize()) as *const InstanceData
     }
     pub(crate) unsafe fn get_instance_mut_unchecked(&mut self, addr: GcRef) -> *mut InstanceData {
-        let ptr = self.memory.as_mut_ptr().add(addr.get_value_addr_usize()) as *mut InstanceData;
-        ptr
+        
+        self.memory.as_mut_ptr().add(addr.get_value_addr_usize()) as *mut InstanceData
     }
     pub(crate) unsafe fn write(
         &mut self,
@@ -188,52 +196,6 @@ impl MemoryPool {
             self.relocate(old_region, new_region);
         }
         new_region
-    }
-    unsafe fn get_u32_dynamic_array(&self, obj: GcRef, offset: usize) -> &U32DynamicArray {
-        debug_assert!(!obj.is_null());
-        (self
-            .memory
-            .as_ptr()
-            .add(obj.get_value_addr_usize() + offset) as *const U32DynamicArray)
-            .as_ref()
-            .unwrap_unchecked()
-    }
-    unsafe fn get_u32_dynamic_array_mut(
-        &mut self,
-        obj: GcRef,
-        offset: usize,
-    ) -> &mut U32DynamicArray {
-        debug_assert!(!obj.is_null());
-
-        (self
-            .memory
-            .as_mut_ptr()
-            .add(obj.get_value_addr_usize() + offset) as *mut U32DynamicArray)
-            .as_mut()
-            .unwrap_unchecked()
-    }
-    pub(crate) unsafe fn u32_array_push_vec(&mut self, obj: GcRef, offset: usize, values: &[u32]) {
-        debug_assert!(!obj.is_null());
-        let array = self.get_u32_dynamic_array(obj, offset);
-        let old_region = array.array.0;
-        let old_len = array.len;
-        let expected_len = array.len + values.len() as u32;
-        let dst_ref = if (array.cap(self) as u32) < expected_len {
-            let new_cap = expected_len * 2;
-            self.raw_region_extend(old_region, new_cap)
-        } else {
-            array.array.0
-        };
-        self.write(
-            dst_ref,
-            old_len as usize,
-            values.as_ptr() as *const u32,
-            values.len(),
-        );
-        let array = &mut *self.get_u32_dynamic_array_mut(obj, offset);
-
-        array.array = U32FixedArray(dst_ref);
-        array.len = expected_len;
     }
     pub(crate) unsafe fn gc_ref_array_push_vec(
         &mut self,
@@ -299,21 +261,21 @@ impl MemoryPool {
         let header = self.read_header(item);
         unsafe {
             match header.object_type() {
-                ObjectType::Instance => (&*self.get_instance_unchecked(item)).trace(self),
+                ObjectType::Instance => (*self.get_instance_unchecked(item)).trace(self),
                 ObjectType::Raw => {
                     // do nothing
                 }
-                ObjectType::RootTable => (&*self.get_value::<RootTable>(item, 0)).trace(self),
+                ObjectType::RootTable => (*self.get_value::<RootTable>(item, 0)).trace(self),
                 ObjectType::ExternMemoryRef
                 | ObjectType::ExternTableRef
                 | ObjectType::ExternModuleRef => {
                     // do nothing
                 }
                 ObjectType::GlobalRef => {
-                    (&*self.get_value::<GlobalRefData>(item, 0)).trace(self);
+                    (*self.get_value::<GlobalRefData>(item, 0)).trace(self);
                 }
                 ObjectType::FunctionInstance => {
-                    (&*self.get_value::<FunctionInstanceData>(item, 0)).trace(self);
+                    (*self.get_value::<FunctionInstanceData>(item, 0)).trace(self);
                 }
             }
         }
@@ -446,11 +408,12 @@ impl MemoryPool {
     }
     pub fn remove_root(&mut self, idx: u32) {
         unsafe {
-            *(&*self.get_value_mut::<GcRefDynamicArray>(self.root, 0))
+            *(*self.get_value_mut::<GcRefDynamicArray>(self.root, 0))
                 .as_ptr_mut(self)
                 .add(idx as usize) = GcRef(0);
         }
     }
+    #[cfg(test)]
     fn scan_heap(&self) -> impl Iterator<Item = GcRef> + use<'_> {
         let mut index = 1;
         std::iter::from_fn(move || {
@@ -549,13 +512,7 @@ impl MemoryPool {
         let ptr = self.memory.as_mut_ptr().add(addr.get_value_addr_usize());
         std::slice::from_raw_parts_mut(ptr as *mut u8, size)
     }
-    pub(crate) unsafe fn set_global4(&self, addr: GcRef) -> &[u8] {
-        let header = self.read_header(addr);
-        let size = header.word_size() as usize * std::mem::size_of::<u32>();
-
-        let ptr = self.memory.as_ptr().add(addr.get_value_addr_usize());
-        std::slice::from_raw_parts(ptr as *const u8, size)
-    }
+    
     pub fn copy_object(&mut self, item: GcRef) -> GcRef {
         let header = self.read_header(item);
         let new_item = self.allocate(header);
