@@ -15,9 +15,9 @@ const UNMARK_MASK: u32 = !MARK_MASK;
 const SIZE_MASK: u32 = 0xFFFF;
 const TYPE_MASK: u32 = 0x1FFF;
 const TYPE_LOWER_BIT: u32 = 16;
-#[repr(transparent)]
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct Header(u32);
+pub struct Header(u32, u32);
 impl Header {
     pub fn object_type(&self) -> ObjectType {
         unsafe { std::mem::transmute((self.0 >> TYPE_LOWER_BIT) & TYPE_MASK) }
@@ -29,26 +29,32 @@ impl Header {
         self.0 & MARK_MASK != 0
     }
     pub fn marked(self) -> Self {
-        Self(self.0 | MARK_MASK)
+        Self(self.0 | MARK_MASK, self.1)
     }
     pub fn unmarked(self) -> Self {
-        Self(self.0 & UNMARK_MASK)
+        Self(self.0 & UNMARK_MASK, self.1)
     }
     pub fn initialized(self) -> Self {
-        Self(self.0 | INIT_MASK)
+        Self(self.0 | INIT_MASK, self.1)
+    }
+    pub fn set_forwarding_pointer(self, ptr: u32) -> Self {
+        Self(self.0, ptr)
+    }
+    pub fn forwarding_pointer(self) -> u32 {
+        self.1
     }
     pub fn is_initialized(&self) -> bool {
         self.0 & INIT_MASK != 0
     }
-    pub fn new(ty: ObjectType, size: usize) -> Header {
+    pub fn new(ty: ObjectType, size: usize) -> Self {
         let ty: u32 = unsafe { std::mem::transmute(ty) };
         if size > u16::MAX.into() {
             panic!()
         }
-        Header(ty << TYPE_LOWER_BIT | (size as u32))
+        Self(ty << TYPE_LOWER_BIT | (size as u32), 0)
     }
-    pub fn get(&self) -> u32 {
-        self.0
+    pub fn get(&self) -> [u32; 2] {
+        [self.0, self.1]
     }
 }
 pub struct MemoryPool {
@@ -59,17 +65,23 @@ pub struct MemoryPool {
 pub const fn word_size<T>() -> usize {
     std::mem::size_of::<T>() / std::mem::size_of::<u32>()
 }
-const HEADER_LEN: usize = 1;
+const HEADER_LEN: usize = word_size::<Header>();
 impl MemoryPool {
     pub fn new() -> Self {
+        let rt_header = Header::new(ObjectType::RootTable, 2).initialized().get();
+        let raw_header = Header::new(ObjectType::Raw, 0).initialized().get();
+        let memory = vec![
+            rt_header[0],
+            rt_header[1],
+            0,
+            4,
+            raw_header[0],
+            raw_header[1],
+        ];
+        let allocated = memory.len() as u32;
         Self {
-            memory: vec![
-                Header::new(ObjectType::RootTable, 2).initialized().get(),
-                0,
-                3,
-                Header::new(ObjectType::Raw, 0).initialized().get(),
-            ],
-            allocated: 4,
+            memory,
+            allocated,
             root: GcRef(0),
         }
     }
@@ -83,7 +95,7 @@ impl MemoryPool {
             self.memory.try_reserve_exact(additional).unwrap();
             self.memory.resize(self.memory.capacity(), 0);
         }
-        self.memory[offset] = header.get();
+        self.memory[offset..offset + HEADER_LEN].copy_from_slice(&header.get());
         self.allocated = expected_len as u32;
         tracing::trace!(
             "pool[{offset}] = {:?} {}",
@@ -94,10 +106,19 @@ impl MemoryPool {
         GcRef(offset as u32)
     }
     pub(crate) fn write_header(&mut self, addr: GcRef, header: Header) {
-        unsafe { std::ptr::write(self.memory.as_mut_ptr().add(addr.get_usize()), header.get()) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                header.get().as_ptr(),
+                self.memory.as_mut_ptr().add(addr.get_usize()),
+                HEADER_LEN,
+            )
+        };
     }
     pub(crate) fn read_header(&self, addr: GcRef) -> Header {
-        Header(self.memory[addr.get_usize()])
+        Header(
+            self.memory[addr.get_usize()],
+            self.memory[addr.get_usize() + 1],
+        )
     }
     pub(crate) fn mark(&mut self, addr: GcRef) -> bool {
         let header = self.read_header(addr);
@@ -166,6 +187,14 @@ impl MemoryPool {
 
         ptr
     }
+    pub(crate) unsafe fn get_instance_mut_unchecked(&mut self, addr: GcRef) -> *mut InstanceData {
+        tracing::trace!("get_instance_unchecked: {addr:?}");
+
+        let ptr = self.memory.as_mut_ptr().add(addr.get_value_addr_usize()) as *mut InstanceData;
+        tracing::trace!("get_instance_unchecked: {:?} {:?}", ptr, (*ptr).module_addr);
+
+        ptr
+    }
     pub(crate) unsafe fn write(
         &mut self,
         addr: GcRef,
@@ -190,23 +219,33 @@ impl MemoryPool {
         );
     }
     pub(crate) unsafe fn raw_region_extend(&mut self, old_region: GcRef, new_cap: u32) -> GcRef {
-        let new_region = self.allocate(Header::new(ObjectType::Raw, new_cap as usize).initialized());
+        let new_region =
+            self.allocate(Header::new(ObjectType::Raw, new_cap as usize).initialized());
         self.relocate(old_region, new_region);
         new_region
     }
-    unsafe fn get_u32_dynamic_array(&self,obj: GcRef,offset: usize) -> &U32DynamicArray{
-        (self.memory.as_ptr().add(obj.get_value_addr_usize() + offset) as *const U32DynamicArray).as_ref().unwrap_unchecked()
+    unsafe fn get_u32_dynamic_array(&self, obj: GcRef, offset: usize) -> &U32DynamicArray {
+        (self
+            .memory
+            .as_ptr()
+            .add(obj.get_value_addr_usize() + offset) as *const U32DynamicArray)
+            .as_ref()
+            .unwrap_unchecked()
     }
-    unsafe fn get_u32_dynamic_array_mut(&mut self,obj: GcRef,offset: usize) -> &mut U32DynamicArray{
-        (self.memory.as_mut_ptr().add(obj.get_value_addr_usize() + offset) as *mut U32DynamicArray).as_mut().unwrap_unchecked()
-    }
-    pub(crate) unsafe fn u32_array_push_vec(
+    unsafe fn get_u32_dynamic_array_mut(
         &mut self,
         obj: GcRef,
         offset: usize,
-        values: &[u32],
-    ) {
-        let array = self.get_u32_dynamic_array(obj,offset);
+    ) -> &mut U32DynamicArray {
+        (self
+            .memory
+            .as_mut_ptr()
+            .add(obj.get_value_addr_usize() + offset) as *mut U32DynamicArray)
+            .as_mut()
+            .unwrap_unchecked()
+    }
+    pub(crate) unsafe fn u32_array_push_vec(&mut self, obj: GcRef, offset: usize, values: &[u32]) {
+        let array = self.get_u32_dynamic_array(obj, offset);
         let old_region = array.array.0;
         let old_len = array.len;
         let expected_len = array.len + values.len() as u32;
@@ -222,7 +261,7 @@ impl MemoryPool {
             values.as_ptr() as *const u32,
             values.len(),
         );
-        let array = &mut *self.get_u32_dynamic_array_mut(obj,offset);
+        let array = &mut *self.get_u32_dynamic_array_mut(obj, offset);
 
         array.array = U32FixedArray(dst_ref);
         array.len = expected_len;
@@ -233,7 +272,7 @@ impl MemoryPool {
         offset: usize,
         values: &[GcRef],
     ) {
-        let array = self.get_ref_dynamic_array(obj,offset);
+        let array = self.get_ref_dynamic_array(obj, offset);
         let old_region = array.array.0;
         let old_len = array.len;
         let expected_len = array.len + values.len() as u32;
@@ -249,17 +288,31 @@ impl MemoryPool {
             values.as_ptr() as *const u32,
             values.len(),
         );
-        let array = &mut *self.get_ref_dynamic_array_mut(obj,offset);
-
+        let array = &mut *self.get_ref_dynamic_array_mut(obj, offset);
         array.array = GcRefFixedArray(dst_ref);
         array.len = expected_len;
+        self.get_ref_dynamic_array_mut(obj, offset);
     }
-    unsafe fn get_ref_dynamic_array(&self,item: GcRef,offset: usize) -> &GcRefDynamicArray{
-        let r = self.memory.as_ptr().add(item.get_value_addr_usize()+offset) as *const GcRefDynamicArray;
+    unsafe fn get_ref_dynamic_array(&self, item: GcRef, offset: usize) -> &GcRefDynamicArray {
+        let r = self
+            .memory
+            .as_ptr()
+            .add(item.get_value_addr_usize() + offset) as *const GcRefDynamicArray;
+        tracing::trace!("{:?}",*r);
+
         r.as_ref().unwrap_unchecked()
     }
-    unsafe fn get_ref_dynamic_array_mut(&mut self,item: GcRef,offset: usize) -> &mut GcRefDynamicArray{
-        (self.memory.as_mut_ptr().add(item.get_value_addr_usize()+offset) as *mut GcRefDynamicArray).as_mut().unwrap_unchecked()
+    unsafe fn get_ref_dynamic_array_mut(
+        &mut self,
+        item: GcRef,
+        offset: usize,
+    ) -> &mut GcRefDynamicArray {
+        (self
+            .memory
+            .as_mut_ptr()
+            .add(item.get_value_addr_usize() + offset) as *mut GcRefDynamicArray)
+            .as_mut()
+            .unwrap_unchecked()
     }
     // NOTE: It is the responsibility of each view to trace the raw section data.
     pub(crate) fn trace(&mut self, item: GcRef) {
@@ -274,43 +327,122 @@ impl MemoryPool {
             }
             ObjectType::RootTable => {
                 // lifetime escape technique
-                unsafe  { &*(self.get_ref_dynamic_array(item,0) as *const GcRefDynamicArray)}.trace(self);
+                unsafe { &*(self.get_ref_dynamic_array(item, 0) as *const GcRefDynamicArray) }
+                    .trace(self);
             }
         }
     }
-    pub fn mark_phase(&mut self){
+    fn mark_phase(&mut self) {
         self.trace(self.root);
     }
-    pub fn add_root(&mut self,item: &[GcRef]) {
-        unsafe { self.gc_ref_array_push_vec(self.root, 0,item) };
+    fn compact(&mut self) {
+        let mut free = 0;
+        let mut live = 0;
+        loop {
+            let header = self.read_header(GcRef(live));
+            if header.is_marked() {
+                self.write_header(GcRef(live), header.set_forwarding_pointer(free));
+                free += HEADER_LEN as u32 + header.word_size() as u32;
+            }
+            live += HEADER_LEN as u32 + header.word_size() as u32;
+            if live == self.allocated {
+                break;
+            }
+        }
+        self.update_pointer();
+        self.move_object();
+        self.allocated = free;
     }
-    pub fn iter(&self) -> impl Iterator<Item = GcRef> + use<'_>{
+    fn update_pointer(&mut self) {
+        let mut ptr = 0;
+        loop {
+            let item = GcRef(ptr);
+            let header = self.read_header(item);
+            if header.is_marked() && header.is_initialized() {
+                match header.object_type() {
+                    ObjectType::Instance => {
+                        (unsafe { &mut *self.get_instance_mut_unchecked(item) }).update(self)
+                    }
+                    ObjectType::Raw => {
+                        // do nothing
+                    }
+                    ObjectType::RootTable => {
+                        // lifetime escape technique
+                        unsafe {
+                            &mut *(self.get_ref_dynamic_array_mut(item, 0)
+                                as *mut GcRefDynamicArray)
+                        }
+                        .update(self);
+                    }
+                }
+            }
+            ptr += HEADER_LEN as u32 + header.word_size() as u32;
+            if ptr == self.allocated {
+                return;
+            }
+        }
+    }
+    fn move_object(&mut self) {
+        let mut ptr = 0;
+        loop {
+            let item = GcRef(ptr);
+            let header = self.read_header(item);
+            self.write_header(item, header.unmarked());
+            if header.is_marked() {
+                unsafe {
+                    std::ptr::copy(
+                        self.memory.as_ptr().add(item.get_usize()),
+                        self.memory
+                            .as_mut_ptr()
+                            .add(header.forwarding_pointer() as usize),
+                        HEADER_LEN + header.word_size() as usize,
+                    )
+                    
+                };
+            }
+            ptr += HEADER_LEN as u32 + header.word_size() as u32;
+            if ptr == self.allocated {
+                return;
+            }
+        }
+    }
+    pub fn add_root(&mut self, item: &[GcRef]) {
+        unsafe { self.gc_ref_array_push_vec(self.root, 0, item) };
+    }
+    pub fn scan_heap(&self) -> impl Iterator<Item = GcRef> + use<'_> {
         let mut index = 0;
-        std::iter::from_fn(move ||{
-            let r =  if index == self.allocated {
-                return None
-            }else{
+        std::iter::from_fn(move || {
+            let r = if index == self.allocated {
+                return None;
+            } else {
                 GcRef(index)
             };
             let header = self.read_header(r);
-            index += HEADER_LEN as u32+ header.word_size() as u32;
+            index += HEADER_LEN as u32 + header.word_size() as u32;
             Some(r)
         })
     }
 }
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::MemoryPool;
 
     #[test]
-    fn test_mark(){
+    fn test_mark() {
+        tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
         let mut pool = MemoryPool::new();
-        let free_arr = pool.new_u32_fixed_array(&[1,2,3]);
-        let marked_arr = pool.new_u32_fixed_array(&[1,2,3]);
+        let free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
+        let marked_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         pool.add_root(&[marked_arr.0]);
-        for addr in pool.iter(){
-            let header =  pool.read_header(addr);
-            tracing::trace!("{addr:?}: {header:?} ({:?},{},init={},marked={})",header.object_type(),header.word_size(),header.is_initialized(),header.is_marked());
+        for addr in pool.scan_heap() {
+            let header = pool.read_header(addr);
+            tracing::trace!(
+                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
+                header.object_type(),
+                header.word_size(),
+                header.is_initialized(),
+                header.is_marked()
+            );
 
             assert!(header.is_initialized());
             assert!(!header.is_marked());
@@ -318,20 +450,48 @@ mod tests{
         pool.mark_phase();
         let mut marked = vec![];
         let mut free = vec![];
-        for addr in pool.iter(){
-            let header =  pool.read_header(addr);
-            tracing::trace!("{addr:?}: {header:?} ({:?},{},init={},marked={})",header.object_type(),header.word_size(),header.is_initialized(),header.is_marked());
+        for addr in pool.scan_heap() {
+            let header = pool.read_header(addr);
+            tracing::trace!(
+                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
+                header.object_type(),
+                header.word_size(),
+                header.is_initialized(),
+                header.is_marked()
+            );
 
             assert!(header.is_initialized());
-            if header.is_marked(){
+            if header.is_marked() {
                 marked.push(addr);
-            }else{
+            } else {
                 free.push(addr);
             }
         }
         assert!(marked.contains(&marked_arr.0));
         assert_eq!(marked.len(), 3);
         assert!(free.contains(&free_arr.0));
-        assert_eq!(free.len(),2);
+        assert_eq!(free.len(), 2);
+    }
+    #[test]
+    fn test_compaction() {
+        tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
+        let mut pool = MemoryPool::new();
+        let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
+        let _free_arr2 = pool.new_u32_fixed_array(&[1, 2, 3]);
+        pool.mark_phase();
+        pool.compact();
+        let mut count_object = 0;
+        for addr in pool.scan_heap() {
+            let header = pool.read_header(addr);
+            tracing::trace!(
+                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
+                header.object_type(),
+                header.word_size(),
+                header.is_initialized(),
+                header.is_marked()
+            );
+            count_object += 1;
+        }
+        assert_eq!(count_object,2);
     }
 }
