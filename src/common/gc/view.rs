@@ -1,9 +1,7 @@
-use std::slice;
-
-use super::{word_size, Header, MemoryPool, ObjectType};
+use super::{word_size, MemoryPool};
 
 #[repr(transparent)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone,PartialEq, Eq, PartialOrd, Ord)]
 pub struct GcRef(pub u32);
 
 impl GcRef {
@@ -101,9 +99,7 @@ impl U32DynamicArray {
     pub fn as_slice(&self, pool: &MemoryPool) -> &[u32] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(pool), self.size(pool).into()) }
     }
-    pub fn push(&mut self, v: &[u32], pool: &mut MemoryPool) {
-        unsafe { pool.u32_array_push_vec(self, v) };
-    }
+
 }
 impl GCView for U32DynamicArray {
     fn trace(&self, pool: &mut MemoryPool) {
@@ -161,9 +157,7 @@ impl GcRefDynamicArray {
     pub fn as_slice(&self, pool: &MemoryPool) -> &[GcRef] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(pool), self.len(pool).into()) }
     }
-    pub fn push(&mut self, v: &[GcRef], pool: &mut MemoryPool) {
-        unsafe { pool.gc_ref_array_push_vec(self, v) };
-    }
+    
 }
 impl GCView for GcRefDynamicArray {
     fn trace(&self, pool: &mut MemoryPool) {

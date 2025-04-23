@@ -1,4 +1,4 @@
-use super::{memory, Instance};
+use super::Instance;
 mod view;
 pub use view::*;
 
@@ -16,6 +16,7 @@ const SIZE_MASK: u32 = 0xFFFF;
 const TYPE_MASK: u32 = 0x1FFF;
 const TYPE_LOWER_BIT: u32 = 16;
 #[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
 pub struct Header(u32);
 impl Header {
     pub fn object_type(&self) -> ObjectType {
@@ -36,6 +37,9 @@ impl Header {
     pub fn initialized(self) -> Self {
         Self(self.0 | INIT_MASK)
     }
+    pub fn is_initialized(&self) -> bool {
+        self.0 & INIT_MASK != 0
+    }
     pub fn new(ty: ObjectType, size: usize) -> Header {
         let ty: u32 = unsafe { std::mem::transmute(ty) };
         if size > u16::MAX.into() {
@@ -49,7 +53,7 @@ impl Header {
 }
 pub struct MemoryPool {
     memory: Vec<u32>,
-    allocated: usize,
+    allocated: u32,
     root: GcRef,
 }
 pub const fn word_size<T>() -> usize {
@@ -60,17 +64,17 @@ impl MemoryPool {
     pub fn new() -> Self {
         Self {
             memory: vec![
-                Header::new(ObjectType::RootTable, 3).get(),
+                Header::new(ObjectType::RootTable, 2).initialized().get(),
                 0,
                 3,
-                Header::new(ObjectType::Raw, 0).get(),
+                Header::new(ObjectType::Raw, 0).initialized().get(),
             ],
-            allocated: 5,
+            allocated: 4,
             root: GcRef(0),
         }
     }
     pub fn allocate(&mut self, header: Header) -> GcRef {
-        let offset: usize = self.allocated;
+        let offset: usize = self.allocated as usize;
 
         let expected_len = HEADER_LEN + offset + header.word_size() as usize;
         if expected_len > self.memory.capacity() {
@@ -80,7 +84,7 @@ impl MemoryPool {
             self.memory.resize(self.memory.capacity(), 0);
         }
         self.memory[offset] = header.get();
-        self.allocated = expected_len;
+        self.allocated = expected_len as u32;
         tracing::trace!(
             "pool[{offset}] = {:?} {}",
             header.object_type(),
@@ -186,61 +190,148 @@ impl MemoryPool {
         );
     }
     pub(crate) unsafe fn raw_region_extend(&mut self, old_region: GcRef, new_cap: u32) -> GcRef {
-        let new_region = self.allocate(Header::new(ObjectType::Raw, new_cap as usize));
+        let new_region = self.allocate(Header::new(ObjectType::Raw, new_cap as usize).initialized());
         self.relocate(old_region, new_region);
         new_region
     }
+    unsafe fn get_u32_dynamic_array(&self,obj: GcRef,offset: usize) -> &U32DynamicArray{
+        (self.memory.as_ptr().add(obj.get_value_addr_usize() + offset) as *const U32DynamicArray).as_ref().unwrap_unchecked()
+    }
+    unsafe fn get_u32_dynamic_array_mut(&mut self,obj: GcRef,offset: usize) -> &mut U32DynamicArray{
+        (self.memory.as_mut_ptr().add(obj.get_value_addr_usize() + offset) as *mut U32DynamicArray).as_mut().unwrap_unchecked()
+    }
     pub(crate) unsafe fn u32_array_push_vec(
         &mut self,
-        array: &mut U32DynamicArray,
+        obj: GcRef,
+        offset: usize,
         values: &[u32],
     ) {
+        let array = self.get_u32_dynamic_array(obj,offset);
+        let old_region = array.array.0;
+        let old_len = array.len;
         let expected_len = array.len + values.len() as u32;
         let dst_ref = if (array.cap(self) as u32) < expected_len {
             let new_cap = expected_len * 2;
-            self.raw_region_extend(array.array.0, new_cap)
-        } else {
-            array.array.0
-        };
-        self.write(dst_ref, array.len as usize, values.as_ptr(), values.len());
-        array.array = U32FixedArray(dst_ref);
-        array.len = expected_len
-    }
-    pub(crate) unsafe fn gc_ref_array_push_vec(
-        &mut self,
-        array: &mut GcRefDynamicArray,
-        values: &[GcRef],
-    ) {
-        let expected_len = array.len + values.len() as u32;
-        let dst_ref = if (array.cap(self) as u32) < expected_len {
-            let new_cap = expected_len * 2;
-            self.raw_region_extend(array.array.0, new_cap)
+            self.raw_region_extend(old_region, new_cap)
         } else {
             array.array.0
         };
         self.write(
             dst_ref,
-            array.len as usize,
+            old_len as usize,
             values.as_ptr() as *const u32,
             values.len(),
         );
-        array.array = GcRefFixedArray(dst_ref);
-        array.len = expected_len
+        let array = &mut *self.get_u32_dynamic_array_mut(obj,offset);
+
+        array.array = U32FixedArray(dst_ref);
+        array.len = expected_len;
     }
-    // NOTE: can't trace raw section
+    pub(crate) unsafe fn gc_ref_array_push_vec(
+        &mut self,
+        obj: GcRef,
+        offset: usize,
+        values: &[GcRef],
+    ) {
+        let array = self.get_ref_dynamic_array(obj,offset);
+        let old_region = array.array.0;
+        let old_len = array.len;
+        let expected_len = array.len + values.len() as u32;
+        let dst_ref = if (array.cap(self) as u32) < expected_len {
+            let new_cap = expected_len * 2;
+            self.raw_region_extend(old_region, new_cap)
+        } else {
+            array.array.0
+        };
+        self.write(
+            dst_ref,
+            old_len as usize,
+            values.as_ptr() as *const u32,
+            values.len(),
+        );
+        let array = &mut *self.get_ref_dynamic_array_mut(obj,offset);
+
+        array.array = GcRefFixedArray(dst_ref);
+        array.len = expected_len;
+    }
+    unsafe fn get_ref_dynamic_array(&self,item: GcRef,offset: usize) -> &GcRefDynamicArray{
+        let r = self.memory.as_ptr().add(item.get_value_addr_usize()+offset) as *const GcRefDynamicArray;
+        r.as_ref().unwrap_unchecked()
+    }
+    unsafe fn get_ref_dynamic_array_mut(&mut self,item: GcRef,offset: usize) -> &mut GcRefDynamicArray{
+        (self.memory.as_mut_ptr().add(item.get_value_addr_usize()+offset) as *mut GcRefDynamicArray).as_mut().unwrap_unchecked()
+    }
+    // NOTE: It is the responsibility of each view to trace the raw section data.
     pub(crate) fn trace(&mut self, item: GcRef) {
         if self.mark(item) {
-            return;
+            return; // return if already marked
         }
-        let ty = self.read_header(item).object_type();
-        match ty {
+        let header = self.read_header(item);
+        match header.object_type() {
             ObjectType::Instance => (unsafe { &*self.get_instance_unchecked(item) }).trace(self),
             ObjectType::Raw => {
                 // do nothing
             }
             ObjectType::RootTable => {
-                // TODO:
+                // lifetime escape technique
+                unsafe  { &*(self.get_ref_dynamic_array(item,0) as *const GcRefDynamicArray)}.trace(self);
             }
         }
+    }
+    pub fn mark_phase(&mut self){
+        self.trace(self.root);
+    }
+    pub fn add_root(&mut self,item: &[GcRef]) {
+        unsafe { self.gc_ref_array_push_vec(self.root, 0,item) };
+    }
+    pub fn iter(&self) -> impl Iterator<Item = GcRef> + use<'_>{
+        let mut index = 0;
+        std::iter::from_fn(move ||{
+            let r =  if index == self.allocated {
+                return None
+            }else{
+                GcRef(index)
+            };
+            let header = self.read_header(r);
+            index += HEADER_LEN as u32+ header.word_size() as u32;
+            Some(r)
+        })
+    }
+}
+#[cfg(test)]
+mod tests{
+    use super::MemoryPool;
+
+    #[test]
+    fn test_mark(){
+        let mut pool = MemoryPool::new();
+        let free_arr = pool.new_u32_fixed_array(&[1,2,3]);
+        let marked_arr = pool.new_u32_fixed_array(&[1,2,3]);
+        pool.add_root(&[marked_arr.0]);
+        for addr in pool.iter(){
+            let header =  pool.read_header(addr);
+            tracing::trace!("{addr:?}: {header:?} ({:?},{},init={},marked={})",header.object_type(),header.word_size(),header.is_initialized(),header.is_marked());
+
+            assert!(header.is_initialized());
+            assert!(!header.is_marked());
+        }
+        pool.mark_phase();
+        let mut marked = vec![];
+        let mut free = vec![];
+        for addr in pool.iter(){
+            let header =  pool.read_header(addr);
+            tracing::trace!("{addr:?}: {header:?} ({:?},{},init={},marked={})",header.object_type(),header.word_size(),header.is_initialized(),header.is_marked());
+
+            assert!(header.is_initialized());
+            if header.is_marked(){
+                marked.push(addr);
+            }else{
+                free.push(addr);
+            }
+        }
+        assert!(marked.contains(&marked_arr.0));
+        assert_eq!(marked.len(), 3);
+        assert!(free.contains(&free_arr.0));
+        assert_eq!(free.len(),2);
     }
 }

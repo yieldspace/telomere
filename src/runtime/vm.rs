@@ -3,7 +3,7 @@ use std::ops::BitXor;
 use crate::{
     common::{
         execute_elem_init_const_expr, gc::InstanceData, ElemInit, ExecuteContext, ExportDesc,
-        FunctionBody, Instance, InstanceAddr, Instr, LocalReference, Stack, VMResult, ValType,
+        FunctionBody, InstanceAddr, Instr, LocalReference, Stack, VMResult, ValType,
         WasmValue,
     },
     Store,

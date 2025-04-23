@@ -1,7 +1,7 @@
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{word_size, GcRef, InstanceData, ObjectType},
+        gc::{word_size, InstanceData, ObjectType},
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance,
         GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceAddr,
