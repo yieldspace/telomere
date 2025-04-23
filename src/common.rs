@@ -3,6 +3,7 @@ mod vm_result;
 use std::fmt::Display;
 
 use custom_section::NameSubSection;
+
 use store::GlobalStore;
 pub use vm_result::VMResult;
 mod memory;
@@ -14,7 +15,10 @@ pub use registry::Registry;
 pub(crate) mod store;
 pub(crate) use store::FunctionInstance;
 pub(crate) use store::ModuleInstance;
-mod gc;
+pub(crate) mod gc;
+use gc::GcRef;
+use gc::InstanceView;
+
 pub use store::{Store, StoreState};
 pub mod custom_section;
 
@@ -396,21 +400,23 @@ impl ExecuteContext<'_> {
             FunctionBody::Host(_) => unreachable!(),
         }
     }
-    pub fn module(&self) -> &ModuleInstance {
+    pub unsafe fn module(&self) -> &ModuleInstance {
         &self.store.modules[self.instance().module_addr as usize]
     }
-    pub fn instance_addr(&self) -> u32 {
+    pub fn instance_addr(&self) -> GcRef {
         self.func().instance_addr
     }
-    pub fn instance(&self) -> &Instance {
-        &self.store.get_instance(self.instance_addr())
+    pub fn instance(&self) -> InstanceView {
+        unsafe { self.store.get_instance_unchecked(self.instance_addr()) }
     }
     pub fn local_reference(&self) -> LocalReference {
         self.local_reference
     }
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.instance()
-            .memory
+            .mems
+            .get(0)
+            .copied()
             .and_then(|v| self.store.memory.get_mut(v as usize))
     }
 }

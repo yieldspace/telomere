@@ -644,7 +644,7 @@ pub(crate) unsafe fn internal_op_call(
 ) -> VMResult<*const Instr> {
     let funcinst = &ctx.store.funcs.0[funcaddr as usize];
     let instance_addr = funcinst.instance_addr;
-    let instance = &ctx.store.get_instance(instance_addr);
+    let instance = ctx.store.get_instance_unchecked(instance_addr);
     let module_addr = instance.module_addr;
     let module = &ctx.store.modules[module_addr as usize];
     let typeidx = module
@@ -653,7 +653,7 @@ pub(crate) unsafe fn internal_op_call(
         .unwrap_unchecked();
     let ft = &module.function_types[typeidx.0 as usize];
     let code = &funcinst.body;
-    trace!("op_call_internal: {instance_addr}({module_addr})  {funcaddr}");
+    trace!("op_call_internal: {instance_addr:?}({module_addr})  {funcaddr}");
     let mut param_size = 0usize;
     for param in ft.0.iter() {
         param_size += param.stack_size().usize();
@@ -863,9 +863,9 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
         gc,
         ..
     } = store;
-    let instance = gc.get_instance(instance_addr as usize);
+    let instance = gc.get_instance_unchecked(instance_addr);
     let dst_table_addr = instance.tables[dst_table_idx] as usize;
-    let elem = if let Some(elem) = elems.get(&(instance_addr, src_elem_idx)) {
+    let elem = if let Some(elem) = elems.get(&(instance_addr.get()/*FIXME: it is broken */, src_elem_idx)) {
         elem
     } else {
         return VMResult::TableIndexOutOfRange;

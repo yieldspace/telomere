@@ -1,10 +1,12 @@
 use crate::{
     common::{
-        execute_elem_init_const_expr, CodeSection, ConstExpr, DataMode, DataSection, ElemInit,
-        ElemMode, ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx,
-        FunctionBody, FunctionInstance, GlobalIdx, HostFunction, HostFunctionDefinition,
-        ImportDesc, ImportSection, InstanceAddr, Limits, LocalReference, MemIdx, Memory,
-        ModuleInstance, NativeModule, TableIdx, TableInstance, TypeIdx, TypeSection, PAGE_SIZE_MAX,
+        execute_elem_init_const_expr,
+        gc::{encode::size_of_instance, GcRef, ObjectType},
+        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
+        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance,
+        GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceAddr,
+        Limits, LocalReference, MemIdx, Memory, ModuleInstance, NativeModule, TableIdx,
+        TableInstance, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -107,7 +109,7 @@ pub fn instantiate_native_module(
 
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
-    let inst_addr = store.allocate(std::mem::size_of::<Instance>() as u32 / 4);
+    let inst_addr = store.allocate(ObjectType::Instance, size_of_instance(instance));
     // -> addr
     let mut memory: Option<u32> = None;
     let mut globals = vec![];
@@ -134,7 +136,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             tracing::error!("unknown instance");
             VMResult::Unlinkable
         }));
-        let ext_inst = &store.get_instance(ext_inst_addr.0);
+        let ext_inst = unsafe { &store.get_instance_unchecked(GcRef(ext_inst_addr.0)) };
         let ext_module = &store.modules[ext_inst.module_addr as usize];
         let export = vm_try!(VMResult::from_option(
             ext_module.exports.find(&import.name),
@@ -427,7 +429,7 @@ pub fn aliasing(
     store: &mut Store,
 ) -> VMResult<InstanceAddr> {
     let mod_addr = store.modules.len() as u32;
-    let inst_addr: u32 = store.allocate(std::mem::size_of::<Instance>() as u32 / 4);
+    let inst_addr: u32 = store.allocate(ObjectType::Instance);
     let mut functions = vec![];
     let mut function_types = vec![];
     let mut globals = vec![];

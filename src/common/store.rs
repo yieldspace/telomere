@@ -1,6 +1,7 @@
 use super::{
-    gc::MemoryPool, ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType,
-    Instance, MemType, Memory, TableInstance, TableType, TypeIdx, VMResult,
+    gc::{GcRef, Header, InstanceView, MemoryPool, ObjectType},
+    ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
+    Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
 use std::{collections::HashMap, io::Write};
 
@@ -48,7 +49,7 @@ impl GlobalStore {
 }
 
 pub struct FunctionInstance {
-    pub instance_addr: u32,
+    pub instance_addr: GcRef,
     pub funcidx: u32,
     pub body: FunctionBody,
 }
@@ -97,14 +98,14 @@ impl Store {
             state,
         }
     }
-    pub(crate) fn get_instance(&self, addr: u32) -> &Instance {
-        self.gc.get_instance(addr as usize)
+    pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> InstanceView {
+        self.gc.get_instance_unchecked(addr)
     }
-    pub(crate) fn allocate(&mut self, size: u32) -> u32 {
-        self.gc.allocate(size as usize) as u32
+    pub(crate) fn allocate(&mut self, object_type: ObjectType, size: usize) -> GcRef {
+        self.gc.allocate(Header::new(object_type, size))
     }
-    pub(crate) fn place_instance(&mut self, addr: u32, instance: Instance) {
-        self.gc.place_instance(instance, addr as usize)
+    pub(crate) unsafe fn place_instance_unchecked(&mut self, addr: GcRef, instance: &Instance) {
+        self.gc.place_instance_unchecked(addr, instance)
     }
 }
 
