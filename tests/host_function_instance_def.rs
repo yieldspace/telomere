@@ -36,8 +36,8 @@ fn test_print() {
         &mut registry,
     )
     .unwrap();
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, print, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, print, &mut store);
     let wast = r#"
     (module
       (import "host" "print" (func $print))
@@ -109,8 +109,8 @@ fn test_tail_call_wasm() {
         &mut registry,
     )
     .unwrap();
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, tail_call, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
     let wast = r#"
     (module
       (import "host" "tail_call" (func $tail_call (param funcref i32) (result i32)))
@@ -159,9 +159,9 @@ pub fn test_tail_call_native() {
         &mut registry,
     )
     .unwrap();
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, tail_call, &mut store);
-    link_host_function_with_function_idx(host, 1, plus60, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
+    link_host_function_with_function_idx(&host, 1, plus60, &mut store);
 
     let wast = r#"
     (module

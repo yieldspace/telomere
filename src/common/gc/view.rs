@@ -146,7 +146,6 @@ impl GCView for GcRefFixedArray {
     }
 
     fn update(&mut self,pool: &mut MemoryPool) {
-        
         for v in self.as_slice_mut(pool) {
             v.update(pool);
         }

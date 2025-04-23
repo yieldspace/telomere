@@ -2,8 +2,11 @@
 mod vm_result;
 use std::fmt::Display;
 
+use std::rc::Rc;
+
 use custom_section::NameSubSection;
 
+use gc::GcRootHandle;
 use gc::InstanceData;
 use store::GlobalStore;
 pub use vm_result::VMResult;
@@ -419,15 +422,20 @@ impl ExecuteContext<'_> {
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.instance()
             .mems
-            .as_slice(&self.store.gc)
+            .as_slice(&self.store.gc.borrow())
             .get(0)
             .copied()
             .and_then(|v| self.store.memory.get_mut(v as usize))
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct InstanceAddr(pub(crate) GcRef);
+#[derive(Debug, Clone)]
+pub struct InstanceHandle(pub(crate) Rc<GcRootHandle>);
+impl InstanceHandle{
+    pub(crate) fn get_gc_ref(&self) -> GcRef{
+        self.0.get_inner()
+    }
+}
 
 pub fn execute_elem_init_const_expr(
     global_store: &GlobalStore,

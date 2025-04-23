@@ -1,6 +1,8 @@
 use super::Instance;
 mod view;
 pub use view::*;
+mod root_handle;
+pub use root_handle::GcRootHandle;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +59,7 @@ impl Header {
         [self.0, self.1]
     }
 }
+#[derive(Debug)]
 pub struct MemoryPool {
     memory: Vec<u32>,
     allocated: u32,
@@ -329,22 +332,9 @@ impl MemoryPool {
     fn mark_phase(&mut self) {
         self.trace(self.root);
     }
-    fn compact(&mut self) {
+    fn compact_phase(&mut self) {
         tracing::trace!("compact");
-        let mut free = 0;
-        let mut live = 0;
-        loop {
-            let header = self.read_header(GcRef(live));
-            if header.is_marked() {
-                self.write_header(GcRef(live), header.set_forwarding_pointer(free));
-                free += HEADER_LEN as u32 + header.word_size() as u32;
-            }
-            live += HEADER_LEN as u32 + header.word_size() as u32;
-            if live == self.allocated {
-                break;
-            }
-        }
-        
+        let free = self.compute_forward_addr();
         for addr in self.scan_heap() {
             let header = self.read_header(addr);
             tracing::trace!(
@@ -368,6 +358,23 @@ impl MemoryPool {
         }
         self.move_object();
         self.allocated = free;
+    }
+    fn compute_forward_addr(&mut self)->u32{
+        tracing::trace!("compute_forward_addr");
+        let mut free = 0;
+        let mut live = 0;
+        loop {
+            let header = self.read_header(GcRef(live));
+            if header.is_marked() {
+                self.write_header(GcRef(live), header.set_forwarding_pointer(free));
+                free += HEADER_LEN as u32 + header.word_size() as u32;
+            }
+            live += HEADER_LEN as u32 + header.word_size() as u32;
+            if live == self.allocated {
+                break;
+            }
+        }
+        free
     }
     fn update_pointer(&mut self) {
         tracing::trace!("update_pointer");
@@ -417,7 +424,6 @@ impl MemoryPool {
                             .add(header.forwarding_pointer() as usize),
                         HEADER_LEN + header.word_size() as usize,
                     )
-                    
                 };
             }
             ptr += HEADER_LEN as u32 + header.word_size() as u32;
@@ -426,10 +432,17 @@ impl MemoryPool {
             }
         }
     }
+    pub fn gc(&mut self){
+        self.mark_phase();
+        self.compact_phase();
+    }
     pub fn add_root(&mut self, item: &[GcRef]) {
         unsafe { self.gc_ref_array_push_vec(self.root, 0, item) };
     }
-    pub fn scan_heap(&self) -> impl Iterator<Item = GcRef> + use<'_> {
+    pub fn remove_root(&mut self, _item: &[GcRef]) {
+        // TODO:
+    }
+    fn scan_heap(&self) -> impl Iterator<Item = GcRef> + use<'_> {
         let mut index = 0;
         std::iter::from_fn(move || {
             let r = if index == self.allocated {
@@ -497,8 +510,7 @@ mod tests {
         let mut pool = MemoryPool::new();
         let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         let _free_arr2 = pool.new_u32_fixed_array(&[1, 2, 3]);
-        pool.mark_phase();
-        pool.compact();
+        pool.gc();
         let mut count_object = 0;
         for addr in pool.scan_heap() {
             let header = pool.read_header(addr);
@@ -515,13 +527,11 @@ mod tests {
     }
     #[test]
     fn compaction_one_root() {
-        tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
         let mut pool = MemoryPool::new();
         let tracked_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         pool.add_root(&[tracked_arr.0]);
-        pool.mark_phase();
-        pool.compact();
+        pool.gc();
         let mut count_object = 0;
         for addr in pool.scan_heap() {
             let header = pool.read_header(addr);

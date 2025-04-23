@@ -28,8 +28,8 @@ fn test_print() {
         &mut store,
         &registry,
     );
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, print, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, print, &mut store);
     let wast = r#"
     (module
       (import "host" "print" (func $print))
@@ -58,7 +58,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let arg = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push_i32(arg + 40));
     let funcidx = 1;
-    let func_addr = ctx.instance().funcs.as_slice(&ctx.store.gc)[funcidx];
+    let func_addr = ctx.instance().funcs.as_slice(&ctx.store.gc.borrow())[funcidx];
 
     let func = &ctx.store.funcs.0[func_addr as usize];
     match &func.body {
@@ -99,8 +99,8 @@ fn test_tail_call_wasm() {
         &mut store,
         &registry,
     );
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, tail_call, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
     let wast = r#"
     (module
       (import "host" "tail_call" (func $tail_call (param i32) (result i32)))
@@ -135,9 +135,9 @@ pub fn test_tail_call_native() {
         &mut store,
         &registry,
     );
-    registry.register("host", host);
-    link_host_function_with_function_idx(host, 0, tail_call, &mut store);
-    link_host_function_with_function_idx(host, 1, plus60, &mut store);
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
+    link_host_function_with_function_idx(&host, 1, plus60, &mut store);
 
     let wast = r#"
     (module

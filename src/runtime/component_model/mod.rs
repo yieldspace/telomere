@@ -5,7 +5,7 @@ mod func;
 pub mod instantiate;
 mod linker;
 
-use crate::common::InstanceAddr;
+use crate::common::InstanceHandle;
 use crate::component_model::FlattenComponent;
 use crate::runtime::component_model::instantiate::{
     instantiate_next, InstantiateContext, InstantiateInstr,
@@ -42,7 +42,7 @@ pub enum InstanceExport {
 
 #[derive(Debug)]
 pub struct CoreInstantiated {
-    pub(crate) id: InstanceAddr,
+    pub(crate) id: InstanceHandle,
     pub(crate) registry: Registry,
 }
 

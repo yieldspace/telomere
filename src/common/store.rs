@@ -3,7 +3,7 @@ use super::{
     ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
     Memory, TableInstance, TableType, TypeIdx, VMResult,
 };
-use std::{collections::HashMap, io::Write};
+use std::{cell::RefCell, collections::HashMap, io::Write, rc::Rc};
 
 pub struct GlobalStore(pub Vec<u8>);
 impl GlobalStore {
@@ -65,7 +65,7 @@ pub struct ModuleInstance {
 }
 
 pub struct Store {
-    pub gc: MemoryPool,
+    pub gc: Rc<RefCell<MemoryPool>>,
     pub instance_id: u32,
     pub globals: GlobalStore,
     pub funcs: FunctionStore,
@@ -96,19 +96,19 @@ impl Store {
             memory: vec![],
             data: HashMap::new(),
             elems: HashMap::new(),
-            gc: MemoryPool::new(),
+            gc: Rc::new(RefCell::new(MemoryPool::new())),
             instance_id: 0,
             state,
         }
     }
     pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
-        self.gc.get_instance_unchecked(addr)
+        self.gc.borrow().get_instance_unchecked(addr)
     }
     pub(crate) fn allocate(&mut self, object_type: ObjectType, size: usize) -> GcRef {
-        self.gc.allocate(Header::new(object_type, size))
+        self.gc.borrow_mut().allocate(Header::new(object_type, size))
     }
     pub(crate) unsafe fn place_instance_unchecked(&mut self, addr: GcRef, instance: &Instance) {
-        self.gc.place_instance_unchecked(addr, instance)
+        self.gc.borrow_mut().place_instance_unchecked(addr, instance)
     }
     pub(crate) fn new_instance_id(&mut self) -> u32 {
         let instance_id = self.instance_id;
