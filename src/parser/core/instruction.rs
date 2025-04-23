@@ -1,4 +1,5 @@
 use super::base::WasmBaseParser;
+use super::instruction_generator::InstructionGenerator;
 use super::jump_resolver::JumpResolver;
 use super::type_checker::TypeChecker;
 use super::validate::*;
@@ -32,6 +33,7 @@ fn get_local_addr(
     let mut param_addr = 0;
     let mut i = 0;
     tracing::trace!("get_local_addr: {locals:?}");
+    let idx = idx;
     for t in ty.iter() {
         if idx < i + 1 {
             return Ok((*t, param_addr));
@@ -42,12 +44,12 @@ fn get_local_addr(
     let param_len = i;
     for (n, t, base_addr) in &locals.0 {
         if idx < param_len + n {
-            let addr = param_addr + base_addr + (idx - i) * t.stack_size().u32();
-            return Ok((*t, addr));
+            let addr = param_addr + *base_addr + (idx - i) * t.stack_size().u32();
+            return Ok((*t, addr as u32));
         }
         i = param_len + n;
     }
-    Err(WasmParserError::InvalidLocalIndex(idx))
+    Err(WasmParserError::InvalidLocalIndex(idx as u32))
 }
 fn validate_br_table_types(
     idx: u32,
@@ -144,24 +146,22 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
     fn parse_inst(
         &mut self,
         data_count_section: &mut DataCountVerifier,
-        instrs: &mut Vec<Instr>,
+        instrs: &mut InstructionGenerator,
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
-        unreachable: &mut bool,
-        is_unreachable_if_block: bool,
     ) -> Result<(usize, bool)> {
         let v = self.reader.read_exact_one()?;
 
         Ok(match v {
             0x00 => {
                 trace!("parse_op_unreachable");
-                if !*unreachable {
-                    instrs.push(Instr {
+                instrs
+                    .push(Instr {
                         op: vm::op_unreachable,
-                    });
-                    *unreachable = true;
-                }
+                    })
+                    .set_unreachable();
+
                 checker.unreachable();
                 (1, false)
             }
@@ -169,8 +169,6 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x02 => {
                 let (len, blocktype) = self.parse_block_type()?;
                 trace!("parse_op_block: {blocktype:?}");
-                let inst_unreachable = *unreachable;
-                let mut unreachable = *unreachable;
 
                 if let BlockType::TypeIdx(idx) = blocktype {
                     let ty = self
@@ -184,17 +182,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker.enter_block(BlockKind::Block, blocktype);
                 };
                 jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
-
+                instrs.enter_block();
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
                     checker,
                     jump_resolver,
                     else_addr,
-                    &mut unreachable,
-                    is_unreachable_if_block,
                 )?;
-                if !inst_unreachable {
+                instrs.leave_block();
+                if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
 
                     instrs.push(Instr {
@@ -211,6 +208,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         },
                     });
                 }
+
                 trace!("parse_op_block(2): {checker:?}");
                 match blocktype {
                     BlockType::TypeIdx(idx) => {
@@ -240,8 +238,6 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x03 => {
                 let (len, blocktype) = self.parse_block_type()?;
                 trace!("parse_op_loop: {blocktype:?}");
-                let inst_unreachable = *unreachable;
-                let mut unreachable = *unreachable;
 
                 if let BlockType::TypeIdx(idx) = blocktype {
                     let ty = self
@@ -256,9 +252,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 jump_resolver.push(JumpResolverDSL::EnterBackwardJumpBlock(instrs.len() as u32));
 
-                if !inst_unreachable {
-                    instrs.push(Instr { op: vm::op_loop });
-
+                instrs.push(Instr { op: vm::op_loop });
+                if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
                     instrs.push(Instr {
                         operand: Operand {
@@ -272,16 +267,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     });
                 }
 
+                instrs.enter_block();
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
                     checker,
                     jump_resolver,
                     else_addr,
-                    &mut unreachable,
-                    is_unreachable_if_block,
                 )?;
-                if !inst_unreachable {
+                instrs.leave_block();
+                if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
 
                     instrs.push(Instr {
@@ -298,6 +293,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         },
                     });
                 }
+
                 match blocktype {
                     BlockType::Void => {
                         checker.leave_block()?;
@@ -324,16 +320,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x04 => {
                 trace!("parse_op_if");
                 let (len, blocktype) = self.parse_block_type()?;
-                let mut unreachable = *unreachable;
-                let is_unreachable_if_block = unreachable;
-                if !is_unreachable_if_block {
-                    instrs.push(Instr { op: vm::op_if });
-                    instrs.push(Instr {
-                        operand: Operand {
-                            jump_addr: 0xFCFCFCFC,
-                        },
-                    });
-                }
+                let is_unreachable_if_block = instrs.is_unreachable();
+                instrs.push(Instr { op: vm::op_if });
+                instrs.push(Instr {
+                    operand: Operand {
+                        jump_addr: 0xFCFCFCFC,
+                    },
+                });
+
                 checker.op(&[ValType::I32], &[])?;
 
                 if let BlockType::TypeIdx(idx) = blocktype {
@@ -351,14 +345,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 
                 let index = instrs.len() - 1;
                 let mut else_addr = None;
+                instrs.enter_block();
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
                     checker,
                     jump_resolver,
                     &mut else_addr,
-                    &mut unreachable,
-                    is_unreachable_if_block,
                 )?;
                 if !is_unreachable_if_block {
                     instrs[index].operand = Operand {
@@ -367,9 +360,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 match blocktype {
                     BlockType::Void => {
-                        if unreachable {
+                        if instrs.is_unreachable() {
                             checker.reset_stack()?;
                         }
+                        instrs.leave_block();
                         checker.leave_block()?;
                     }
                     BlockType::TypeIdx(idx) => {
@@ -378,7 +372,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             .get(idx)
                             .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
                         if else_addr.is_none() {
-                            if unreachable {
+                            if instrs.is_unreachable() {
                                 checker.reset_stack()?;
                             } else {
                                 checker.op(&ty.1 .0, &[])?;
@@ -386,32 +380,32 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             checker.leave_block()?;
                             checker.enter_block(BlockKind::If, blocktype);
                             checker.op(&[], &ty.0 .0)?;
-                            unreachable = is_unreachable_if_block;
                         }
-                        if unreachable {
+                        if instrs.is_unreachable() {
                             checker.reset_stack()?;
                         } else {
                             checker.op(&ty.1 .0, &[])?;
                         }
+                        instrs.leave_block();
                         checker.leave_block()?;
                         checker.op(&[], &ty.1 .0)?;
                     }
                     BlockType::ValType(ty) => {
                         if else_addr.is_none() {
-                            if unreachable {
+                            if instrs.is_unreachable() {
                                 checker.reset_stack()?;
                             } else {
                                 checker.op(&[ty], &[])?;
                             }
                             checker.leave_block()?;
                             checker.enter_block(BlockKind::If, blocktype);
-                            unreachable = is_unreachable_if_block;
                         }
-                        if unreachable {
+                        if instrs.is_unreachable() {
                             checker.reset_stack()?;
                         } else {
                             checker.op(&[ty], &[])?;
                         }
+                        instrs.leave_block();
                         checker.leave_block()?;
                         checker.op(&[], &[ty])?;
                     }
@@ -420,10 +414,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1 + len + len2, false)
             }
             0x05 => {
-                let inst_unreachable = *unreachable;
-                trace!("parse_op_else: {inst_unreachable} {is_unreachable_if_block}");
-                *unreachable = is_unreachable_if_block;
-                if !*unreachable {
+                let inst_unreachable = instrs.is_unreachable();
+                trace!("parse_op_else: {inst_unreachable}");
+                instrs.leave_block();
+                instrs.enter_block();
+                if !instrs.is_unreachable() {
                     instrs.push(Instr { op: vm::op_else });
                     jump_resolver.push(JumpResolverDSL::Br(0, instrs.len() as u32));
                     instrs.push(Instr {
@@ -478,7 +473,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x0B => {
                 trace!("parse_op_end");
                 jump_resolver.push(JumpResolverDSL::LeaveBlock(instrs.len() as u32));
-                instrs.push(Instr { op: vm::op_end });
+                instrs.force_push(Instr { op: vm::op_end });
 
                 (1, true)
             }
@@ -486,9 +481,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x0C => {
                 let (len, idx) = self.parse_u32()?;
                 trace!("parse_op_br: {idx}");
-                let inst_unreachable = *unreachable;
-                *unreachable = true;
-                if !inst_unreachable {
+                if !instrs.is_unreachable() {
                     instrs.push(Instr { op: vm::op_br });
                     jump_resolver.push(JumpResolverDSL::Br(idx, instrs.len() as u32));
                     instrs.push(Instr {
@@ -496,8 +489,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             u32: 0xFFFF0000 | idx,
                         },
                     });
+                    instrs.set_unreachable();
                 }
-
                 let (kind, blocktype, _block_base_stack_len) = checker.get_block(idx as usize)?;
 
                 match kind {
@@ -561,7 +554,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         // do nothing
                     }
                 }
-                if !*unreachable {
+                if !instrs.is_unreachable() {
                     instrs.push(Instr { op: vm::op_br_if });
                     jump_resolver.push(JumpResolverDSL::Br(idx, instrs.len() as u32));
                     instrs.push(Instr {
@@ -584,7 +577,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         Err(WasmParserError::InvalidStackValTypeAny)?;
                     }
                 }
-                if !*unreachable {
+                if !instrs.is_unreachable() {
                     instrs.push(Instr {
                         op: vm::op_br_table,
                     });
@@ -609,12 +602,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     });
                 }
                 checker.unreachable();
-                *unreachable = true;
+                instrs.set_unreachable();
                 (1 + len + len2, false)
             }
             0x0F => {
                 trace!("parse_op_return");
-                if !*unreachable {
+                if !instrs.is_unreachable() {
                     instrs.push(Instr { op: vm::op_return });
                     jump_resolver.push(JumpResolverDSL::Return(instrs.len() as u32));
                     instrs.push(Instr {
@@ -622,11 +615,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             jump_addr: 0xFFFC0000,
                         },
                     });
+                    instrs.set_unreachable();
                 }
                 checker.op(&self.functype.1 .0, &[])?;
                 checker.unreachable();
 
-                *unreachable = true;
                 (1, false)
             }
             0x10 => {
@@ -642,12 +635,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
                 checker.op_func_type(ty)?;
 
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_call });
-                    instrs.push(Instr {
-                        operand: Operand { u32: idx },
-                    });
-                }
+                instrs.push(Instr { op: vm::op_call });
+                instrs.push(Instr {
+                    operand: Operand { u32: idx },
+                });
+
                 (1 + len, false)
             }
             0x11 => {
@@ -666,17 +658,15 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .get(TypeIdx(typeidx))
                     .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(typeidx)))?;
                 checker.op_func_type(ty)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_call_indirect,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { u32: tableidx },
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { u32: typeidx },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_call_indirect,
+                });
+                instrs.push(Instr {
+                    operand: Operand { u32: tableidx },
+                });
+                instrs.push(Instr {
+                    operand: Operand { u32: typeidx },
+                });
 
                 (1 + len + len2, false)
             }
@@ -684,18 +674,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_drop");
                 let x = checker.pop()?;
 
-                if !*unreachable {
-                    if let MaybeUnreachable::Normal(x) = x {
-                        instrs.push(Instr { op: vm::op_drop });
-                        instrs.push(Instr {
-                            operand: Operand {
-                                drop_size: x.stack_size().u32(),
-                            },
-                        });
-                    } else {
-                        // valid
-                        // do nothing
-                    }
+                if let MaybeUnreachable::Normal(x) = x {
+                    instrs.push(Instr { op: vm::op_drop });
+                    instrs.push(Instr {
+                        operand: Operand {
+                            drop_size: x.stack_size().u32(),
+                        },
+                    });
+                } else {
+                    // valid
+                    // do nothing
                 }
 
                 (1, false)
@@ -710,14 +698,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     if matches!(x, ValType::ExternRef | ValType::FuncRef) {
                         Err(WasmParserError::InvalidStackValTypeAny)?
                     }
-                    if !*unreachable {
-                        instrs.push(Instr { op: vm::op_select });
-                        instrs.push(Instr {
-                            operand: Operand {
-                                select: x.stack_size().u32(),
-                            },
-                        });
-                    }
+                    instrs.push(Instr { op: vm::op_select });
+                    instrs.push(Instr {
+                        operand: Operand {
+                            select: x.stack_size().u32(),
+                        },
+                    });
                 } else {
                     let x = checker.pop()?;
                     if matches!(
@@ -727,17 +713,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         Err(WasmParserError::InvalidStackValTypeAny)?
                     }
                     if let MaybeUnreachable::Normal(x) = x {
-                        if !*unreachable {
-                            instrs.push(Instr { op: vm::op_select });
-                            instrs.push(Instr {
-                                operand: Operand {
-                                    select: x.stack_size().u32(),
-                                },
-                            });
-                        }
+                        instrs.push(Instr { op: vm::op_select });
+                        instrs.push(Instr {
+                            operand: Operand {
+                                select: x.stack_size().u32(),
+                            },
+                        });
+
                         checker.push(x);
                     } else {
-                        assert!(*unreachable);
+                        assert!(instrs.is_unreachable());
                         checker.push_any();
                     }
                 }
@@ -753,7 +738,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 checker.op(&[ValType::I32], &[])?;
                 checker.op(&operand, &[])?;
                 checker.op(&operand, &operand)?;
-                if !*unreachable {
+                if !instrs.is_unreachable() {
                     let bytes = operand.iter().map(|v| v.stack_size().u32()).sum();
                     instrs.push(Instr { op: vm::op_select });
                     instrs.push(Instr {
@@ -771,20 +756,19 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 );
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 
-                if !*unreachable {
-                    match ty.stack_size() {
-                        ValueSize::Byte4 => instrs.push(Instr {
-                            op: vm::op_local_get4,
-                        }),
-                        ValueSize::Byte8 => instrs.push(Instr {
-                            op: vm::op_local_get8,
-                        }),
-                        ValueSize::Byte16 => todo!(),
-                    }
-                    instrs.push(Instr {
-                        operand: Operand { local_addr: addr },
-                    });
-                }
+                match ty.stack_size() {
+                    ValueSize::Byte4 => instrs.push(Instr {
+                        op: vm::op_local_get4,
+                    }),
+                    ValueSize::Byte8 => instrs.push(Instr {
+                        op: vm::op_local_get8,
+                    }),
+                    ValueSize::Byte16 => todo!(),
+                };
+                instrs.push(Instr {
+                    operand: Operand { local_addr: addr },
+                });
+
                 checker.op(&[], &[ty])?;
 
                 (1 + len, false)
@@ -794,20 +778,19 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let (len, idx) = self.parse_u32()?;
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 
-                if !*unreachable {
-                    match ty.stack_size() {
-                        ValueSize::Byte4 => instrs.push(Instr {
-                            op: vm::op_local_set4,
-                        }),
-                        ValueSize::Byte8 => instrs.push(Instr {
-                            op: vm::op_local_set8,
-                        }),
-                        ValueSize::Byte16 => todo!(),
-                    }
-                    instrs.push(Instr {
-                        operand: Operand { local_addr: addr },
-                    });
-                }
+                match ty.stack_size() {
+                    ValueSize::Byte4 => instrs.push(Instr {
+                        op: vm::op_local_set4,
+                    }),
+                    ValueSize::Byte8 => instrs.push(Instr {
+                        op: vm::op_local_set8,
+                    }),
+                    ValueSize::Byte16 => todo!(),
+                };
+                instrs.push(Instr {
+                    operand: Operand { local_addr: addr },
+                });
+
                 checker.op(&[ty], &[])?;
 
                 (1 + len, false)
@@ -817,20 +800,19 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let (len, idx) = self.parse_u32()?;
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 
-                if !*unreachable {
-                    match ty.stack_size() {
-                        ValueSize::Byte4 => instrs.push(Instr {
-                            op: vm::op_local_tee4,
-                        }),
-                        ValueSize::Byte8 => instrs.push(Instr {
-                            op: vm::op_local_tee8,
-                        }),
-                        ValueSize::Byte16 => todo!(),
-                    }
-                    instrs.push(Instr {
-                        operand: Operand { local_addr: addr },
-                    });
-                }
+                match ty.stack_size() {
+                    ValueSize::Byte4 => instrs.push(Instr {
+                        op: vm::op_local_tee4,
+                    }),
+                    ValueSize::Byte8 => instrs.push(Instr {
+                        op: vm::op_local_tee8,
+                    }),
+                    ValueSize::Byte16 => todo!(),
+                };
+                instrs.push(Instr {
+                    operand: Operand { local_addr: addr },
+                });
+
                 checker.op(&[ty], &[ty])?;
 
                 (1 + len, false)
@@ -845,21 +827,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .ok_or(WasmParserError::UnknownGlobal)?;
                 checker.op(&[], &[ty.0])?;
 
-                if !*unreachable {
-                    match ty.0.stack_size() {
-                        ValueSize::Byte4 => instrs.push(Instr {
-                            op: vm::op_global_get4,
-                        }),
-                        ValueSize::Byte8 => instrs.push(Instr {
-                            op: vm::op_global_get8,
-                        }),
-                        ValueSize::Byte16 => todo!(),
-                    }
+                match ty.0.stack_size() {
+                    ValueSize::Byte4 => instrs.push(Instr {
+                        op: vm::op_global_get4,
+                    }),
+                    ValueSize::Byte8 => instrs.push(Instr {
+                        op: vm::op_global_get8,
+                    }),
+                    ValueSize::Byte16 => todo!(),
+                };
 
-                    instrs.push(Instr {
-                        operand: Operand { u32: idx },
-                    });
-                }
+                instrs.push(Instr {
+                    operand: Operand { u32: idx },
+                });
+
                 (1 + len, false)
             }
             0x24 => {
@@ -874,21 +855,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 checker.op(&[ty.0], &[])?;
 
-                if !*unreachable {
-                    match ty.0.stack_size() {
-                        ValueSize::Byte4 => instrs.push(Instr {
-                            op: vm::op_global_set4,
-                        }),
-                        ValueSize::Byte8 => instrs.push(Instr {
-                            op: vm::op_global_set8,
-                        }),
-                        ValueSize::Byte16 => todo!(),
-                    }
+                match ty.0.stack_size() {
+                    ValueSize::Byte4 => instrs.push(Instr {
+                        op: vm::op_global_set4,
+                    }),
+                    ValueSize::Byte8 => instrs.push(Instr {
+                        op: vm::op_global_set8,
+                    }),
+                    ValueSize::Byte16 => todo!(),
+                };
 
-                    instrs.push(Instr {
-                        operand: Operand { u32: idx },
-                    });
-                }
+                instrs.push(Instr {
+                    operand: Operand { u32: idx },
+                });
+
                 (1 + len, false)
             }
             0x25 => {
@@ -899,14 +879,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .get(idx as usize)
                     .ok_or(WasmParserError::InvalidTableIndex(idx))?;
                 checker.op(&[ValType::I32], &[ty.reftype.into()])?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_table_get,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { u32: idx },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_table_get,
+                });
+                instrs.push(Instr {
+                    operand: Operand { u32: idx },
+                });
+
                 (1 + len, false)
             }
             0x26 => {
@@ -917,28 +896,26 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .get(idx as usize)
                     .ok_or(WasmParserError::InvalidTableIndex(idx))?;
                 checker.op(&[ValType::I32, ty.reftype.into()], &[])?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_table_set,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { u32: idx },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_table_set,
+                });
+                instrs.push(Instr {
+                    operand: Operand { u32: idx },
+                });
+
                 (1 + len, false)
             }
             0x28 => {
                 trace!("parse_op_i32_load");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_load,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_load,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I32)?;
                 (1 + len, false)
             }
@@ -946,14 +923,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_load,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_load,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
             }
@@ -961,14 +937,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_load");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_load,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_load,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::F32)?;
                 (1 + len, false)
             }
@@ -976,14 +951,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_load");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_load,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_load,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::F64)?;
 
                 (1 + len, false)
@@ -992,14 +966,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load8_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_load8_s,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_load8_s,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I32)?;
 
                 (1 + len, false)
@@ -1008,14 +981,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load8_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_load8_u,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_load8_u,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I32)?;
 
                 (1 + len, false)
@@ -1024,14 +996,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load16_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_load16_s,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_load16_s,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I32)?;
                 (1 + len, false)
             }
@@ -1039,14 +1010,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load16_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_load16_u,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_load16_u,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I32)?;
                 (1 + len, false)
             }
@@ -1054,14 +1024,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load8_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_load8_s,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_load8_s,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
             }
@@ -1069,14 +1038,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load8_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_load8_u,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_load8_u,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
             }
@@ -1084,14 +1052,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load16_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_load16_s,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_load16_s,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
             }
@@ -1099,14 +1066,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load16_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_load16_u,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_load16_u,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
             }
@@ -1114,14 +1080,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load32_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_load32_s,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_load32_s,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I64)?;
 
                 (1 + len, false)
@@ -1130,14 +1095,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load32_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_load32_u,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_load32_u,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.load_op(ValType::I64)?;
 
                 (1 + len, false)
@@ -1146,14 +1110,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_store");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_store,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_store,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::I32)?;
                 (1 + len, false)
             }
@@ -1161,14 +1124,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_store");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_store,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_store,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::I64)?;
 
                 (1 + len, false)
@@ -1177,14 +1139,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_store");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_store,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_store,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::F32)?;
                 (1 + len, false)
             }
@@ -1192,14 +1153,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_store");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_store,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_store,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::F64)?;
 
                 (1 + len, false)
@@ -1208,14 +1168,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_store8");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_store8,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_store8,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::I32)?;
 
                 (1 + len, false)
@@ -1224,14 +1183,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_store16");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_store16,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_store16,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::I32)?;
                 (1 + len, false)
             }
@@ -1239,14 +1197,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_store8");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_store8,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_store8,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::I64)?;
                 (1 + len, false)
             }
@@ -1254,14 +1211,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_store16");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_store16,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_store16,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::I64)?;
 
                 (1 + len, false)
@@ -1270,14 +1226,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_store32");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_store32,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { memarg },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_store32,
+                });
+                instrs.push(Instr {
+                    operand: Operand { memarg },
+                });
+
                 checker.store_op(ValType::I64)?;
                 (1 + len, false)
             }
@@ -1288,11 +1243,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 if next != 0x00 {
                     Err(WasmParserError::InvalidInstruction([0x3F, next, 0, 0]))?
                 }
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_mem_size,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_mem_size,
+                });
+
                 checker.op(&[], &[ValType::I32])?;
                 (2, false)
             }
@@ -1303,53 +1257,49 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     Err(WasmParserError::InvalidInstruction([0x40, next, 0, 0]))?
                 }
                 assert_memory(self.mems)?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_mem_grow,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_mem_grow,
+                });
+
                 checker.op(&[ValType::I32], &[ValType::I32])?;
                 (2, false)
             }
             0x41 => {
                 trace!("parse_op_i32_const");
                 let (len, operand) = self.parse_i32()?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_const,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { i32: operand },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_const,
+                });
+                instrs.push(Instr {
+                    operand: Operand { i32: operand },
+                });
+
                 checker.op(&[], &[ValType::I32])?;
                 (1 + len, false)
             }
             0x42 => {
                 trace!("parse_op_i64_const");
                 let (len, operand) = self.parse_i64()?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_const,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { i64: operand },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_const,
+                });
+                instrs.push(Instr {
+                    operand: Operand { i64: operand },
+                });
+
                 checker.op(&[], &[ValType::I64])?;
                 (1 + len, false)
             }
             0x43 => {
                 trace!("parse_op_f32_const");
                 let (len, operand) = self.parse_f32()?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_const,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { f32: operand },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_const,
+                });
+                instrs.push(Instr {
+                    operand: Operand { f32: operand },
+                });
+
                 checker.op(&[], &[ValType::F32])?;
 
                 (1 + len, false)
@@ -1357,119 +1307,107 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x44 => {
                 trace!("parse_op_f64_const");
                 let (len, operand) = self.parse_f64()?;
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_const,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { f64: operand },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_const,
+                });
+                instrs.push(Instr {
+                    operand: Operand { f64: operand },
+                });
+
                 checker.op(&[], &[ValType::F64])?;
 
                 (1 + len, false)
             }
             0x45 => {
                 trace!("parse_op_i32_eqz");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_eqz });
-                }
+                instrs.push(Instr { op: vm::op_i32_eqz });
+
                 checker.op(&[ValType::I32], &[ValType::I32])?;
                 (1, false)
             }
             0x46 => {
                 trace!("parse_op_i32_eq");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_eq });
-                }
+                instrs.push(Instr { op: vm::op_i32_eq });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x47 => {
                 trace!("parse_op_i32_ne");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_ne });
-                }
+                instrs.push(Instr { op: vm::op_i32_ne });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x48 => {
                 trace!("parse_op_i32_lt_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_lt_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_lt_s,
+                });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x49 => {
                 trace!("parse_op_i32_lt_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_lt_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_lt_u,
+                });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x4A => {
                 trace!("parse_op_i32_gt_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_gt_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_gt_s,
+                });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x4B => {
                 trace!("parse_op_i32_gt_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_gt_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_gt_u,
+                });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x4C => {
                 trace!("parse_op_i32_le_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_le_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_le_s,
+                });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x4D => {
                 trace!("parse_op_i32_le_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_le_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_le_u,
+                });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x4E => {
                 trace!("parse_op_i32_ge_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_ge_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_ge_s,
+                });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
             0x4F => {
                 trace!("parse_op_i32_ge_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_ge_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_ge_u,
+                });
+
                 checker.cond_op(ValType::I32)?;
                 (1, false)
             }
@@ -1477,993 +1415,882 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_eqz");
                 checker.op(&[ValType::I64], &[ValType::I32])?;
 
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_eqz });
-                }
+                instrs.push(Instr { op: vm::op_i64_eqz });
 
                 (1, false)
             }
             0x51 => {
                 trace!("parse_op_i64_eq");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_eq });
-                }
+                instrs.push(Instr { op: vm::op_i64_eq });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x52 => {
                 trace!("parse_op_i64_ne");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_ne });
-                }
+                instrs.push(Instr { op: vm::op_i64_ne });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x53 => {
                 trace!("parse_op_i64_lt_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_lt_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_lt_s,
+                });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x54 => {
                 trace!("parse_op_i64_lt_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_lt_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_lt_u,
+                });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x55 => {
                 trace!("parse_op_i64_gt_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_gt_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_gt_s,
+                });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x56 => {
                 trace!("parse_op_i64_gt_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_gt_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_gt_u,
+                });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x57 => {
                 trace!("parse_op_i64_le_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_le_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_le_s,
+                });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x58 => {
                 trace!("parse_op_i64_le_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_le_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_le_u,
+                });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x59 => {
                 trace!("parse_op_i64_ge_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_ge_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_ge_s,
+                });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x5A => {
                 trace!("parse_op_i64_ge_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_ge_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_ge_u,
+                });
+
                 checker.cond_op(ValType::I64)?;
                 (1, false)
             }
             0x5B => {
                 trace!("parse_op_f32_eq");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_eq });
-                }
+                instrs.push(Instr { op: vm::op_f32_eq });
+
                 checker.cond_op(ValType::F32)?;
                 (1, false)
             }
             0x5C => {
                 trace!("parse_op_f32_ne");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_ne });
-                }
+                instrs.push(Instr { op: vm::op_f32_ne });
+
                 checker.cond_op(ValType::F32)?;
                 (1, false)
             }
             0x5D => {
                 trace!("parse_op_f32_lt");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_lt });
-                }
+                instrs.push(Instr { op: vm::op_f32_lt });
+
                 checker.cond_op(ValType::F32)?;
                 (1, false)
             }
             0x5E => {
                 trace!("parse_op_f32_gt");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_gt });
-                }
+                instrs.push(Instr { op: vm::op_f32_gt });
+
                 checker.cond_op(ValType::F32)?;
                 (1, false)
             }
             0x5F => {
                 trace!("parse_op_f32_le");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_le });
-                }
+                instrs.push(Instr { op: vm::op_f32_le });
+
                 checker.cond_op(ValType::F32)?;
                 (1, false)
             }
             0x60 => {
                 trace!("parse_op_f32_ge");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_ge });
-                }
+                instrs.push(Instr { op: vm::op_f32_ge });
+
                 checker.cond_op(ValType::F32)?;
                 (1, false)
             }
             0x61 => {
                 trace!("parse_op_f64_eq");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_eq });
-                }
+                instrs.push(Instr { op: vm::op_f64_eq });
+
                 checker.cond_op(ValType::F64)?;
                 (1, false)
             }
             0x62 => {
                 trace!("parse_op_f64_ne");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_ne });
-                }
+                instrs.push(Instr { op: vm::op_f64_ne });
+
                 checker.cond_op(ValType::F64)?;
                 (1, false)
             }
             0x63 => {
                 trace!("parse_op_f64_lt");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_lt });
-                }
+                instrs.push(Instr { op: vm::op_f64_lt });
+
                 checker.cond_op(ValType::F64)?;
                 (1, false)
             }
             0x64 => {
                 trace!("parse_op_f64_gt");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_gt });
-                }
+                instrs.push(Instr { op: vm::op_f64_gt });
+
                 checker.cond_op(ValType::F64)?;
                 (1, false)
             }
             0x65 => {
                 trace!("parse_op_f64_le");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_le });
-                }
+                instrs.push(Instr { op: vm::op_f64_le });
+
                 checker.cond_op(ValType::F64)?;
                 (1, false)
             }
             0x66 => {
                 trace!("parse_op_f64_ge");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_ge });
-                }
+                instrs.push(Instr { op: vm::op_f64_ge });
+
                 checker.cond_op(ValType::F64)?;
                 (1, false)
             }
             0x67 => {
                 trace!("parse_op_i32_clz");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_clz });
-                }
+                instrs.push(Instr { op: vm::op_i32_clz });
+
                 checker.binary_op(ValType::I32)?;
 
                 (1, false)
             }
             0x68 => {
                 trace!("parse_op_i32_ctz");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_ctz });
-                }
+                instrs.push(Instr { op: vm::op_i32_ctz });
+
                 checker.binary_op(ValType::I32)?;
 
                 (1, false)
             }
             0x69 => {
                 trace!("parse_op_i32_popcnt");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_popcnt,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_popcnt,
+                });
+
                 checker.binary_op(ValType::I32)?;
                 (1, false)
             }
             0x6A => {
                 trace!("parse_op_i32_add");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_add });
-                }
+                instrs.push(Instr { op: vm::op_i32_add });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x6B => {
                 trace!("parse_op_i32_sub");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_sub });
-                }
+                instrs.push(Instr { op: vm::op_i32_sub });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x6C => {
                 trace!("parse_op_i32_mul");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_mul });
-                }
+                instrs.push(Instr { op: vm::op_i32_mul });
                 checker.unary_op(ValType::I32)?;
 
                 (1, false)
             }
             0x6D => {
                 trace!("parse_op_i32_div_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_div_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_div_s,
+                });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x6E => {
                 trace!("parse_op_i32_div_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_div_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_div_u,
+                });
+
                 checker.unary_op(ValType::I32)?;
 
                 (1, false)
             }
             0x6F => {
                 trace!("parse_op_i32_rem_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_rem_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_rem_s,
+                });
+
                 checker.unary_op(ValType::I32)?;
 
                 (1, false)
             }
             0x70 => {
                 trace!("parse_op_i32_rem_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_rem_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_rem_u,
+                });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x71 => {
                 trace!("parse_op_i32_and");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_and });
-                }
+                instrs.push(Instr { op: vm::op_i32_and });
+
                 checker.unary_op(ValType::I32)?;
 
                 (1, false)
             }
             0x72 => {
                 trace!("parse_op_i32_or");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_or });
-                }
+                instrs.push(Instr { op: vm::op_i32_or });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x73 => {
                 trace!("parse_op_i32_xor");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_xor });
-                }
+                instrs.push(Instr { op: vm::op_i32_xor });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x74 => {
                 trace!("parse_op_i32_shl");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i32_shl });
-                }
+                instrs.push(Instr { op: vm::op_i32_shl });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x75 => {
                 trace!("parse_op_i32_shr_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_shr_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_shr_s,
+                });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x76 => {
                 trace!("parse_op_i32_shr_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_shr_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_shr_u,
+                });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x77 => {
                 trace!("parse_op_i32_rotl");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_rotl,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_rotl,
+                });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x78 => {
                 trace!("parse_op_i32_rotr");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_rotr,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_rotr,
+                });
+
                 checker.unary_op(ValType::I32)?;
                 (1, false)
             }
             0x79 => {
                 trace!("parse_op_i64_clz");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_clz });
-                }
+                instrs.push(Instr { op: vm::op_i64_clz });
+
                 checker.binary_op(ValType::I64)?;
                 (1, false)
             }
             0x7A => {
                 trace!("parse_op_i64_ctz");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_ctz });
-                }
+                instrs.push(Instr { op: vm::op_i64_ctz });
+
                 checker.binary_op(ValType::I64)?;
                 (1, false)
             }
             0x7B => {
                 trace!("parse_op_i64_popcnt");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_popcnt,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_popcnt,
+                });
+
                 checker.binary_op(ValType::I64)?;
                 (1, false)
             }
             0x7C => {
                 trace!("parse_op_i64_add");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_add });
-                }
+                instrs.push(Instr { op: vm::op_i64_add });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x7D => {
                 trace!("parse_op_i64_sub");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_sub });
-                }
+                instrs.push(Instr { op: vm::op_i64_sub });
+
                 checker.unary_op(ValType::I64)?;
 
                 (1, false)
             }
             0x7E => {
                 trace!("parse_op_i64_mul");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_mul });
-                }
+                instrs.push(Instr { op: vm::op_i64_mul });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x7F => {
                 trace!("parse_op_i64_div_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_div_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_div_s,
+                });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x80 => {
                 trace!("parse_op_i64_div_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_div_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_div_u,
+                });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x81 => {
                 trace!("parse_op_i64_rem_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_rem_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_rem_s,
+                });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x82 => {
                 trace!("parse_op_i64_rem_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_rem_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_rem_u,
+                });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x83 => {
                 trace!("parse_op_i64_and");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_and });
-                }
+                instrs.push(Instr { op: vm::op_i64_and });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x84 => {
                 trace!("parse_op_i64_or");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_or });
-                }
+                instrs.push(Instr { op: vm::op_i64_or });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x85 => {
                 trace!("parse_op_i64_xor");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_xor });
-                }
+                instrs.push(Instr { op: vm::op_i64_xor });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x86 => {
                 trace!("parse_op64_shl");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_i64_shl });
-                }
+                instrs.push(Instr { op: vm::op_i64_shl });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x87 => {
                 trace!("parse_op_i64_shr_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_shr_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_shr_s,
+                });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x88 => {
                 trace!("parse_op_i64_shr_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_shr_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_shr_u,
+                });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x89 => {
                 trace!("parse_op_i64_rotl");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_rotl,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_rotl,
+                });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x8A => {
                 trace!("parse_op_i64_rotr");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_rotr,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_rotr,
+                });
+
                 checker.unary_op(ValType::I64)?;
                 (1, false)
             }
             0x8B => {
                 trace!("parse_op_f32_abs");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_abs });
-                }
+                instrs.push(Instr { op: vm::op_f32_abs });
+
                 checker.binary_op(ValType::F32)?;
                 (1, false)
             }
             0x8C => {
                 trace!("parse_op_f32_neg");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_neg });
-                }
+                instrs.push(Instr { op: vm::op_f32_neg });
+
                 checker.binary_op(ValType::F32)?;
 
                 (1, false)
             }
             0x8D => {
                 trace!("parse_op_f32_ceil");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_ceil,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_ceil,
+                });
+
                 checker.binary_op(ValType::F32)?;
                 (1, false)
             }
             0x8E => {
                 trace!("parse_op_f32_floor");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_floor,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_floor,
+                });
+
                 checker.binary_op(ValType::F32)?;
                 (1, false)
             }
             0x8F => {
                 trace!("parse_op_f32_trunc");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_trunc,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_trunc,
+                });
+
                 checker.binary_op(ValType::F32)?;
                 (1, false)
             }
             0x90 => {
                 trace!("parse_op_f32_nearest");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_nearest,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_nearest,
+                });
+
                 checker.binary_op(ValType::F32)?;
                 (1, false)
             }
             0x91 => {
                 trace!("parse_op_f32_sqrt");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_sqrt,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_sqrt,
+                });
+
                 checker.binary_op(ValType::F32)?;
                 (1, false)
             }
             0x92 => {
                 trace!("parse_op_f32_add");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_add });
-                }
+                instrs.push(Instr { op: vm::op_f32_add });
+
                 checker.unary_op(ValType::F32)?;
                 (1, false)
             }
             0x93 => {
                 trace!("parse_op_f32_sub");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_sub });
-                }
+                instrs.push(Instr { op: vm::op_f32_sub });
+
                 checker.unary_op(ValType::F32)?;
                 (1, false)
             }
             0x94 => {
                 trace!("parse_op_f32_mul");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_mul });
-                }
+                instrs.push(Instr { op: vm::op_f32_mul });
+
                 checker.unary_op(ValType::F32)?;
                 (1, false)
             }
             0x95 => {
                 trace!("parse_op_f32_div");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_div });
-                }
+                instrs.push(Instr { op: vm::op_f32_div });
+
                 checker.unary_op(ValType::F32)?;
                 (1, false)
             }
             0x96 => {
                 trace!("parse_op_f32_min");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_min });
-                }
+                instrs.push(Instr { op: vm::op_f32_min });
+
                 checker.unary_op(ValType::F32)?;
                 (1, false)
             }
             0x97 => {
                 trace!("parse_op_f32_max");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f32_max });
-                }
+                instrs.push(Instr { op: vm::op_f32_max });
+
                 checker.unary_op(ValType::F32)?;
                 (1, false)
             }
             0x98 => {
                 trace!("parse_op_f32_copysign");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_copysign,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_copysign,
+                });
+
                 checker.unary_op(ValType::F32)?;
                 (1, false)
             }
             0x99 => {
                 trace!("parse_op_f64_abs");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_abs });
-                }
+                instrs.push(Instr { op: vm::op_f64_abs });
+
                 checker.binary_op(ValType::F64)?;
                 (1, false)
             }
             0x9A => {
                 trace!("parse_op_f64_neg");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_neg });
-                }
+                instrs.push(Instr { op: vm::op_f64_neg });
+
                 checker.binary_op(ValType::F64)?;
                 (1, false)
             }
             0x9B => {
                 trace!("parse_op_f64_ceil");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_ceil,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_ceil,
+                });
+
                 checker.binary_op(ValType::F64)?;
                 (1, false)
             }
             0x9C => {
                 trace!("parse_op_f64_floor");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_floor,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_floor,
+                });
+
                 checker.binary_op(ValType::F64)?;
                 (1, false)
             }
             0x9D => {
                 trace!("parse_op_f64_trunc");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_trunc,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_trunc,
+                });
+
                 checker.binary_op(ValType::F64)?;
                 (1, false)
             }
             0x9E => {
                 trace!("parse_op_f64_nearest");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_nearest,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_nearest,
+                });
+
                 checker.binary_op(ValType::F64)?;
                 (1, false)
             }
 
             0x9F => {
                 trace!("parse_op_f64_sqrt");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_sqrt,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_sqrt,
+                });
+
                 checker.binary_op(ValType::F64)?;
                 (1, false)
             }
             0xA0 => {
                 trace!("parse_op_f64_add");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_add });
-                }
+                instrs.push(Instr { op: vm::op_f64_add });
+
                 checker.unary_op(ValType::F64)?;
                 (1, false)
             }
             0xA1 => {
                 trace!("parse_op_f64_sub");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_sub });
-                }
+                instrs.push(Instr { op: vm::op_f64_sub });
+
                 checker.unary_op(ValType::F64)?;
                 (1, false)
             }
             0xA2 => {
                 trace!("parse_op_f64_mul");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_mul });
-                }
+                instrs.push(Instr { op: vm::op_f64_mul });
+
                 checker.unary_op(ValType::F64)?;
                 (1, false)
             }
             0xA3 => {
                 trace!("parse_op_f64_div");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_div });
-                }
+                instrs.push(Instr { op: vm::op_f64_div });
                 checker.unary_op(ValType::F64)?;
                 (1, false)
             }
             0xA4 => {
                 trace!("parse_op_f64_min");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_min });
-                }
+                instrs.push(Instr { op: vm::op_f64_min });
+
                 checker.unary_op(ValType::F64)?;
                 (1, false)
             }
             0xA5 => {
                 trace!("parse_op_f64_max");
-                if !*unreachable {
-                    instrs.push(Instr { op: vm::op_f64_max });
-                }
+                instrs.push(Instr { op: vm::op_f64_max });
+
                 checker.unary_op(ValType::F64)?;
                 (1, false)
             }
             0xA6 => {
                 trace!("parse_op_f64_copysign");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_copysign,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_copysign,
+                });
+
                 checker.unary_op(ValType::F64)?;
                 (1, false)
             }
             0xA7 => {
                 trace!("parse_op_i32_wrap_i64");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_wrap_i64,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_wrap_i64,
+                });
+
                 checker.op(&[ValType::I64], &[ValType::I32])?;
                 (1, false)
             }
             0xA8 => {
                 trace!("parse_op_i32_trunc_f32_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_trunc_f32_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_trunc_f32_s,
+                });
+
                 checker.op(&[ValType::F32], &[ValType::I32])?;
                 (1, false)
             }
             0xA9 => {
                 trace!("parse_op_i32_trunc_f32_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_trunc_f32_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_trunc_f32_u,
+                });
+
                 checker.op(&[ValType::F32], &[ValType::I32])?;
                 (1, false)
             }
             0xAA => {
                 trace!("parse_op_i32_trunc_f64_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_trunc_f64_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_trunc_f64_s,
+                });
+
                 checker.op(&[ValType::F64], &[ValType::I32])?;
                 (1, false)
             }
             0xAB => {
                 trace!("parse_op_i32_trunc_f64_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_trunc_f64_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_trunc_f64_u,
+                });
+
                 checker.op(&[ValType::F64], &[ValType::I32])?;
                 (1, false)
             }
             0xAC => {
                 trace!("parse_op_i64_extend_i32_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_extend_i32_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_extend_i32_s,
+                });
+
                 checker.op(&[ValType::I32], &[ValType::I64])?;
                 (1, false)
             }
             0xAD => {
                 trace!("parse_op_i64_extend_i32_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_extend_i32_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_extend_i32_u,
+                });
+
                 checker.op(&[ValType::I32], &[ValType::I64])?;
 
                 (1, false)
             }
             0xAE => {
                 trace!("parse_op_i64_trunc_f32_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_trunc_f32_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_trunc_f32_s,
+                });
+
                 checker.op(&[ValType::F32], &[ValType::I64])?;
                 (1, false)
             }
             0xAF => {
                 trace!("parse_op_i64_trunc_f32_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_trunc_f32_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_trunc_f32_u,
+                });
+
                 checker.op(&[ValType::F32], &[ValType::I64])?;
                 (1, false)
             }
             0xB0 => {
                 trace!("parse_op_i64_trunc_f64_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_trunc_f64_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_trunc_f64_s,
+                });
+
                 checker.op(&[ValType::F64], &[ValType::I64])?;
                 (1, false)
             }
             0xB1 => {
                 trace!("parse_op_i64_trunc_f64_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_trunc_f64_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_trunc_f64_u,
+                });
+
                 checker.op(&[ValType::F64], &[ValType::I64])?;
                 (1, false)
             }
             0xB2 => {
                 trace!("parse_op_f32_convert_i32_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_convert_i32_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_convert_i32_s,
+                });
+
                 checker.op(&[ValType::I32], &[ValType::F32])?;
                 (1, false)
             }
             0xB3 => {
                 trace!("parse_op_f32_convert_i32_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_convert_i32_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_convert_i32_u,
+                });
+
                 checker.op(&[ValType::I32], &[ValType::F32])?;
                 (1, false)
             }
             0xB4 => {
                 trace!("parse_op_f32_convert_i64_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_convert_i64_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_convert_i64_s,
+                });
+
                 checker.op(&[ValType::I64], &[ValType::F32])?;
                 (1, false)
             }
             0xB5 => {
                 trace!("parse_op_f32_convert_i64_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_convert_i64_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_convert_i64_u,
+                });
+
                 checker.op(&[ValType::I64], &[ValType::F32])?;
                 (1, false)
             }
             0xB6 => {
                 trace!("parse_op_f32_demote_f64");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f32_demote_f64,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f32_demote_f64,
+                });
+
                 checker.op(&[ValType::F64], &[ValType::F32])?;
                 (1, false)
             }
             0xB7 => {
                 trace!("parse_op_f64_convert_i32_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_convert_i32_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_convert_i32_s,
+                });
+
                 checker.op(&[ValType::I32], &[ValType::F64])?;
                 (1, false)
             }
             0xB8 => {
                 trace!("parse_op_f64_convert_i32_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_convert_i32_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_convert_i32_u,
+                });
+
                 checker.op(&[ValType::I32], &[ValType::F64])?;
                 (1, false)
             }
             0xB9 => {
                 trace!("parse_op_f64_convert_i64_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_convert_i64_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_convert_i64_s,
+                });
+
                 checker.op(&[ValType::I64], &[ValType::F64])?;
                 (1, false)
             }
             0xBA => {
                 trace!("parse_op_f64_convert_i64_u");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_convert_i64_u,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_convert_i64_u,
+                });
+
                 checker.op(&[ValType::I64], &[ValType::F64])?;
                 (1, false)
             }
             0xBB => {
                 trace!("parse_op_f64_promote_f32");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_f64_promote_f32,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_f64_promote_f32,
+                });
+
                 checker.op(&[ValType::F32], &[ValType::F64])?;
                 (1, false)
             }
@@ -2492,81 +2319,73 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 match next {
                     0 => {
                         trace!("parse_op_i32_trunc_sat_f32_s");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_i32_trunc_sat_f32_s,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_i32_trunc_sat_f32_s,
+                        });
+
                         checker.op(&[ValType::F32], &[ValType::I32])?;
                         (1 + len, false)
                     }
                     1 => {
                         trace!("parse_op_i32_trunc_sat_f32_u");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_i32_trunc_sat_f32_u,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_i32_trunc_sat_f32_u,
+                        });
+
                         checker.op(&[ValType::F32], &[ValType::I32])?;
                         (1 + len, false)
                     }
                     2 => {
                         trace!("parse_op_i32_trunc_sat_f64_s");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_i32_trunc_sat_f64_s,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_i32_trunc_sat_f64_s,
+                        });
+
                         checker.op(&[ValType::F64], &[ValType::I32])?;
                         (1 + len, false)
                     }
                     3 => {
                         trace!("parse_op_i32_trunc_sat_f64_u");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_i32_trunc_sat_f64_u,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_i32_trunc_sat_f64_u,
+                        });
+
                         checker.op(&[ValType::F64], &[ValType::I32])?;
                         (1 + len, false)
                     }
                     4 => {
                         trace!("parse_op_i64_trunc_sat_f32_s");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_i64_trunc_sat_f32_s,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_i64_trunc_sat_f32_s,
+                        });
+
                         checker.op(&[ValType::F32], &[ValType::I64])?;
                         (1 + len, false)
                     }
                     5 => {
                         trace!("parse_op_i64_trunc_sat_f32_u");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_i64_trunc_sat_f32_u,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_i64_trunc_sat_f32_u,
+                        });
+
                         checker.op(&[ValType::F32], &[ValType::I64])?;
                         (1 + len, false)
                     }
                     6 => {
                         trace!("parse_op_i64_trunc_sat_f64_s");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_i64_trunc_sat_f64_s,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_i64_trunc_sat_f64_s,
+                        });
+
                         checker.op(&[ValType::F64], &[ValType::I64])?;
                         (1 + len, false)
                     }
                     7 => {
                         trace!("parse_op_i64_trunc_sat_f64_u");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_i64_trunc_sat_f64_u,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_i64_trunc_sat_f64_u,
+                        });
+
                         checker.op(&[ValType::F64], &[ValType::I64])?;
                         (1 + len, false)
                     }
@@ -2584,14 +2403,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         if !matches!(data_count_section, DataCountVerifier::OnePass(_)) {
                             Err(WasmParserError::InvalidDataSectionCount)?
                         }
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_mem_init,
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: idx },
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_mem_init,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: idx },
+                        });
+
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         (2 + len + len2, false)
                     }
@@ -2602,14 +2420,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         if !matches!(data_count_section, DataCountVerifier::OnePass(_)) {
                             Err(WasmParserError::InvalidDataSectionCount)?
                         }
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_data_drop,
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: idx },
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_data_drop,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: idx },
+                        });
+
                         (1 + len + len2, false)
                     }
                     10 => {
@@ -2623,11 +2440,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }
                         trace!("parse_op_mem_copy");
                         assert_memory(self.mems)?;
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_mem_copy,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_mem_copy,
+                        });
+
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         (3 + len, false)
                     }
@@ -2638,11 +2454,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }
                         assert_memory(self.mems)?;
                         trace!("parse_op_mem_fill");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_mem_fill,
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_mem_fill,
+                        });
+
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         (2 + len, false)
                     }
@@ -2656,17 +2471,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 
                         validate_active_elem(self.tables, tableidx, elem.kind)?;
                         trace!("parse_op_table_init");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_table_init,
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: elemidx },
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: tableidx },
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_table_init,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: elemidx },
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: tableidx },
+                        });
+
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         (1 + len + len2 + len3, false)
                     }
@@ -2676,14 +2490,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             Err(WasmParserError::UnknownElement(elemidx))?;
                         }
                         trace!("parse_op_elem_drop");
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_elem_drop,
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: elemidx },
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_elem_drop,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: elemidx },
+                        });
 
                         (1 + len + len2, false)
                     }
@@ -2703,17 +2515,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         if tt1.reftype != tt2.reftype {
                             Err(WasmParserError::InvalidStackValTypeAny)?
                         }
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_table_copy,
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: tableidx },
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: tableidx2 },
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_table_copy,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: tableidx },
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: tableidx2 },
+                        });
+
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
                         (1 + len + len2 + len3, false)
                     }
@@ -2725,14 +2536,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             .get(tableidx as usize)
                             .ok_or(WasmParserError::InvalidTableIndex(tableidx))?;
                         checker.op(&[tt.reftype.into(), ValType::I32], &[ValType::I32])?;
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_table_grow,
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: tableidx },
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_table_grow,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: tableidx },
+                        });
+
                         (1 + len + len2, false)
                     }
                     16 => {
@@ -2742,14 +2552,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             .get(tableidx as usize)
                             .ok_or(WasmParserError::InvalidTableIndex(tableidx))?;
                         checker.op(&[], &[ValType::I32])?;
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_table_size,
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: tableidx },
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_table_size,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: tableidx },
+                        });
+
                         (1 + len + len2, false)
                     }
                     17 => {
@@ -2760,14 +2569,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             .get(tableidx as usize)
                             .ok_or(WasmParserError::InvalidTableIndex(tableidx))?;
                         checker.op(&[ValType::I32, tt.reftype.into(), ValType::I32], &[])?;
-                        if !*unreachable {
-                            instrs.push(Instr {
-                                op: vm::op_table_fill,
-                            });
-                            instrs.push(Instr {
-                                operand: Operand { u32: tableidx },
-                            });
-                        }
+                        instrs.push(Instr {
+                            op: vm::op_table_fill,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: tableidx },
+                        });
+
                         (1 + len + len2, false)
                     }
                     _ => Err(WasmParserError::InvalidInstruction([
@@ -2777,51 +2585,46 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0xC0 => {
                 trace!("parse_op_i32_extend8_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_extend8_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_extend8_s,
+                });
+
                 checker.binary_op(ValType::I32)?;
                 (1, false)
             }
             0xC1 => {
                 trace!("parse_op_i32_extend16_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i32_extend16_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i32_extend16_s,
+                });
+
                 checker.binary_op(ValType::I32)?;
                 (1, false)
             }
             0xC2 => {
                 trace!("parse_op_i64_extend8_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_extend8_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_extend8_s,
+                });
+
                 checker.binary_op(ValType::I64)?;
                 (1, false)
             }
             0xC3 => {
                 trace!("parse_op_i64_extend16_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_extend16_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_extend16_s,
+                });
+
                 checker.binary_op(ValType::I64)?;
                 (1, false)
             }
             0xC4 => {
                 trace!("parse_op_i64_extend32_s");
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_i64_extend32_s,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_i64_extend32_s,
+                });
+
                 checker.binary_op(ValType::I64)?;
                 (1, false)
             }
@@ -2829,22 +2632,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_ref_null");
                 let (len, t) = self.parse_reftype()?;
 
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_ref_null,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_ref_null,
+                });
+
                 checker.op(&[], &[t.into()])?;
                 (1 + len, false)
             }
             0xD1 => {
                 trace!("parse_op_ref_is_null");
 
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_ref_is_null,
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_ref_is_null,
+                });
+
                 let v = checker.pop()?;
                 if !matches!(
                     v,
@@ -2886,14 +2687,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }
                 }
 
-                if !*unreachable {
-                    instrs.push(Instr {
-                        op: vm::op_ref_func,
-                    });
-                    instrs.push(Instr {
-                        operand: Operand { u32: idx },
-                    });
-                }
+                instrs.push(Instr {
+                    op: vm::op_ref_func,
+                });
+                instrs.push(Instr {
+                    operand: Operand { u32: idx },
+                });
+
                 checker.op(&[], &[ValType::FuncRef])?;
                 (1 + len, false)
             }
@@ -2904,12 +2704,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
     pub fn parse_instrs(
         &mut self,
         data_count_section: &mut DataCountVerifier,
-        instrs: &mut Vec<Instr>,
+        instrs: &mut InstructionGenerator,
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
-        unreachable: &mut bool,
-        is_unreachable_if_block: bool,
     ) -> Result<usize> {
         let mut read_bytes = 0;
         loop {
@@ -2919,8 +2717,6 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 checker,
                 jump_resolver,
                 else_addr,
-                unreachable,
-                is_unreachable_if_block,
             )?;
             trace!("{checker:?}");
             read_bytes += len;
