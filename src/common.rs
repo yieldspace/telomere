@@ -498,3 +498,6 @@ pub fn execute_elem_init_const_expr(
         unknown => todo!("{unknown:?}"),
     }
 }
+pub const fn word_size<T>() -> usize {
+    std::mem::size_of::<T>() / std::mem::size_of::<u32>()
+}

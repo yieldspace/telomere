@@ -2,13 +2,7 @@ use std::rc::Rc;
 
 use crate::{
     common::{
-        execute_elem_init_const_expr,
-        gc::{word_size, GcRef, GcRootHandle, Header, InstanceData, ObjectType},
-        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
-        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance,
-        GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle,
-        Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TableInstance,
-        TypeIdx, TypeSection, PAGE_SIZE_MAX,
+        execute_elem_init_const_expr, gc::{GcRef, GcRootHandle, Header, InstanceData, ObjectType}, word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -362,7 +356,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         globals,
         funcs,
     };
-    
+
     if let Some(start) = start {
         let mut stack = Stack::new(128 * 1024);
 
