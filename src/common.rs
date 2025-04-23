@@ -105,6 +105,11 @@ pub struct TableType {
 }
 #[derive(Debug)]
 pub struct Table(pub TableType);
+impl Table {
+    pub fn new(tt: TableType) -> Self {
+        Self(tt)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncType(pub ResultType, pub ResultType);
@@ -236,8 +241,14 @@ pub struct HostFunctionDefinition {
 pub struct NativeModule {
     pub functions: Vec<HostFunctionDefinition>,
 }
+pub const TABLE_UNINITIALIZED: u32 = 0x00;
 #[derive(Debug, Clone)]
 pub struct TableInstance(pub TableType, pub Vec<u32>);
+impl TableInstance {
+    pub fn new(tt: TableType) -> Self {
+        Self(tt, vec![TABLE_UNINITIALIZED; tt.limits.min as usize])
+    }
+}
 #[derive(Clone)]
 pub struct Instance {
     pub module_addr: u32,
@@ -249,7 +260,7 @@ pub struct Instance {
     // idx -> addr
     pub funcs: Vec<u32>,
     // idx -> addr
-    pub tables: Vec<u32>,
+    pub tables: Vec<GcRef>,
 }
 #[derive(Debug, Clone)]
 pub struct Locals {
@@ -434,8 +445,8 @@ impl ExecuteContext<'_> {
 #[derive(Debug, Clone)]
 pub struct InstanceHandle(pub(crate) Rc<GcRootHandle>);
 impl InstanceHandle {
-    pub(crate) fn get_gc_ref(&self) -> GcRef {
-        self.0.into_inner()
+    pub(crate) fn get_gc_ref_with_pool(&self, pool_ref: &MemoryPool) -> GcRef {
+        self.0.get_gc_ref_with_pool(pool_ref)
     }
 }
 

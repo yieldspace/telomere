@@ -6,6 +6,7 @@ pub trait GCView {
     fn update(&mut self, pool: &mut MemoryPool);
 }
 
+// NOTE: GcRef will disabled after gc
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GcRef(pub u32);
@@ -46,7 +47,7 @@ pub struct InstanceData {
     pub module_addr: u32,
     pub globals: U32FixedArray,
     pub funcs: U32FixedArray,
-    pub tables: U32FixedArray,
+    pub tables: GcRefFixedArray,
     pub mems: GcRefFixedArray,
 }
 impl GCView for InstanceData {

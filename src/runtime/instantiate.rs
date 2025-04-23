@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{word_size, GcRef, GcRootHandle, InstanceData, ObjectType},
+        gc::{word_size, GcRef, GcRootHandle, Header, InstanceData, ObjectType},
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
         ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance,
         GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle,
@@ -14,7 +14,6 @@ use crate::{
     Instance, Module, Registry, Stack, Store, VMResult,
 };
 
-use super::TABLE_UNINITIALIZED;
 fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMResult<()> {
     if import_limit.min > real {
         tracing::trace!("invalid import_limit min");
@@ -111,7 +110,9 @@ pub fn instantiate_native_module(
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceHandle> {
     let mod_addr = store.modules.len() as u32;
     let instance_id = store.new_instance_id();
-
+    let gc = store.gc.clone();
+    let mut gc = gc.borrow_mut();
+    let gc = &mut gc;
     // -> addr
     let mut memory: Option<GcRef> = None;
     let mut globals = vec![];
@@ -138,12 +139,8 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             tracing::error!("unknown instance");
             VMResult::Unlinkable
         }));
-        let ext_inst = unsafe {
-            &*store
-                .gc
-                .borrow()
-                .get_instance_unchecked(ext_inst_addr.get_gc_ref())
-        };
+        let instance_gc_ref = ext_inst_addr.get_gc_ref_with_pool(gc);
+        let ext_inst = unsafe { &*gc.get_instance_unchecked(instance_gc_ref) };
         let ext_module = &store.modules[ext_inst.module_addr as usize];
         let export = vm_try!(VMResult::from_option(
             ext_module.exports.find(&import.name),
@@ -164,7 +161,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     tracing::trace!("import function type");
                     return VMResult::Unlinkable;
                 }
-                let funcaddr = ext_inst.funcs.as_slice(&store.gc.borrow())[funcidx.0 as usize];
+                let funcaddr = ext_inst.funcs.as_slice(&gc)[funcidx.0 as usize];
                 let funcidx = funcs.len();
                 funcs.push(funcaddr);
                 tracing::trace!("linking: {mod_addr} {funcidx} => {funcaddr}")
@@ -176,7 +173,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
 
                     return VMResult::Unlinkable;
                 }
-                globals.push(ext_inst.globals.as_slice(&store.gc.borrow())[global_idx.0 as usize]);
+                globals.push(ext_inst.globals.as_slice(&gc)[global_idx.0 as usize]);
             }
             (ImportDesc::TableType(import_tt), ExportDesc::Table(idx)) => {
                 let export_tt = ext_module.tables[idx.0 as usize];
@@ -187,19 +184,18 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
 
                     return VMResult::Unlinkable;
                 }
-                let addr = ext_inst.tables.as_slice(&store.gc.borrow())[idx.0 as usize];
+                let addr = ext_inst.tables.as_slice(gc)[idx.0 as usize];
                 vm_try!(validate_limit(
                     import_tt.limits,
-                    store.tables[addr as usize].1.len() as u32,
+                    unsafe { gc.get_table(addr) }.1.len() as u32,
                     export_tt.limits
                 ));
-                tables.push(ext_inst.tables.as_slice(&store.gc.borrow())[idx.0 as usize]);
+                tables.push(ext_inst.tables.as_slice(gc)[idx.0 as usize]);
             }
             (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                memory = ext_inst.mems.as_slice(&store.gc.borrow()).get(0).copied();
+                memory = ext_inst.mems.as_slice(gc).get(0).copied();
                 if let Some(memory_addr) = &memory {
-                    let mut gc = store.gc.borrow_mut();
-                    let memory = unsafe { &gc.get_memory(*memory_addr) };
+                    let memory = unsafe { gc.get_memory(*memory_addr) };
                     vm_try!(validate_limit(
                         mt.0,
                         memory.page_size(),
@@ -216,14 +212,14 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             }
         }
     }
-    let inst_addr = store.allocate(ObjectType::Instance, word_size::<InstanceData>());
+    let inst_addr = gc.allocate(Header::new(
+        ObjectType::Instance,
+        word_size::<InstanceData>(),
+    ));
     if memory.is_none() {
         if let Some(mem) = mems.first() {
             memory = Some({
-                store
-                    .gc
-                    .borrow_mut()
-                    .new_memory(mem.0.min, mem.0.max.unwrap_or_else(|| PAGE_SIZE_MAX as u32))
+                gc.new_memory(mem.0.min, mem.0.max.unwrap_or_else(|| PAGE_SIZE_MAX as u32))
             })
         }
     }
@@ -234,7 +230,6 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 assert_eq!(mem.0, 0);
                 let offset = vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
                 if let Some(memory) = &memory {
-                    let mut gc = store.gc.borrow_mut();
                     let memory = unsafe { gc.get_memory(*memory) };
                     if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
                         slice.copy_from_slice(&d.init);
@@ -272,19 +267,9 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             .globals
             .init(init, &globals, &funcs, &m_globals)));
     }
-    let table_instances: Vec<TableInstance> = m_tables
-        .iter()
-        .map(|v| TableInstance(*v, vec![TABLE_UNINITIALIZED; v.limits.min as usize]))
-        .collect();
-    let mut table_addr = store.tables.len() as u32;
-    let mut s_tables = vec![];
+    let mut table_instances: Vec<GcRef> = m_tables.iter().map(|v| gc.new_table(*v)).collect();
+    tables.append(&mut table_instances);
 
-    for table in table_instances {
-        tables.push(table_addr);
-        s_tables.push(table);
-        table_addr += 1;
-    }
-    store.tables.append(&mut s_tables);
     tracing::trace!("funcs: {funcs:?}");
 
     let res = (|| {
@@ -296,8 +281,9 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     ElemInit::FuncIdx(idxs) => {
                         let offset =
                             vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
-                        let table_addr = tables[idx.0 as usize] as usize;
-                        let instance = &mut store.tables[table_addr];
+                        let table_addr = tables[idx.0 as usize];
+
+                        let instance = unsafe { gc.get_table(table_addr) };
 
                         if instance.0.reftype != elem.kind {
                             panic!("reftype mismatch")
@@ -317,13 +303,12 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     ElemInit::ConstExpr(idxs) => {
                         let offset =
                             vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
-                        let table_addr = tables[idx.0 as usize] as usize;
+                        let table_addr = tables[idx.0 as usize];
                         let Store {
                             globals: global_store,
-                            tables,
                             ..
                         } = store;
-                        let instance = &mut tables[table_addr];
+                        let instance = unsafe { gc.get_table(table_addr) };
                         if offset + idxs.len() > instance.1.len() {
                             return VMResult::TableIndexOutOfRange;
                         }
@@ -377,13 +362,13 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         globals,
         funcs,
     };
-    let addr = InstanceHandle(Rc::new(GcRootHandle::new(inst_addr, store.gc.clone())));
+    
     if let Some(start) = start {
         let mut stack = Stack::new(128 * 1024);
 
         let funcaddr = instance.funcs[start.0 as usize];
         unsafe {
-            store.place_instance_unchecked(inst_addr, &instance);
+            gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
 
@@ -406,13 +391,12 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     &vm::VM_END
                 ));
                 let ptr = code.expr.as_ptr();
-                let gc = store.gc.clone();
-                let mut gc = gc.borrow_mut();
+
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
                     store,
                     local_reference,
-                    gc: &mut gc,
+                    gc,
                 };
                 vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
             }
@@ -428,13 +412,12 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     },
                     &vm::VM_END
                 ));
-                let gc = store.gc.clone();
-                let mut gc = gc.borrow_mut();
+
                 let mut ctx = ExecuteContext {
                     stack: &mut stack,
                     store,
                     local_reference,
-                    gc: &mut gc,
+                    gc: gc,
                 };
                 let return_addr = vm_try!(fp(&mut ctx));
                 vm_try!(unsafe { vm::call_next(return_addr, 0, &mut ctx) });
@@ -442,10 +425,15 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         }
     } else {
         unsafe {
-            store.place_instance_unchecked(inst_addr, &instance);
+            gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
     }
+    let addr = InstanceHandle(Rc::new(GcRootHandle::new_with_ref(
+        inst_addr,
+        gc,
+        store.gc.clone(),
+    )));
     VMResult::Success(addr)
 }
 // TODO:
@@ -471,13 +459,8 @@ pub fn aliasing(
         let instance_addr = vm_try!(VMResult::from_option(registry.get(modname), || {
             VMResult::Unlinkable
         }));
-
-        let ext_instance = unsafe {
-            &*store
-                .gc
-                .borrow()
-                .get_instance_unchecked(instance_addr.get_gc_ref())
-        };
+        let gc_ref = instance_addr.get_gc_ref_with_pool(&mut store.gc.borrow_mut());
+        let ext_instance = unsafe { &*store.gc.borrow().get_instance_unchecked(gc_ref) };
         let ext_module = &store.modules[ext_instance.module_addr as usize];
         let export_desc = vm_try!(VMResult::from_option(
             ext_module.exports.find(importname),
@@ -564,7 +547,8 @@ pub fn link_host_function_with_function_idx(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let instance = unsafe { &*store.gc.borrow().get_instance_unchecked(addr.get_gc_ref()) };
+    let gc_ref = addr.get_gc_ref_with_pool(&mut store.gc.borrow_mut());
+    let instance = unsafe { &*store.gc.borrow().get_instance_unchecked(gc_ref) };
     let funcaddr = instance.funcs.as_slice(&store.gc.borrow())[funcidx as usize];
     let func = &mut store.funcs.0[funcaddr as usize];
     func.body = FunctionBody::Host(f);
@@ -575,7 +559,8 @@ pub fn link_host_function_with_export_name(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let instance = unsafe { &*store.gc.borrow().get_instance_unchecked(addr.get_gc_ref()) };
+    let gc = store.gc.borrow();
+    let instance = unsafe { &*gc.get_instance_unchecked(addr.get_gc_ref_with_pool(&gc)) };
     let module = &store.modules[instance.module_addr as usize];
     let export = &module.exports.find(name).unwrap();
     let func_idx = if let ExportDesc::Func(v) = export {

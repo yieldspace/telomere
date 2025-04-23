@@ -1,7 +1,7 @@
 use super::{
-    gc::{GcRef, Header, MemoryPool, ObjectType},
-    ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, Instance, MemType,
-    TableInstance, TableType, TypeIdx, VMResult,
+    gc::{GcRef, MemoryPool},
+    ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, MemType, TableType,
+    TypeIdx, VMResult,
 };
 use std::{cell::RefCell, collections::HashMap, io::Write, rc::Rc};
 
@@ -70,7 +70,6 @@ pub struct Store {
     pub globals: GlobalStore,
     pub funcs: FunctionStore,
     pub modules: Vec<ModuleInstance>,
-    pub tables: Vec<TableInstance>,
     pub data: HashMap<(u32, u32), Data>,
     pub elems: HashMap<(u32, u32), Elem>,
     pub state: StoreState,
@@ -91,7 +90,6 @@ impl Store {
             globals: GlobalStore(vec![]),
             funcs: FunctionStore(vec![]),
             modules: vec![],
-            tables: vec![],
             data: HashMap::new(),
             elems: HashMap::new(),
             gc: Rc::new(RefCell::new(MemoryPool::new())),
@@ -99,16 +97,7 @@ impl Store {
             state,
         }
     }
-    pub(crate) fn allocate(&mut self, object_type: ObjectType, size: usize) -> GcRef {
-        self.gc
-            .borrow_mut()
-            .allocate(Header::new(object_type, size))
-    }
-    pub(crate) unsafe fn place_instance_unchecked(&mut self, addr: GcRef, instance: &Instance) {
-        self.gc
-            .borrow_mut()
-            .place_instance_unchecked(addr, instance)
-    }
+
     pub(crate) fn new_instance_id(&mut self) -> u32 {
         let instance_id = self.instance_id;
         self.instance_id += 1;

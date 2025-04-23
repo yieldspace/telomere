@@ -9,18 +9,25 @@ pub struct GcRootHandle {
 }
 impl GcRootHandle {
     pub fn new(ptr: GcRef, pool: Rc<RefCell<MemoryPool>>) -> Self {
-        let idx = pool.borrow_mut().add_root(ptr);
+        Self::new_with_ref(ptr, &mut pool.borrow_mut(), pool.clone())
+        
+    }
+    pub fn new_with_ref(
+        ptr: GcRef,
+        pool_ref: &mut MemoryPool,
+        pool: Rc<RefCell<MemoryPool>>,
+    ) -> Self {
+        let idx = pool_ref.add_root(ptr);
         Self { pool, idx }
     }
-    pub fn into_inner(&self) -> GcRef {
+    pub fn get_gc_ref_with_pool(&self, pool_ref: &MemoryPool) -> GcRef {
         let arr = unsafe {
-            self.pool
-                .borrow()
+            pool_ref
                 .get_value::<GcRefDynamicArray>(GcRef(1), 0)
                 .as_ref()
                 .unwrap()
         };
-        arr.as_slice(&self.pool.borrow())[self.idx as usize]
+        arr.as_slice(pool_ref)[self.idx as usize]
     }
 }
 impl Drop for GcRootHandle {

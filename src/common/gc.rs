@@ -1,4 +1,4 @@
-use super::{Instance, Memory, PAGE_SIZE};
+use super::{Instance, Memory, TableInstance, TableType, PAGE_SIZE};
 mod view;
 pub use view::*;
 mod root_handle;
@@ -11,6 +11,7 @@ pub enum ObjectType {
     Instance = 2,
     RootTable = 3,
     ExternMemoryRef = 4,
+    ExternTableRef = 5,
 }
 const INIT_MASK: u32 = 1 << 30;
 const MARK_MASK: u32 = 1 << 29;
@@ -64,6 +65,7 @@ impl Header {
 pub struct MemoryPool {
     memory: Vec<u32>,
     wasm_linear_memory: Vec<Option<Memory>>,
+    wasm_table: Vec<Option<TableInstance>>,
     allocated: u32,
     root: GcRef,
 }
@@ -81,6 +83,7 @@ impl MemoryPool {
             memory,
             allocated,
             wasm_linear_memory: vec![],
+            wasm_table: vec![],
             root: GcRef(1),
         }
     }
@@ -150,7 +153,7 @@ impl MemoryPool {
             globals: self.new_u32_fixed_array(&instance.globals),
             mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
             module_addr: instance.module_addr,
-            tables: self.new_u32_fixed_array(&instance.tables),
+            tables: self.new_gc_ref_fixed_array(&instance.tables),
         };
         unsafe {
             let value_ptr = self.memory[value_dst..].as_mut_ptr() as *mut InstanceData;
@@ -172,7 +175,7 @@ impl MemoryPool {
             globals: self.new_u32_fixed_array(&instance.globals),
             mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
             module_addr: instance.module_addr,
-            tables: self.new_u32_fixed_array(&instance.tables),
+            tables: self.new_gc_ref_fixed_array(&instance.tables),
         };
         let value_ptr =
             self.memory.as_mut_ptr().add(dst.get_value_addr_usize()) as *mut InstanceData;
@@ -346,7 +349,7 @@ impl MemoryPool {
                     // do nothing
                 }
                 ObjectType::RootTable => (&*self.get_value::<RootTable>(item, 0)).trace(self),
-                ObjectType::ExternMemoryRef => {
+                ObjectType::ExternMemoryRef | ObjectType::ExternTableRef => {
                     // do nothing
                 }
             }
@@ -403,14 +406,24 @@ impl MemoryPool {
                         }
                         .update(self);
                     }
-                    ObjectType::ExternMemoryRef => {
+                    ObjectType::ExternMemoryRef | ObjectType::ExternTableRef => {
                         // ok
                     }
                 }
             }
-            if header.object_type() == ObjectType::ExternMemoryRef && !header.is_marked() {
-                let idx = unsafe { *self.memory.as_ptr().add(item.get_value_addr_usize()) };
-                self.wasm_linear_memory[idx as usize] = None;
+            if !header.is_marked() {
+                // perform finalizer
+                match header.object_type() {
+                    ObjectType::ExternMemoryRef => {
+                        let idx = unsafe { *self.memory.as_ptr().add(item.get_value_addr_usize()) };
+                        self.wasm_linear_memory[idx as usize] = None;
+                    }
+                    ObjectType::ExternTableRef => {
+                        let idx = unsafe { *self.memory.as_ptr().add(item.get_value_addr_usize()) };
+                        self.wasm_table[idx as usize] = None;
+                    }
+                    _ => {}
+                }
             }
             ptr += HEADER_LEN as u32 + header.word_size() as u32;
             if ptr == self.allocated {
@@ -487,6 +500,19 @@ impl MemoryPool {
         self.wasm_linear_memory[mem_idx as usize]
             .as_mut()
             .unwrap_unchecked()
+    }
+    pub(crate) fn new_table(&mut self, tt: TableType) -> GcRef {
+        let idx = self.wasm_table.len() as u32;
+        self.wasm_table.push(Some(TableInstance::new(tt)));
+        let gc_ref = self.allocate(Header::new(ObjectType::ExternTableRef, 1).initialized());
+        unsafe {
+            *self.memory.as_mut_ptr().add(gc_ref.get_value_addr_usize()) = idx;
+        }
+        gc_ref
+    }
+    pub(crate) unsafe fn get_table(&mut self, addr: GcRef) -> &mut TableInstance {
+        let idx = *self.memory.as_ptr().add(addr.get_value_addr_usize());
+        self.wasm_table[idx as usize].as_mut().unwrap_unchecked()
     }
     pub fn get_total_linear_memory_size(&self) -> usize {
         self.wasm_linear_memory
