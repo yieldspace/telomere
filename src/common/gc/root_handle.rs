@@ -1,23 +1,30 @@
 use std::{cell::RefCell, rc::Rc};
 
-use super::{GcRef, MemoryPool};
+use super::{GcRef, GcRefDynamicArray, MemoryPool};
 
 #[derive(Debug)]
-pub struct GcRootHandle{
+pub struct GcRootHandle {
     pool: Rc<RefCell<MemoryPool>>,
-    ptr: GcRef
+    idx: u32,
 }
-impl GcRootHandle{
-    pub fn new(ptr: GcRef,pool: Rc<RefCell<MemoryPool>> )-> Self{
-        pool.borrow_mut().add_root(&[ptr]);
-        Self { pool, ptr }
+impl GcRootHandle {
+    pub fn new(ptr: GcRef, pool: Rc<RefCell<MemoryPool>>) -> Self {
+        let idx = pool.borrow_mut().add_root(ptr);
+        Self { pool, idx }
     }
-    pub fn get_inner(&self) -> GcRef{
-        self.ptr
+    pub fn into_inner(&self) -> GcRef {
+        let arr = unsafe {
+            self.pool
+                .borrow()
+                .get_value::<GcRefDynamicArray>(GcRef(1), 0)
+                .as_ref()
+                .unwrap()
+        };
+        arr.as_slice(&self.pool.borrow())[self.idx as usize]
     }
 }
-impl Drop for GcRootHandle{
+impl Drop for GcRootHandle {
     fn drop(&mut self) {
-        self.pool.borrow_mut().remove_root(&[self.ptr]);
+        self.pool.borrow_mut().remove_root(self.idx);
     }
 }

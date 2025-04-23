@@ -431,9 +431,9 @@ impl ExecuteContext<'_> {
 
 #[derive(Debug, Clone)]
 pub struct InstanceHandle(pub(crate) Rc<GcRootHandle>);
-impl InstanceHandle{
-    pub(crate) fn get_gc_ref(&self) -> GcRef{
-        self.0.get_inner()
+impl InstanceHandle {
+    pub(crate) fn get_gc_ref(&self) -> GcRef {
+        self.0.into_inner()
     }
 }
 

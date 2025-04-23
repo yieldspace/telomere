@@ -72,21 +72,13 @@ const HEADER_LEN: usize = word_size::<Header>();
 #[allow(dead_code)]
 impl MemoryPool {
     pub fn new() -> Self {
-        let rt_header = Header::new(ObjectType::RootTable, 2).initialized().get();
-        let raw_header = Header::new(ObjectType::Raw, 0).initialized().get();
-        let memory = vec![
-            rt_header[0],
-            rt_header[1],
-            0,
-            4,
-            raw_header[0],
-            raw_header[1],
-        ];
+        let rt_header = Header::new(ObjectType::RootTable, 4).initialized().get();
+        let memory = vec![0xFFFFFFFF, rt_header[0], rt_header[1], 0, 0, 0, 0];
         let allocated = memory.len() as u32;
         Self {
             memory,
             allocated,
-            root: GcRef(0),
+            root: GcRef(1),
         }
     }
     pub fn allocate(&mut self, header: Header) -> GcRef {
@@ -119,12 +111,16 @@ impl MemoryPool {
         };
     }
     pub(crate) fn read_header(&self, addr: GcRef) -> Header {
+        debug_assert!(!addr.is_null());
         Header(
             self.memory[addr.get_usize()],
             self.memory[addr.get_usize() + 1],
         )
     }
     pub(crate) fn mark(&mut self, addr: GcRef) -> bool {
+        if addr.is_null() {
+            return false;
+        }
         let header = self.read_header(addr);
         let is_marked = header.is_marked();
         self.write_header(addr, header.marked());
@@ -183,6 +179,16 @@ impl MemoryPool {
         self.get_instance_unchecked(dst);
         self.write_header(dst, Header::new(ObjectType::Instance, size).initialized());
     }
+    unsafe fn get_value<T>(&self, addr: GcRef, offset: usize) -> *const T {
+        self.memory
+            .as_ptr()
+            .add(addr.get_value_addr_usize() + offset) as *const T
+    }
+    unsafe fn get_value_mut<T>(&mut self, addr: GcRef, offset: usize) -> *mut T {
+        self.memory
+            .as_mut_ptr()
+            .add(addr.get_value_addr_usize() + offset) as *mut T
+    }
     pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
         let ptr = self.memory.as_ptr().add(addr.get_value_addr_usize()) as *const InstanceData;
         ptr
@@ -217,10 +223,13 @@ impl MemoryPool {
     pub(crate) unsafe fn raw_region_extend(&mut self, old_region: GcRef, new_cap: u32) -> GcRef {
         let new_region =
             self.allocate(Header::new(ObjectType::Raw, new_cap as usize).initialized());
-        self.relocate(old_region, new_region);
+        if !old_region.is_null() {
+            self.relocate(old_region, new_region);
+        }
         new_region
     }
     unsafe fn get_u32_dynamic_array(&self, obj: GcRef, offset: usize) -> &U32DynamicArray {
+        debug_assert!(!obj.is_null());
         (self
             .memory
             .as_ptr()
@@ -233,6 +242,8 @@ impl MemoryPool {
         obj: GcRef,
         offset: usize,
     ) -> &mut U32DynamicArray {
+        debug_assert!(!obj.is_null());
+
         (self
             .memory
             .as_mut_ptr()
@@ -241,6 +252,7 @@ impl MemoryPool {
             .unwrap_unchecked()
     }
     pub(crate) unsafe fn u32_array_push_vec(&mut self, obj: GcRef, offset: usize, values: &[u32]) {
+        debug_assert!(!obj.is_null());
         let array = self.get_u32_dynamic_array(obj, offset);
         let old_region = array.array.0;
         let old_len = array.len;
@@ -268,6 +280,7 @@ impl MemoryPool {
         offset: usize,
         values: &[GcRef],
     ) {
+        debug_assert!(!obj.is_null());
         tracing::trace!("gc_ref_array_push_vec: {values:?}");
         let array = self.get_ref_dynamic_array(obj, offset);
         let old_region = array.array.0;
@@ -291,11 +304,13 @@ impl MemoryPool {
         self.get_ref_dynamic_array_mut(obj, offset);
     }
     unsafe fn get_ref_dynamic_array(&self, item: GcRef, offset: usize) -> &GcRefDynamicArray {
+        debug_assert!(!item.is_null());
+
         let r = self
             .memory
             .as_ptr()
             .add(item.get_value_addr_usize() + offset) as *const GcRefDynamicArray;
-        tracing::trace!("{:?}",*r);
+        tracing::trace!("{:?}", *r);
 
         r.as_ref().unwrap_unchecked()
     }
@@ -304,6 +319,7 @@ impl MemoryPool {
         item: GcRef,
         offset: usize,
     ) -> &mut GcRefDynamicArray {
+        debug_assert!(!item.is_null());
         (self
             .memory
             .as_mut_ptr()
@@ -313,19 +329,20 @@ impl MemoryPool {
     }
     // NOTE: It is the responsibility of each view to trace the raw section data.
     pub(crate) fn trace(&mut self, item: GcRef) {
+        if item.is_null() {
+            return;
+        }
         if self.mark(item) {
             return; // return if already marked
         }
         let header = self.read_header(item);
-        match header.object_type() {
-            ObjectType::Instance => (unsafe { &*self.get_instance_unchecked(item) }).trace(self),
-            ObjectType::Raw => {
-                // do nothing
-            }
-            ObjectType::RootTable => {
-                // lifetime escape technique
-                unsafe { &*(self.get_ref_dynamic_array(item, 0) as *const GcRefDynamicArray) }
-                    .trace(self);
+        unsafe {
+            match header.object_type() {
+                ObjectType::Instance => (&*self.get_instance_unchecked(item)).trace(self),
+                ObjectType::Raw => {
+                    // do nothing
+                }
+                ObjectType::RootTable => (&*self.get_value::<RootTable>(item, 0)).trace(self),
             }
         }
     }
@@ -359,10 +376,10 @@ impl MemoryPool {
         self.move_object();
         self.allocated = free;
     }
-    fn compute_forward_addr(&mut self)->u32{
+    fn compute_forward_addr(&mut self) -> u32 {
         tracing::trace!("compute_forward_addr");
-        let mut free = 0;
-        let mut live = 0;
+        let mut free = 1;
+        let mut live = 1;
         loop {
             let header = self.read_header(GcRef(live));
             if header.is_marked() {
@@ -378,7 +395,7 @@ impl MemoryPool {
     }
     fn update_pointer(&mut self) {
         tracing::trace!("update_pointer");
-        let mut ptr = 0;
+        let mut ptr = 1;
         loop {
             let item = GcRef(ptr);
             tracing::trace!("update_pointer: {item:?}");
@@ -410,7 +427,7 @@ impl MemoryPool {
     }
     fn move_object(&mut self) {
         tracing::trace!("move_object");
-        let mut ptr = 0;
+        let mut ptr = 1;
         loop {
             let item = GcRef(ptr);
             let header = self.read_header(item);
@@ -432,18 +449,25 @@ impl MemoryPool {
             }
         }
     }
-    pub fn gc(&mut self){
+    pub fn gc(&mut self) {
         self.mark_phase();
         self.compact_phase();
     }
-    pub fn add_root(&mut self, item: &[GcRef]) {
-        unsafe { self.gc_ref_array_push_vec(self.root, 0, item) };
+    pub fn add_root(&mut self, item: GcRef) -> u32 {
+        unsafe {
+            self.gc_ref_array_push_vec(self.root, 0, &[item]);
+            self.get_ref_dynamic_array(self.root, 0).len - 1
+        }
     }
-    pub fn remove_root(&mut self, _item: &[GcRef]) {
-        // TODO:
+    pub fn remove_root(&mut self, idx: u32) {
+        unsafe {
+            *(&*self.get_value_mut::<GcRefDynamicArray>(self.root, 0))
+                .as_ptr_mut(self)
+                .add(idx as usize) = GcRef(0);
+        }
     }
     fn scan_heap(&self) -> impl Iterator<Item = GcRef> + use<'_> {
-        let mut index = 0;
+        let mut index = 1;
         std::iter::from_fn(move || {
             let r = if index == self.allocated {
                 return None;
@@ -459,14 +483,54 @@ impl MemoryPool {
 #[cfg(test)]
 mod tests {
     use super::MemoryPool;
+    #[test]
+    fn init() {
+        let mut pool = MemoryPool::new();
+        for addr in pool.scan_heap() {
+            let header = pool.read_header(addr);
+            tracing::trace!(
+                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
+                header.object_type(),
+                header.word_size(),
+                header.is_initialized(),
+                header.is_marked()
+            );
 
+            assert!(header.is_initialized());
+            assert!(!header.is_marked());
+        }
+        pool.mark_phase();
+        let mut marked = vec![];
+        let mut free = vec![];
+        for addr in pool.scan_heap() {
+            let header = pool.read_header(addr);
+            tracing::trace!(
+                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
+                header.object_type(),
+                header.word_size(),
+                header.is_initialized(),
+                header.is_marked()
+            );
+
+            assert!(header.is_initialized());
+            if header.is_marked() {
+                marked.push(addr);
+            } else {
+                free.push(addr);
+            }
+            assert_eq!(marked.len(), 1);
+            assert!(free.is_empty());
+        }
+    }
     #[test]
     fn mark() {
-        tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .init();
         let mut pool = MemoryPool::new();
         let free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
-        let marked_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
-        pool.add_root(&[marked_arr.0]);
+        let marked_arr = pool.new_u32_fixed_array(&[4]);
+        pool.add_root(marked_arr.0);
         for addr in pool.scan_heap() {
             let header = pool.read_header(addr);
             tracing::trace!(
@@ -501,9 +565,9 @@ mod tests {
             }
         }
         assert!(marked.contains(&marked_arr.0));
-        assert_eq!(marked.len(), 3);
+        assert_eq!(marked.len(), 3); // root table, root table buf, marked_arr
         assert!(free.contains(&free_arr.0));
-        assert_eq!(free.len(), 2);
+        assert_eq!(free.len(), 1); // free_arr
     }
     #[test]
     fn compaction_no_root() {
@@ -523,14 +587,14 @@ mod tests {
             );
             count_object += 1;
         }
-        assert_eq!(count_object,2);
+        assert_eq!(count_object, 1); // only root table
     }
     #[test]
     fn compaction_one_root() {
         let mut pool = MemoryPool::new();
         let tracked_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
-        pool.add_root(&[tracked_arr.0]);
+        pool.add_root(tracked_arr.0);
         pool.gc();
         let mut count_object = 0;
         for addr in pool.scan_heap() {
@@ -544,6 +608,6 @@ mod tests {
             );
             count_object += 1;
         }
-        assert_eq!(count_object,3);
+        assert_eq!(count_object, 3); // root table, root table buf, tracked_arr
     }
 }
