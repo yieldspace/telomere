@@ -1,4 +1,4 @@
-use crate::common::gc::{GcView, GcRef, MemoryPool};
+use crate::common::gc::{GcRef, GcView, MemoryPool};
 
 use super::GcRefFixedArray;
 

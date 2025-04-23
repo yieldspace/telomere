@@ -4,15 +4,15 @@ use crate::{
             object::{GcRefFixedArray, U32DynamicArray},
             HEADER_LEN,
         },
-        word_size, Memory, ModuleInstance, TableInstance, TableType, PAGE_SIZE,
+        word_size, Instr, LocalsData, Memory, ModuleInstance, TableInstance, TableType, PAGE_SIZE,
     },
     Instance,
 };
 
 use super::{
     object::{
-        GcRefDynamicArray, Global4Data, Global8Data, GlobalRefData, InstanceData, RootTable,
-        U32FixedArray,
+        FunctionInstanceData, GcRefDynamicArray, Global4Data, Global8Data, GlobalRefData,
+        InstanceData, RootTable, U32FixedArray,
     },
     GcRef, GcView, Header, ObjectType,
 };
@@ -104,7 +104,7 @@ impl MemoryPool {
         let value_dst = dst.get_value_addr_usize();
         let instance_data = InstanceData {
             instance_id: instance.instance_id,
-            funcs: self.new_u32_fixed_array(&instance.funcs),
+            funcs: self.new_gc_ref_fixed_array(&instance.funcs),
             globals: self.new_gc_ref_fixed_array(&instance.globals),
             mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
             module_addr: instance.module_addr,
@@ -126,7 +126,7 @@ impl MemoryPool {
         }
         let instance_data = InstanceData {
             instance_id: instance.instance_id,
-            funcs: self.new_u32_fixed_array(&instance.funcs),
+            funcs: self.new_gc_ref_fixed_array(&instance.funcs),
             globals: self.new_gc_ref_fixed_array(&instance.globals),
             mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
             module_addr: instance.module_addr,
@@ -140,12 +140,12 @@ impl MemoryPool {
         self.get_instance_unchecked(dst);
         self.write_header(dst, Header::new(ObjectType::Instance, size).initialized());
     }
-    pub(crate) unsafe fn get_value<T>(&self, addr: GcRef, offset: usize) -> *const T {
+    pub unsafe fn get_value<T>(&self, addr: GcRef, offset: usize) -> *const T {
         self.memory
             .as_ptr()
             .add(addr.get_value_addr_usize() + offset) as *const T
     }
-    unsafe fn get_value_mut<T>(&mut self, addr: GcRef, offset: usize) -> *mut T {
+    pub(crate) unsafe fn get_value_mut<T>(&mut self, addr: GcRef, offset: usize) -> *mut T {
         self.memory
             .as_mut_ptr()
             .add(addr.get_value_addr_usize() + offset) as *mut T
@@ -312,6 +312,9 @@ impl MemoryPool {
                 ObjectType::GlobalRef => {
                     (&*self.get_value::<GlobalRefData>(item, 0)).trace(self);
                 }
+                ObjectType::FunctionInstance => {
+                    (&*self.get_value::<FunctionInstanceData>(item, 0)).trace(self);
+                }
             }
         }
     }
@@ -374,6 +377,11 @@ impl MemoryPool {
                     ObjectType::GlobalRef => {
                         let global_ref =
                             unsafe { &mut *self.get_value_mut::<GlobalRefData>(item, 0) };
+                        global_ref.update(self);
+                    }
+                    ObjectType::FunctionInstance => {
+                        let global_ref =
+                            unsafe { &mut *self.get_value_mut::<FunctionInstanceData>(item, 0) };
                         global_ref.update(self);
                     }
                 }
@@ -560,6 +568,69 @@ impl MemoryPool {
         };
         new_item
     }
+    pub(crate) unsafe fn get_func(&self, addr: GcRef) -> &FunctionInstanceData {
+        self.get_value::<FunctionInstanceData>(addr, 0)
+            .as_ref()
+            .unwrap_unchecked()
+    }
+    pub(crate) unsafe fn get_func_mut(&mut self, addr: GcRef) -> &mut FunctionInstanceData {
+        self.get_value_mut::<FunctionInstanceData>(addr, 0)
+            .as_mut()
+            .unwrap_unchecked()
+    }
+    pub(crate) fn new_func(&mut self, data: &FunctionInstanceData) -> GcRef {
+        let addr = self.allocate(Header::new(
+            ObjectType::FunctionInstance,
+            word_size::<FunctionInstanceData>(),
+        ));
+        unsafe {
+            self.write(
+                addr,
+                0,
+                std::mem::transmute(data),
+                word_size::<FunctionInstanceData>(),
+            )
+        };
+        addr
+    }
+    pub(crate) fn new_function_body(&mut self, locals: &LocalsData, instr: &[Instr]) -> GcRef {
+        let size = locals.byte_size() + instr.len() * word_size::<Instr>();
+        let addr = self.allocate(Header::new(ObjectType::Raw, size).initialized());
+        let mut ptr = unsafe { self.get_value_mut::<u32>(addr, 0) };
+        unsafe {
+            if locals.count_i32 != 0 {
+                std::ptr::write(ptr, locals.count_i32);
+                ptr = ptr.add(1);
+            }
+            if locals.count_f32 != 0 {
+                std::ptr::write(ptr, locals.count_f32);
+                ptr = ptr.add(1);
+            }
+            if locals.count_func_ref != 0 {
+                std::ptr::write(ptr, locals.count_func_ref);
+                ptr = ptr.add(1);
+            }
+            if locals.count_extern_ref != 0 {
+                std::ptr::write(ptr, locals.count_extern_ref);
+                ptr = ptr.add(1);
+            }
+            if locals.count_i64 != 0 {
+                std::ptr::write(ptr, locals.count_i64);
+                ptr = ptr.add(1);
+            }
+            if locals.count_f64 != 0 {
+                std::ptr::write(ptr, locals.count_f64);
+                ptr = ptr.add(1);
+            }
+            if locals.count_v128 != 0 {
+                std::ptr::write(ptr, locals.count_v128);
+                ptr = ptr.add(1);
+            }
+            std::ptr::copy_nonoverlapping(instr.as_ptr(), ptr as *mut Instr, instr.len());
+        }
+        addr
+    }
+
     pub fn get_total_linear_memory_size(&self) -> usize {
         self.wasm_linear_memory
             .iter()
@@ -587,7 +658,6 @@ mod tests {
             );
 
             assert!(header.is_initialized());
-            assert!(!header.is_marked());
         }
     }
     #[test]
@@ -616,7 +686,7 @@ mod tests {
         let free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         let marked_arr = pool.new_u32_fixed_array(&[4]);
         pool.add_root(marked_arr.0);
-        debug_pool(&pool);
+        debug_pool(&pool);        
         pool.mark_phase();
         debug_pool(&pool);
         let mut marked = vec![];

@@ -18,29 +18,34 @@ use crate::parser::core::type_checker::MaybeUnreachable;
 use crate::runtime::vm;
 use crate::{
     common::{
-        BlockType, DataCountVerifier, Elem, FuncIdx, FuncType, Instr, Locals, MemType, Operand,
-        TableType, TypeIdx, TypeSection, ValType, ValueSize,
+        BlockType, DataCountVerifier, Elem, FuncIdx, FuncType, Instr, LocalReassignTable, Locals,
+        MemType, Operand, TableType, TypeIdx, TypeSection, ValType, ValueSize,
     },
     WasmParserError,
 };
 use tracing::trace;
-fn get_local_addr(ty: &ResultType, locals: &[Locals], idx: u32) -> Result<(ValType, u32)> {
-    let mut addr = 0;
+fn get_local_addr(
+    ty: &ResultType,
+    locals: &LocalReassignTable,
+    idx: u32,
+) -> Result<(ValType, u32)> {
+    let mut param_addr = 0;
     let mut i = 0;
+    tracing::trace!("get_local_addr: {locals:?}");
     for t in ty.iter() {
         if idx < i + 1 {
-            return Ok((*t, addr));
+            return Ok((*t, param_addr));
         }
-        addr += t.stack_size().u32();
+        param_addr += t.stack_size().u32();
         i += 1;
     }
-    for local in locals {
-        if idx < i + local.n {
-            addr += (idx - i) * local.t.stack_size().u32();
-            return Ok((local.t, addr));
+    let param_len = i;
+    for (n, t, base_addr) in &locals.0 {
+        if idx < param_len + n {
+            let addr = param_addr + base_addr + (idx - i) * t.stack_size().u32();
+            return Ok((*t, addr));
         }
-        addr += local.t.stack_size().u32() * local.n;
-        i += local.n;
+        i = param_len + n;
     }
     Err(WasmParserError::InvalidLocalIndex(idx))
 }
@@ -116,7 +121,7 @@ pub struct InstructionParser<'a, R: BinaryReader> {
     funcidx: FuncIdx,
     mems: &'a [MemType],
     functype: &'a FuncType,
-    locals: &'a [Locals],
+    locals: &'a LocalReassignTable,
     globals: &'a [GlobalType],
     tables: &'a [TableType],
     elems: &'a [Elem],
@@ -2932,7 +2937,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         funcidx: FuncIdx,
         mems: &'a [MemType],
         functype: &'a FuncType,
-        locals: &'a [Locals],
+        locals: &'a LocalReassignTable,
         globals: &'a [GlobalType],
         tables: &'a [TableType],
         elems: &'a [Elem],

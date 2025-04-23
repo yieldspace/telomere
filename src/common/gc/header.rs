@@ -10,6 +10,7 @@ pub enum ObjectType {
     ExternTableRef = 5,
     ExternModuleRef = 6,
     GlobalRef = 7,
+    FunctionInstance = 8,
 }
 const INIT_MASK: u32 = 1 << 30;
 const MARK_MASK: u32 = 1 << 29;

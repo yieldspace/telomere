@@ -1,16 +1,9 @@
 use super::{
     gc::{GcRef, MemoryPool},
-    ConstExpr, Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, MemType, TableType,
-    TypeIdx, VMResult,
+    Data, Elem, ExportSection, FuncType, FunctionBody, GlobalType, MemType, TableType, TypeIdx,
 };
-use std::{cell::RefCell, collections::HashMap, io::Write, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-pub struct FunctionInstance {
-    pub instance_addr: GcRef,
-    pub funcidx: u32,
-    pub body: FunctionBody,
-}
-pub struct FunctionStore(pub Vec<FunctionInstance>);
 #[derive(Debug)]
 pub struct ModuleInstance {
     pub exports: ExportSection,
@@ -24,7 +17,6 @@ pub struct ModuleInstance {
 pub struct Store {
     pub gc: Rc<RefCell<MemoryPool>>,
     pub instance_id: u32,
-    pub funcs: FunctionStore,
     pub data: HashMap<(u32, u32), Data>,
     pub elems: HashMap<(u32, u32), Elem>,
     pub state: StoreState,
@@ -42,7 +34,6 @@ impl Store {
 
     pub fn new_with_state(state: StoreState) -> Self {
         Store {
-            funcs: FunctionStore(vec![]),
             data: HashMap::new(),
             elems: HashMap::new(),
             gc: Rc::new(RefCell::new(MemoryPool::new())),

@@ -3,12 +3,14 @@ use std::rc::Rc;
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{GcRef, GcRootHandle, Header, InstanceData, MemoryPool, ObjectType},
+        gc::{
+            FunctionInstanceData, GcRef, GcRootHandle, Header, InstanceData, MemoryPool, ObjectType,
+        },
         word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
         ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
-        FunctionInstance, GlobalIdx, GlobalType, HostFunction, HostFunctionDefinition, ImportDesc,
-        ImportSection, InstanceHandle, Limits, LocalReference, MemIdx, ModuleInstance,
-        NativeModule, TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
+        GlobalIdx, GlobalType, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection,
+        InstanceHandle, Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule,
+        TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -18,7 +20,7 @@ pub(crate) fn init_global(
     gc: &mut MemoryPool,
     init: &ConstExpr,
     globals: &[GcRef],
-    funcs: &[u32],
+    funcs: &[GcRef],
     gts: &[GlobalType],
 ) -> VMResult<GcRef> {
     tracing::trace!("global init: {init:?}");
@@ -32,7 +34,7 @@ pub(crate) fn init_global(
         ConstExpr::FuncRef(v) => {
             let addr = funcs.get(*v as usize);
             if let Some(addr) = addr {
-                gc.new_global_data4(*addr)
+                gc.new_global_ref(*addr)
             } else {
                 return VMResult::InvalidOperand;
             }
@@ -146,7 +148,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     // -> addr
     let mut memory: Option<GcRef> = None;
     let mut globals = vec![];
-    let mut funcs: Vec<u32> = vec![];
+    let mut funcs: Vec<GcRef> = vec![];
     let mut tables = vec![];
     let Module {
         fts,
@@ -194,7 +196,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 let funcaddr = ext_inst.funcs.as_slice(&gc)[funcidx.0 as usize];
                 let funcidx = funcs.len();
                 funcs.push(funcaddr);
-                tracing::trace!("linking: {funcidx} => {funcaddr}")
+                tracing::trace!("linking: {funcidx} => {funcaddr:?}")
             }
             (ImportDesc::GlobalType(import_gt), ExportDesc::Global(global_idx)) => {
                 let export_gt = ext_module.globals.get(global_idx.0 as usize).unwrap();
@@ -275,21 +277,38 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         }
     }
 
-    let mut funcaddr = store.funcs.0.len();
-    let mut s_funcs = vec![];
     for func in codes.0.into_iter() {
         let funcidx = funcs.len() as u32;
-        funcs.push(funcaddr as u32);
-        s_funcs.push(FunctionInstance {
-            instance_addr: inst_addr,
-            funcidx,
-            body: func,
-        });
 
-        tracing::trace!("linking: {funcidx} => {funcaddr}");
-        funcaddr += 1;
+        let func_addr = match func {
+            FunctionBody::Wasm(code) => {
+                let body = gc.new_function_body(&code.locals, &code.expr);
+                gc.new_func(&FunctionInstanceData {
+                    instance_addr: inst_addr,
+                    function_flags: FunctionInstanceData::create_wasm_flags(&code.locals),
+                    body,
+                    funcidx,
+                })
+            }
+            FunctionBody::Host(fp) => {
+                let body =
+                    gc.allocate(Header::new(ObjectType::Raw, word_size::<usize>()).initialized());
+                let ptr = unsafe { gc.get_value_mut::<usize>(body, 0) };
+                unsafe { std::ptr::write(ptr, fp as usize) };
+                gc.new_func(&FunctionInstanceData {
+                    instance_addr: inst_addr,
+                    function_flags: FunctionInstanceData::create_host_flags(),
+                    body,
+                    funcidx,
+                })
+            }
+        };
+
+        funcs.push(func_addr);
+
+        tracing::trace!("linking: {funcidx} => {func_addr:?}");
     }
-    store.funcs.0.append(&mut s_funcs);
+
     for init in &global_init {
         globals.push(vm_try!(init_global(gc, init, &globals, &funcs, &m_globals)));
     }
@@ -318,9 +337,9 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                             return VMResult::TableIndexOutOfRange;
                         }
                         for (idx, funcidx) in idxs.iter().enumerate() {
-                            instance.1[offset + idx] = funcs[*funcidx as usize];
+                            instance.1[offset + idx] = funcs[*funcidx as usize].get();
                             tracing::trace!(
-                                "table[{}] = {}",
+                                "table[{}] = {:?}",
                                 offset + idx,
                                 funcs[*funcidx as usize]
                             );
@@ -344,8 +363,8 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                                 gc, &globals, &funcs, idx_expr, rt
                             ));
                             let instance = unsafe { gc.get_table(table_addr) };
-                            instance.1[offset + idx] = addr;
-                            tracing::trace!("table[{}] = {}", offset + idx, addr);
+                            instance.1[offset + idx] = addr.get();
+                            tracing::trace!("table[{}] = {:?}", offset + idx, addr);
                         }
                     }
                 },
@@ -388,56 +407,49 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         }
         vm_try!(res);
 
-        let funcinst = &store.funcs.0[funcaddr as usize];
+        let funcinst = unsafe { gc.get_func(funcaddr) };
         let code = &funcinst.body;
-        match code {
-            FunctionBody::Wasm(code) => {
-                let mut local_size = 0usize;
-                for local in &code.locals {
-                    local_size += local.n as usize * local.t.stack_size().usize();
-                }
-                let local_reference = vm_try!(stack.function_call(
-                    0,
-                    local_size,
-                    funcaddr,
-                    LocalReference {
-                        local_size: 0,
-                        local_top: 0
-                    },
-                    &vm::VM_END
-                ));
-                let ptr = code.expr.as_ptr();
+        if funcinst.is_host_func() {
+            let fp = funcinst.host_code_pointer(gc);
+            let local_reference = vm_try!(stack.function_call(
+                0,
+                0,
+                funcaddr,
+                LocalReference {
+                    local_size: 0,
+                    local_top: 0
+                },
+                &vm::VM_END
+            ));
 
-                let mut ctx = ExecuteContext {
-                    stack: &mut stack,
-                    store,
-                    local_reference,
-                    gc,
-                };
-                vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
-            }
-            FunctionBody::Host(fp) => {
-                let fp = *fp;
-                let local_reference = vm_try!(stack.function_call(
-                    0,
-                    0,
-                    funcaddr,
-                    LocalReference {
-                        local_size: 0,
-                        local_top: 0
-                    },
-                    &vm::VM_END
-                ));
-
-                let mut ctx = ExecuteContext {
-                    stack: &mut stack,
-                    store,
-                    local_reference,
-                    gc: gc,
-                };
-                let return_addr = vm_try!(fp(&mut ctx));
-                vm_try!(unsafe { vm::call_next(return_addr, 0, &mut ctx) });
-            }
+            let mut ctx = ExecuteContext {
+                stack: &mut stack,
+                store,
+                local_reference,
+                gc: gc,
+            };
+            let return_addr = vm_try!(fp(&mut ctx));
+            vm_try!(unsafe { vm::call_next(return_addr, 0, &mut ctx) });
+        } else {
+            let (locals, offset) = funcinst.locals_and_code_offset(gc);
+            let local_reference = vm_try!(stack.function_call(
+                0,
+                locals.byte_size(),
+                funcaddr,
+                LocalReference {
+                    local_size: 0,
+                    local_top: 0
+                },
+                &vm::VM_END
+            ));
+            let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, offset) };
+            let mut ctx = ExecuteContext {
+                stack: &mut stack,
+                store,
+                local_reference,
+                gc,
+            };
+            vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
         }
     } else {
         unsafe {
@@ -565,11 +577,14 @@ pub fn link_host_function_with_function_idx(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let gc_ref = addr.get_gc_ref_with_pool(&mut store.gc.borrow_mut());
-    let instance = unsafe { &*store.gc.borrow().get_instance_unchecked(gc_ref) };
-    let funcaddr = instance.funcs.as_slice(&store.gc.borrow())[funcidx as usize];
-    let func = &mut store.funcs.0[funcaddr as usize];
-    func.body = FunctionBody::Host(f);
+    let mut gc = store.gc.borrow_mut();
+    let gc_ref = addr.get_gc_ref_with_pool(&mut gc);
+    let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
+    let funcaddr = instance.funcs.as_slice(&gc)[funcidx as usize];
+    let func = unsafe { gc.get_func_mut(funcaddr) };
+    func.function_flags = FunctionInstanceData::create_host_flags();
+    let funcbody = func.body;
+    unsafe { *gc.get_value_mut::<HostFunction>(funcbody, 0) = f };
 }
 pub fn link_host_function_with_export_name(
     addr: &InstanceHandle,
@@ -577,7 +592,7 @@ pub fn link_host_function_with_export_name(
     f: HostFunction,
     store: &mut Store,
 ) {
-    let gc = store.gc.borrow();
+    let mut gc = store.gc.borrow_mut();
     let instance = unsafe { &*gc.get_instance_unchecked(addr.get_gc_ref_with_pool(&gc)) };
     let module = unsafe { gc.get_module(instance.module_addr) };
     let export = &module.exports.find(name).unwrap();
@@ -586,7 +601,10 @@ pub fn link_host_function_with_export_name(
     } else {
         unreachable!()
     };
-    let funcaddr = instance.funcs.as_slice(&store.gc.borrow())[func_idx.0 as usize];
-    let func = &mut store.funcs.0[funcaddr as usize];
-    func.body = FunctionBody::Host(f);
+    let funcaddr = instance.funcs.as_slice(&gc)[func_idx.0 as usize];
+    let func = unsafe { gc.get_func_mut(funcaddr) };
+    func.function_flags = FunctionInstanceData::create_host_flags();
+    let funcbody = func.body;
+
+    unsafe { *gc.get_value_mut::<HostFunction>(funcbody, 0) = f };
 }

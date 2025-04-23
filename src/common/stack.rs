@@ -1,7 +1,7 @@
 use crate::VMResult;
 use std::fmt::Debug;
 
-use super::Instr;
+use super::{gc::GcRef, Instr};
 pub struct Stack {
     memory: Box<[u8]>,
     top: usize,
@@ -16,7 +16,7 @@ struct CallStackInfo {
     return_addr: *const Instr,
     prev_local_reference_top: usize,
     prev_local_reference_size: u32,
-    code_addr: u32,
+    code_addr: GcRef,
 }
 #[derive(Debug, Clone, Copy)]
 #[repr(C, packed)]
@@ -164,7 +164,7 @@ impl Stack {
         &mut self,
         param_size: usize,
         local_size: usize,
-        code_addr: u32,
+        code_addr: GcRef,
         prev_local_reference: LocalReference,
         return_addr: *const Instr,
     ) -> VMResult<LocalReference> {
@@ -193,7 +193,7 @@ impl Stack {
             local_size: (param_size + local_size + std::mem::size_of_val(&d)) as u32,
         })
     }
-    pub fn code_addr(&self, reference: &LocalReference) -> u32 {
+    pub fn code_addr(&self, reference: &LocalReference) -> GcRef {
         self.call_stack_info(reference).code_addr
     }
     pub fn function_return(

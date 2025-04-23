@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use tracing::trace;
 
 use crate::common::custom_section::NameSubSection;
-use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, Operand};
+use crate::common::{
+    ConstExpr, ElemInit, Func, FunctionBody, Instr, LocalReassignTable, Locals, LocalsData, Operand,
+};
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::validate::validate_locals;
@@ -708,6 +710,9 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         size: u32,
     ) -> Result<Func> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
+        let slice = &locals[..];
+        let locals_data = LocalsData::from(slice);
+        let local_reassign = locals_data.create_reassignment_table(&locals);
         validate_locals(&locals)?;
         let mut instrs = Vec::new();
         let mut checker = TypeChecker::new(typeidx);
@@ -721,7 +726,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             funcidx,
             mems,
             functype,
-            &locals,
+            &local_reassign,
             globals,
             table_section,
             elems,
@@ -758,7 +763,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         });
         jump_resolver.evaluate(&mut instrs);
         Ok(Func {
-            locals,
+            locals: locals_data,
             expr: instrs,
         })
     }

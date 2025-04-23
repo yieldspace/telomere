@@ -14,3 +14,5 @@ mod global_data;
 pub(crate) use global_data::Global4Data;
 pub(crate) use global_data::Global8Data;
 pub(crate) use global_data::GlobalRefData;
+mod function_instance_data;
+pub(crate) use function_instance_data::FunctionInstanceData;

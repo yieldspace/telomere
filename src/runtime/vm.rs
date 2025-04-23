@@ -2,9 +2,10 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        execute_elem_init_const_expr, gc::InstanceData, ElemInit, ExecuteContext, ExportDesc,
-        FunctionBody, InstanceHandle, Instr, LocalReference, Stack, VMResult, ValType, WasmValue,
-        TABLE_UNINITIALIZED,
+        execute_elem_init_const_expr,
+        gc::{GcRef, InstanceData},
+        ElemInit, ExecuteContext, ExportDesc, FunctionBody, InstanceHandle, Instr, LocalReference,
+        Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     Store,
 };
@@ -639,10 +640,10 @@ pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
 #[inline(never)]
 pub(crate) unsafe fn internal_op_call(
     return_addr: *const Instr,
-    funcaddr: u32,
+    funcaddr: GcRef,
     ctx: &mut ExecuteContext,
 ) -> VMResult<*const Instr> {
-    let funcinst = &ctx.store.funcs.0[funcaddr as usize];
+    let funcinst = ctx.func_by_addr(funcaddr);
     let instance_addr = funcinst.instance_addr;
     let instance = &*ctx.gc.get_instance_unchecked(instance_addr);
     let module_addr = instance.module_addr;
@@ -652,36 +653,35 @@ pub(crate) unsafe fn internal_op_call(
         .get(funcinst.funcidx as usize)
         .unwrap_unchecked();
     let ft = &module.function_types[typeidx.0 as usize];
-    let code = &funcinst.body;
-    trace!("op_call_internal: {instance_addr:?}({module_addr:?})  {funcaddr}");
+    let code = funcinst.body;
+    trace!("op_call_internal: {instance_addr:?}({module_addr:?})  {funcaddr:?}");
     let mut param_size = 0usize;
     for param in ft.0.iter() {
         param_size += param.stack_size().usize();
     }
+    if funcinst.is_host_func() {
+        let fp = funcinst.host_code_pointer(&ctx.gc);
+        ctx.local_reference = vm_try!(ctx.stack.function_call(
+            param_size,
+            0,
+            funcaddr,
+            ctx.local_reference,
+            return_addr
+        ));
+        let return_addr = vm_try!(fp(ctx));
+        VMResult::Success(return_addr)
+    } else {
+        let (locals, code_offset) = funcinst.locals_and_code_offset(&ctx.gc);
+        let addr = funcinst.body;
+        ctx.local_reference = vm_try!(ctx.stack.function_call(
+            param_size,
+            locals.byte_size(),
+            funcaddr,
+            ctx.local_reference,
+            return_addr
+        ));
 
-    match code {
-        FunctionBody::Wasm(code) => {
-            ctx.local_reference = vm_try!(ctx.stack.function_call(
-                param_size,
-                code.local_size(),
-                funcaddr,
-                ctx.local_reference,
-                return_addr
-            ));
-
-            VMResult::Success(code.expr.as_ptr())
-        }
-        FunctionBody::Host(fp) => {
-            ctx.local_reference = vm_try!(ctx.stack.function_call(
-                param_size,
-                0,
-                funcaddr,
-                ctx.local_reference,
-                return_addr
-            ));
-            let return_addr = vm_try!(fp(ctx));
-            VMResult::Success(return_addr)
-        }
+        VMResult::Success(ctx.gc.get_value::<Instr>(addr, code_offset))
     }
 }
 
@@ -711,8 +711,8 @@ unsafe fn internal_op_call_indirect(
     if func_addr == TABLE_UNINITIALIZED {
         return VMResult::TableUninitialized;
     }
-
-    let funcinst = &ctx.store.funcs.0[func_addr as usize];
+    let func_addr = GcRef(func_addr);
+    let funcinst = ctx.gc.get_func(func_addr);
     let instance = &*ctx.gc.get_instance_unchecked(funcinst.instance_addr);
     let module = ctx.gc.get_module(instance.module_addr);
     let actual_typeidx = module.functions.get(funcinst.funcidx as usize).unwrap();
@@ -876,7 +876,7 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
                     VMResult::TableIndexOutOfRange
                 }));
                 for (i, funcidx) in slice.iter().enumerate() {
-                    dst[i] = instance.funcs.as_slice(&store.gc.borrow())[*funcidx as usize];
+                    dst[i] = instance.funcs.as_slice(&store.gc.borrow())[*funcidx as usize].get();
                 }
             }
             ElemInit::ConstExpr(exprs) => {
@@ -896,7 +896,7 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
                         dst_table.1.get_mut(dst_pos..dst_pos + len),
                         || { VMResult::TableIndexOutOfRange }
                     ));
-                    dst[i] = res;
+                    dst[i] = res.get();
                 }
             }
         }
@@ -1881,7 +1881,7 @@ pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let funcidx = (*tail_code).operand.u32;
     vm_try!(ctx
         .stack
-        .push_u32(ctx.instance().funcs.as_slice(&ctx.gc)[funcidx as usize]));
+        .push_u32(ctx.instance().funcs.as_slice(&ctx.gc)[funcidx as usize].get()));
     call_next(tail_code, 1, ctx)
 }
 
@@ -1943,7 +1943,7 @@ pub fn run_module_function(
     trace!("{:?}", module_inst.exports);
     if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
         let code_addr = funcs.as_slice(gc)[idx.0 as usize];
-        let funcinst = &store.funcs.0[code_addr as usize];
+        let funcinst = unsafe { gc.get_func(code_addr) };
         let mut stack = Stack::new(128 * 1024);
         let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
         let ft = module_inst
@@ -1956,14 +1956,9 @@ pub fn run_module_function(
         for t in ft.0.iter() {
             param_size += t.stack_size().usize();
         }
-        let mut local_size = 0usize;
-        let code = match &funcinst.body {
-            FunctionBody::Wasm(code) => code,
-            FunctionBody::Host(_) => unreachable!(),
-        };
-        for local in &code.locals {
-            local_size += local.n as usize * local.t.stack_size().usize();
-        }
+
+        let (locals_data, code_offset) = funcinst.locals_and_code_offset(gc);
+        let local_size = locals_data.byte_size();
         for arg in args.iter() {
             vm_try!(match arg {
                 WasmValue::I32(i32) => stack.push_i32(*i32),
@@ -1975,7 +1970,7 @@ pub fn run_module_function(
             });
         }
 
-        tracing::trace!("run_module_function: {name} {local_size} {:?}", code.locals,);
+        tracing::trace!("run_module_function: {name} {local_size}");
         let local_reference = vm_try!(stack.function_call(
             param_size,
             local_size,
@@ -1987,7 +1982,7 @@ pub fn run_module_function(
             &VM_END as *const Instr
         ));
 
-        let ptr = code.expr.as_ptr();
+        let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
 
         let mut ctx = ExecuteContext {
             stack: &mut stack,

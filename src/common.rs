@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use custom_section::NameSubSection;
 
+use gc::FunctionInstanceData;
 use gc::GcRootHandle;
 use gc::InstanceData;
 use gc::MemoryPool;
@@ -17,10 +18,9 @@ pub use stack::{LocalReference, Stack};
 mod registry;
 pub use registry::Registry;
 pub(crate) mod store;
-pub(crate) use store::FunctionInstance;
 pub(crate) use store::ModuleInstance;
 pub(crate) mod gc;
-use gc::GcRef;
+pub use gc::GcRef;
 
 pub use store::{Store, StoreState};
 pub mod custom_section;
@@ -257,7 +257,7 @@ pub struct Instance {
     // idx -> addr
     pub globals: Vec<GcRef>,
     // idx -> addr
-    pub funcs: Vec<u32>,
+    pub funcs: Vec<GcRef>,
     // idx -> addr
     pub tables: Vec<GcRef>,
 }
@@ -278,16 +278,12 @@ pub struct GlobalType(pub ValType, pub Mut);
 pub struct Global(pub GlobalType, pub Vec<ConstExpr>);
 #[derive(Clone)]
 pub struct Func {
-    pub locals: Vec<Locals>,
+    pub locals: LocalsData,
     pub expr: Vec<Instr>,
 }
 impl Func {
     pub fn local_size(&self) -> usize {
-        let mut local_size = 0usize;
-        for local in &self.locals {
-            local_size += local.n as usize * local.t.stack_size().usize();
-        }
-        local_size
+        self.locals.byte_size()
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -407,14 +403,17 @@ pub struct ExecuteContext<'a> {
     pub gc: &'a mut MemoryPool,
 }
 impl ExecuteContext<'_> {
-    pub fn func(&self) -> &FunctionInstance {
-        &self.store.funcs.0[self.stack.code_addr(&self.local_reference()) as usize]
+    pub fn func(&self) -> &FunctionInstanceData {
+        let code_addr = self.stack.code_addr(&self.local_reference());
+        unsafe { &self.gc.get_func(code_addr) }
+    }
+    pub fn func_by_addr(&self, addr: GcRef) -> &FunctionInstanceData {
+        unsafe { &self.gc.get_func(addr) }
     }
     pub(crate) fn code(&self) -> *const Instr {
-        match &self.func().body {
-            FunctionBody::Wasm(code) => code.expr.as_ptr(),
-            FunctionBody::Host(_) => unreachable!(),
-        }
+        let func = self.func();
+        let (local_data,offset) = func.locals_and_code_offset(&self.gc);
+        unsafe { self.gc.get_value::<Instr>(func.body, offset) }
     }
     pub unsafe fn module(&self) -> &ModuleInstance {
         &self.gc.get_module(self.instance().module_addr)
@@ -452,10 +451,10 @@ impl InstanceHandle {
 pub fn execute_elem_init_const_expr(
     gc: &mut MemoryPool,
     globals: &[GcRef],
-    funcs: &[u32],
+    funcs: &[GcRef],
     exprs: &[ConstExpr],
     expected: RefType,
-) -> VMResult<u32> {
+) -> VMResult<GcRef> {
     if exprs.len() != 1 {
         return VMResult::Unlinkable;
     }
@@ -478,13 +477,13 @@ pub fn execute_elem_init_const_expr(
             if expected != RefType::FuncRef {
                 return VMResult::Unlinkable;
             }
-            VMResult::Success(0)
+            VMResult::Success(GcRef(0))
         }
         ConstExpr::RefNull(RefType::ExternRef) => {
             if expected != RefType::ExternRef {
                 return VMResult::Unlinkable;
             }
-            VMResult::Success(0)
+            VMResult::Success(GcRef(0))
         }
         ConstExpr::GlobalGet(idx) => {
             let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
@@ -492,11 +491,146 @@ pub fn execute_elem_init_const_expr(
             }));
             let mut buf = [0u8; 4];
             buf.copy_from_slice(unsafe { &gc.get_global(addr) });
-            VMResult::Success(u32::from_le_bytes(buf))
+            VMResult::Success(GcRef(u32::from_le_bytes(buf)))
         }
         unknown => todo!("{unknown:?}"),
     }
 }
 pub const fn word_size<T>() -> usize {
     std::mem::size_of::<T>() / std::mem::size_of::<u32>()
+}
+#[derive(Debug)]
+pub(crate) struct LocalReassignTable(pub(crate) Vec<(u32, ValType, u32)>);
+#[derive(Default, Debug, Clone)]
+pub struct LocalsData {
+    count_i32: u32,
+    count_f32: u32,
+    count_func_ref: u32,
+    count_extern_ref: u32,
+    count_i64: u32,
+    count_f64: u32,
+    count_v128: u32,
+}
+impl LocalsData {
+    pub fn byte_size(&self) -> usize {
+        self.word_size() * 4
+    }
+    pub(crate) fn word_size(&self) -> usize {
+        let Self {
+            count_extern_ref,
+            count_f32,
+            count_f64,
+            count_func_ref,
+            count_i32,
+            count_i64,
+            count_v128,
+        } = self;
+        (*count_i32 as usize
+            + *count_f32 as usize
+            + *count_extern_ref as usize
+            + *count_func_ref as usize)
+            + (*count_i64 as usize + *count_f64 as usize) * 2
+            + *count_v128 as usize * 4
+    }
+    pub(crate) fn create_reassignment_table(&self, locals: &[Locals]) -> LocalReassignTable {
+        let mut count_i32 = 0;
+        let mut count_f32 = 0;
+        let mut count_func_ref = 0;
+        let mut count_extern_ref = 0;
+        let mut count_i64 = 0;
+        let mut count_f64 = 0;
+        let mut count_v128 = 0;
+        let mut index = 0;
+        let mut res = vec![];
+        for Locals { n, t } in locals {
+            index += n;
+            match t {
+                ValType::I32 => {
+                    res.push((index, ValType::I32, count_i32 * 4));
+                    count_i32 += n;
+                }
+                ValType::F32 => {
+                    res.push((index, ValType::F32, (self.count_i32 + count_f32) * 4));
+                    count_f32 += n;
+                }
+                ValType::FuncRef => {
+                    res.push((
+                        index,
+                        ValType::FuncRef,
+                        (self.count_i32 + self.count_f32 + count_func_ref) * 4,
+                    ));
+                    count_func_ref += n;
+                }
+                ValType::ExternRef => {
+                    res.push((
+                        index,
+                        ValType::ExternRef,
+                        (self.count_i32 + self.count_f32 + self.count_func_ref + count_extern_ref)
+                            * 4,
+                    ));
+                    count_extern_ref += n;
+                }
+                ValType::I64 => {
+                    res.push((
+                        index,
+                        ValType::I64,
+                        (self.count_i32
+                            + self.count_f32
+                            + self.count_func_ref
+                            + self.count_extern_ref)
+                            * 4
+                            + count_i64 * 8,
+                    ));
+                    count_i64 += n;
+                }
+                ValType::F64 => {
+                    res.push((
+                        index,
+                        ValType::F64,
+                        (self.count_i32
+                            + self.count_f32
+                            + self.count_func_ref
+                            + self.count_extern_ref)
+                            * 4
+                            + (self.count_i64 + count_f64) * 8,
+                    ));
+                    count_f64 += n;
+                }
+                ValType::V128 => {
+                    res.push((
+                        index,
+                        ValType::V128,
+                        (self.count_i32
+                            + self.count_f32
+                            + self.count_func_ref
+                            + self.count_extern_ref)
+                            * 4
+                            + (self.count_i64 + self.count_f64) * 8
+                            + count_v128 * 16,
+                    ));
+                    count_v128 += n;
+                }
+            }
+        }
+        LocalReassignTable(res)
+    }
+}
+impl From<&[Locals]> for LocalsData {
+    fn from(value: &[Locals]) -> Self {
+        let mut me = Self::default();
+        for Locals { n, t } in value {
+            let n = *n;
+            use ValType::*;
+            match t {
+                ExternRef => me.count_extern_ref += n,
+                I32 => me.count_i32 += n,
+                I64 => me.count_i64 += n,
+                F32 => me.count_f32 += n,
+                F64 => me.count_f64 += n,
+                V128 => me.count_v128 += n,
+                FuncRef => me.count_func_ref += n,
+            }
+        }
+        me
+    }
 }
