@@ -148,15 +148,11 @@ impl StoreState {
 
 #[cfg(test)]
 mod test {
-    use crate::Instance;
-
     #[test]
     fn test_state() {
         use super::StoreState;
         let data = vec![1, 2, 3];
         let state = StoreState::new(Some(&data));
-        unsafe {
             assert_eq!(state.get::<Vec<i32>>().unwrap(), &data);
-        }
     }
 }

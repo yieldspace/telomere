@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 mod common;
 use common::run_wast;
-use tracing::Level;
+
 fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 

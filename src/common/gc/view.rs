@@ -1,4 +1,4 @@
-use super::{word_size, MemoryPool, HEADER_LEN};
+use super::{MemoryPool, HEADER_LEN};
 
 // GC のトレース用トレイト
 pub trait GCView {
@@ -88,6 +88,8 @@ pub struct U32DynamicArray {
     pub(crate) len: u32,
     pub(crate) array: U32FixedArray,
 }
+// TODO:
+#[allow(dead_code)]
 impl U32DynamicArray {
     pub fn len(&self, _pool: &MemoryPool) -> u16 {
         self.len as u16
@@ -186,13 +188,11 @@ impl GCView for GcRefDynamicArray {
     }
     fn update(&mut self,pool: &mut MemoryPool) {
         
-        tracing::trace!("{:?}",self);
+        tracing::trace!("dynamic array update: {:?}",self);
         for v in self.as_slice_mut(pool) {
             tracing::trace!("dynamic array update: {:?}",v);
-
             v.update(pool);
         }
         self.array.0.update(pool);
     }
 }
-pub struct RootTable(pub(crate) GcRefDynamicArray);

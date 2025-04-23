@@ -66,6 +66,7 @@ pub const fn word_size<T>() -> usize {
     std::mem::size_of::<T>() / std::mem::size_of::<u32>()
 }
 const HEADER_LEN: usize = word_size::<Header>();
+#[allow(dead_code)]
 impl MemoryPool {
     pub fn new() -> Self {
         let rt_header = Header::new(ObjectType::RootTable, 2).initialized().get();
@@ -180,19 +181,11 @@ impl MemoryPool {
         self.write_header(dst, Header::new(ObjectType::Instance, size).initialized());
     }
     pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
-        tracing::trace!("get_instance_unchecked: {addr:?}");
-
         let ptr = self.memory.as_ptr().add(addr.get_value_addr_usize()) as *const InstanceData;
-        tracing::trace!("get_instance_unchecked: {:?} {:?}", ptr, (*ptr).module_addr);
-
         ptr
     }
     pub(crate) unsafe fn get_instance_mut_unchecked(&mut self, addr: GcRef) -> *mut InstanceData {
-        tracing::trace!("get_instance_unchecked: {addr:?}");
-
         let ptr = self.memory.as_mut_ptr().add(addr.get_value_addr_usize()) as *mut InstanceData;
-        tracing::trace!("get_instance_unchecked: {:?} {:?}", ptr, (*ptr).module_addr);
-
         ptr
     }
     pub(crate) unsafe fn write(
