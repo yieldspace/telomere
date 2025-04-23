@@ -2,7 +2,13 @@ use std::rc::Rc;
 
 use crate::{
     common::{
-        execute_elem_init_const_expr, gc::{GcRef, GcRootHandle, Header, InstanceData, ObjectType}, word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstance, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX
+        execute_elem_init_const_expr,
+        gc::{GcRef, GcRootHandle, Header, InstanceData, ObjectType},
+        word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
+        ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
+        FunctionInstance, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
+        ImportSection, InstanceHandle, Limits, LocalReference, MemIdx, ModuleInstance,
+        NativeModule, TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,

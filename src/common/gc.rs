@@ -10,3 +10,5 @@ pub use header::ObjectType;
 pub use header::HEADER_LEN;
 mod memory_pool;
 pub use memory_pool::MemoryPool;
+mod object;
+pub(crate) use object::InstanceData;

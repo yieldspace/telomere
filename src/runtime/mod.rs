@@ -2,12 +2,10 @@
 #[macro_use]
 mod trace;
 
-#[allow(clippy::missing_safety_doc)]
-pub(crate) mod vm;
-//FIXME:
-
 pub mod component_model;
 pub(crate) mod instantiate;
+#[allow(clippy::missing_safety_doc)]
+pub(crate) mod vm;
 pub use instantiate::aliasing;
 pub use instantiate::instantiate;
 pub use instantiate::instantiate_native_module;

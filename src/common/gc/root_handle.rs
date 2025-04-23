@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use super::{GcRef, GcRefDynamicArray, MemoryPool};
+use super::{object::GcRefDynamicArray, GcRef, MemoryPool};
 
 #[derive(Debug)]
 pub struct GcRootHandle {
@@ -10,7 +10,6 @@ pub struct GcRootHandle {
 impl GcRootHandle {
     pub fn new(ptr: GcRef, pool: Rc<RefCell<MemoryPool>>) -> Self {
         Self::new_with_ref(ptr, &mut pool.borrow_mut(), pool.clone())
-        
     }
     pub fn new_with_ref(
         ptr: GcRef,

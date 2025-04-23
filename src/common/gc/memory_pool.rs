@@ -1,6 +1,18 @@
-use crate::{common::{gc::HEADER_LEN, word_size, Memory, TableInstance, TableType, PAGE_SIZE}, Instance};
+use crate::{
+    common::{
+        gc::{
+            object::{GcRefFixedArray, U32DynamicArray},
+            HEADER_LEN,
+        },
+        word_size, Memory, TableInstance, TableType, PAGE_SIZE,
+    },
+    Instance,
+};
 
-use super::{GCView, GcRef, GcRefDynamicArray, GcRefFixedArray, Header, InstanceData, ObjectType, RootTable, U32DynamicArray, U32FixedArray};
+use super::{
+    object::{GcRefDynamicArray, InstanceData, RootTable, U32FixedArray},
+    GCView, GcRef, Header, ObjectType,
+};
 
 #[derive(Debug)]
 pub struct MemoryPool {
