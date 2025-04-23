@@ -76,7 +76,7 @@ impl Header {
         if size > u16::MAX.into() {
             panic!()
         }
-        Self(ty << TYPE_LOWER_BIT | (size as u32), 0)
+        Self((ty << TYPE_LOWER_BIT) | (size as u32), 0)
     }
     pub fn get(&self) -> [u32; 2] {
         [self.0, self.1]

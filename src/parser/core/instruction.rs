@@ -33,7 +33,6 @@ fn get_local_addr(
     let mut param_addr = 0;
     let mut i = 0;
     tracing::trace!("get_local_addr: {locals:?}");
-    let idx = idx;
     for t in ty.iter() {
         if idx < i + 1 {
             return Ok((*t, param_addr));
@@ -45,11 +44,11 @@ fn get_local_addr(
     for (n, t, base_addr) in &locals.0 {
         if idx < param_len + n {
             let addr = param_addr + *base_addr + (idx - i) * t.stack_size().u32();
-            return Ok((*t, addr as u32));
+            return Ok((*t, addr));
         }
         i = param_len + n;
     }
-    Err(WasmParserError::InvalidLocalIndex(idx as u32))
+    Err(WasmParserError::InvalidLocalIndex(idx))
 }
 fn validate_br_table_types(
     idx: u32,

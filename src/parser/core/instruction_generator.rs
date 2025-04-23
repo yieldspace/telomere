@@ -13,10 +13,12 @@ impl InstructionGenerator {
             unreachable: vec![false],
         }
     }
+    #[allow(dead_code)]
     pub(crate) fn push_instr1(&mut self, opcode: Op) -> &mut Self {
         self.push_with_operand(opcode, &[]);
         self
     }
+    #[allow(dead_code)]
     pub(crate) fn push_with_operand(&mut self, opcode: Op, operands: &[Operand]) -> &mut Self {
         self.push(Instr { op: opcode });
         for operand in operands {
