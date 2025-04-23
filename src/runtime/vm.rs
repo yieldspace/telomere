@@ -2,7 +2,9 @@ use std::ops::BitXor;
 
 use crate::{
     common::{
-        execute_elem_init_const_expr, gc::InstanceView, ElemInit, ExecuteContext, ExportDesc, FunctionBody, Instance, InstanceAddr, Instr, LocalReference, Stack, VMResult, ValType, WasmValue
+        execute_elem_init_const_expr, gc::InstanceView, ElemInit, ExecuteContext, ExportDesc,
+        FunctionBody, Instance, InstanceAddr, Instr, LocalReference, Stack, VMResult, ValType,
+        WasmValue,
     },
     Store,
 };
@@ -849,10 +851,6 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let len = ctx.stack.pop_u32() as usize;
     let src = ctx.stack.pop_u32() as usize;
     let dst = ctx.stack.pop_u32() as usize;
-    if len == 0 {
-        return call_next(tail_code, 2, ctx)
-
-    } 
     let src_elem_idx = (*tail_code).operand.u32;
     let dst_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
     let instance_addr = ctx.instance_addr();
@@ -868,42 +866,41 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     } = store;
     let instance = gc.get_instance_unchecked(instance_addr);
     let dst_table_addr = instance.tables[dst_table_idx] as usize;
-    let elem = if let Some(elem) = elems.get(&(instance.instance_id, src_elem_idx)) {
-        elem
-    } else {
+    if let Some(elem) = elems.get(&(instance.instance_id, src_elem_idx)) {
+        let dst_table = &mut tables[dst_table_addr];
+        let dst = vm_try!(VMResult::from_option(
+            dst_table.1.get_mut(dst..dst + len),
+            || { VMResult::TableIndexOutOfRange }
+        ));
+        match &elem.init {
+            ElemInit::FuncIdx(idxs) => {
+                let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
+                    VMResult::TableIndexOutOfRange
+                }));
+                for (i, funcidx) in slice.iter().enumerate() {
+                    dst[i] = instance.funcs[*funcidx as usize];
+                }
+            }
+            ElemInit::ConstExpr(exprs) => {
+                let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
+                    VMResult::TableIndexOutOfRange
+                }));
+                for (i, expr) in slice.iter().enumerate() {
+                    dst[i] = vm_try!(execute_elem_init_const_expr(
+                        global_store,
+                        &instance.globals,
+                        &instance.funcs,
+                        expr,
+                        dst_table.0.reftype,
+                    ));
+                }
+            }
+        }
+    } else if len == 0{
+        // ok
+    }else{
         return VMResult::TableIndexOutOfRange;
-    };
-
-    let dst_table = &mut tables[dst_table_addr];
-    let dst = vm_try!(VMResult::from_option(
-        dst_table.1.get_mut(dst..dst + len),
-        || { VMResult::TableIndexOutOfRange }
-    ));
-    match &elem.init {
-        ElemInit::FuncIdx(idxs) => {
-            let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
-                VMResult::TableIndexOutOfRange
-            }));
-            for (i, funcidx) in slice.iter().enumerate() {
-                dst[i] = instance.funcs[*funcidx as usize];
-            }
-        }
-        ElemInit::ConstExpr(exprs) => {
-            let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
-                VMResult::TableIndexOutOfRange
-            }));
-            for (i, expr) in slice.iter().enumerate() {
-                dst[i] = vm_try!(execute_elem_init_const_expr(
-                    global_store,
-                    &instance.globals,
-                    &instance.funcs,
-                    expr,
-                    dst_table.0.reftype,
-                ));
-            }
-        }
     }
-
     call_next(tail_code, 2, ctx)
 }
 pub unsafe fn op_elem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1930,10 +1927,8 @@ pub fn run_module_function(
     args: &ResultValue,
 ) -> VMResult<ResultValue> {
     let InstanceView {
-        module_addr,
-        funcs,
-        ..
-    } = unsafe { store.get_instance_unchecked(instance.0)};
+        module_addr, funcs, ..
+    } = unsafe { store.get_instance_unchecked(instance.0) };
     let module_inst = &store.modules[module_addr as usize];
     if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
         let code_addr = funcs[idx.0 as usize];

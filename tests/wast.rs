@@ -130,7 +130,6 @@ fn data() {
 
 #[test]
 fn bulk() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("bulk");
 }
 
