@@ -95,7 +95,7 @@ pub enum WasmParserError {
     #[error("undeclared function reference")]
     UndeclaredFunctionReference,
     #[error("unknown label")]
-    UnknownLabel
+    UnknownLabel,
 }
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {

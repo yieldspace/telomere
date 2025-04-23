@@ -99,7 +99,10 @@ impl TryFrom<SortWithIdx> for ComponentIdx {
         if let SortWithIdx::Component(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(value, "Component".to_string()))
+            Err(ComponentParseError::InvalidSort(
+                value,
+                "Component".to_string(),
+            ))
         }
     }
 }
@@ -111,7 +114,10 @@ impl TryFrom<SortWithIdx> for InstanceIdx {
         if let SortWithIdx::Instance(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(value, "Instance".to_string()))
+            Err(ComponentParseError::InvalidSort(
+                value,
+                "Instance".to_string(),
+            ))
         }
     }
 }
