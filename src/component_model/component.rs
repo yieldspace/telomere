@@ -8,6 +8,7 @@ use crate::runtime::component_model::instantiate::InstantiateInstr;
 
 /// コンポーネントからexportされた型を表します．
 /// exportされた型に明示的にexterndescが設定されている場合，externdescの型として表されます．
+#[allow(clippy::large_enum_variant)]
 pub enum ComponentExportSlot {
     CoreModule(Slot<CoreModule, CoreModuleIdx>),
     Func(Slot<ComponentFunction, FuncIdx>),

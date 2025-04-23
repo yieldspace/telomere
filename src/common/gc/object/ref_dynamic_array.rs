@@ -27,7 +27,7 @@ impl GcRefDynamicArray {
         }
         unsafe { std::slice::from_raw_parts(self.as_ptr(pool), self.len(pool).into()) }
     }
-    pub fn as_slice_mut(&self, pool: &mut MemoryPool) -> &mut [GcRef] {
+    pub fn as_slice_mut(&mut self, pool: &mut MemoryPool) -> &mut [GcRef] {
         if self.len == 0 {
             return &mut [];
         }

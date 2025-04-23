@@ -415,8 +415,8 @@ impl ExecuteContext<'_> {
         let (_local_data, offset) = func.locals_and_code_offset(self.gc);
         unsafe { self.gc.get_value::<Instr>(func.body, offset) }
     }
-    pub unsafe fn module(&self) -> &ModuleInstance {
-        self.gc.get_module(self.instance().module_addr)
+    pub fn module(&self) -> &ModuleInstance {
+        unsafe { self.gc.get_module(self.instance().module_addr) }
     }
     pub fn instance_addr(&self) -> GcRef {
         self.func().instance_addr

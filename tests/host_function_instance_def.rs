@@ -156,7 +156,7 @@ pub fn test_tail_call_native() {
             ],
         },
         &mut store,
-        &mut registry,
+        &registry,
     )
     .unwrap();
     registry.register("host", host.clone());

@@ -6,6 +6,7 @@ use crate::common::custom_section::{
 use super::base::WasmBaseParser;
 use super::{Result, WasmParserError};
 
+type IndirectNameAssoc = (u32, Vec<(u32, String)>);
 pub struct CustomSectionParser<'a, R: BinaryReader> {
     reader: &'a mut R,
 }
@@ -75,7 +76,7 @@ impl<'a, R: BinaryReader> CustomSectionParser<'a, R> {
         let (len2, name) = self.parse_name()?;
         Ok((len + len2, (idx, name)))
     }
-    fn parse_indirect_name_assoc(&mut self) -> Result<(usize, (u32, Vec<(u32, String)>))> {
+    fn parse_indirect_name_assoc(&mut self) -> Result<(usize, IndirectNameAssoc)> {
         let (len1, idx) = self.parse_u32()?;
         let (len2, namemap) = self.parse_vec(Self::parse_name_assoc)?;
         Ok((len1 + len2, (idx, namemap)))

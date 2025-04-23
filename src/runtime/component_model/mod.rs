@@ -2,6 +2,7 @@ mod canon;
 mod context;
 mod error;
 mod func;
+#[allow(clippy::missing_safety_doc)]
 pub mod instantiate;
 mod linker;
 

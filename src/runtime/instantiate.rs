@@ -575,7 +575,7 @@ pub fn link_host_function_with_function_idx(
     store: &mut Store,
 ) {
     let mut gc = store.gc.borrow_mut();
-    let gc_ref = addr.get_gc_ref_with_pool(&mut gc);
+    let gc_ref = addr.get_gc_ref_with_pool(&gc);
     let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
     let funcaddr = instance.funcs.as_slice(&gc)[funcidx as usize];
     let func = unsafe { gc.get_func_mut(funcaddr) };

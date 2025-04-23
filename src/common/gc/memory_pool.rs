@@ -544,7 +544,7 @@ impl MemoryPool {
             self.write(
                 addr,
                 0,
-                std::mem::transmute(data),
+                 data as *const FunctionInstanceData as *const u32,
                 word_size::<FunctionInstanceData>(),
             )
         };

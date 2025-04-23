@@ -8,8 +8,10 @@ pub use crate::runtime::component_model::instantiate::context::InstantiateContex
 use crate::Registry;
 
 mod context;
-
-pub type InstantiateResult<T> = Result<T, ()>;
+// FIXME: what is this?
+#[derive(Debug)]
+pub enum Void{}
+pub type InstantiateResult<T> = Result<T, Void>;
 
 pub type InstantiateOp =
     unsafe fn(*const InstantiateInstr, &mut InstantiateContext) -> InstantiateResult<()>;
@@ -166,7 +168,7 @@ pub unsafe fn instantiate_core_function(
 
     todo!();
 }
-
+#[allow(clippy::result_unit_err)]
 pub unsafe fn instantiate_function(
     tail_code: *const InstantiateInstr,
     _ctx: &mut InstantiateContext,
@@ -175,6 +177,7 @@ pub unsafe fn instantiate_function(
     todo!()
 }
 
+#[allow(clippy::result_unit_err)]
 pub unsafe fn instantiate_special_end(
     _tail_code: *const InstantiateInstr,
     _ctx: &mut InstantiateContext,
