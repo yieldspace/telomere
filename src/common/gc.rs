@@ -272,6 +272,7 @@ impl MemoryPool {
         offset: usize,
         values: &[GcRef],
     ) {
+        tracing::trace!("gc_ref_array_push_vec: {values:?}");
         let array = self.get_ref_dynamic_array(obj, offset);
         let old_region = array.array.0;
         let old_len = array.len;
@@ -336,6 +337,7 @@ impl MemoryPool {
         self.trace(self.root);
     }
     fn compact(&mut self) {
+        tracing::trace!("compact");
         let mut free = 0;
         let mut live = 0;
         loop {
@@ -349,14 +351,38 @@ impl MemoryPool {
                 break;
             }
         }
+        
+        for addr in self.scan_heap() {
+            let header = self.read_header(addr);
+            tracing::trace!(
+                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
+                header.object_type(),
+                header.word_size(),
+                header.is_initialized(),
+                header.is_marked()
+            );
+        }
         self.update_pointer();
+        for addr in self.scan_heap() {
+            let header = self.read_header(addr);
+            tracing::trace!(
+                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
+                header.object_type(),
+                header.word_size(),
+                header.is_initialized(),
+                header.is_marked()
+            );
+        }
         self.move_object();
         self.allocated = free;
     }
     fn update_pointer(&mut self) {
+        tracing::trace!("update_pointer");
         let mut ptr = 0;
         loop {
             let item = GcRef(ptr);
+            tracing::trace!("update_pointer: {item:?}");
+
             let header = self.read_header(item);
             if header.is_marked() && header.is_initialized() {
                 match header.object_type() {
@@ -383,6 +409,7 @@ impl MemoryPool {
         }
     }
     fn move_object(&mut self) {
+        tracing::trace!("move_object");
         let mut ptr = 0;
         loop {
             let item = GcRef(ptr);
@@ -428,7 +455,7 @@ mod tests {
     use super::MemoryPool;
 
     #[test]
-    fn test_mark() {
+    fn mark() {
         tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
         let mut pool = MemoryPool::new();
         let free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
@@ -473,8 +500,7 @@ mod tests {
         assert_eq!(free.len(), 2);
     }
     #[test]
-    fn test_compaction() {
-        tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
+    fn compaction_no_root() {
         let mut pool = MemoryPool::new();
         let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
         let _free_arr2 = pool.new_u32_fixed_array(&[1, 2, 3]);
@@ -493,5 +519,28 @@ mod tests {
             count_object += 1;
         }
         assert_eq!(count_object,2);
+    }
+    #[test]
+    fn compaction_one_root() {
+        tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
+        let mut pool = MemoryPool::new();
+        let tracked_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
+        let _free_arr = pool.new_u32_fixed_array(&[1, 2, 3]);
+        pool.add_root(&[tracked_arr.0]);
+        pool.mark_phase();
+        pool.compact();
+        let mut count_object = 0;
+        for addr in pool.scan_heap() {
+            let header = pool.read_header(addr);
+            tracing::trace!(
+                "{addr:?}: {header:?} ({:?},size={},init={},marked={})",
+                header.object_type(),
+                header.word_size(),
+                header.is_initialized(),
+                header.is_marked()
+            );
+            count_object += 1;
+        }
+        assert_eq!(count_object,3);
     }
 }

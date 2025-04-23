@@ -29,6 +29,7 @@ impl GCView for GcRef {
         pool.trace(*self);
     }
     fn update(&mut self,pool: &mut MemoryPool) {
+        tracing::trace!("{self:?}");
         self.0 = pool.read_header(*self).forwarding_pointer()
     }
 }
@@ -143,10 +144,11 @@ impl GCView for GcRefFixedArray {
     }
 
     fn update(&mut self,pool: &mut MemoryPool) {
-        self.0.update(pool);
+        
         for v in self.as_slice_mut(pool) {
             v.update(pool);
         }
+        self.0.update(pool);
     }
 }
 #[repr(C)]
@@ -183,11 +185,14 @@ impl GCView for GcRefDynamicArray {
         }
     }
     fn update(&mut self,pool: &mut MemoryPool) {
-        self.array.0.update(pool);
+        
         tracing::trace!("{:?}",self);
         for v in self.as_slice_mut(pool) {
+            tracing::trace!("dynamic array update: {:?}",v);
+
             v.update(pool);
         }
+        self.array.0.update(pool);
     }
 }
 pub struct RootTable(pub(crate) GcRefDynamicArray);
