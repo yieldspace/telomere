@@ -3,10 +3,10 @@ use std::rc::Rc;
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{GcRef, GcRootHandle, Header, InstanceData, ObjectType},
+        gc::{GcRef, GcRootHandle, Header, InstanceData, MemoryPool, ObjectType},
         word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
         ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
-        FunctionInstance, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
+        FunctionInstance, GlobalIdx, GlobalType, HostFunction, HostFunctionDefinition, ImportDesc,
         ImportSection, InstanceHandle, Limits, LocalReference, MemIdx, ModuleInstance,
         NativeModule, TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
@@ -14,6 +14,37 @@ use crate::{
     Instance, Module, Registry, Stack, Store, VMResult,
 };
 
+pub(crate) fn init_global(
+    gc: &mut MemoryPool,
+    init: &ConstExpr,
+    globals: &[GcRef],
+    funcs: &[u32],
+    gts: &[GlobalType],
+) -> VMResult<GcRef> {
+    tracing::trace!("global init: {init:?}");
+
+    let res = match init {
+        ConstExpr::I32(v) => gc.new_global_data4(*v as u32),
+        ConstExpr::I64(v) => gc.new_global_data8(*v as u64),
+        ConstExpr::F32(v) => gc.new_global_data4(v.to_bits()),
+        ConstExpr::F64(v) => gc.new_global_data8(v.to_bits()),
+        ConstExpr::RefNull(_t) => gc.new_global_ref(GcRef(0)),
+        ConstExpr::FuncRef(v) => {
+            let addr = funcs.get(*v as usize);
+            if let Some(addr) = addr {
+                gc.new_global_data4(*addr)
+            } else {
+                return VMResult::InvalidOperand;
+            }
+        }
+        ConstExpr::GlobalGet(idx) => {
+            let idx = *idx as usize;
+            let addr = globals[idx];
+            gc.copy_object(addr)
+        }
+    };
+    VMResult::Success(res)
+}
 fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMResult<()> {
     if import_limit.min > real {
         tracing::trace!("invalid import_limit min");
@@ -41,8 +72,8 @@ fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMRe
     VMResult::Success(())
 }
 fn execute_offset_const_expr(
-    store: &mut Store,
-    globals: &[u32],
+    gc: &mut MemoryPool,
+    globals: &[GcRef],
     exprs: &[ConstExpr],
 ) -> VMResult<u32> {
     for expr in exprs {
@@ -51,9 +82,9 @@ fn execute_offset_const_expr(
             ConstExpr::GlobalGet(idx) => {
                 let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
                     VMResult::Unlinkable
-                })) as usize;
+                }));
                 let mut buf = [0u8; 4];
-                buf.copy_from_slice(&store.globals.0[addr..addr + 4]);
+                buf.copy_from_slice(unsafe { &gc.get_global(addr) });
                 u32::from_le_bytes(buf)
             }
             _ => {
@@ -225,7 +256,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
         match &d.mode {
             DataMode::Active(mem, offset) => {
                 assert_eq!(mem.0, 0);
-                let offset = vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
+                let offset = vm_try!(execute_offset_const_expr(gc, &globals, offset)) as usize;
                 if let Some(memory) = &memory {
                     let memory = unsafe { gc.get_memory(*memory) };
                     if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
@@ -260,9 +291,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     }
     store.funcs.0.append(&mut s_funcs);
     for init in &global_init {
-        globals.push(vm_try!(store
-            .globals
-            .init(init, &globals, &funcs, &m_globals)));
+        globals.push(vm_try!(init_global(gc, init, &globals, &funcs, &m_globals)));
     }
     let mut table_instances: Vec<GcRef> = m_tables.iter().map(|v| gc.new_table(*v)).collect();
     tables.append(&mut table_instances);
@@ -277,7 +306,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 ElemMode::Active(idx, offset) => match &elem.init {
                     ElemInit::FuncIdx(idxs) => {
                         let offset =
-                            vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
+                            vm_try!(execute_offset_const_expr(gc, &globals, offset)) as usize;
                         let table_addr = tables[idx.0 as usize];
 
                         let instance = unsafe { gc.get_table(table_addr) };
@@ -299,26 +328,22 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                     }
                     ElemInit::ConstExpr(idxs) => {
                         let offset =
-                            vm_try!(execute_offset_const_expr(store, &globals, offset)) as usize;
+                            vm_try!(execute_offset_const_expr(gc, &globals, offset)) as usize;
                         let table_addr = tables[idx.0 as usize];
-                        let Store {
-                            globals: global_store,
-                            ..
-                        } = store;
+                        let Store { .. } = store;
                         let instance = unsafe { gc.get_table(table_addr) };
                         if offset + idxs.len() > instance.1.len() {
                             return VMResult::TableIndexOutOfRange;
                         }
+                        let rt = instance.0.reftype;
+
                         tracing::trace!("funcs4: {funcs:?}");
 
                         for (idx, idx_expr) in idxs.iter().enumerate() {
                             let addr = vm_try!(execute_elem_init_const_expr(
-                                global_store,
-                                &globals,
-                                &funcs,
-                                idx_expr,
-                                instance.0.reftype,
+                                gc, &globals, &funcs, idx_expr, rt
                             ));
+                            let instance = unsafe { gc.get_table(table_addr) };
                             instance.1[offset + idx] = addr;
                             tracing::trace!("table[{}] = {}", offset + idx, addr);
                         }

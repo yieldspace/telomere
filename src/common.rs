@@ -9,7 +9,6 @@ use custom_section::NameSubSection;
 use gc::GcRootHandle;
 use gc::InstanceData;
 use gc::MemoryPool;
-use store::GlobalStore;
 pub use vm_result::VMResult;
 mod memory;
 pub use memory::{MemArg, Memory};
@@ -256,7 +255,7 @@ pub struct Instance {
     //  -> addr
     pub memory: Vec<GcRef>,
     // idx -> addr
-    pub globals: Vec<u32>,
+    pub globals: Vec<GcRef>,
     // idx -> addr
     pub funcs: Vec<u32>,
     // idx -> addr
@@ -451,8 +450,8 @@ impl InstanceHandle {
 }
 
 pub fn execute_elem_init_const_expr(
-    global_store: &GlobalStore,
-    globals: &[u32],
+    gc: &mut MemoryPool,
+    globals: &[GcRef],
     funcs: &[u32],
     exprs: &[ConstExpr],
     expected: RefType,
@@ -490,9 +489,9 @@ pub fn execute_elem_init_const_expr(
         ConstExpr::GlobalGet(idx) => {
             let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
                 VMResult::Unlinkable
-            })) as usize;
+            }));
             let mut buf = [0u8; 4];
-            buf.copy_from_slice(&global_store.0[addr..addr + 4]);
+            buf.copy_from_slice(unsafe { &gc.get_global(addr) });
             VMResult::Success(u32::from_le_bytes(buf))
         }
         unknown => todo!("{unknown:?}"),

@@ -5,49 +5,6 @@ use super::{
 };
 use std::{cell::RefCell, collections::HashMap, io::Write, rc::Rc};
 
-pub struct GlobalStore(pub Vec<u8>);
-impl GlobalStore {
-    pub(crate) fn init(
-        &mut self,
-        init: &ConstExpr,
-        globals: &[u32],
-        funcs: &[u32],
-        gts: &[GlobalType],
-    ) -> VMResult<u32> {
-        let addr: usize = self.0.len();
-        tracing::trace!("global init: {init:?}");
-
-        match match init {
-            ConstExpr::I32(v) => self.0.write_all(&v.to_le_bytes()),
-            ConstExpr::I64(v) => self.0.write_all(&v.to_le_bytes()),
-            ConstExpr::F32(v) => self.0.write_all(&v.to_le_bytes()),
-            ConstExpr::F64(v) => self.0.write_all(&v.to_le_bytes()),
-            ConstExpr::RefNull(_t) => self.0.write_all(&u32::to_le_bytes(0)),
-            ConstExpr::FuncRef(v) => {
-                let addr = funcs.get(*v as usize);
-                if let Some(addr) = addr {
-                    self.0.write_all(&addr.to_le_bytes())
-                } else {
-                    return VMResult::InvalidOperand;
-                }
-            }
-            ConstExpr::GlobalGet(idx) => {
-                let idx = *idx as usize;
-                let addr = globals[idx] as usize;
-                let gt = gts[idx];
-                let new_addr = self.0.len();
-                self.0.resize(self.0.len() + gt.0.stack_size().usize(), 0);
-                self.0
-                    .copy_within(addr..addr + gt.0.stack_size().usize(), new_addr);
-                Ok(())
-            }
-        } {
-            Ok(_) => VMResult::Success(addr as u32),
-            Err(_) => panic!(), //FIXME:
-        }
-    }
-}
-
 pub struct FunctionInstance {
     pub instance_addr: GcRef,
     pub funcidx: u32,
@@ -67,7 +24,6 @@ pub struct ModuleInstance {
 pub struct Store {
     pub gc: Rc<RefCell<MemoryPool>>,
     pub instance_id: u32,
-    pub globals: GlobalStore,
     pub funcs: FunctionStore,
     pub data: HashMap<(u32, u32), Data>,
     pub elems: HashMap<(u32, u32), Elem>,
@@ -86,7 +42,6 @@ impl Store {
 
     pub fn new_with_state(state: StoreState) -> Self {
         Store {
-            globals: GlobalStore(vec![]),
             funcs: FunctionStore(vec![]),
             data: HashMap::new(),
             elems: HashMap::new(),

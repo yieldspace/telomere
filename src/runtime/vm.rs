@@ -796,26 +796,30 @@ pub unsafe fn op_local_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 }
 pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx] as usize;
-    vm_try!(ctx.stack.push_slice(&ctx.store.globals.0[addr..addr + 4]));
+    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx];
+    vm_try!(ctx.stack.push_slice(&ctx.gc.get_global(addr)));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx] as usize;
-    vm_try!(ctx.stack.push_slice(&ctx.store.globals.0[addr..addr + 8]));
+    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx];
+    vm_try!(ctx.stack.push_slice(&ctx.gc.get_global(addr)));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx] as usize;
-    ctx.store.globals.0[addr..addr + 4].copy_from_slice(&ctx.stack.pop_u8_array::<4>());
+    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx];
+    ctx.gc
+        .get_global_mut(addr)
+        .copy_from_slice(&ctx.stack.pop_u8_array::<4>());
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx] as usize;
-    ctx.store.globals.0[addr..addr + 8].copy_from_slice(&ctx.stack.pop_u8_array::<8>());
+    let addr = ctx.instance().globals.as_slice(&ctx.gc)[idx];
+    ctx.gc
+        .get_global_mut(addr)
+        .copy_from_slice(&ctx.stack.pop_u8_array::<8>());
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -856,11 +860,7 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 
     let ExecuteContext { store, gc, .. } = ctx;
 
-    let Store {
-        globals: global_store,
-        elems,
-        ..
-    } = store;
+    let Store { elems, .. } = store;
     let instance = *gc.get_instance_unchecked(instance_addr);
     let dst_table_addr = instance.tables.as_slice(gc)[dst_table_idx];
     if let Some(elem) = elems.get(&(instance.instance_id, src_elem_idx)) {
@@ -885,9 +885,9 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
                 }));
                 for (i, expr) in slice.iter().enumerate() {
                     let res = vm_try!(execute_elem_init_const_expr(
-                        global_store,
-                        instance.globals.as_slice(gc),
-                        instance.funcs.as_slice(gc),
+                        gc,
+                        instance.globals.as_slice(&gc),
+                        instance.funcs.as_slice(&gc),
                         expr,
                         reftype,
                     ));
@@ -2021,17 +2021,17 @@ pub fn get_global(instance: &InstanceHandle, store: &mut Store, name: &str) -> V
     let instance = unsafe { &*gc.get_instance_unchecked(instance.get_gc_ref_with_pool(&gc)) };
     let module_inst = unsafe { gc.get_module(instance.module_addr) };
     if let Some(ExportDesc::Global(idx)) = module_inst.exports.find(name) {
-        let addr = instance.globals.as_slice(&store.gc.borrow())[idx.0 as usize] as usize;
+        let addr = instance.globals.as_slice(&store.gc.borrow())[idx.0 as usize];
         let gt = module_inst.globals[idx.0 as usize];
         VMResult::Success(match gt.0 {
             ValType::I32 => {
                 let mut buf = [0u8; 4];
-                buf.copy_from_slice(&store.globals.0[addr..addr + 4]);
+                buf.copy_from_slice(unsafe { &gc.get_global(addr) });
                 WasmValue::I32(i32::from_le_bytes(buf))
             }
             ValType::I64 => {
                 let mut buf = [0u8; 8];
-                buf.copy_from_slice(&store.globals.0[addr..addr + 8]);
+                buf.copy_from_slice(unsafe { &gc.get_global(addr) });
                 WasmValue::I64(i64::from_le_bytes(buf))
             }
             _ => todo!(),

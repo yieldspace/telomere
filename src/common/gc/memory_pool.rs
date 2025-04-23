@@ -10,8 +10,11 @@ use crate::{
 };
 
 use super::{
-    object::{GcRefDynamicArray, InstanceData, RootTable, U32FixedArray},
-    GcView, GcRef, Header, ObjectType,
+    object::{
+        GcRefDynamicArray, Global4Data, Global8Data, GlobalRefData, InstanceData, RootTable,
+        U32FixedArray,
+    },
+    GcRef, GcView, Header, ObjectType,
 };
 
 #[derive(Debug)]
@@ -102,7 +105,7 @@ impl MemoryPool {
         let instance_data = InstanceData {
             instance_id: instance.instance_id,
             funcs: self.new_u32_fixed_array(&instance.funcs),
-            globals: self.new_u32_fixed_array(&instance.globals),
+            globals: self.new_gc_ref_fixed_array(&instance.globals),
             mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
             module_addr: instance.module_addr,
             tables: self.new_gc_ref_fixed_array(&instance.tables),
@@ -124,7 +127,7 @@ impl MemoryPool {
         let instance_data = InstanceData {
             instance_id: instance.instance_id,
             funcs: self.new_u32_fixed_array(&instance.funcs),
-            globals: self.new_u32_fixed_array(&instance.globals),
+            globals: self.new_gc_ref_fixed_array(&instance.globals),
             mems: self.new_gc_ref_fixed_array(&instance.memory.iter().copied().collect::<Vec<_>>()),
             module_addr: instance.module_addr,
             tables: self.new_gc_ref_fixed_array(&instance.tables),
@@ -306,6 +309,9 @@ impl MemoryPool {
                 | ObjectType::ExternModuleRef => {
                     // do nothing
                 }
+                ObjectType::GlobalRef => {
+                    (&*self.get_value::<GlobalRefData>(item, 0)).trace(self);
+                }
             }
         }
     }
@@ -364,6 +370,11 @@ impl MemoryPool {
                     | ObjectType::ExternTableRef
                     | ObjectType::ExternModuleRef => {
                         // ok
+                    }
+                    ObjectType::GlobalRef => {
+                        let global_ref =
+                            unsafe { &mut *self.get_value_mut::<GlobalRefData>(item, 0) };
+                        global_ref.update(self);
                     }
                 }
             }
@@ -489,6 +500,66 @@ impl MemoryPool {
         self.wasm_module[idx as usize].as_ref().unwrap_unchecked()
     }
 
+    pub fn new_global_ref(&mut self, global_ref: GcRef) -> GcRef {
+        let gc_ref = self.allocate(
+            Header::new(ObjectType::GlobalRef, word_size::<GlobalRefData>()).initialized(),
+        );
+        unsafe {
+            *self.memory.as_mut_ptr().add(gc_ref.get_value_addr_usize()) = global_ref.get();
+        }
+        gc_ref
+    }
+    pub fn new_global_data4(&mut self, data: u32) -> GcRef {
+        let gc_ref =
+            self.allocate(Header::new(ObjectType::Raw, word_size::<Global4Data>()).initialized());
+        unsafe {
+            *self.memory.as_mut_ptr().add(gc_ref.get_value_addr_usize()) = data;
+        }
+        gc_ref
+    }
+    pub fn new_global_data8(&mut self, data: u64) -> GcRef {
+        let gc_ref =
+            self.allocate(Header::new(ObjectType::Raw, word_size::<Global8Data>()).initialized());
+        unsafe {
+            let bytes = data.to_le_bytes();
+            (self.memory.as_mut_ptr().add(gc_ref.get_value_addr_usize()) as *mut u8)
+                .copy_from_nonoverlapping(bytes.as_ptr(), bytes.len());
+        }
+        gc_ref
+    }
+    pub(crate) unsafe fn get_global(&self, addr: GcRef) -> &[u8] {
+        let header = self.read_header(addr);
+        let size = header.word_size() as usize * std::mem::size_of::<u32>();
+
+        let ptr = self.memory.as_ptr().add(addr.get_value_addr_usize());
+        std::slice::from_raw_parts(ptr as *const u8, size)
+    }
+    pub(crate) unsafe fn get_global_mut(&mut self, addr: GcRef) -> &mut [u8] {
+        let header = self.read_header(addr);
+        let size = header.word_size() as usize * std::mem::size_of::<u32>();
+
+        let ptr = self.memory.as_mut_ptr().add(addr.get_value_addr_usize());
+        std::slice::from_raw_parts_mut(ptr as *mut u8, size)
+    }
+    pub(crate) unsafe fn set_global4(&self, addr: GcRef) -> &[u8] {
+        let header = self.read_header(addr);
+        let size = header.word_size() as usize * std::mem::size_of::<u32>();
+
+        let ptr = self.memory.as_ptr().add(addr.get_value_addr_usize());
+        std::slice::from_raw_parts(ptr as *const u8, size)
+    }
+    pub fn copy_object(&mut self, item: GcRef) -> GcRef {
+        let header = self.read_header(item);
+        let new_item = self.allocate(header);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.memory.as_ptr().add(item.get_usize()),
+                self.memory.as_mut_ptr().add(new_item.get_usize()),
+                HEADER_LEN + header.word_size() as usize,
+            )
+        };
+        new_item
+    }
     pub fn get_total_linear_memory_size(&self) -> usize {
         self.wasm_linear_memory
             .iter()
