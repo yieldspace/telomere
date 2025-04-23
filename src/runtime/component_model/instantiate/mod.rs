@@ -10,7 +10,7 @@ use crate::Registry;
 mod context;
 // FIXME: what is this?
 #[derive(Debug)]
-pub enum Void{}
+pub enum Void {}
 pub type InstantiateResult<T> = Result<T, Void>;
 
 pub type InstantiateOp =

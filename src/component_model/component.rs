@@ -104,9 +104,7 @@ impl InlineComponent {
                         #[cfg(feature = "component-gated-feature-value-imports-exports")]
                         ExternDesc::Value(bound) => todo!(),
                         ExternDesc::Type(ty) => match ty {
-                            TypeBound::Eq(idx) => {
-                                Ok(ComponentExportSlot::Type(Slot::Idx(*idx)))
-                            }
+                            TypeBound::Eq(idx) => Ok(ComponentExportSlot::Type(Slot::Idx(*idx))),
                             TypeBound::Sub => Ok(ComponentExportSlot::Type(Slot::Value(
                                 Type::SuperTypedUniqueResource(export.sort.clone().try_into()?),
                             ))),

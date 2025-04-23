@@ -8,9 +8,9 @@ use crate::{
         },
         word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
         ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
-        GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection,
-        InstanceHandle, Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule,
-        TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
+        GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle,
+        Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TypeIdx,
+        TypeSection, PAGE_SIZE_MAX,
     },
     runtime::vm,
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -247,9 +247,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     ));
     if memory.is_none() {
         if let Some(mem) = mems.first() {
-            memory = Some({
-                gc.new_memory(mem.0.min, mem.0.max.unwrap_or(PAGE_SIZE_MAX as u32))
-            })
+            memory = Some({ gc.new_memory(mem.0.min, mem.0.max.unwrap_or(PAGE_SIZE_MAX as u32)) })
         }
     }
 
@@ -527,7 +525,8 @@ pub fn aliasing(
                 memories.push(mt);
                 mem_addr = ext_instance
                     .mems
-                    .as_slice(&store.gc.borrow()).first()
+                    .as_slice(&store.gc.borrow())
+                    .first()
                     .copied();
                 exports.push(Export(
                     exportname,

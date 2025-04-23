@@ -1,14 +1,13 @@
 use crate::{
     common::{
-        gc::{
-            object::GcRefFixedArray,
-            HEADER_LEN,
-        },
+        gc::{object::GcRefFixedArray, HEADER_LEN},
         word_size, Instr, LocalsData, Memory, ModuleInstance, TableInstance, TableType, PAGE_SIZE,
     },
     Instance,
 };
 
+#[cfg(test)]
+use super::object::U32FixedArray;
 use super::{
     object::{
         FunctionInstanceData, GcRefDynamicArray, Global4Data, Global8Data, GlobalRefData,
@@ -16,8 +15,6 @@ use super::{
     },
     GcRef, GcView, Header, ObjectType,
 };
-#[cfg(test)]
-use super::object::U32FixedArray;
 #[derive(Debug)]
 pub struct MemoryPool {
     pub(crate) memory: Vec<u32>,
@@ -159,11 +156,9 @@ impl MemoryPool {
             .add(addr.get_value_addr_usize() + offset) as *mut T
     }
     pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
-        
         self.memory.as_ptr().add(addr.get_value_addr_usize()) as *const InstanceData
     }
     pub(crate) unsafe fn get_instance_mut_unchecked(&mut self, addr: GcRef) -> *mut InstanceData {
-        
         self.memory.as_mut_ptr().add(addr.get_value_addr_usize()) as *mut InstanceData
     }
     pub(crate) unsafe fn write(
@@ -512,7 +507,7 @@ impl MemoryPool {
         let ptr = self.memory.as_mut_ptr().add(addr.get_value_addr_usize());
         std::slice::from_raw_parts_mut(ptr as *mut u8, size)
     }
-    
+
     pub fn copy_object(&mut self, item: GcRef) -> GcRef {
         let header = self.read_header(item);
         let new_item = self.allocate(header);
@@ -544,7 +539,7 @@ impl MemoryPool {
             self.write(
                 addr,
                 0,
-                 data as *const FunctionInstanceData as *const u32,
+                data as *const FunctionInstanceData as *const u32,
                 word_size::<FunctionInstanceData>(),
             )
         };

@@ -433,7 +433,8 @@ impl ExecuteContext<'_> {
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.instance()
             .mems
-            .as_slice(self.gc).first()
+            .as_slice(self.gc)
+            .first()
             .copied()
             .map(|v| unsafe { self.gc.get_memory(v) })
     }

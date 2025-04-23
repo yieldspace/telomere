@@ -24,8 +24,7 @@ impl Instance {
         match self {
             Instance::Instantiate(Instantiate { component_idx, .. }) => {
                 let component = ctx.validator.get_component(component_idx);
-                let export =
-                    component.get_export(ctx.validator, *component_idx, name.clone())?;
+                let export = component.get_export(ctx.validator, *component_idx, name.clone())?;
                 if export.eq_sort(sort) {
                     return Ok(export);
                 }
