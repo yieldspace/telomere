@@ -12,11 +12,15 @@ pub enum ObjectType {
     GlobalRef = 7,
     FunctionInstance = 8,
 }
+pub(crate) const PADDING_MASK: u32 = 1 << 31;
 const INIT_MASK: u32 = 1 << 30;
 const MARK_MASK: u32 = 1 << 29;
+const ALIGN64_MASK: u32 = 1 << 28;
+const NEED_PADDING_MASK: u32 = 1 << 27;
+const UNNEED_PADDING_MASK: u32 = !NEED_PADDING_MASK;
 const UNMARK_MASK: u32 = !MARK_MASK;
 const SIZE_MASK: u32 = 0xFFFF;
-const TYPE_MASK: u32 = 0x1FFF;
+const TYPE_MASK: u32 = 0xFF;
 const TYPE_LOWER_BIT: u32 = 16;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -31,6 +35,15 @@ impl Header {
     pub fn is_marked(&self) -> bool {
         self.0 & MARK_MASK != 0
     }
+    pub fn is_align64(self) -> bool {
+        self.0 & ALIGN64_MASK != 0
+    }
+    pub fn is_padding(self) -> bool {
+        self.0 & PADDING_MASK != 0
+    }
+    pub fn is_need_padding(self) -> bool {
+        self.0 & NEED_PADDING_MASK != 0
+    }
     pub fn marked(self) -> Self {
         Self(self.0 | MARK_MASK, self.1)
     }
@@ -39,6 +52,15 @@ impl Header {
     }
     pub fn initialized(self) -> Self {
         Self(self.0 | INIT_MASK, self.1)
+    }
+    pub fn align64(self) -> Self {
+        Self(self.0 | ALIGN64_MASK, self.1)
+    }
+    pub fn need_padding(self) -> Self {
+        Self(self.0 | NEED_PADDING_MASK, self.1)
+    }
+    pub fn unneed_padding(self) -> Self {
+        Self(self.0 & UNNEED_PADDING_MASK, self.1)
     }
     pub fn set_forwarding_pointer(self, ptr: u32) -> Self {
         Self(self.0, ptr)
@@ -54,7 +76,7 @@ impl Header {
         if size > u16::MAX.into() {
             panic!()
         }
-        Self(ty << TYPE_LOWER_BIT | (size as u32), 0)
+        Self((ty << TYPE_LOWER_BIT) | (size as u32), 0)
     }
     pub fn get(&self) -> [u32; 2] {
         [self.0, self.1]

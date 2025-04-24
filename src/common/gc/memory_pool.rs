@@ -1,6 +1,6 @@
 use crate::{
     common::{
-        gc::{object::GcRefFixedArray, HEADER_LEN},
+        gc::{header::PADDING_MASK, object::GcRefFixedArray, HEADER_LEN},
         word_size, Instr, LocalsData, Memory, ModuleInstance, TableInstance, TableType, PAGE_SIZE,
     },
     Instance,
@@ -47,8 +47,11 @@ impl MemoryPool {
         }
     }
     pub fn allocate(&mut self, header: Header) -> GcRef {
-        let offset: usize = self.allocated as usize;
-
+        let padding_offset = self.allocated as usize;
+        let mut offset: usize = self.allocated as usize;
+        if header.is_align64() && offset % 2 != 0 {
+            offset += 1;
+        }
         let expected_len = HEADER_LEN + offset + header.word_size() as usize;
         if expected_len > self.memory.capacity() {
             let additional = expected_len - self.memory.len();
@@ -56,6 +59,7 @@ impl MemoryPool {
             self.memory.try_reserve_exact(additional).unwrap();
             self.memory.resize(self.memory.capacity(), 0);
         }
+        self.memory[padding_offset..offset].fill(PADDING_MASK);
         self.memory[offset..offset + HEADER_LEN].copy_from_slice(&header.get());
         self.allocated = expected_len as u32;
         tracing::trace!(
@@ -77,19 +81,25 @@ impl MemoryPool {
     }
     pub(crate) fn read_header(&self, addr: GcRef) -> Header {
         debug_assert!(!addr.is_null());
-        Header::from_raw(
-            self.memory[addr.get_usize()],
-            self.memory[addr.get_usize() + 1],
-        )
+        let v = self.memory[addr.get_usize()];
+        if v & PADDING_MASK != 0 {
+            Header::from_raw(v, 0)
+        } else {
+            Header::from_raw(v, self.memory[addr.get_usize() + 1])
+        }
     }
     pub(crate) fn mark(&mut self, addr: GcRef) -> bool {
         if addr.is_null() {
             return false;
         }
         let header = self.read_header(addr);
-        let is_marked = header.is_marked();
-        self.write_header(addr, header.marked());
-        is_marked
+        if !header.is_padding() {
+            let is_marked = header.is_marked();
+            self.write_header(addr, header.marked());
+            is_marked
+        } else {
+            unreachable!()
+        }
     }
     fn new_raw_region(&mut self, data: *const u32, len: usize) -> GcRef {
         let addr = self.allocate(Header::new(ObjectType::Raw, len).initialized());
@@ -291,6 +301,17 @@ impl MemoryPool {
         let mut live = 1;
         loop {
             let header = self.read_header(GcRef(live));
+            if header.is_padding() {
+                live += 1;
+                continue;
+            }
+            let need_padding = header.is_align64() && free % 2 == 1;
+            let header = if need_padding {
+                free += 1;
+                header.need_padding()
+            } else {
+                header
+            };
             if header.is_marked() {
                 self.write_header(GcRef(live), header.set_forwarding_pointer(free));
                 free += HEADER_LEN as u32 + header.word_size() as u32;
@@ -310,6 +331,10 @@ impl MemoryPool {
             tracing::trace!("update_pointer: {item:?}");
 
             let header = self.read_header(item);
+            if header.is_padding() {
+                ptr += 1;
+                continue;
+            }
             if header.is_marked() && header.is_initialized() {
                 match header.object_type() {
                     ObjectType::Instance => {
@@ -373,9 +398,23 @@ impl MemoryPool {
         loop {
             let item = GcRef(ptr);
             let header = self.read_header(item);
-            self.write_header(item, header.unmarked());
+            if header.is_padding() {
+                ptr += 1;
+                continue;
+            }
+
+            self.write_header(item, header.unmarked().unneed_padding());
             if header.is_marked() {
                 unsafe {
+                    if header.is_need_padding() {
+                        std::ptr::write(
+                            self.memory
+                                .as_mut_ptr()
+                                .add(header.forwarding_pointer() as usize - 1),
+                            PADDING_MASK,
+                        );
+                    }
+
                     std::ptr::copy(
                         self.memory.as_ptr().add(item.get_usize()),
                         self.memory
@@ -546,8 +585,17 @@ impl MemoryPool {
         addr
     }
     pub(crate) fn new_function_body(&mut self, locals: &LocalsData, instr: &[Instr]) -> GcRef {
-        let size = locals.byte_size() + instr.len() * word_size::<Instr>();
-        let addr = self.allocate(Header::new(ObjectType::Raw, size).initialized());
+        let align = align_of::<*mut Instr>();
+        let align64 = align == 8;
+        let size = locals.word_size()
+            + locals.word_size() % (align / 4)
+            + instr.len() * word_size::<Instr>();
+        let addr = if align64 {
+            self.allocate(Header::new(ObjectType::Raw, size).initialized().align64())
+        } else {
+            self.allocate(Header::new(ObjectType::Raw, size).initialized())
+        };
+
         let mut ptr = unsafe { self.get_value_mut::<u32>(addr, 0) };
         unsafe {
             if locals.count_i32 != 0 {
@@ -578,7 +626,12 @@ impl MemoryPool {
                 std::ptr::write(ptr, locals.count_v128);
                 ptr = ptr.add(1);
             }
-            std::ptr::copy_nonoverlapping(instr.as_ptr(), ptr as *mut Instr, instr.len());
+            let offset = ptr.align_offset(align_of::<*mut Instr>());
+            std::ptr::copy_nonoverlapping(
+                instr.as_ptr(),
+                ptr.add(offset) as *mut Instr,
+                instr.len(),
+            );
         }
         addr
     }

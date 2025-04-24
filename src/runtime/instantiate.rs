@@ -247,7 +247,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
     ));
     if memory.is_none() {
         if let Some(mem) = mems.first() {
-            memory = Some({ gc.new_memory(mem.0.min, mem.0.max.unwrap_or(PAGE_SIZE_MAX as u32)) })
+            memory = Some(gc.new_memory(mem.0.min, mem.0.max.unwrap_or(PAGE_SIZE_MAX as u32)))
         }
     }
 

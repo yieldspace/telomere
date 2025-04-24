@@ -23,6 +23,8 @@ pub(crate) mod gc;
 pub use gc::GcRef;
 
 pub use store::{Store, StoreState};
+
+use crate::WasmParserError;
 pub mod custom_section;
 
 #[derive(Debug, Clone, Copy)]
@@ -532,43 +534,71 @@ impl LocalsData {
             + (*count_i64 as usize + *count_f64 as usize) * 2
             + *count_v128 as usize * 4
     }
-    pub(crate) fn create_reassignment_table(&self, locals: &[Locals]) -> LocalReassignTable {
-        let mut count_i32 = 0;
-        let mut count_f32 = 0;
-        let mut count_func_ref = 0;
-        let mut count_extern_ref = 0;
-        let mut count_i64 = 0;
-        let mut count_f64 = 0;
-        let mut count_v128 = 0;
-        let mut index = 0;
+    pub(crate) fn create_reassignment_table(
+        &self,
+        locals: &[Locals],
+    ) -> Result<LocalReassignTable, WasmParserError> {
+        let mut count_i32 = 0u32;
+        let mut count_f32 = 0u32;
+        let mut count_func_ref = 0u32;
+        let mut count_extern_ref = 0u32;
+        let mut count_i64 = 0u32;
+        let mut count_f64 = 0u32;
+        let mut count_v128 = 0u32;
+        let mut index = 0u32;
         let mut res = vec![];
         for Locals { n, t } in locals {
-            index += n;
+            index = index
+                .checked_add(*n)
+                .ok_or(WasmParserError::TooManyLocals)?;
             match t {
                 ValType::I32 => {
-                    res.push((index, ValType::I32, count_i32 * 4));
-                    count_i32 += n;
+                    res.push((
+                        index,
+                        ValType::I32,
+                        count_i32
+                            .checked_mul(4)
+                            .ok_or(WasmParserError::TooManyLocals)?,
+                    ));
+                    count_i32 = count_i32
+                        .checked_add(*n)
+                        .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::F32 => {
-                    res.push((index, ValType::F32, (self.count_i32 + count_f32) * 4));
-                    count_f32 += n;
+                    res.push((
+                        index,
+                        ValType::F32,
+                        (self.count_i32 + count_f32)
+                            .checked_mul(4)
+                            .ok_or(WasmParserError::TooManyLocals)?,
+                    ));
+                    count_f32 = count_f32
+                        .checked_add(*n)
+                        .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::FuncRef => {
                     res.push((
                         index,
                         ValType::FuncRef,
-                        (self.count_i32 + self.count_f32 + count_func_ref) * 4,
+                        (self.count_i32 + self.count_f32 + count_func_ref)
+                            .checked_mul(4)
+                            .ok_or(WasmParserError::TooManyLocals)?,
                     ));
-                    count_func_ref += n;
+                    count_func_ref = count_func_ref
+                        .checked_add(*n)
+                        .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::ExternRef => {
                     res.push((
                         index,
                         ValType::ExternRef,
                         (self.count_i32 + self.count_f32 + self.count_func_ref + count_extern_ref)
-                            * 4,
+                            .checked_mul(4)
+                            .ok_or(WasmParserError::TooManyLocals)?,
                     ));
-                    count_extern_ref += n;
+                    count_extern_ref = count_extern_ref
+                        .checked_add(*n)
+                        .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::I64 => {
                     res.push((
@@ -578,10 +608,15 @@ impl LocalsData {
                             + self.count_f32
                             + self.count_func_ref
                             + self.count_extern_ref)
-                            * 4
-                            + count_i64 * 8,
+                            .checked_mul(4)
+                            .ok_or(WasmParserError::TooManyLocals)?
+                            + count_i64
+                                .checked_mul(8)
+                                .ok_or(WasmParserError::TooManyLocals)?,
                     ));
-                    count_i64 += n;
+                    count_i64 = count_i64
+                        .checked_add(*n)
+                        .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::F64 => {
                     res.push((
@@ -591,10 +626,15 @@ impl LocalsData {
                             + self.count_f32
                             + self.count_func_ref
                             + self.count_extern_ref)
-                            * 4
-                            + (self.count_i64 + count_f64) * 8,
+                            .checked_mul(4)
+                            .ok_or(WasmParserError::TooManyLocals)?
+                            + (self.count_i64 + count_f64)
+                                .checked_mul(8)
+                                .ok_or(WasmParserError::TooManyLocals)?,
                     ));
-                    count_f64 += n;
+                    count_f64 = count_f64
+                        .checked_add(*n)
+                        .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::V128 => {
                     res.push((
@@ -604,15 +644,22 @@ impl LocalsData {
                             + self.count_f32
                             + self.count_func_ref
                             + self.count_extern_ref)
-                            * 4
-                            + (self.count_i64 + self.count_f64) * 8
-                            + count_v128 * 16,
+                            .checked_mul(4)
+                            .ok_or(WasmParserError::TooManyLocals)?
+                            + (self.count_i64 + self.count_f64)
+                                .checked_mul(8)
+                                .ok_or(WasmParserError::TooManyLocals)?
+                            + count_v128
+                                .checked_mul(16)
+                                .ok_or(WasmParserError::TooManyLocals)?,
                     ));
-                    count_v128 += n;
+                    count_v128 = count_v128
+                        .checked_add(*n)
+                        .ok_or(WasmParserError::TooManyLocals)?;
                 }
             }
         }
-        LocalReassignTable(res)
+        Ok(LocalReassignTable(res))
     }
 }
 impl From<&[Locals]> for LocalsData {

@@ -1,6 +1,6 @@
 use crate::common::{
     gc::{GcRef, GcView, MemoryPool},
-    HostFunction, LocalsData,
+    HostFunction, Instr, LocalsData,
 };
 
 const HOST_FUNC_MASK: u32 = 0x80000000;
@@ -83,7 +83,7 @@ impl FunctionInstanceData {
                 locals.count_f64 = *pool.get_value::<u32>(addr, offset);
                 offset += 1;
             }
-            (locals, offset)
+            (locals, offset + (offset % (align_of::<*mut Instr>() / 4)))
         }
     }
     pub fn host_code_pointer(&self, pool: &MemoryPool) -> HostFunction {
