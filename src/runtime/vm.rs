@@ -1,3 +1,4 @@
+pub(crate) mod simd;
 use std::ops::BitXor;
 
 use crate::{
@@ -1964,6 +1965,7 @@ pub fn run_module_function(
                 WasmValue::I64(i64) => stack.push_i64(*i64),
                 WasmValue::F32(v) => stack.push_f32(*v),
                 WasmValue::F64(v) => stack.push_f64(*v),
+                WasmValue::V128(v) => stack.push_u128(*v),
                 WasmValue::ExternRef(v) => stack.push_u32(*v),
                 WasmValue::FuncRef(v) => stack.push_u32(*v),
             });
@@ -2000,7 +2002,7 @@ pub fn run_module_function(
                     ValType::F64 => WasmValue::F64(stack.pop_f64()),
                     ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
                     ValType::ExternRef => WasmValue::ExternRef(stack.pop_u32()),
-                    ValType::V128 => todo!(),
+                    ValType::V128 => WasmValue::V128(stack.pop_u128()),
                 })
                 .collect::<Vec<_>>();
         result.reverse();

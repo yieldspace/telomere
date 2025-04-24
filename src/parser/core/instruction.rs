@@ -1,8 +1,10 @@
 use super::base::WasmBaseParser;
 use super::instruction_generator::InstructionGenerator;
 use super::jump_resolver::JumpResolver;
+use super::simd_instruction;
 use super::type_checker::TypeChecker;
 use super::validate::*;
+use super::values;
 use super::Result;
 use crate::binary::BinaryReader;
 use crate::common::BlockReturn;
@@ -25,6 +27,14 @@ use crate::{
     WasmParserError,
 };
 use tracing::trace;
+macro_rules! simd_instruction {
+    ($code: expr,$ctx: expr, $($name: ident),*) => {
+        match ($code) {
+            $($name::CODE => $name::parse(&mut $ctx)?,)*
+            unknown => todo!("unknown simd code: {}",unknown),
+        }
+    }
+}
 fn get_local_addr(
     ty: &ResultType,
     locals: &LocalReassignTable,
@@ -134,12 +144,7 @@ impl<R: BinaryReader> WasmBaseParser<R> for InstructionParser<'_, R> {
 }
 impl<'a, R: BinaryReader> InstructionParser<'a, R> {
     fn parse_memarg(&mut self, natural_align: u32) -> Result<(usize, MemArg)> {
-        let (len, align) = self.parse_u32()?;
-        if align > natural_align {
-            Err(WasmParserError::InvalidAlignment(align))?;
-        }
-        let (len2, offset) = self.parse_u32()?;
-        Ok((len + len2, MemArg { align, offset }))
+        values::parse_memarg(self.reader, natural_align)
     }
     #[allow(clippy::too_many_arguments)]
     fn parse_inst(
@@ -2695,6 +2700,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 
                 checker.op(&[], &[ValType::FuncRef])?;
                 (1 + len, false)
+            }
+            0xFD => {
+                // simd
+                let (len, idx) = self.parse_u32()?;
+                use simd_instruction::*;
+                let mut ctx = SimdParserContext {
+                    instrs,
+                    reader: self.reader,
+                    checker,
+                };
+                let len2 = simd_instruction!(idx, ctx, v128_load);
+                (1 + len + len2, false)
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
         })

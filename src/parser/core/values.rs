@@ -1,4 +1,5 @@
 use crate::binary::BinaryReader;
+use crate::common::MemArg;
 use crate::parser::leb128::Leb128Parser;
 use crate::WasmParserError;
 use tracing::trace;
@@ -61,4 +62,12 @@ pub fn parse_name<R: BinaryReader>(reader: &mut R) -> Result<(usize, String)> {
         len,
         String::from_utf8(name).map_err(|_| WasmParserError::InvalidNameEncoding)?,
     ))
+}
+pub fn parse_memarg<R: BinaryReader>(reader: &mut R, natural_align: u32) -> Result<(usize, MemArg)> {
+    let (len, align) = parse_u32(reader)?;
+    if align > natural_align {
+        Err(WasmParserError::InvalidAlignment(align))?;
+    }
+    let (len2, offset) = parse_u32(reader)?;
+    Ok((len + len2, MemArg { align, offset }))
 }

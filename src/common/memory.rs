@@ -84,6 +84,11 @@ impl Memory {
             self.read_u8_array::<8>(vm_try!(compute_offset(memarg, offset)))
         )))
     }
+    pub fn read_u128(&self, memarg: MemArg, offset: u32) -> VMResult<u128> {
+        VMResult::Success(u128::from_le_bytes(vm_try!(
+            self.read_u8_array::<16>(vm_try!(compute_offset(memarg, offset)))
+        )))
+    }
     pub fn read_f32(&self, memarg: MemArg, offset: u32) -> VMResult<f32> {
         VMResult::Success(f32::from_le_bytes(vm_try!(
             self.read_u8_array(vm_try!(compute_offset(memarg, offset)))

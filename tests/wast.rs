@@ -400,3 +400,7 @@ fn utf8_import_module() {
 fn utf8_invalid_encoding() {
     run_test_file("utf8-invalid-encoding");
 }
+#[test]
+fn simd_load() {
+    run_test_file("simd_load");
+}
