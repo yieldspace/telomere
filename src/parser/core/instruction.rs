@@ -2710,7 +2710,19 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     reader: self.reader,
                     checker,
                 };
-                let len2 = simd_instruction!(idx, ctx, v128_load);
+                let len2 = simd_instruction!(
+                    idx,
+                    ctx,
+                    v128_load,
+                    i8x16_extract_lane_s,
+                    i8x16_eq,
+                    v128_not,
+                    i8x16_all_true,
+                    v128_bitselect,
+                    i8x16_shl,
+                    i8x16_add,
+                    i8x16_sub
+                );
                 (1 + len + len2, false)
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
