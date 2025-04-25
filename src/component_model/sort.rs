@@ -19,7 +19,7 @@ pub trait SortLike {
     fn eq_sort(&self, sort: Sort) -> bool;
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SortWithIdx {
     Core(CoreSortWithIdx),
     Func(FuncIdx),

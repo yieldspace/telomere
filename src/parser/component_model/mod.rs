@@ -1,3 +1,4 @@
+use std::ops::Range;
 use crate::binary::BinaryReader;
 use crate::parser::core::parse_u32;
 use crate::WasmParserError;
@@ -126,4 +127,11 @@ where
         }
         x => Err(ComponentParseError::WrongMagic(x, "option".to_string())),
     }
+}
+
+pub(crate) fn parse_vec_range(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> Result<Range<u32>, ComponentParseError> {
+    let (_, size) = parse_u32(ctx.reader)?;
+    Ok(0..size)
 }

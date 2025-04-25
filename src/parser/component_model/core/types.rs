@@ -1,9 +1,9 @@
 use crate::binary::BinaryReader;
-use crate::component_model::CoreTypeIdx;
+use crate::component_model::{CoreType, CoreTypeIdx};
 use crate::parser::component_model::{ParseContext, SizedResult};
 
 pub(crate) fn parse_core_type(
     _ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<CoreTypeIdx> {
+) -> SizedResult<CoreType> {
     todo!()
 }

@@ -1,11 +1,8 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Binding, ComponentExport, ComponentExportType, Idx, InlineExport, Instance, InstanceIdx,
-    InstanceValue, Instantiate, InstantiateArg,
-};
+use crate::component_model::{Binding, Idx, InlineExport, Instance, InstanceIdx, InstanceValue, InstantiateArg, SortWithIdx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
-use crate::parser::component_model::parse_sort_with_idx;
+use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError};
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::{parse_name, parse_vec};
 use crate::runtime::component_model::instantiate::{
@@ -24,19 +21,27 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
             let args = args
                 .into_iter()
                 .map(|InstantiateArg { name, sort }| (name, sort))
-                .collect();
-            // let idx = ctx
-            //     .validator
-            //     .add_instance(Binding::Real(Instance::Instantiate(Instantiate {
-            //         component_idx,
-            //         args,
-            //     })))?;
-            let component = ctx.validator.get_component(&component_idx);
-            // let exports = component.get_exports();
+                .collect::<HashMap<String, SortWithIdx>>();
+            let component = ctx.validator.get_component(&component_idx)?;
+            if args.len() != component.ty.imports.len() {
+                return Err(ComponentParseError::InvalidSignature(format!(
+                    "Invalid number of args: {}",
+                    args.len()
+                )));
+            }
+            let mut exports = HashMap::new();
+            for (export_name, ty) in component.ty.exports.iter() {
+                // todo: check ty and arg type
+                let arg = args.get(export_name).expect("export not found");
+                exports.insert(
+                    export_name.clone(),
+                    arg.clone(),
+                );
+            }
             let value = InstanceValue {
                 component_idx: Some(component_idx),
                 args,
-                exports: HashMap::default(),
+                exports,
             };
             let ty = value.get_type();
             let idx = ctx
@@ -60,9 +65,6 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
         }
         0x01 => {
             let (_, exports) = parse_vec(ctx, |v| v.reader, parse_inlineexport)?;
-            // let idx = ctx
-            //     .validator
-            //     .add_instance(Binding::Real(Instance::InlineExport(exports)))?;
             let value = InstanceValue {
                 component_idx: None,
                 args: Default::default(),

@@ -1,14 +1,11 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreModuleReference,
-    CoreSortWithIdx, CoreType, ExternDesc, Idx, InlineComponent, Instance, Reference, SortWithIdx,
-    Type, TypeBound,
-};
+use crate::component_model::{Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreSortWithIdx, CoreType, ExternDesc, Idx, InlineComponent, Instance, InstanceReference, LazyValue, Reference, SortWithIdx, Type, TypeBound};
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{
     parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, SizedResult,
 };
 use crate::parser::core::parse_name;
+use crate::runtime::component_model::instantiate::{instantiate_import_core_module, InstantiateInstr};
 
 pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
@@ -16,21 +13,17 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
     let (_, ed) = parse_externdesc(ctx)?;
     let import = match ed {
         ExternDesc::Core(idx) => {
-            let ty = ctx.validator.get_core_type(&idx);
+            let ty = ctx.validator.get_core_type(&idx)?;
             if let CoreType::ModuleType(mod_type) = ty {
-                // let idx = ctx
-                //     .validator
-                //     .add_core_module(Binding::Real(CoreModule::Typed(
-                //         mod_type.clone(),
-                //         Reference::Imported(name.clone()),
-                //     )))?;
                 let idx = ctx
                     .validator
                     .add_core_module(Binding::Real(CoreModule::new(
-                        None,
+                        LazyValue::Lazy(LazyCoreModuleValue::UnresolvedImport(name.clone())),
                         mod_type.clone(),
-                        Some(CoreModuleReference::Imported(name.clone())),
                     )))?;
+                ctx.push_instr(InstantiateInstr {
+                    op: instantiate_import_core_module,
+                });
                 ComponentImport::CoreModule(idx)
             } else {
                 return Err(ComponentParseError::InvalidSignature(format!(
@@ -87,7 +80,10 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
             if let Type::Instance(inst_type) = ty {
                 let idx = ctx
                     .validator
-                    .add_instance(Binding::Real(Instance::new(None, inst_type.clone())))?;
+                    .add_instance(Binding::reference(
+                        Instance::new(None, inst_type.clone()),
+                        InstanceReference::Imported(name.clone()),
+                    ))?;
                 ComponentImport::Instance(idx)
             } else {
                 return Err(ComponentParseError::InvalidSignature(format!(
@@ -109,7 +105,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
         SortWithIdx::Core(CoreSortWithIdx::Module(idx)) => {
             if ed.is_some() {
                 if let ExternDesc::Core(type_idx) = ed.clone().unwrap() {
-                    if let CoreType::ModuleType(ty) = ctx.validator.get_core_type(&type_idx) {
+                    if let CoreType::ModuleType(ty) = ctx.validator.get_core_type(&type_idx)? {
                         // ctx.validator
                         //     .add_core_module(Binding::Real(CoreModule::SuperTyped(
                         //         ty.clone(),
@@ -119,9 +115,8 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()
                         let idx = ctx
                             .validator
                             .add_core_module(Binding::Real(CoreModule::new(
-                                None,
+                                LazyValue::Lazy(LazyCoreModuleValue::FromIdx(idx)),
                                 ty.clone(),
-                                Some(CoreModuleReference::TypeOverwritten(idx)),
                             )))?;
                         SortWithIdx::Core(CoreSortWithIdx::Module(idx))
                     } else {

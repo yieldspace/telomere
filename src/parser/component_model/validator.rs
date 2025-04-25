@@ -1,19 +1,11 @@
 mod child;
-mod types;
 
-use crate::component_model::{
-    Binding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, ComponentType,
-    CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx,
-    CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreTableIdx, CoreTableRef, CoreType,
-    CoreTypeIdx, FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceIdx, Type,
-    TypeIdx,
-};
+use crate::component_model::{Binding, ComponentBinding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, ComponentType, CoreFuncIdx, CoreFunction, CoreFunctionBinding, CoreGlobalBinding, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceBinding, CoreInstanceIdx, CoreMemoryBinding, CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleBinding, CoreModuleIdx, CoreTableBinding, CoreTableIdx, CoreTableRef, CoreType, CoreTypeBinding, CoreTypeIdx, FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceBinding, InstanceIdx, Resolvable, Resolver, Type, TypeBinding, TypeIdx};
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
 pub use child::ChildValidator;
 use std::collections::HashMap;
-pub use types::*;
 
 #[derive(Default)]
 pub struct LocalStore {
@@ -150,7 +142,7 @@ pub trait Validator: private::Sealed {
 
     fn add_core_module(
         &mut self,
-        module: Binding<CoreModule>,
+        module: CoreModuleBinding,
     ) -> Result<CoreModuleIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_modules.len();
         let idx = CoreModuleIdx::new(global_idx);
@@ -161,7 +153,7 @@ pub trait Validator: private::Sealed {
 
     fn add_core_instance(
         &mut self,
-        instance: Binding<CoreInstance>,
+        instance: CoreInstanceBinding,
     ) -> Result<CoreInstanceIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_instances.len();
         let idx = CoreInstanceIdx::new(global_idx);
@@ -174,7 +166,7 @@ pub trait Validator: private::Sealed {
 
     fn add_core_func(
         &mut self,
-        func: Binding<CoreFunction>,
+        func: CoreFunctionBinding,
     ) -> Result<CoreFuncIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_functions.len();
         let idx = CoreFuncIdx::new(global_idx);
@@ -183,7 +175,7 @@ pub trait Validator: private::Sealed {
         Ok(idx)
     }
 
-    fn add_core_type(&mut self, ty: Binding<CoreType>) -> Result<CoreTypeIdx, ComponentParseError> {
+    fn add_core_type(&mut self, ty: CoreTypeBinding) -> Result<CoreTypeIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_types.len();
         let idx = CoreTypeIdx::new(global_idx);
         self.get_flatten_component_mut().core_types.push(ty);
@@ -193,7 +185,7 @@ pub trait Validator: private::Sealed {
 
     fn add_core_memory(
         &mut self,
-        memory: Binding<CoreMemoryRef>,
+        memory: CoreMemoryBinding,
     ) -> Result<CoreMemoryIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_memories.len();
         let idx = CoreMemoryIdx::new(global_idx);
@@ -204,7 +196,7 @@ pub trait Validator: private::Sealed {
 
     fn add_core_table(
         &mut self,
-        table: Binding<CoreTableRef>,
+        table: CoreTableBinding,
     ) -> Result<CoreTableIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_tables.len();
         let idx = CoreTableIdx::new(global_idx);
@@ -215,7 +207,7 @@ pub trait Validator: private::Sealed {
 
     fn add_core_global(
         &mut self,
-        global: Binding<CoreGlobalRef>,
+        global: CoreGlobalBinding,
     ) -> Result<CoreGlobalIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().core_globals.len();
         let idx = CoreGlobalIdx::new(global_idx);
@@ -226,7 +218,7 @@ pub trait Validator: private::Sealed {
 
     fn add_component(
         &mut self,
-        component: Binding<InlineComponent>,
+        component: ComponentBinding,
     ) -> Result<ComponentIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().components.len();
         let idx = ComponentIdx::new(global_idx);
@@ -237,7 +229,7 @@ pub trait Validator: private::Sealed {
 
     fn add_instance(
         &mut self,
-        instance: Binding<Instance>,
+        instance: InstanceBinding,
     ) -> Result<InstanceIdx, ComponentParseError> {
         let global_idx = self.get_flatten_component().instances.len();
         let idx = InstanceIdx::new(global_idx);
@@ -291,36 +283,120 @@ pub trait Validator: private::Sealed {
         self.get_local_store_mut().exports.insert(name, export);
         Ok(())
     }
+}
 
-    fn get_core_module(&self, core_mod_idx: &CoreModuleIdx) -> &CoreModule {
-        self.get_flatten_component()
-            .get_core_module(core_mod_idx.global())
-    }
+impl<T> Resolver<Type> for T where T: Validator + ?Sized {
+    type Error = ComponentParseError;
 
-    fn get_core_type(&self, core_type_idx: &CoreTypeIdx) -> &CoreType {
-        self.get_flatten_component()
-            .get_core_type(core_type_idx.global())
-    }
-
-    fn get_core_instance(&self, core_inst_idx: &CoreInstanceIdx) -> &CoreInstance {
-        self.get_flatten_component()
-            .get_core_instance(core_inst_idx.global())
-    }
-
-    fn get_component(&self, component_idx: &ComponentIdx) -> &InlineComponent {
-        self.get_flatten_component()
-            .get_component(component_idx.global())
-    }
-
-    fn get_instance(&self, instance_idx: &InstanceIdx) -> &Instance {
-        self.get_flatten_component()
-            .get_instance(instance_idx.global())
-    }
-
-    fn get_type(&self, type_idx: &TypeIdx) -> &Type {
-        self.get_flatten_component().get_type(type_idx.global())
+    fn resolve<I>(&self, idx: &I) -> Result<&Type, Self::Error>
+    where
+        I: Idx + Resolvable<Type>
+    {
+        match self.get_flatten_component().types.get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "type".to_string()))? {
+            TypeBinding::Real(ty) => Ok(ty),
+            TypeBinding::Alias(idx) => self.resolve(&TypeIdx::new(*idx)),
+            TypeBinding::Reference(ty, _) => Ok(ty)
+        }
     }
 }
+
+impl<T> Resolver<Instance> for T where T: Validator + ?Sized {
+    type Error = ComponentParseError;
+
+    fn resolve<I>(&self, idx: &I) -> Result<&Instance, Self::Error>
+    where
+        I: Idx + Resolvable<Instance>
+    {
+        match self.get_flatten_component().instances.get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "instance".to_string()))? {
+            InstanceBinding::Real(inst) => Ok(inst),
+            InstanceBinding::Alias(idx) => self.resolve(&InstanceIdx::new(*idx)),
+            InstanceBinding::Reference(inst, _) => Ok(inst),
+        }
+    }
+}
+
+impl<T> Resolver<InlineComponent> for T where T: Validator + ?Sized {
+    type Error = ComponentParseError;
+
+    fn resolve<I>(&self, idx: &I) -> Result<&InlineComponent, Self::Error>
+    where
+        I: Idx + Resolvable<InlineComponent>
+    {
+        match self.get_flatten_component().components.get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "component".to_string()))? {
+            Binding::Real(comp) => Ok(comp),
+            Binding::Alias(idx) => self.resolve(&ComponentIdx::new(*idx)),
+            Binding::Reference(comp, _) => Ok(comp),
+        }
+    }
+}
+
+impl<T> Resolver<CoreType> for T where T: Validator + ?Sized {
+    type Error = ComponentParseError;
+
+    fn resolve<I>(&self, idx: &I) -> Result<&CoreType, Self::Error>
+    where
+        I: Idx + Resolvable<CoreType>
+    {
+        match self.get_flatten_component().core_types.get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core type".to_string()))? {
+            CoreTypeBinding::Real(value) => Ok(value),
+            CoreTypeBinding::Alias(idx) => self.resolve(&CoreTypeIdx::new(*idx)),
+            CoreTypeBinding::Reference(value, _) => Ok(value),
+        }
+    }
+}
+
+impl<T> Resolver<CoreInstance> for T where T: Validator + ?Sized {
+    type Error = ComponentParseError;
+
+    fn resolve<I>(&self, idx: &I) -> Result<&CoreInstance, Self::Error>
+    where
+        I: Idx + Resolvable<CoreInstance>,
+    {
+        match self.get_flatten_component().core_instances.get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core instance".to_string()))? {
+            CoreInstanceBinding::Real(value) => Ok(value),
+            CoreInstanceBinding::Alias(idx) => self.resolve(&CoreInstanceIdx::new(*idx)),
+            CoreInstanceBinding::Reference(value, _) => Ok(value),
+        }
+    }
+}
+
+impl<T> Resolver<CoreFunction> for T where T: Validator + ?Sized {
+    type Error = ComponentParseError;
+
+    fn resolve<I>(&self, idx: &I) -> Result<&CoreFunction, Self::Error>
+    where
+        I: Idx + Resolvable<CoreFunction>,
+    {
+        match self.get_flatten_component().core_functions.get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core function".to_string()))? {
+            CoreFunctionBinding::Real(value) => Ok(value),
+            CoreFunctionBinding::Alias(idx) => self.resolve(&CoreFuncIdx::new(*idx)),
+            CoreFunctionBinding::Reference(value, _) => Ok(value),
+        }
+    }
+}
+
+impl<T> Resolver<CoreModule> for T where T: Validator + ?Sized {
+    type Error = ComponentParseError;
+
+    fn resolve<I>(&self, idx: &I) -> Result<&CoreModule, Self::Error>
+    where
+        I: Idx + Resolvable<CoreModule>,
+    {
+        match self.get_flatten_component().core_modules.get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core module".to_string()))? {
+            CoreModuleBinding::Real(value) => Ok(value),
+            CoreModuleBinding::Alias(idx) => self.resolve(&CoreModuleIdx::new(*idx)),
+            CoreModuleBinding::Reference(value, _) => Ok(value),
+        }
+    }
+}
+
 
 pub struct ComponentValidator<'a> {
     component: &'a mut FlattenComponent,
@@ -362,8 +438,8 @@ impl Validator for ComponentValidator<'_> {
 }
 
 mod private {
-    use crate::parser::component_model::validator::TypeValidator;
     use crate::parser::component_model::{ChildValidator, ComponentValidator};
+    use crate::parser::component_model::types::TypeValidator;
 
     pub trait Sealed {}
 
@@ -371,4 +447,12 @@ mod private {
     impl Sealed for ComponentValidator<'_> {}
     impl Sealed for ChildValidator<'_> {}
     impl Sealed for TypeValidator<'_> {}
+}
+
+pub fn get_outer_validator(validator: &dyn Validator, ct: u32) -> &dyn Validator {
+    if ct == 0 {
+        validator
+    } else {
+        get_outer_validator(validator.get_parent().unwrap(), ct - 1)
+    }
 }

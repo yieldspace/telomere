@@ -12,6 +12,7 @@ pub struct InstantiateContext<'a> {
     pub core_functions: Vec<(InstanceAddr, String)>,
     pub core_memories: Vec<(InstanceAddr, String)>,
     pub core_tables: Vec<(InstanceAddr, String)>,
+    pub resolved_imports: HashMap<ResolvedImportKey, ResolvedImportMap>,
     pub instances: HashMap<usize, InstantiatedInstance>,
     pub linker: &'a Linker,
 }
@@ -31,6 +32,7 @@ impl<'a> InstantiateContext<'a> {
             core_functions: vec![],
             core_memories: vec![],
             core_tables: vec![],
+            resolved_imports: Default::default(),
             instances: Default::default(),
             linker,
         }
@@ -51,4 +53,27 @@ pub enum InstantiatedInstanceExport {
 
 pub struct InstantiatedInstance {
     pub exports: HashMap<String, InstantiatedInstanceExport>,
+}
+
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
+pub enum ResolvedImportKey {
+    Toplevel,
+    Child(usize),
+}
+
+pub struct ResolvedImportMap {
+    pub core_modules: HashMap<CoreModuleIdx, Module>,
+}
+
+impl ResolvedImportMap {
+    pub fn new() -> Self {
+        Self {
+            core_modules: Default::default(),
+        }
+    }
+}
+
+pub enum ResolvedImport {
+    CoreModule(CoreModuleIdx),
+    Instance(InstanceIdx),
 }

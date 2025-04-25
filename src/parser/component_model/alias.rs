@@ -1,9 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    AliasIdx, Binding, ComponentExportSlot, ComponentFunction, CoreExportSlot, CoreModule,
-    CoreModuleReference, CoreModuleType, CoreSortWithIdx, ExternDesc, Idx, InlineComponent,
-    Instance, Sort, SortWithIdx, Type, TypeBound,
-};
+use crate::component_model::{AliasIdx, Binding, ComponentExportSlot, ComponentFunction, CoreExportSlot, CoreModule, CoreModuleType, CoreSortWithIdx, ExternDesc, Idx, InlineComponent, Instance, LazyValue, Resolvable, Sort, SortWithIdx, Type, TypeBound};
 use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::{
     parse_core_instance_idx, parse_instance_idx, parse_sort, ComponentParseError, ParseContext,
@@ -19,7 +15,7 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Ali
         match ctx.reader.read_exact_one()? {
             0x00 => {
                 let (_, instance_idx) = parse_instance_idx(ctx)?;
-                let instance = ctx.validator.get_instance(&instance_idx);
+                let instance = instance_idx.resolve(ctx.validator)?;
                 let (_, name) = parse_name(ctx.reader)?;
                 let export = instance.get_export(&name)?;
                 if export.is_none() {
@@ -28,14 +24,13 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Ali
                         ExternDesc::Core(module_idx) => {
                             let ty: CoreModuleType = ctx
                                 .validator
-                                .get_core_type(&module_idx)
+                                .get_core_type(&module_idx)?
                                 .clone()
                                 .try_into()?;
                             AliasIdx::CoreModule(ctx.validator.add_core_module(Binding::Real(
                                 CoreModule::new(
-                                    None,
+                                    LazyValue::Lazy(LazyCoreModuleValue::UnresolvedAlias(instance_idx, name.clone())),
                                     ty,
-                                    Some(CoreModuleReference::Instance(instance_idx, name.clone())),
                                 ),
                             ))?)
                         }
@@ -70,7 +65,10 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Ali
                             let instance = instance.clone().try_into()?;
                             AliasIdx::Instance(
                                 ctx.validator
-                                    .add_instance(Binding::Real(Instance::new(None, instance)))?,
+                                    .add_instance(Binding::Real(Instance::new(
+                                        LazyValue::Lazy(
+                                            LazyInstanceValue::UnresolvedAlias(instance_idx, name.clone())
+                                        ), instance)))?,
                             )
                         }
                     }

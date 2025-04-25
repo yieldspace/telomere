@@ -1,9 +1,5 @@
 use crate::common::ExportDesc;
-use crate::component_model::{
-    Binding, CoreBinding, CoreExportSlot, CoreFuncRef, CoreFunction, CoreGlobalRef,
-    CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreMemoryRef, CoreModule,
-    CoreModuleIdx, CoreReference, CoreSort, CoreTableRef, Idx, Slot,
-};
+use crate::component_model::{Binding, CoreBinding, CoreExportSlot, CoreFuncRef, CoreFunction, CoreGlobalRef, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreReference, CoreSort, CoreTableRef, Idx, Resolvable, Slot};
 use crate::parser::component_model::{ComponentParseError, Validator};
 use crate::Module;
 use std::collections::HashMap;
@@ -42,7 +38,7 @@ impl CoreInstance {
     ) -> Result<CoreExportSlot, ComponentParseError> {
         match self {
             CoreInstance::Real { module_idx, .. } => {
-                let module = validator.get_core_module(module_idx);
+                let module = module_idx.resolve(validator)?;
                 match &module.value {
                     None => module.ty.get_export(self_idx, sort, name),
                     Some(module) => {

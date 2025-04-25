@@ -4,18 +4,13 @@ use crate::component_model::{
 };
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
-use crate::runtime::component_model::instantiate::context::{
-    InstantiatedInstance, InstantiatedInstanceExport,
-};
+use crate::runtime::component_model::instantiate::context::{InstantiatedInstance, InstantiatedInstanceExport, ResolvedImportKey, ResolvedImportMap};
 use crate::runtime::component_model::ComponentVMError;
 use crate::Registry;
 use crate::{aliasing as core_aliasing, Module};
 
 mod context;
-// FIXME: what is this?
-#[derive(Debug)]
-pub enum Void {}
-pub type InstantiateResult<T> = Result<T, Void>;
+mod instance;
 
 pub type InstantiateResult<T> = Result<T, ComponentVMError>;
 
@@ -170,11 +165,29 @@ pub unsafe fn instantiate_core_type(
     todo!()
 }
 
+pub unsafe fn instantiate_import_core_module(
+    tail_code: *const InstantiateInstr,
+    ctx: &mut InstantiateContext,
+) -> InstantiateResult<()> {
+    let idx = (*tail_code).operand.core_module_idx;
+    let module = ctx.component.get_core_module(idx);
+    assert!(module.value.is_none());
+    if let Some(CoreModuleReference::Imported(name)) = &module.reference {
+        let imported_module = ctx.component.get_instance(idx);
+        ctx.resolved_imports.get_mut(&ResolvedImportKey::Child(ctx.current.unwrap())).unwrap()
+            .core_modules.insert(idx, )
+    } else {
+        unreachable!()
+    }
+}
+
 pub unsafe fn instantiate_instance_start(
     tail_code: *const InstantiateInstr,
     ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     let idx = (*tail_code).operand.instance_idx;
+
+    ctx.resolved_imports.insert(ResolvedImportKey::Child(idx), ResolvedImportMap::new());
 
     ctx.current = Some(idx);
 

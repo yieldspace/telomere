@@ -6,6 +6,7 @@ mod idx;
 mod instance;
 mod sort;
 mod types;
+mod binding;
 
 pub use canon::*;
 pub use component::*;
@@ -15,6 +16,29 @@ pub use idx::*;
 pub use instance::*;
 pub use sort::*;
 pub use types::*;
+pub use binding::*;
+#[derive(Debug, Clone)]
+pub enum LazyValue<V, R> {
+    Value(V),
+    Lazy(R),
+}
+
+impl<V, R> LazyValue<V, R> {
+    pub fn unwrap(self) -> V {
+        match self {
+            LazyValue::Value(value) => value,
+            LazyValue::Lazy(_) => panic!("Tried to unwrap a lazy value"),
+        }
+    }
+
+    pub fn is_value(&self) -> bool {
+        matches!(self, LazyValue::Value(_))
+    }
+
+    pub fn is_lazy(&self) -> bool {
+        matches!(self, LazyValue::Lazy(_))
+    }
+}
 
 #[derive(Clone)]
 pub enum Slot<T, I: Idx> {
@@ -42,24 +66,18 @@ pub enum Reference {
     Exported(ExportName),
 }
 
-#[derive(Debug)]
-pub enum Binding<T> {
-    Real(T),
-    Alias(usize),
-}
-
 pub struct FlattenComponent {
-    pub core_modules: Vec<Binding<CoreModule>>,
-    pub core_instances: Vec<Binding<CoreInstance>>,
-    pub core_functions: Vec<Binding<CoreFunction>>,
-    pub functions: Vec<Binding<ComponentFunction>>,
-    pub components: Vec<Binding<InlineComponent>>,
-    pub instances: Vec<Binding<Instance>>,
-    pub core_types: Vec<Binding<CoreType>>,
-    pub core_memories: Vec<Binding<CoreMemoryRef>>,
-    pub core_tables: Vec<Binding<CoreTableRef>>,
-    pub core_globals: Vec<Binding<CoreGlobalRef>>,
-    pub types: Vec<Binding<Type>>,
+    pub core_modules: Vec<CoreModuleBinding>,
+    pub core_instances: Vec<CoreInstanceBinding>,
+    pub core_functions: Vec<CoreFunctionBinding>,
+    pub functions: Vec<FunctionBinding>,
+    pub components: Vec<ComponentBinding>,
+    pub instances: Vec<InstanceBinding>,
+    pub core_types: Vec<CoreTypeBinding>,
+    pub core_memories: Vec<CoreMemoryBinding>,
+    pub core_tables: Vec<CoreTableBinding>,
+    pub core_globals: Vec<CoreGlobalBinding>,
+    pub types: Vec<TypeBinding>,
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     pub values: Vec<Binding<ValueBound>>,
 }
