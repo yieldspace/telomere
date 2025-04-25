@@ -230,6 +230,13 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                     };
                                     assert_eq!(b.to_le_bytes(), buf)
                                 }
+                                (WastRetCore::V128(V128Pattern::F32x4(x)), WasmValue::V128(b)) => {
+                                    let x = x.iter().flat_map(|x| match x {
+                                        NanPattern::Value(x)=>x.bits.to_le_bytes(),
+                                        _ => todo!()
+                                    }).collect::<Vec<_>>();
+                                    assert_eq!(x ,b.to_le_bytes())
+                                }
                                 (WastRetCore::RefNull(_), WasmValue::ExternRef(0)) => {
                                     // ok
                                 }

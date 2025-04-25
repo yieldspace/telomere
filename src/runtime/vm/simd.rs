@@ -114,3 +114,12 @@ pub unsafe fn op_i8x16_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     vm_try!(ctx.stack.push_u128(result_u128));
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_f32x4_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let v2 = ctx.stack.pop_f32x4();
+    let v1 = ctx.stack.pop_f32x4();
+    trace!("{v2:?} {v1:?}");
+    let result = v1 * v2;
+    trace!("{result:?}");
+    vm_try!(ctx.stack.push_f32x4(result));
+    call_next(tail_code, 0, ctx)
+}

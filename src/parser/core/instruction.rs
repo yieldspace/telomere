@@ -2721,7 +2721,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     v128_bitselect,
                     i8x16_shl,
                     i8x16_add,
-                    i8x16_sub
+                    i8x16_sub,
+                    f32x4_mul
                 );
                 (1 + len + len2, false)
             }

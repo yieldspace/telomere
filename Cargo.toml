@@ -14,7 +14,7 @@ tracing = { version = "0.1.41" }
 num-derive = "0.4.2"
 num-traits = "0.2.19"
 typed-arena = "2.0.2"
-
+wide = "0.7.32"
 [dev-dependencies]
 wast = { version = "229.0.0", features = ["component-model"] }
 tracing-subscriber = { version = "0.3.19" }

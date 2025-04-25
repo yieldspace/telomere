@@ -1,3 +1,5 @@
+use wide::f32x4;
+
 use crate::VMResult;
 use std::fmt::Debug;
 
@@ -97,6 +99,14 @@ impl Stack {
     }
     pub fn pop_u128(&mut self) -> u128 {
         u128::from_le_bytes(self.pop_u8_array::<16>())
+    }
+    pub fn pop_f32x4(&mut self) -> f32x4 {
+        let x = self.pop_u8_array::<16>();
+        From::<[f32;4]>::from(unsafe { std::mem::transmute(x) })
+    }
+    pub fn push_f32x4(&mut self,v: f32x4)->VMResult<()>{
+        let x: [u8;16] = unsafe { std::mem::transmute( v.to_array()) };
+        self.push_u8_array(x)
     }
     pub fn pop_u64(&mut self) -> u64 {
         u64::from_le_bytes(self.pop_u8_array::<8>())

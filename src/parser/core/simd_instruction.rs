@@ -125,3 +125,14 @@ pub(crate) mod i8x16_sub {
         Ok(0)
     }
 }
+pub(crate) mod f32x4_mul {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 230;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        ctx.checker.unary_op(ValType::V128)?;
+        ctx.instrs.push_instr1(vm::simd::op_f32x4_mul);
+        Ok(0)
+    }
+}
