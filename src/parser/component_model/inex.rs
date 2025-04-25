@@ -1,9 +1,17 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreSortWithIdx, CoreType, ExternDesc, Idx, InlineComponent, Instance, InstanceReference, LazyValue, Reference, SortWithIdx, Type, TypeBound};
+use crate::component_model::{
+    Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreSortWithIdx,
+    CoreType, ExternDesc, Idx, InlineComponent, Instance, InstanceReference, LazyValue, Reference,
+    SortWithIdx, Type, TypeBound,
+};
 use crate::parser::component_model::types::parse_externdesc;
-use crate::parser::component_model::{parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, SizedResult, Validator};
+use crate::parser::component_model::{
+    parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, SizedResult, Validator,
+};
 use crate::parser::core::parse_name;
-use crate::runtime::component_model::instantiate::{instantiate_import_core_module, InstantiateInstr};
+use crate::runtime::component_model::instantiate::{
+    instantiate_import_core_module, InstantiateInstr,
+};
 
 pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
@@ -13,10 +21,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -
         ExternDesc::CoreModule(ty) => {
             let idx = ctx
                 .validator
-                .add_core_module(Binding::Real(CoreModule::new(
-                    None,
-                    ty.clone(),
-                )))?;
+                .add_core_module(Binding::Real(CoreModule::new(None, ty.clone())))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_import_core_module,
             });
@@ -25,10 +30,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -
         ExternDesc::Func(ty) => {
             let idx = ctx
                 .validator
-                .add_func(Binding::Real(ComponentFunction::new(
-                    None,
-                    ty.clone(),
-                )))?;
+                .add_func(Binding::Real(ComponentFunction::new(None, ty.clone())))?;
             ComponentImport::Func(idx)
         }
         #[cfg(feature = "component-gated-feature-value-imports-exports")]
@@ -53,12 +55,10 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -
             ComponentImport::Component(idx)
         }
         ExternDesc::Instance(ty) => {
-            let idx = ctx
-                .validator
-                .add_instance(Binding::reference(
-                    Instance::new(None, ty.clone()),
-                    InstanceReference::Imported(name.clone()),
-                ))?;
+            let idx = ctx.validator.add_instance(Binding::reference(
+                Instance::new(None, ty.clone()),
+                InstanceReference::Imported(name.clone()),
+            ))?;
             ComponentImport::Instance(idx)
         }
     };
@@ -77,10 +77,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -
                 if let ExternDesc::CoreModule(ty) = ed.clone().unwrap() {
                     let idx = ctx
                         .validator
-                        .add_core_module(Binding::Real(CoreModule::new(
-                            None,
-                            ty.clone(),
-                        )))?;
+                        .add_core_module(Binding::Real(CoreModule::new(None, ty.clone())))?;
                     SortWithIdx::Core(CoreSortWithIdx::Module(idx))
                 } else {
                     return Err(ComponentParseError::InvalidSignature(format!(
@@ -123,14 +120,18 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -
     Ok((ctx.reader.read_count() - start_count, ()))
 }
 
-pub fn parse_import_name_dash(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<String> {
+pub fn parse_import_name_dash(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> SizedResult<String> {
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "import name")?;
     // todo: check name
     let (len, name) = parse_name(ctx.reader)?;
     Ok((len + 1, name))
 }
 
-pub fn parse_export_name_dash(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<String> {
+pub fn parse_export_name_dash(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> SizedResult<String> {
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "export name")?;
     // todo: check name
     let (len, name) = parse_name(ctx.reader)?;

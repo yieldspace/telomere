@@ -1,12 +1,20 @@
 mod child;
 
-use crate::component_model::{Binding, ComponentBinding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, ComponentType, CoreFuncIdx, CoreFunction, CoreFunctionBinding, CoreGlobalBinding, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceBinding, CoreInstanceIdx, CoreMemoryBinding, CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleBinding, CoreModuleIdx, CoreTableBinding, CoreTableIdx, CoreTableRef, CoreType, CoreTypeBinding, CoreTypeIdx, FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceBinding, InstanceIdx, Resolvable, Resolver, Type, TypeBinding, TypeIdx};
+use crate::component_model::{
+    Binding, ComponentBinding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport,
+    ComponentType, CoreFuncIdx, CoreFunction, CoreFunctionBinding, CoreGlobalBinding,
+    CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceBinding, CoreInstanceIdx,
+    CoreMemoryBinding, CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleBinding, CoreModuleIdx,
+    CoreTableBinding, CoreTableIdx, CoreTableRef, CoreType, CoreTypeBinding, CoreTypeIdx,
+    FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceBinding, InstanceIdx,
+    Resolvable, Resolver, Type, TypeBinding, TypeIdx,
+};
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
 pub use child::ChildValidator;
-use std::collections::HashMap;
 use either::Either;
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct LocalStore {
@@ -286,31 +294,45 @@ pub trait Validator: private::Sealed {
     }
 }
 
-impl<T> Resolver<Type> for T where T: Validator + ?Sized {
+impl<T> Resolver<Type> for T
+where
+    T: Validator + ?Sized,
+{
     type Error = ComponentParseError;
 
     fn resolve<I>(&self, idx: &I) -> Result<&Type, Self::Error>
     where
-        I: Idx + Resolvable<Type>
+        I: Idx + Resolvable<Type>,
     {
-        match self.get_flatten_component().types.get(idx.global())
-            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "type".to_string()))? {
+        match self
+            .get_flatten_component()
+            .types
+            .get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "type".to_string()))?
+        {
             TypeBinding::Real(ty) => Ok(ty),
             TypeBinding::Alias(idx) => self.resolve(&TypeIdx::new(*idx)),
-            TypeBinding::Reference(ty, _) => Ok(ty)
+            TypeBinding::Reference(ty, _) => Ok(ty),
         }
     }
 }
 
-impl<T> Resolver<Instance> for T where T: Validator + ?Sized {
+impl<T> Resolver<Instance> for T
+where
+    T: Validator + ?Sized,
+{
     type Error = ComponentParseError;
 
     fn resolve<I>(&self, idx: &I) -> Result<&Instance, Self::Error>
     where
-        I: Idx + Resolvable<Instance>
+        I: Idx + Resolvable<Instance>,
     {
-        match self.get_flatten_component().instances.get(idx.global())
-            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "instance".to_string()))? {
+        match self
+            .get_flatten_component()
+            .instances
+            .get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "instance".to_string()))?
+        {
             InstanceBinding::Real(inst) => Ok(inst),
             InstanceBinding::Alias(idx) => self.resolve(&InstanceIdx::new(*idx)),
             InstanceBinding::Reference(inst, _) => Ok(inst),
@@ -318,15 +340,22 @@ impl<T> Resolver<Instance> for T where T: Validator + ?Sized {
     }
 }
 
-impl<T> Resolver<InlineComponent> for T where T: Validator + ?Sized {
+impl<T> Resolver<InlineComponent> for T
+where
+    T: Validator + ?Sized,
+{
     type Error = ComponentParseError;
 
     fn resolve<I>(&self, idx: &I) -> Result<&InlineComponent, Self::Error>
     where
-        I: Idx + Resolvable<InlineComponent>
+        I: Idx + Resolvable<InlineComponent>,
     {
-        match self.get_flatten_component().components.get(idx.global())
-            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "component".to_string()))? {
+        match self
+            .get_flatten_component()
+            .components
+            .get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "component".to_string()))?
+        {
             Binding::Real(comp) => Ok(comp),
             Binding::Alias(idx) => self.resolve(&ComponentIdx::new(*idx)),
             Binding::Reference(comp, _) => Ok(comp),
@@ -334,15 +363,22 @@ impl<T> Resolver<InlineComponent> for T where T: Validator + ?Sized {
     }
 }
 
-impl<T> Resolver<CoreType> for T where T: Validator + ?Sized {
+impl<T> Resolver<CoreType> for T
+where
+    T: Validator + ?Sized,
+{
     type Error = ComponentParseError;
 
     fn resolve<I>(&self, idx: &I) -> Result<&CoreType, Self::Error>
     where
-        I: Idx + Resolvable<CoreType>
+        I: Idx + Resolvable<CoreType>,
     {
-        match self.get_flatten_component().core_types.get(idx.global())
-            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core type".to_string()))? {
+        match self
+            .get_flatten_component()
+            .core_types
+            .get(idx.global())
+            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core type".to_string()))?
+        {
             CoreTypeBinding::Real(value) => Ok(value),
             CoreTypeBinding::Alias(idx) => self.resolve(&CoreTypeIdx::new(*idx)),
             CoreTypeBinding::Reference(value, _) => Ok(value),
@@ -350,15 +386,23 @@ impl<T> Resolver<CoreType> for T where T: Validator + ?Sized {
     }
 }
 
-impl<T> Resolver<CoreInstance> for T where T: Validator + ?Sized {
+impl<T> Resolver<CoreInstance> for T
+where
+    T: Validator + ?Sized,
+{
     type Error = ComponentParseError;
 
     fn resolve<I>(&self, idx: &I) -> Result<&CoreInstance, Self::Error>
     where
         I: Idx + Resolvable<CoreInstance>,
     {
-        match self.get_flatten_component().core_instances.get(idx.global())
-            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core instance".to_string()))? {
+        match self
+            .get_flatten_component()
+            .core_instances
+            .get(idx.global())
+            .ok_or_else(|| {
+                ComponentParseError::InvalidIdx(idx.global(), "core instance".to_string())
+            })? {
             CoreInstanceBinding::Real(value) => Ok(value),
             CoreInstanceBinding::Alias(idx) => self.resolve(&CoreInstanceIdx::new(*idx)),
             CoreInstanceBinding::Reference(value, _) => Ok(value),
@@ -366,15 +410,23 @@ impl<T> Resolver<CoreInstance> for T where T: Validator + ?Sized {
     }
 }
 
-impl<T> Resolver<CoreFunction> for T where T: Validator + ?Sized {
+impl<T> Resolver<CoreFunction> for T
+where
+    T: Validator + ?Sized,
+{
     type Error = ComponentParseError;
 
     fn resolve<I>(&self, idx: &I) -> Result<&CoreFunction, Self::Error>
     where
         I: Idx + Resolvable<CoreFunction>,
     {
-        match self.get_flatten_component().core_functions.get(idx.global())
-            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core function".to_string()))? {
+        match self
+            .get_flatten_component()
+            .core_functions
+            .get(idx.global())
+            .ok_or_else(|| {
+                ComponentParseError::InvalidIdx(idx.global(), "core function".to_string())
+            })? {
             CoreFunctionBinding::Real(value) => Ok(value),
             CoreFunctionBinding::Alias(idx) => self.resolve(&CoreFuncIdx::new(*idx)),
             CoreFunctionBinding::Reference(value, _) => Ok(value),
@@ -382,15 +434,23 @@ impl<T> Resolver<CoreFunction> for T where T: Validator + ?Sized {
     }
 }
 
-impl<T> Resolver<CoreModule> for T where T: Validator + ?Sized {
+impl<T> Resolver<CoreModule> for T
+where
+    T: Validator + ?Sized,
+{
     type Error = ComponentParseError;
 
     fn resolve<I>(&self, idx: &I) -> Result<&CoreModule, Self::Error>
     where
         I: Idx + Resolvable<CoreModule>,
     {
-        match self.get_flatten_component().core_modules.get(idx.global())
-            .ok_or_else(|| ComponentParseError::InvalidIdx(idx.global(), "core module".to_string()))? {
+        match self
+            .get_flatten_component()
+            .core_modules
+            .get(idx.global())
+            .ok_or_else(|| {
+                ComponentParseError::InvalidIdx(idx.global(), "core module".to_string())
+            })? {
             CoreModuleBinding::Real(value) => Ok(value),
             CoreModuleBinding::Alias(idx) => self.resolve(&CoreModuleIdx::new(*idx)),
             CoreModuleBinding::Reference(value, _) => Ok(value),
@@ -398,13 +458,12 @@ impl<T> Resolver<CoreModule> for T where T: Validator + ?Sized {
     }
 }
 
-
 pub struct ComponentValidator<'a, 'b> {
     resource: Either<&'a mut FlattenComponent, &'b mut dyn Validator>,
     store: LocalStore,
 }
 
-impl<'a, 'b> ComponentValidator<'a, 'b>{
+impl<'a, 'b> ComponentValidator<'a, 'b> {
     pub fn new(component: &'a mut FlattenComponent) -> Self {
         Self {
             resource: Either::Left(component),
@@ -452,8 +511,8 @@ impl Validator for ComponentValidator<'_, '_> {
 }
 
 mod private {
-    use crate::parser::component_model::{ChildValidator, ComponentValidator, Validator};
     use crate::parser::component_model::types::TypeValidator;
+    use crate::parser::component_model::{ChildValidator, ComponentValidator, Validator};
 
     pub trait Sealed {}
 

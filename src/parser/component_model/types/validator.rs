@@ -1,10 +1,13 @@
-use std::collections::HashMap;
-use crate::component_model::{ComponentType, CoreModuleType, CoreType, CoreTypeIdx, ExportDecl, ExternDesc, FlattenComponent, Idx, Instance, InstanceIdx, InstanceType, Resolvable, Resolver, Type, TypeIdx};
-use crate::parser::component_model::{ComponentParseError, Validator};
+use crate::component_model::{
+    ComponentType, CoreModuleType, CoreType, CoreTypeIdx, ExportDecl, ExternDesc, FlattenComponent,
+    Idx, Instance, InstanceIdx, InstanceType, Resolvable, Resolver, Type, TypeIdx,
+};
 use crate::parser::component_model::validator::LocalStore;
+use crate::parser::component_model::{ComponentParseError, Validator};
+use std::collections::HashMap;
 
 /// A type validator that can be used to validate types in a component model.
-/// 
+///
 /// 型のパースをする際に，実際にglobal idxを付与してvalidateをすると無駄な情報をinstantiate時まで持つ必要があるため，
 /// type validatorを使って型レベルでvalidateを行えるようにした．
 pub struct TypeValidator<'a> {
@@ -44,7 +47,7 @@ impl<'a> TypeValidator<'a> {
             )),
         }
     }
-    
+
     pub fn validate_type(&self, local: u32) -> Result<Type, ComponentParseError> {
         match self.type_map.types.get(local as usize) {
             Some(ty) => Ok(ty.clone()),
@@ -54,7 +57,7 @@ impl<'a> TypeValidator<'a> {
             )),
         }
     }
-    
+
     pub fn validate_instance(&self, local: u32) -> Result<InstanceType, ComponentParseError> {
         match self.type_map.instance_types.get(local as usize) {
             Some(ty) => Ok(ty.clone()),
@@ -64,7 +67,7 @@ impl<'a> TypeValidator<'a> {
             )),
         }
     }
-    
+
     pub fn validate_component(&self, local: u32) -> Result<ComponentType, ComponentParseError> {
         match self.type_map.component_types.get(local as usize) {
             Some(ty) => Ok(ty.clone()),
@@ -74,28 +77,27 @@ impl<'a> TypeValidator<'a> {
             )),
         }
     }
-    
+
     pub fn add_core_type(&mut self, ty: CoreType) {
         self.type_map.core_types.push(ty);
     }
-    
+
     pub fn add_type(&mut self, ty: Type) {
         self.type_map.types.push(ty);
     }
-    
+
     pub fn add_instance_type(&mut self, ty: InstanceType) {
         self.type_map.instance_types.push(ty);
     }
-    
+
     pub fn add_component_type(&mut self, ty: ComponentType) {
         self.type_map.component_types.push(ty);
     }
-    
+
     pub fn add_export(&mut self, name: String, ty: ExternDesc) {
         self.type_map.exports.insert(name, ty);
     }
 }
-
 
 #[derive(Default)]
 pub struct TypeMap {
@@ -103,5 +105,5 @@ pub struct TypeMap {
     pub types: Vec<Type>,
     pub instance_types: Vec<InstanceType>,
     pub component_types: Vec<ComponentType>,
-    pub exports: HashMap<String, ExternDesc>
+    pub exports: HashMap<String, ExternDesc>,
 }

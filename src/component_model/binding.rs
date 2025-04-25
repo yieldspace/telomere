@@ -1,4 +1,7 @@
-use crate::component_model::{ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, ImportName, InlineComponent, Instance, Type};
+use crate::component_model::{
+    ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule,
+    CoreTableRef, CoreType, ImportName, InlineComponent, Instance, Type,
+};
 
 #[derive(Debug)]
 pub enum Binding<T, R = ()> {
@@ -11,7 +14,7 @@ impl<T, R> Binding<T, R> {
     pub fn real(value: T) -> Self {
         Binding::Real(value)
     }
-    
+
     pub fn alias(idx: usize) -> Self {
         Binding::Alias(idx)
     }

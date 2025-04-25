@@ -1,20 +1,20 @@
-mod prim;
-mod func;
-mod val;
-mod resource;
-mod component;
-mod instance;
 mod alias;
+mod component;
+mod func;
+mod instance;
+mod prim;
+mod resource;
+mod val;
 
-pub use prim::*;
-pub use func::*;
-pub use val::*;
-pub use resource::*;
-pub use instance::*;
-pub use component::*;
-pub use alias::*;
 use crate::component_model::{Reference, TypeIdx};
 use crate::parser::component_model::ComponentParseError;
+pub use alias::*;
+pub use component::*;
+pub use func::*;
+pub use instance::*;
+pub use prim::*;
+pub use resource::*;
+pub use val::*;
 
 macro_rules! impl_try_into_type {
     ($from:ident, $variant:ident) => {

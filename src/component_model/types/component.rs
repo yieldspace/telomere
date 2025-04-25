@@ -1,5 +1,5 @@
+use crate::component_model::{CoreTypeIdx, ImportDecl, InstanceDecl, InstanceIdx, TypeIdx};
 use std::collections::HashMap;
-use crate::component_model::{CoreTypeIdx, InstanceIdx, TypeIdx, InstanceDecl, ImportDecl};
 
 #[derive(Debug, Clone)]
 pub struct ComponentType {
@@ -20,7 +20,6 @@ impl ComponentType {
             instances: Vec::new(),
         }
     }
-    
 }
 
 #[derive(Debug, Clone)]

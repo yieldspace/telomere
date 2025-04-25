@@ -1,7 +1,7 @@
-use std::ops::Range;
 use crate::binary::BinaryReader;
 use crate::parser::core::parse_u32;
 use crate::WasmParserError;
+use std::ops::Range;
 use tracing::trace;
 
 pub use alias::*;

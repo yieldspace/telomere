@@ -1,5 +1,8 @@
+use crate::component_model::{
+    AliasIdx, AliasType, ComponentType, CoreModuleType, CoreType, CoreTypeIdx, FuncType,
+    InstanceIdx, Type, TypeIdx,
+};
 use std::collections::HashMap;
-use crate::component_model::{AliasIdx, AliasType, ComponentType, CoreModuleType, CoreType, CoreTypeIdx, FuncType, InstanceIdx, Type, TypeIdx};
 
 #[derive(Debug, Clone)]
 pub struct InstanceType {

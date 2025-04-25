@@ -1,5 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, CoreModule, CoreModuleType, InlineComponent, InlineComponentValue, LazyValue};
+use crate::component_model::{
+    Binding, CoreModule, CoreModuleType, InlineComponent, InlineComponentValue, LazyValue,
+};
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
@@ -9,7 +11,10 @@ use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::validator::ChildValidator;
-use crate::parser::component_model::{parse_alias, parse_layer, parse_magic, parse_section_type, parse_version, ComponentValidator, Validator};
+use crate::parser::component_model::{
+    parse_alias, parse_layer, parse_magic, parse_section_type, parse_version, ComponentValidator,
+    Validator,
+};
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
 use crate::{Module, WasmParser};

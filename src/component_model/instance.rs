@@ -1,8 +1,12 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentExport, ComponentExportSlot, ComponentIdx, CoreSortWithIdx, InlineExport, InstanceExportType, InstanceIdx, InstanceType, LazyValue, Reference, Slot, Sort, SortLike, SortWithIdx};
+use crate::component_model::{
+    ComponentExport, ComponentExportSlot, ComponentIdx, CoreSortWithIdx, InlineExport,
+    InstanceExportType, InstanceIdx, InstanceType, LazyValue, Reference, Slot, Sort, SortLike,
+    SortWithIdx,
+};
 use crate::parser::component_model::{ComponentParseError, ParseContext};
-use std::collections::HashMap;
 use crate::runtime::component_model::instantiate::InstantiateContext;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Instance {
@@ -33,12 +37,13 @@ impl Instance {
     }
     pub fn get_export(&self, name: &String) -> Result<Option<SortWithIdx>, ComponentParseError> {
         match self.value {
-            Some(ref value) => value.exports
+            Some(ref value) => value
+                .exports
                 .get(name)
                 .cloned()
                 .map(|x| Some(x))
                 .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone())),
-            _ => Ok(None)
+            _ => Ok(None),
         }
     }
 

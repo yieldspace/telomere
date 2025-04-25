@@ -48,7 +48,7 @@ pub struct InlineComponent {
     pub ty: ComponentType,
 }
 
-pub struct  InlineComponentValue {
+pub struct InlineComponentValue {
     instrs: Vec<InstantiateInstr>,
     imports: HashMap<String, ComponentImport>,
     exports: HashMap<String, ComponentExport>,

@@ -1,5 +1,8 @@
+use crate::component_model::{
+    ComponentFunction, CoreFunction, CoreInstance, CoreModule, CoreType, InlineComponent, Instance,
+    Type,
+};
 use std::ops::Deref;
-use crate::component_model::{ComponentFunction, CoreFunction, CoreInstance, CoreModule, CoreType, InlineComponent, Instance, Type};
 
 pub trait Idx: Clone + Deref<Target = usize> {
     fn new(global: usize) -> Self;
@@ -14,8 +17,10 @@ pub trait Resolvable<V>: Idx {
 
 pub trait Resolver<O> {
     type Error;
-    
-    fn resolve<I>(&self, idx: &I) -> Result<&O, Self::Error> where I: Idx + Resolvable<O>;
+
+    fn resolve<I>(&self, idx: &I) -> Result<&O, Self::Error>
+    where
+        I: Idx + Resolvable<O>;
 }
 
 macro_rules! impl_idx {

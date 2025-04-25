@@ -2,7 +2,12 @@ use crate::binary::BinaryReader;
 use crate::component_model::{CoreSort, CoreSortWithIdx, Sort, SortWithIdx};
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::parser::component_model::parse_value_idx;
-use crate::parser::component_model::{parse_component_idx, parse_core_func_idx, parse_core_global_idx, parse_core_instance_idx, parse_core_memory_idx, parse_core_module_idx, parse_core_sort, parse_core_table_idx, parse_core_type_idx, parse_func_idx, parse_instance_idx, parse_type_idx, ParseContext, SizedResult, Validator};
+use crate::parser::component_model::{
+    parse_component_idx, parse_core_func_idx, parse_core_global_idx, parse_core_instance_idx,
+    parse_core_memory_idx, parse_core_module_idx, parse_core_sort, parse_core_table_idx,
+    parse_core_type_idx, parse_func_idx, parse_instance_idx, parse_type_idx, ParseContext,
+    SizedResult, Validator,
+};
 
 pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<Sort> {
     let start_count = ctx.reader.read_count();
@@ -20,7 +25,9 @@ pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> 
     Ok((ctx.reader.read_count() - start_count, sort))
 }
 
-pub fn parse_sort_with_idx(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<SortWithIdx> {
+pub fn parse_sort_with_idx(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> SizedResult<SortWithIdx> {
     let start_count = ctx.reader.read_count();
 
     match ctx.reader.read_exact_one()? {

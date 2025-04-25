@@ -1,5 +1,5 @@
-use num_derive::FromPrimitive;
 use crate::parser::leb128::compile_i32;
+use num_derive::FromPrimitive;
 
 #[derive(Debug, FromPrimitive, Clone)]
 #[repr(i32)]
@@ -20,4 +20,3 @@ pub enum PrimValType {
     #[cfg(feature = "component-gated-feature-async")]
     ErrorContext = compile_i32([0x64]),
 }
-

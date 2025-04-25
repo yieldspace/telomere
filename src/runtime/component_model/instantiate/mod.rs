@@ -4,7 +4,9 @@ use crate::component_model::{
 };
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
-use crate::runtime::component_model::instantiate::context::{InstantiatedInstance, InstantiatedInstanceExport, ResolvedImportKey, ResolvedImportMap};
+use crate::runtime::component_model::instantiate::context::{
+    InstantiatedInstance, InstantiatedInstanceExport, ResolvedImportKey, ResolvedImportMap,
+};
 use crate::runtime::component_model::ComponentVMError;
 use crate::Registry;
 use crate::{aliasing as core_aliasing, Module};
@@ -50,9 +52,7 @@ fn instantiate_core_module_rec(
     registry: Registry,
     module: CoreModule,
 ) -> InstantiateResult<()> {
-    let CoreModule {
-        value, ..
-    } = module;
+    let CoreModule { value, .. } = module;
     match value {
         None => {
             unreachable!()
@@ -82,7 +82,7 @@ fn instantiate_core_module_rec(
             //     instantiate_core_module_rec(ctx, registry, core_module)
             // }
             // CoreModuleReference::Exported(_) => unreachable!(),
-        },
+        }
         Some(module) => {
             let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
             ctx.push_core_module_instance(instance, registry);
@@ -190,7 +190,8 @@ pub unsafe fn instantiate_instance_start(
 ) -> InstantiateResult<()> {
     let idx = (*tail_code).operand.instance_idx;
 
-    ctx.resolved_imports.insert(ResolvedImportKey::Child(idx), ResolvedImportMap::new());
+    ctx.resolved_imports
+        .insert(ResolvedImportKey::Child(idx), ResolvedImportMap::new());
 
     ctx.current = Some(idx);
 

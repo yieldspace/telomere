@@ -1,10 +1,15 @@
 use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::CanonicalFuncKind;
-use crate::component_model::{Binding, CanonOpt, ComponentFunction, CoreFunction, FuncType, FuncValue, Idx, Resolvable};
+use crate::component_model::{
+    Binding, CanonOpt, ComponentFunction, CoreFunction, FuncType, FuncValue, Idx, Resolvable,
+};
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;
-use crate::parser::component_model::{parse_core_func_idx, parse_core_memory_idx, parse_func_idx, parse_type_idx, ComponentParseError, ParseContext, SizedResult, Validator};
+use crate::parser::component_model::{
+    parse_core_func_idx, parse_core_memory_idx, parse_func_idx, parse_type_idx,
+    ComponentParseError, ParseContext, SizedResult, Validator,
+};
 #[cfg(any(
     feature = "component-gated-feature-async",
     feature = "component-gated-feature-threading-builtins"
@@ -320,7 +325,9 @@ fn parse_async(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> Siz
     Ok((1, a))
 }
 
-fn parse_canon_opt(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<CanonOpt> {
+fn parse_canon_opt(
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+) -> SizedResult<CanonOpt> {
     let start_count = ctx.reader.read_count();
     let opt = match ctx.reader.read_exact_one()? {
         0x00 => CanonOpt::StringEncodingUtf8,

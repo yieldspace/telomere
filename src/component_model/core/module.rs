@@ -1,7 +1,6 @@
 use crate::component_model::{CoreModuleIdx, CoreModuleType, InstanceIdx, LazyValue, Reference};
 use crate::Module;
 
-
 #[derive(Clone)]
 pub struct CoreModule {
     // Defined(Module),
@@ -13,13 +12,7 @@ pub struct CoreModule {
 }
 
 impl CoreModule {
-    pub fn new(
-        value: Option<Module>,
-        ty: CoreModuleType,
-    ) -> Self {
-        Self {
-            value,
-            ty,
-        }
+    pub fn new(value: Option<Module>, ty: CoreModuleType) -> Self {
+        Self { value, ty }
     }
 }
