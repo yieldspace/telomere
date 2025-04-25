@@ -1,4 +1,4 @@
-use crate::component_model::{CoreModuleIdx, CoreModuleType, InstanceIdx, LazyValue, Reference};
+use crate::component_model::CoreModuleType;
 use crate::Module;
 
 #[derive(Clone)]

@@ -1,7 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreSortWithIdx,
-    CoreType, ExternDesc, Idx, InlineComponent, Instance, InstanceReference, LazyValue, Reference,
+    Binding, ComponentExport, ComponentFunction, ComponentImport, CoreModule, CoreSortWithIdx, ExternDesc, Idx, InlineComponent, Instance, InstanceReference, Reference,
     SortWithIdx, Type, TypeBound,
 };
 use crate::parser::component_model::types::parse_externdesc;

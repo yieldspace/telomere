@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{CoreType, CoreTypeIdx};
+use crate::component_model::CoreType;
 use crate::parser::component_model::{ParseContext, SizedResult, Validator};
 
 pub(crate) fn parse_core_type(

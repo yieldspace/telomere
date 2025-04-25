@@ -3,9 +3,9 @@ mod child;
 use crate::component_model::{
     Binding, ComponentBinding, ComponentExport, ComponentFunction, ComponentIdx, ComponentImport,
     ComponentType, CoreFuncIdx, CoreFunction, CoreFunctionBinding, CoreGlobalBinding,
-    CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceBinding, CoreInstanceIdx,
-    CoreMemoryBinding, CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleBinding, CoreModuleIdx,
-    CoreTableBinding, CoreTableIdx, CoreTableRef, CoreType, CoreTypeBinding, CoreTypeIdx,
+    CoreGlobalIdx, CoreInstance, CoreInstanceBinding, CoreInstanceIdx,
+    CoreMemoryBinding, CoreMemoryIdx, CoreModule, CoreModuleBinding, CoreModuleIdx,
+    CoreTableBinding, CoreTableIdx, CoreType, CoreTypeBinding, CoreTypeIdx,
     FlattenComponent, FuncIdx, Idx, InlineComponent, Instance, InstanceBinding, InstanceIdx,
     Resolvable, Resolver, Type, TypeBinding, TypeIdx,
 };
@@ -512,7 +512,7 @@ impl Validator for ComponentValidator<'_, '_> {
 
 mod private {
     use crate::parser::component_model::types::TypeValidator;
-    use crate::parser::component_model::{ChildValidator, ComponentValidator, Validator};
+    use crate::parser::component_model::{ChildValidator, ComponentValidator};
 
     pub trait Sealed {}
 

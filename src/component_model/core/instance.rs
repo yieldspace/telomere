@@ -1,11 +1,10 @@
 use crate::common::ExportDesc;
 use crate::component_model::{
     Binding, CoreBinding, CoreExportSlot, CoreFuncRef, CoreFunction, CoreGlobalRef,
-    CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreMemoryRef, CoreModule,
+    CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreMemoryRef,
     CoreModuleIdx, CoreReference, CoreSort, CoreTableRef, Idx, Resolvable, Slot,
 };
 use crate::parser::component_model::{ComponentParseError, Validator};
-use crate::Module;
 use std::collections::HashMap;
 
 pub enum CoreInstance {

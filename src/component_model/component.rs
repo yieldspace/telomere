@@ -1,9 +1,7 @@
 use crate::component_model::{
-    ComponentDecl, ComponentFunction, ComponentIdx, ComponentType, CoreModule, CoreModuleIdx,
-    CoreSort, CoreSortWithIdx, CoreType, ExternDesc, FuncIdx, Instance, InstanceDecl, InstanceIdx,
-    Reference, Slot, Sort, SortLike, SortWithIdx, Type, TypeBound, TypeIdx,
+    ComponentFunction, ComponentIdx, ComponentType, CoreModule, CoreModuleIdx,
+    CoreSort, ExternDesc, FuncIdx, Instance, InstanceIdx, Slot, Sort, SortLike, SortWithIdx, Type, TypeIdx,
 };
-use crate::parser::component_model::{ComponentParseError, Validator};
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 use std::collections::HashMap;
 

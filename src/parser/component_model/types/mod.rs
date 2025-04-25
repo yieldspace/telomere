@@ -7,14 +7,14 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueBound;
 use crate::component_model::{
-    Binding, Case, ComponentDecl, ComponentType, CoreType, DefValType, ExportDecl, ExternDesc,
+    Case, DefValType, ExportDecl, ExternDesc,
     FuncType, ImportDecl, Label, LabelValType, PrimValType, Resolvable, ResourceType, Type,
-    TypeBound, TypeIdx, ValType,
+    TypeBound, ValType,
 };
 use crate::parser::component_model::inex::{parse_export_name_dash, parse_import_name_dash};
 pub(super) use crate::parser::component_model::types::validator::TypeValidator;
 use crate::parser::component_model::{
-    parse_core_type_idx, parse_func_idx, parse_option, parse_type_idx, parse_vec_range,
+    parse_core_type_idx, parse_func_idx, parse_option, parse_type_idx,
     ComponentParseError, ParseContext, SizedResult, Validator,
 };
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};

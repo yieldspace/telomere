@@ -1,6 +1,6 @@
 use crate::component_model::{
     CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport,
-    CoreModule, CoreModuleReference, CoreSortWithIdx, Idx, Reference, SortWithIdx,
+    CoreModule, CoreSortWithIdx, Idx, SortWithIdx,
 };
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
@@ -9,7 +9,7 @@ use crate::runtime::component_model::instantiate::context::{
 };
 use crate::runtime::component_model::ComponentVMError;
 use crate::Registry;
-use crate::{aliasing as core_aliasing, Module};
+use crate::aliasing as core_aliasing;
 
 mod context;
 mod instance;

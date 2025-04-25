@@ -1,4 +1,4 @@
-use crate::component_model::{CanonOpt, CoreFuncIdx, FuncIdx, FuncType, Reference, TypeIdx};
+use crate::component_model::{CanonOpt, CoreFuncIdx, FuncType, TypeIdx};
 
 pub struct ComponentFunction {
     pub(crate) value: Option<FuncValue>,

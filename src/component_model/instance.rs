@@ -1,11 +1,9 @@
-use crate::binary::BinaryReader;
 use crate::component_model::{
-    ComponentExport, ComponentExportSlot, ComponentIdx, CoreSortWithIdx, InlineExport,
-    InstanceExportType, InstanceIdx, InstanceType, LazyValue, Reference, Slot, Sort, SortLike,
+    ComponentIdx,
+    InstanceExportType, InstanceType,
     SortWithIdx,
 };
-use crate::parser::component_model::{ComponentParseError, ParseContext};
-use crate::runtime::component_model::instantiate::InstantiateContext;
+use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

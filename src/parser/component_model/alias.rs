@@ -1,12 +1,11 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasIdx, Binding, ComponentExportSlot, ComponentFunction, CoreExportSlot, CoreModule,
-    CoreModuleType, CoreSortWithIdx, ExternDesc, Idx, InlineComponent, Instance, LazyValue,
-    Resolvable, Sort, SortWithIdx, Type, TypeBound,
+    AliasIdx, Binding, CoreExportSlot, CoreSortWithIdx, Idx,
+    Resolvable, Sort, SortWithIdx,
 };
 use crate::parser::component_model::validator::Validator;
 use crate::parser::component_model::{
-    parse_core_instance_idx, parse_instance_idx, parse_sort, ComponentParseError, ParseContext,
+    parse_core_instance_idx, parse_instance_idx, parse_sort, ParseContext,
     SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};

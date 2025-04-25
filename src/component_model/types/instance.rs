@@ -1,6 +1,5 @@
 use crate::component_model::{
-    AliasIdx, AliasType, ComponentType, CoreModuleType, CoreType, CoreTypeIdx, FuncType,
-    InstanceIdx, Type, TypeIdx,
+    AliasType, ComponentType, CoreModuleType, CoreType, FuncType, Type, TypeIdx,
 };
 use std::collections::HashMap;
 

@@ -2,7 +2,7 @@ use crate::binary::BinaryReader;
 use crate::component_model::{AliasType, Resolvable, Sort, SortWithIdx};
 use crate::parser::component_model::validator::get_outer_validator;
 use crate::parser::component_model::{
-    parse_core_instance_idx, parse_instance_idx, parse_sort, ComponentParseError, ParseContext,
+    parse_instance_idx, parse_sort, ComponentParseError, ParseContext,
     SizedResult, Validator,
 };
 use crate::parser::core::{parse_name, parse_u32};

@@ -1,6 +1,5 @@
 use crate::component_model::{
-    ComponentType, CoreModuleType, CoreType, CoreTypeIdx, ExportDecl, ExternDesc, FlattenComponent,
-    Idx, Instance, InstanceIdx, InstanceType, Resolvable, Resolver, Type, TypeIdx,
+    ComponentType, CoreType, ExternDesc, FlattenComponent, InstanceType, Type,
 };
 use crate::parser::component_model::validator::LocalStore;
 use crate::parser::component_model::{ComponentParseError, Validator};

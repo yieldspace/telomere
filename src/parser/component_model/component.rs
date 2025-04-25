@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, CoreModule, CoreModuleType, InlineComponent, InlineComponentValue, LazyValue,
+    Binding, CoreModuleType, InlineComponent, InlineComponentValue,
 };
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
@@ -10,7 +10,6 @@ use crate::parser::component_model::inex::{parse_export, parse_import};
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
-use crate::parser::component_model::validator::ChildValidator;
 use crate::parser::component_model::{
     parse_alias, parse_layer, parse_magic, parse_section_type, parse_version, ComponentValidator,
     Validator,
