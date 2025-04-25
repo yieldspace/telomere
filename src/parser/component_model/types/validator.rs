@@ -32,10 +32,6 @@ impl<'a> Validator for TypeValidator<'a> {
     fn get_local_store_mut(&mut self) -> &mut LocalStore {
         unreachable!("Local Store can't use in type validating");
     }
-
-    fn validate_type_idx(&self, local: usize) -> Result<TypeIdx, ComponentParseError> {
-        self.validate_type(local)
-    }
 }
 
 impl<'a> TypeValidator<'a> {

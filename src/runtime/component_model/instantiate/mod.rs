@@ -51,35 +51,37 @@ fn instantiate_core_module_rec(
     module: CoreModule,
 ) -> InstantiateResult<()> {
     let CoreModule {
-        value, reference, ..
+        value, ..
     } = module;
     match value {
-        None => match reference.clone().unwrap() {
-            CoreModuleReference::Imported(name) => match ctx.current {
-                None => {
-                    let module = ctx.linker.get_module(&name).unwrap();
-                    let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
-                    ctx.push_core_module_instance(instance, registry);
-                    Ok(())
-                }
-                Some(idx) => {
-                    let inst = ctx.component.get_instance(idx);
-                    todo!("instanceにreferenceをつけてやる")
-                }
-            },
-            CoreModuleReference::Instance(idx, name) => {
-                let inst = ctx.instances.get(&idx.global()).unwrap();
-                if let InstantiatedInstanceExport::Module(idx) = inst.exports.get(&name).unwrap() {
-                    let core_module = ctx.component.get_core_module(idx.global()).clone();
-                    return instantiate_core_module_rec(ctx, registry, core_module);
-                };
-                panic!("Invalid instance export");
-            }
-            CoreModuleReference::TypeOverwritten(idx) => {
-                let core_module = ctx.component.get_core_module(idx.global()).clone();
-                instantiate_core_module_rec(ctx, registry, core_module)
-            }
-            CoreModuleReference::Exported(_) => unreachable!(),
+        None => {
+            unreachable!()
+            // match reference.clone().unwrap() {
+            // CoreModuleReference::Imported(name) => match ctx.current {
+            //     None => {
+            //         let module = ctx.linker.get_module(&name).unwrap();
+            //         let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
+            //         ctx.push_core_module_instance(instance, registry);
+            //         Ok(())
+            //     }
+            //     Some(idx) => {
+            //         let inst = ctx.component.get_instance(idx);
+            //         todo!("instanceにreferenceをつけてやる")
+            //     }
+            // },
+            // CoreModuleReference::Instance(idx, name) => {
+            //     let inst = ctx.instances.get(&idx.global()).unwrap();
+            //     if let InstantiatedInstanceExport::Module(idx) = inst.exports.get(&name).unwrap() {
+            //         let core_module = ctx.component.get_core_module(idx.global()).clone();
+            //         return instantiate_core_module_rec(ctx, registry, core_module);
+            //     };
+            //     panic!("Invalid instance export");
+            // }
+            // CoreModuleReference::TypeOverwritten(idx) => {
+            //     let core_module = ctx.component.get_core_module(idx.global()).clone();
+            //     instantiate_core_module_rec(ctx, registry, core_module)
+            // }
+            // CoreModuleReference::Exported(_) => unreachable!(),
         },
         Some(module) => {
             let instance = core_instantiate(module.clone(), ctx.store, &registry).unwrap();
@@ -171,14 +173,15 @@ pub unsafe fn instantiate_import_core_module(
 ) -> InstantiateResult<()> {
     let idx = (*tail_code).operand.core_module_idx;
     let module = ctx.component.get_core_module(idx);
-    assert!(module.value.is_none());
-    if let Some(CoreModuleReference::Imported(name)) = &module.reference {
-        let imported_module = ctx.component.get_instance(idx);
-        ctx.resolved_imports.get_mut(&ResolvedImportKey::Child(ctx.current.unwrap())).unwrap()
-            .core_modules.insert(idx, )
-    } else {
-        unreachable!()
-    }
+    // assert!(module.value.is_none());
+    // if let Some(CoreModuleReference::Imported(name)) = &module.reference {
+    //     let imported_module = ctx.component.get_instance(idx);
+    //     ctx.resolved_imports.get_mut(&ResolvedImportKey::Child(ctx.current.unwrap())).unwrap()
+    //         .core_modules.insert(idx, )
+    // } else {
+    //     unreachable!()
+    // }
+    unreachable!()
 }
 
 pub unsafe fn instantiate_instance_start(

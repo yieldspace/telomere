@@ -6,6 +6,7 @@ use crate::component_model::{ValueBound, ValueIdx};
 use crate::parser::component_model::error::ComponentParseError;
 pub use child::ChildValidator;
 use std::collections::HashMap;
+use either::Either;
 
 #[derive(Default)]
 pub struct LocalStore {
@@ -398,21 +399,28 @@ impl<T> Resolver<CoreModule> for T where T: Validator + ?Sized {
 }
 
 
-pub struct ComponentValidator<'a> {
-    component: &'a mut FlattenComponent,
+pub struct ComponentValidator<'a, 'b> {
+    resource: Either<&'a mut FlattenComponent, &'b mut dyn Validator>,
     store: LocalStore,
 }
 
-impl<'a> ComponentValidator<'a> {
+impl<'a, 'b> ComponentValidator<'a, 'b>{
     pub fn new(component: &'a mut FlattenComponent) -> Self {
         Self {
-            component,
+            resource: Either::Left(component),
+            store: LocalStore::default(),
+        }
+    }
+
+    pub fn new_child(parent: &'b mut dyn Validator) -> Self {
+        Self {
+            resource: Either::Right(parent),
             store: LocalStore::default(),
         }
     }
 }
 
-impl Validator for ComponentValidator<'_> {
+impl Validator for ComponentValidator<'_, '_> {
     #[inline]
     fn get_parent(&self) -> Option<&dyn Validator> {
         None
@@ -420,12 +428,18 @@ impl Validator for ComponentValidator<'_> {
 
     #[inline]
     fn get_flatten_component(&self) -> &FlattenComponent {
-        self.component
+        match self.resource {
+            Either::Left(ref left) => left,
+            Either::Right(ref right) => right.get_flatten_component(),
+        }
     }
 
     #[inline]
     fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent {
-        self.component
+        match self.resource {
+            Either::Left(ref mut left) => left,
+            Either::Right(ref mut right) => right.get_flatten_component_mut(),
+        }
     }
 
     fn get_local_store(&self) -> &LocalStore {
@@ -438,13 +452,13 @@ impl Validator for ComponentValidator<'_> {
 }
 
 mod private {
-    use crate::parser::component_model::{ChildValidator, ComponentValidator};
+    use crate::parser::component_model::{ChildValidator, ComponentValidator, Validator};
     use crate::parser::component_model::types::TypeValidator;
 
     pub trait Sealed {}
 
     // 同じ型に実装
-    impl Sealed for ComponentValidator<'_> {}
+    impl Sealed for ComponentValidator<'_, '_> {}
     impl Sealed for ChildValidator<'_> {}
     impl Sealed for TypeValidator<'_> {}
 }

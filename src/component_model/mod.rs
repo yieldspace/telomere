@@ -115,6 +115,7 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_module(*idx),
+            Binding::Reference(shadow, _) => shadow
         }
     }
 
@@ -126,6 +127,7 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_instance(*idx),
+            Binding::Reference(shadow, _) => shadow
         }
     }
 
@@ -137,6 +139,7 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_function(*idx),
+            Binding::Reference(shadow, _) => shadow
         }
     }
 
@@ -148,6 +151,7 @@ impl FlattenComponent {
         {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_function(*idx),
+            Binding::Reference(shadow, _) => shadow
         }
     }
 
@@ -155,6 +159,7 @@ impl FlattenComponent {
         match self.types.get(idx).expect("Type not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_type(*idx),
+            Binding::Reference(shadow, _) => shadow
         }
     }
 
@@ -162,6 +167,7 @@ impl FlattenComponent {
         match self.instances.get(idx).expect("Instance not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_instance(*idx),
+            Binding::Reference(shadow, _) => shadow
         }
     }
 
@@ -169,6 +175,7 @@ impl FlattenComponent {
         match self.components.get(idx).expect("Component not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_component(*idx),
+            Binding::Reference(shadow, _) => shadow
         }
     }
 
@@ -176,6 +183,7 @@ impl FlattenComponent {
         match self.core_types.get(idx).expect("Core Type not found") {
             Binding::Real(real) => real,
             Binding::Alias(idx) => self.get_core_type(*idx),
+            Binding::Reference(shadow, _) => shadow
         }
     }
 }

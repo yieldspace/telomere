@@ -1,8 +1,8 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, Idx, InlineExport, Instance, InstanceIdx, InstanceValue, InstantiateArg, SortWithIdx};
+use crate::component_model::{Binding, Idx, InlineExport, Instance, InstanceIdx, InstanceValue, InstantiateArg, Resolvable, SortWithIdx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
-use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError};
+use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError, Validator};
 use crate::parser::component_model::SizedResult;
 use crate::parser::core::{parse_name, parse_vec};
 use crate::runtime::component_model::instantiate::{
@@ -11,7 +11,7 @@ use crate::runtime::component_model::instantiate::{
 };
 use std::collections::HashMap;
 
-pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstanceIdx> {
+pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<InstanceIdx> {
     let start_count = ctx.reader.read_count();
 
     match ctx.reader.read_exact_one()? {
@@ -22,7 +22,7 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
                 .into_iter()
                 .map(|InstantiateArg { name, sort }| (name, sort))
                 .collect::<HashMap<String, SortWithIdx>>();
-            let component = ctx.validator.get_component(&component_idx)?;
+            let component = component_idx.resolve(ctx.validator)?;
             if args.len() != component.ty.imports.len() {
                 return Err(ComponentParseError::InvalidSignature(format!(
                     "Invalid number of args: {}",
@@ -91,7 +91,7 @@ pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<
     }
 }
 
-fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstantiateArg> {
+fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<InstantiateArg> {
     let start_count = ctx.reader.read_count();
 
     let (_, name) = parse_name(ctx.reader)?;
@@ -102,7 +102,7 @@ fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResu
     ))
 }
 
-fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InlineExport> {
+fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<InlineExport> {
     let start_count = ctx.reader.read_count();
 
     let (_, name) = parse_name(ctx.reader)?;

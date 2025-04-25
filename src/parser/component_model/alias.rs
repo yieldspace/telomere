@@ -7,7 +7,7 @@ use crate::parser::component_model::{
 };
 use crate::parser::core::{parse_name, parse_u32};
 
-pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<AliasIdx> {
+pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<AliasIdx> {
     let start_count = ctx.reader.read_count();
 
     let (_, sort) = parse_sort(ctx)?;
@@ -19,59 +19,60 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Ali
                 let (_, name) = parse_name(ctx.reader)?;
                 let export = instance.get_export(&name)?;
                 if export.is_none() {
+                    todo!();
                     let export_type = instance.get_export_type(&name)?;
-                    match export_type.desc {
-                        ExternDesc::Core(module_idx) => {
-                            let ty: CoreModuleType = ctx
-                                .validator
-                                .get_core_type(&module_idx)?
-                                .clone()
-                                .try_into()?;
-                            AliasIdx::CoreModule(ctx.validator.add_core_module(Binding::Real(
-                                CoreModule::new(
-                                    LazyValue::Lazy(LazyCoreModuleValue::UnresolvedAlias(instance_idx, name.clone())),
-                                    ty,
-                                ),
-                            ))?)
-                        }
-                        ExternDesc::Func(idx) => {
-                            let func = ctx.validator.get_type(&idx);
-                            let func = func.clone().try_into()?;
-                            AliasIdx::Func(
-                                ctx.validator
-                                    .add_func(Binding::Real(ComponentFunction::new(None, func)))?,
-                            )
-                        }
-                        #[cfg(feature = "component-gated-feature-value-imports-exports")]
-                        ExternDesc::Value(_) => todo!(),
-                        ExternDesc::Type(bound) => match bound {
-                            TypeBound::Eq(idx) => AliasIdx::Type(
-                                ctx.validator.add_type(Binding::Alias(idx.global()))?,
-                            ),
-                            TypeBound::Sub => AliasIdx::Type(
-                                ctx.validator
-                                    .add_type(Binding::Real(Type::UniqueResource))?,
-                            ),
-                        },
-                        ExternDesc::Component(idx) => {
-                            let component = ctx.validator.get_type(&idx);
-                            let component = component.clone().try_into()?;
-                            AliasIdx::Component(ctx.validator.add_component(Binding::Real(
-                                InlineComponent::new(None, component),
-                            ))?)
-                        }
-                        ExternDesc::Instance(idx) => {
-                            let instance = ctx.validator.get_type(&idx);
-                            let instance = instance.clone().try_into()?;
-                            AliasIdx::Instance(
-                                ctx.validator
-                                    .add_instance(Binding::Real(Instance::new(
-                                        LazyValue::Lazy(
-                                            LazyInstanceValue::UnresolvedAlias(instance_idx, name.clone())
-                                        ), instance)))?,
-                            )
-                        }
-                    }
+                    // match export_type.desc {
+                    //     ExternDesc::Core(module_idx) => {
+                    //         let ty: CoreModuleType = ctx
+                    //             .validator
+                    //             .get_core_type(&module_idx)?
+                    //             .clone()
+                    //             .try_into()?;
+                    //         AliasIdx::CoreModule(ctx.validator.add_core_module(Binding::Real(
+                    //             CoreModule::new(
+                    //                 LazyValue::Lazy(LazyCoreModuleValue::UnresolvedAlias(instance_idx, name.clone())),
+                    //                 ty,
+                    //             ),
+                    //         ))?)
+                    //     }
+                    //     ExternDesc::Func(idx) => {
+                    //         let func = ctx.validator.get_type(&idx);
+                    //         let func = func.clone().try_into()?;
+                    //         AliasIdx::Func(
+                    //             ctx.validator
+                    //                 .add_func(Binding::Real(ComponentFunction::new(None, func)))?,
+                    //         )
+                    //     }
+                    //     #[cfg(feature = "component-gated-feature-value-imports-exports")]
+                    //     ExternDesc::Value(_) => todo!(),
+                    //     ExternDesc::Type(bound) => match bound {
+                    //         TypeBound::Eq(idx) => AliasIdx::Type(
+                    //             ctx.validator.add_type(Binding::Alias(idx.global()))?,
+                    //         ),
+                    //         TypeBound::Sub => AliasIdx::Type(
+                    //             ctx.validator
+                    //                 .add_type(Binding::Real(Type::UniqueResource))?,
+                    //         ),
+                    //     },
+                    //     ExternDesc::Component(idx) => {
+                    //         let component = ctx.validator.get_type(&idx);
+                    //         let component = component.clone().try_into()?;
+                    //         AliasIdx::Component(ctx.validator.add_component(Binding::Real(
+                    //             InlineComponent::new(None, component),
+                    //         ))?)
+                    //     }
+                    //     ExternDesc::Instance(idx) => {
+                    //         let instance = ctx.validator.get_type(&idx);
+                    //         let instance = instance.clone().try_into()?;
+                    //         AliasIdx::Instance(
+                    //             ctx.validator
+                    //                 .add_instance(Binding::Real(Instance::new(
+                    //                     LazyValue::Lazy(
+                    //                         LazyInstanceValue::UnresolvedAlias(instance_idx, name.clone())
+                    //                     ), instance)))?,
+                    //         )
+                    //     }
+                    // }
                 } else {
                     let sort = export.unwrap();
                     match sort.clone() {
@@ -103,7 +104,7 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Ali
             0x01 => {
                 let (_, core_inst_idx) = parse_core_instance_idx(ctx)?;
                 let (_, name) = parse_name(ctx.reader)?;
-                let core_inst = ctx.validator.get_core_instance(&core_inst_idx);
+                let core_inst = core_inst_idx.resolve(ctx.validator)?;
                 match sort {
                     Sort::Core(cs) => {
                         let export =

@@ -7,7 +7,7 @@ use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_core_module_idx};
 use crate::parser::component_model::core::sort::parse_core_sort;
 use crate::parser::component_model::error::ComponentParseError;
-use crate::parser::component_model::SizedResult;
+use crate::parser::component_model::{SizedResult, Validator};
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{
     instantiate_core_instance, InstantiateInstr, InstantiateOperand,
@@ -15,7 +15,7 @@ use crate::runtime::component_model::instantiate::{
 use std::collections::HashMap;
 
 pub fn parse_core_instance(
-    ctx: &mut ParseContext<impl BinaryReader>,
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
 ) -> SizedResult<CoreInstanceIdx> {
     let start = ctx.reader.read_count();
     match ctx.reader.read_exact_one()? {
@@ -61,7 +61,7 @@ pub fn parse_core_instance(
 }
 
 pub fn parse_core_instantiate_arg(
-    ctx: &mut ParseContext<impl BinaryReader>,
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
 ) -> SizedResult<(String, CoreInstanceImport)> {
     let (name_len, name) = parse_name(ctx.reader)?;
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x12], "instantiate arg")?;
@@ -73,7 +73,7 @@ pub fn parse_core_instantiate_arg(
 }
 
 pub fn parse_core_instance_inline_export(
-    ctx: &mut ParseContext<impl BinaryReader>,
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
 ) -> SizedResult<(String, CoreInstanceInlineExport)> {
     let (name_len, name) = parse_name(ctx.reader)?;
     let (sort_len, sort) = parse_core_sort(ctx)?;

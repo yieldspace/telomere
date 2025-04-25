@@ -112,9 +112,9 @@ where
     Ok((read_bytes, ()))
 }
 
-pub(crate) fn parse_option<R: BinaryReader, T, E>(
-    ctx: &mut ParseContext<R>,
-    mut f: impl FnMut(&mut ParseContext<R>) -> Result<(usize, T), E>,
+pub(crate) fn parse_option<R: BinaryReader, V: Validator, T, E>(
+    ctx: &mut ParseContext<R, V>,
+    mut f: impl FnMut(&mut ParseContext<R, V>) -> Result<(usize, T), E>,
 ) -> SizedResult<Option<T>>
 where
     ComponentParseError: From<E>,
@@ -130,7 +130,7 @@ where
 }
 
 pub(crate) fn parse_vec_range(
-    ctx: &mut ParseContext<impl BinaryReader>,
+    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
 ) -> Result<Range<u32>, ComponentParseError> {
     let (_, size) = parse_u32(ctx.reader)?;
     Ok(0..size)

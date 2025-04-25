@@ -1,15 +1,10 @@
 use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::CanonicalFuncKind;
-use crate::component_model::{
-    Binding, CanonOpt, ComponentFunction, CoreFunction, FuncType, FuncValue, Idx,
-};
+use crate::component_model::{Binding, CanonOpt, ComponentFunction, CoreFunction, FuncType, FuncValue, Idx, Resolvable};
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;
-use crate::parser::component_model::{
-    parse_core_func_idx, parse_core_memory_idx, parse_func_idx, parse_type_idx,
-    ComponentParseError, ParseContext, SizedResult,
-};
+use crate::parser::component_model::{parse_core_func_idx, parse_core_memory_idx, parse_func_idx, parse_type_idx, ComponentParseError, ParseContext, SizedResult, Validator};
 #[cfg(any(
     feature = "component-gated-feature-async",
     feature = "component-gated-feature-threading-builtins"
@@ -20,7 +15,7 @@ use crate::runtime::component_model::instantiate::{
     instantiate_core_function, instantiate_function, InstantiateInstr, InstantiateOperand,
 };
 
-pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()> {
+pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
     match ctx.reader.read_exact_one()? {
         // canon lift
@@ -29,7 +24,7 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
             let (_, func_idx) = parse_core_func_idx(ctx)?;
             let (_, opts) = parse_vec(ctx, |v| v.reader, parse_canon_opt)?;
             let (_, ft) = parse_type_idx(ctx)?;
-            let ty = ctx.validator.get_type(&ft);
+            let ty = ft.resolve(ctx.validator)?;
             let value = FuncValue::CanonLift {
                 core_func_idx: func_idx,
                 opts,
@@ -316,7 +311,7 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
     Ok((ctx.reader.read_count() - start_count, ()))
 }
 #[allow(dead_code)]
-fn parse_async(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<bool> {
+fn parse_async(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<bool> {
     let a = match ctx.reader.read_exact_one()? {
         0x00 => false,
         0x01 => true,
@@ -325,7 +320,7 @@ fn parse_async(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<bool> {
     Ok((1, a))
 }
 
-fn parse_canon_opt(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<CanonOpt> {
+fn parse_canon_opt(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<CanonOpt> {
     let start_count = ctx.reader.read_count();
     let opt = match ctx.reader.read_exact_one()? {
         0x00 => CanonOpt::StringEncodingUtf8,
