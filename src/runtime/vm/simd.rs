@@ -123,3 +123,8 @@ pub unsafe fn op_f32x4_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     vm_try!(ctx.stack.push_f32x4(result));
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn op_f32x4_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let v1 = ctx.stack.pop_f32x4();
+    vm_try!(ctx.stack.push_f32x4(v1.abs()));
+    call_next(tail_code, 0, ctx)
+}
