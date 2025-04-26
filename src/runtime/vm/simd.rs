@@ -1,4 +1,4 @@
-use wide::{f32x4, i32x4};
+use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u8x16};
 
 use crate::{
     common::{stack::StackOperation, ExecuteContext, Instr},
@@ -86,36 +86,6 @@ pub unsafe fn op_i8x16_shl(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 
     call_next(tail_code, 0, ctx)
 }
-pub unsafe fn op_i8x16_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v2 = ctx.stack.pop_u128();
-    let v1 = ctx.stack.pop_u128();
-
-    let mut result = [0u8; 16];
-    for i in 0..16 {
-        let v1_byte = ((v1 >> (i * 8)) & 0xff) as u8;
-        let v2_byte = ((v2 >> (i * 8)) & 0xff) as u8;
-
-        result[i] = v1_byte.wrapping_add(v2_byte);
-    }
-    let result_u128 = u128::from_le_bytes(result);
-    vm_try!(ctx.stack.push_u128(result_u128));
-    call_next(tail_code, 0, ctx)
-}
-pub unsafe fn op_i8x16_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v2 = ctx.stack.pop_u128();
-    let v1 = ctx.stack.pop_u128();
-
-    let mut result = [0u8; 16];
-    for i in 0..16 {
-        let v1_byte = ((v1 >> (i * 8)) & 0xff) as i8;
-        let v2_byte = ((v2 >> (i * 8)) & 0xff) as i8;
-
-        result[i] = v1_byte.wrapping_sub(v2_byte) as u8;
-    }
-    let result_u128 = u128::from_le_bytes(result);
-    vm_try!(ctx.stack.push_u128(result_u128));
-    call_next(tail_code, 0, ctx)
-}
 
 #[inline]
 unsafe fn handle_unary_op<T>(
@@ -163,6 +133,4 @@ macro_rules! impl_binary_op {
         })*
     };
 }
-impl_unary_op!([(f32x4_mul, f32x4)], |a, b| a * b);
-impl_unary_op!([(f32x4_min, f32x4)], |a, b| a.min(b));
-impl_binary_op!([(f32x4_abs, f32x4), (i32x4_abs, i32x4)], |a| a.abs());
+include!("simd_generated.rs");

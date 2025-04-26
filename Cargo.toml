@@ -20,6 +20,11 @@ wast = { version = "229.0.0", features = ["component-model"] }
 tracing-subscriber = { version = "0.3.19" }
 wat = "1.228.0"
 
+[build-dependencies]
+syn = { version = "2.0.100", features = ["full"] }
+quote = "1.0.40"
+proc-macro2 = "1.0.95"
+
 [features]
 default = ["interpreter", "simd"]
 interpreter = []

@@ -1,4 +1,4 @@
-use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16};
+use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::VMResult;
 use std::fmt::Debug;
@@ -21,10 +21,14 @@ macro_rules! impl_lane_type {
 }
 impl_lane_type!(f32x4, f32);
 impl_lane_type!(f64x2, f64);
-impl_lane_type!(i32x4, i32);
-impl_lane_type!(i64x2, i64);
 impl_lane_type!(i8x16, i8);
 impl_lane_type!(i16x8, i16);
+impl_lane_type!(i32x4, i32);
+impl_lane_type!(i64x2, i64);
+impl_lane_type!(u8x16, u8);
+impl_lane_type!(u16x8, u16);
+impl_lane_type!(u32x4, u32);
+impl_lane_type!(u64x2, u64);
 
 pub struct Stack {
     memory: Box<[u8]>,
@@ -305,7 +309,12 @@ macro_rules! stack_operation_wide {
 }
 stack_operation_wide!(f32x4);
 stack_operation_wide!(f64x2);
-stack_operation_wide!(i32x4);
-stack_operation_wide!(i64x2);
+
 stack_operation_wide!(i8x16);
 stack_operation_wide!(i16x8);
+stack_operation_wide!(i32x4);
+stack_operation_wide!(i64x2);
+stack_operation_wide!(u8x16);
+stack_operation_wide!(u16x8);
+stack_operation_wide!(u32x4);
+stack_operation_wide!(u64x2);
