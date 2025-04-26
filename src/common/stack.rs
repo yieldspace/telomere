@@ -297,11 +297,23 @@ macro_rules! stack_operation_wide {
             fn pop(&mut self) -> $target {
                 let x = self.pop_u8_array::<16>();
                 From::<[<$target as LaneType>::BaseType; <$target as LaneType>::LANE_SIZE]>::from(
-                    unsafe { std::mem::transmute(x) },
+                    unsafe {
+                        #[allow(clippy::useless_transmute)]
+                        std::mem::transmute::<
+                            [u8; 16],
+                            [<$target as LaneType>::BaseType; <$target as LaneType>::LANE_SIZE],
+                        >(x)
+                    },
                 )
             }
             fn push(&mut self, v: $target) -> VMResult<()> {
-                let x: [u8; 16] = unsafe { std::mem::transmute(v.to_array()) };
+                let x: [u8; 16] = unsafe {
+                    #[allow(clippy::useless_transmute)]
+                    std::mem::transmute::<
+                        [<$target as LaneType>::BaseType; <$target as LaneType>::LANE_SIZE],
+                        [u8; 16],
+                    >(v.to_array())
+                };
                 self.push_u8_array(x)
             }
         }

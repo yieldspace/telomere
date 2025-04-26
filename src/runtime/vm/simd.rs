@@ -79,8 +79,9 @@ pub unsafe fn op_i8x16_shl(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     let shift = shift as u32 & 7;
 
     let mut result = [0u8; 16];
+    #[allow(clippy::needless_range_loop)]
     for i in 0..16 {
-        result[i] = ((v >> (8 * i) & 0xff) << shift) as u8;
+        result[i] = (((v >> (8 * i)) & 0xff) << shift) as u8;
     }
 
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
