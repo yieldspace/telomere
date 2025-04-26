@@ -1,7 +1,9 @@
+use wide::{f32x4, i32x4};
+
 use crate::{
-    common::{ExecuteContext, Instr},
+    common::{stack::StackOperation, ExecuteContext, Instr},
     runtime::vm::call_next,
-    VMResult,
+    Stack, VMResult,
 };
 
 pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -114,17 +116,53 @@ pub unsafe fn op_i8x16_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     vm_try!(ctx.stack.push_u128(result_u128));
     call_next(tail_code, 0, ctx)
 }
-pub unsafe fn op_f32x4_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v2 = ctx.stack.pop_f32x4();
-    let v1 = ctx.stack.pop_f32x4();
-    trace!("{v2:?} {v1:?}");
-    let result = v1 * v2;
-    trace!("{result:?}");
-    vm_try!(ctx.stack.push_f32x4(result));
+
+#[inline]
+unsafe fn handle_unary_op<T>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    op: impl FnOnce(T, T) -> T,
+) -> VMResult<()>
+where
+    Stack: StackOperation<T>,
+{
+    use crate::common::stack::StackOperation;
+    let v2: T = ctx.stack.pop();
+    let v1: T = ctx.stack.pop();
+    let result = op(v1, v2);
+    vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
-pub unsafe fn op_f32x4_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v1 = ctx.stack.pop_f32x4();
-    vm_try!(ctx.stack.push_f32x4(v1.abs()));
+
+macro_rules! impl_unary_op {
+    ([$(($name:ident, $target: ty)),*],$closure: expr) => {
+        $(pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            handle_unary_op::<$target>(tail_code, ctx, $closure)
+        })*
+    };
+}
+#[inline]
+unsafe fn handle_binary_op<T>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    op: impl FnOnce(T) -> T,
+) -> VMResult<()>
+where
+    Stack: StackOperation<T>,
+{
+    use crate::common::stack::StackOperation;
+    let a: T = ctx.stack.pop();
+    let result = op(a);
+    vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
+macro_rules! impl_binary_op {
+    ([$(($name:ident, $target: ty)),*], $closure: expr) => {
+        $(pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            handle_binary_op::<$target>(tail_code, ctx, $closure)
+        })*
+    };
+}
+impl_unary_op!([(f32x4_mul, f32x4)], |a, b| a * b);
+impl_unary_op!([(f32x4_min, f32x4)], |a, b| a.min(b));
+impl_binary_op!([(f32x4_abs, f32x4), (i32x4_abs, i32x4)], |a| a.abs());

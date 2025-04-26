@@ -1,9 +1,31 @@
-use wide::f32x4;
+use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16};
 
 use crate::VMResult;
 use std::fmt::Debug;
 
 use super::{gc::GcRef, Instr};
+
+trait LaneType
+where
+    Self: Sized,
+{
+    type BaseType;
+    const LANE_SIZE: usize = std::mem::size_of::<Self>() / std::mem::size_of::<Self::BaseType>();
+}
+macro_rules! impl_lane_type {
+    ($target: ty,$base: ty) => {
+        impl LaneType for $target {
+            type BaseType = $base;
+        }
+    };
+}
+impl_lane_type!(f32x4, f32);
+impl_lane_type!(f64x2, f64);
+impl_lane_type!(i32x4, i32);
+impl_lane_type!(i64x2, i64);
+impl_lane_type!(i8x16, i8);
+impl_lane_type!(i16x8, i16);
+
 pub struct Stack {
     memory: Box<[u8]>,
     top: usize,
@@ -99,14 +121,6 @@ impl Stack {
     }
     pub fn pop_u128(&mut self) -> u128 {
         u128::from_le_bytes(self.pop_u8_array::<16>())
-    }
-    pub fn pop_f32x4(&mut self) -> f32x4 {
-        let x = self.pop_u8_array::<16>();
-        From::<[f32;4]>::from(unsafe { std::mem::transmute(x) })
-    }
-    pub fn push_f32x4(&mut self,v: f32x4)->VMResult<()>{
-        let x: [u8;16] = unsafe { std::mem::transmute( v.to_array()) };
-        self.push_u8_array(x)
     }
     pub fn pop_u64(&mut self) -> u64 {
         u64::from_le_bytes(self.pop_u8_array::<8>())
@@ -248,3 +262,50 @@ impl Stack {
         self.top = reference.local_top + reference.local_size as usize + stack_top + return_size;
     }
 }
+pub(crate) trait StackOperation<T> {
+    fn push(&mut self, v: T) -> VMResult<()>;
+    fn pop(&mut self) -> T;
+}
+
+macro_rules! stack_operation {
+    ($target: ident,$push_op: ident,$pop_op: ident) => {
+        impl StackOperation<$target> for Stack {
+            fn push(&mut self, v: $target) -> VMResult<()> {
+                self.$push_op(v)
+            }
+
+            fn pop(&mut self) -> $target {
+                self.$pop_op()
+            }
+        }
+    };
+}
+stack_operation!(u32, push_u32, pop_u32);
+stack_operation!(u64, push_u64, pop_u64);
+stack_operation!(i32, push_i32, pop_i32);
+stack_operation!(i64, push_i64, pop_i64);
+stack_operation!(f32, push_f32, pop_f32);
+stack_operation!(f64, push_f64, pop_f64);
+macro_rules! stack_operation_wide {
+    ($target: ty) => {
+        #[cfg(feature = "simd")]
+        impl StackOperation<$target> for Stack {
+            fn pop(&mut self) -> $target {
+                let x = self.pop_u8_array::<16>();
+                From::<[<$target as LaneType>::BaseType; <$target as LaneType>::LANE_SIZE]>::from(
+                    unsafe { std::mem::transmute(x) },
+                )
+            }
+            fn push(&mut self, v: $target) -> VMResult<()> {
+                let x: [u8; 16] = unsafe { std::mem::transmute(v.to_array()) };
+                self.push_u8_array(x)
+            }
+        }
+    };
+}
+stack_operation_wide!(f32x4);
+stack_operation_wide!(f64x2);
+stack_operation_wide!(i32x4);
+stack_operation_wide!(i64x2);
+stack_operation_wide!(i8x16);
+stack_operation_wide!(i16x8);

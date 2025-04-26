@@ -13,7 +13,7 @@ use gc::MemoryPool;
 pub use vm_result::VMResult;
 mod memory;
 pub use memory::{MemArg, Memory};
-mod stack;
+pub(crate) mod stack;
 pub use stack::{LocalReference, Stack};
 mod registry;
 pub use registry::Registry;

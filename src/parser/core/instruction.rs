@@ -1,7 +1,6 @@
 use super::base::WasmBaseParser;
 use super::instruction_generator::InstructionGenerator;
 use super::jump_resolver::JumpResolver;
-use super::simd_instruction;
 use super::type_checker::TypeChecker;
 use super::validate::*;
 use super::values;
@@ -2702,30 +2701,38 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1 + len, false)
             }
             0xFD => {
-                // simd
-                let (len, idx) = self.parse_u32()?;
-                use simd_instruction::*;
-                let mut ctx = SimdParserContext {
-                    instrs,
-                    reader: self.reader,
-                    checker,
-                };
-                let len2 = simd_instruction!(
-                    idx,
-                    ctx,
-                    v128_load,
-                    i8x16_extract_lane_s,
-                    i8x16_eq,
-                    v128_not,
-                    i8x16_all_true,
-                    v128_bitselect,
-                    i8x16_shl,
-                    i8x16_add,
-                    i8x16_sub,
-                    f32x4_mul,
-                    f32x4_abs
-                );
-                (1 + len + len2, false)
+                #[cfg(feature = "simd")]
+                {
+                    let (len, idx) = self.parse_u32()?;
+                    use super::simd_instruction::*;
+                    let mut ctx = SimdParserContext {
+                        instrs,
+                        reader: self.reader,
+                        checker,
+                    };
+                    let len2 = simd_instruction!(
+                        idx,
+                        ctx,
+                        v128_load,
+                        i8x16_extract_lane_s,
+                        i8x16_eq,
+                        v128_not,
+                        i8x16_all_true,
+                        v128_bitselect,
+                        i8x16_shl,
+                        i8x16_add,
+                        i8x16_sub,
+                        f32x4_mul,
+                        f32x4_abs,
+                        i32x4_abs,
+                        f32x4_min
+                    );
+                    (1 + len + len2, false)
+                }
+                #[cfg(not(feature = "simd"))]
+                {
+                    return Err(WasmParserError::invalid_instruction1(0xFD));
+                }
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
         })

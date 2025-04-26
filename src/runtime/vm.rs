@@ -1,3 +1,4 @@
+#[cfg(feature = "simd")]
 pub(crate) mod simd;
 use std::ops::BitXor;
 
