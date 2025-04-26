@@ -402,6 +402,8 @@ fn utf8_invalid_encoding() {
 }
 #[test]
 fn simd_load() {
-    tracing_subscriber::fmt().with_max_level(tracing::Level::TRACE).init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
     run_test_file("simd_load");
 }
