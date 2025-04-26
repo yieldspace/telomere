@@ -60,6 +60,8 @@ pub(crate) mod v128_load {
         Ok(len)
     }
 }
+unary_op_simd_parser!(i8x16_swizzle, 14);
+
 pub(crate) mod i8x16_extract_lane_s {
     use super::prelude::*;
     pub(crate) const CODE: u32 = 21;

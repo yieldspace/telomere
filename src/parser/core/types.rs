@@ -124,6 +124,7 @@ pub fn parse_block_type(reader: &mut impl BinaryReader) -> Result<(usize, BlockT
             -2 => BlockType::ValType(ValType::I64),
             -3 => BlockType::ValType(ValType::F32),
             -4 => BlockType::ValType(ValType::F64),
+            -5 => BlockType::ValType(ValType::V128),
             -16 => BlockType::ValType(ValType::FuncRef),
             -17 => BlockType::ValType(ValType::ExternRef),
             -64 => BlockType::Void,
