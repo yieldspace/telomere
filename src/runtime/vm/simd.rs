@@ -1,4 +1,4 @@
-use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u8x16};
+use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u32x4, u8x16};
 
 use crate::{
     common::{stack::StackOperation, ExecuteContext, Instr},
@@ -84,6 +84,28 @@ pub unsafe fn op_i8x16_shl(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
 
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i32x4_trunc_sat_f32x4_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    use crate::common::stack::StackOperation;
+    let a: f32x4 = ctx.stack.pop();
+    let result = a.trunc_int();
+    vm_try!(ctx.stack.push(result));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn f32x4_convert_i32x4_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    use crate::common::stack::StackOperation;
+    let a: u32x4 = ctx.stack.pop();
+    let [a, b, c, d] = a.to_array();
+    let result = f32x4::from([a as f32, b as f32, c as f32, d as f32]);
+    vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
 
