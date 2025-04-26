@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u32x4, u8x16};
 
 use crate::{
