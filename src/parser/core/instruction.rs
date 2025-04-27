@@ -766,7 +766,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     ValueSize::Byte8 => instrs.push(Instr {
                         op: vm::op_local_get8,
                     }),
-                    ValueSize::Byte16 => todo!(),
+                    ValueSize::Byte16 => instrs.push(Instr {
+                        op: vm::op_local_get16,
+                    }),
                 };
                 instrs.push(Instr {
                     operand: Operand { local_addr: addr },
@@ -788,7 +790,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     ValueSize::Byte8 => instrs.push(Instr {
                         op: vm::op_local_set8,
                     }),
-                    ValueSize::Byte16 => todo!(),
+                    ValueSize::Byte16 => instrs.push(Instr {
+                        op: vm::op_local_set16,
+                    }),
                 };
                 instrs.push(Instr {
                     operand: Operand { local_addr: addr },
@@ -810,7 +814,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     ValueSize::Byte8 => instrs.push(Instr {
                         op: vm::op_local_tee8,
                     }),
-                    ValueSize::Byte16 => todo!(),
+                    ValueSize::Byte16 => instrs.push(Instr {
+                        op: vm::op_local_tee16,
+                    }),
                 };
                 instrs.push(Instr {
                     operand: Operand { local_addr: addr },
@@ -837,7 +843,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     ValueSize::Byte8 => instrs.push(Instr {
                         op: vm::op_global_get8,
                     }),
-                    ValueSize::Byte16 => todo!(),
+                    ValueSize::Byte16 => instrs.push(Instr {
+                        op: vm::op_global_get16,
+                    }),
                 };
 
                 instrs.push(Instr {
@@ -865,7 +873,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     ValueSize::Byte8 => instrs.push(Instr {
                         op: vm::op_global_set8,
                     }),
-                    ValueSize::Byte16 => todo!(),
+                    ValueSize::Byte16 => instrs.push(Instr {
+                        op: vm::op_global_set16,
+                    }),
                 };
 
                 instrs.push(Instr {
@@ -2714,6 +2724,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         idx,
                         ctx,
                         v128_load,
+                        v128_const,
                         i8x16_swizzle,
                         i8x16_extract_lane_s,
                         i8x16_eq,
@@ -2736,7 +2747,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         f32x4_pmin,
                         f32x4_pmax,
                         i32x4_trunc_sat_f32x4_s,
-                        f32x4_convert_i32x4_u
+                        f32x4_convert_i32x4_u,
+                        i32x4_add,
+                        i64x2_add
                     );
                     (1 + len + len2, false)
                 }

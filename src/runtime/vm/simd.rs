@@ -18,6 +18,18 @@ pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     vm_try!(ctx.stack.push_u128(v));
     call_next(tail_code, 1, ctx)
 }
+
+pub unsafe fn v128_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let left_buf = &(*tail_code).operand.encoded;
+    let right_buf = &(*tail_code.add(1)).operand.encoded;
+    let mut buf = [0u8; 16];
+    buf[0..8].copy_from_slice(left_buf);
+    buf[8..16].copy_from_slice(right_buf);
+
+    vm_try!(ctx.stack.push_i128(i128::from_le_bytes(buf)));
+    call_next(tail_code, 2, ctx)
+}
+
 pub unsafe fn op_i8x16_extract_lane_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

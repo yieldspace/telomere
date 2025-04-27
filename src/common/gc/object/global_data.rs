@@ -34,3 +34,11 @@ impl GcView for Global8Data {
     fn trace(&self, _pool: &mut MemoryPool) {}
     fn update(&mut self, _pool: &mut MemoryPool) {}
 }
+#[repr(transparent)]
+pub struct Global16Data {
+    pub _global16: u128,
+}
+impl GcView for Global16Data {
+    fn trace(&self, _pool: &mut MemoryPool) {}
+    fn update(&mut self, _pool: &mut MemoryPool) {}
+}

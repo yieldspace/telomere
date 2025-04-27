@@ -10,6 +10,7 @@ pub(crate) use u32_fixed_array::U32FixedArray;
 mod instance_data;
 pub(crate) use instance_data::InstanceData;
 mod global_data;
+pub(crate) use global_data::Global16Data;
 pub(crate) use global_data::Global4Data;
 pub(crate) use global_data::Global8Data;
 pub(crate) use global_data::GlobalRefData;

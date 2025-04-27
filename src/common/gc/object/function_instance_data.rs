@@ -83,6 +83,10 @@ impl FunctionInstanceData {
                 locals.count_f64 = *pool.get_value::<u32>(addr, offset);
                 offset += 1;
             }
+            if flags & LOCALS_ENCODED_V128 != 0 {
+                locals.count_v128 = *pool.get_value::<u32>(addr, offset);
+                offset += 1;
+            }
             (locals, offset + (offset % (align_of::<*mut Instr>() / 4)))
         }
     }

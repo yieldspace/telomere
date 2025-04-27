@@ -60,6 +60,30 @@ pub(crate) mod v128_load {
         Ok(len)
     }
 }
+pub(crate) mod v128_const {
+    use super::prelude::*;
+
+    pub(crate) const CODE: u32 = 12;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let src = ctx.reader.read_exact::<16>()?;
+        let mut right_buf = [0u8; 8];
+        let mut left_buf = [0u8; 8];
+        left_buf.copy_from_slice(&src[0..8]);
+        right_buf.copy_from_slice(&src[8..16]);
+        ctx.checker.op(&[], &[ValType::V128])?;
+        ctx.instrs.push_with_operand(
+            vm::simd::v128_const,
+            &[
+                Operand { encoded: left_buf },
+                Operand { encoded: right_buf },
+            ],
+        );
+        Ok(16)
+    }
+}
+
 unary_op_simd_parser!(i8x16_swizzle, 14);
 
 pub(crate) mod i8x16_extract_lane_s {
@@ -146,6 +170,10 @@ unary_op_simd_parser!(i8x16_min, 118);
 unary_op_simd_parser!(u8x16_min, 119);
 unary_op_simd_parser!(i8x16_max, 120);
 unary_op_simd_parser!(u8x16_max, 121);
+
+unary_op_simd_parser!(i32x4_add, 174);
+
+unary_op_simd_parser!(i64x2_add, 206);
 
 binary_op_simd_parser!(f32x4_abs, 224);
 binary_op_simd_parser!(i32x4_abs, 160);

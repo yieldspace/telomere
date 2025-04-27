@@ -22,6 +22,7 @@ use crate::{
 
 use super::base::WasmBaseParser;
 use super::custom_section::CustomSectionParser;
+use super::simd_instruction::v128_const;
 use super::validate::{assert_memory, assert_valtype, validate_active_elem};
 use super::{Result, WasmParserError};
 
@@ -56,6 +57,8 @@ fn validate_const_expr_type(
         ConstExpr::RefNull(t) => assert_valtype(expected, Some(t.into()))?,
         ConstExpr::F32(_) => assert_valtype(expected, Some(ValType::F32))?,
         ConstExpr::F64(_) => assert_valtype(expected, Some(ValType::F64))?,
+        ConstExpr::V128(_) => assert_valtype(expected, Some(ValType::V128))?,
+
         ConstExpr::FuncRef(idx) => {
             if funcs.get(idx as usize).is_none() {
                 return Err(WasmParserError::InvalidFuncIdx(FuncIdx(idx)));
@@ -233,6 +236,15 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 0xD2 => {
                     let (len, idx) = self.parse_u32()?;
                     (1 + len, ConstExpr::FuncRef(idx))
+                }
+                0xFD => {
+                    let (len, code) = self.parse_u32()?;
+                    if code == v128_const::CODE {
+                        let v = self.reader.read_exact::<16>()?;
+                        (1 + len + 16, ConstExpr::V128(u128::from_le_bytes(v)))
+                    } else {
+                        Err(WasmParserError::InvalidConstInstruction(0xFD))? //FIXME:
+                    }
                 }
                 unknown => Err(WasmParserError::InvalidConstInstruction(unknown))?,
             };
