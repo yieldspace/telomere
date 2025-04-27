@@ -6,7 +6,7 @@ use telomere::{
 };
 use tracing::error;
 use wast::{
-    core::{AbstractHeapType, HeapType, NanPattern, WastRetCore},
+    core::{AbstractHeapType, HeapType, NanPattern, V128Pattern, WastRetCore},
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
@@ -197,6 +197,48 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                 ) => {
                                     // TODO: is arithmetic nan?
                                     assert!(actual.is_nan());
+                                }
+                                (WastRetCore::V128(V128Pattern::I64x2(x)), WasmValue::V128(b)) => {
+                                    let x = x.as_ptr() as *const u8;
+                                    let mut buf = [0; 16];
+                                    unsafe {
+                                        std::ptr::copy_nonoverlapping(x, buf.as_mut_ptr(), 16)
+                                    };
+                                    assert_eq!(b.to_le_bytes(), buf)
+                                }
+                                (WastRetCore::V128(V128Pattern::I32x4(x)), WasmValue::V128(b)) => {
+                                    let x = x.as_ptr() as *const u8;
+                                    let mut buf = [0; 16];
+                                    unsafe {
+                                        std::ptr::copy_nonoverlapping(x, buf.as_mut_ptr(), 16)
+                                    };
+                                    assert_eq!(b.to_le_bytes(), buf)
+                                }
+                                (WastRetCore::V128(V128Pattern::I16x8(x)), WasmValue::V128(b)) => {
+                                    let x = x.as_ptr() as *const u8;
+                                    let mut buf = [0; 16];
+                                    unsafe {
+                                        std::ptr::copy_nonoverlapping(x, buf.as_mut_ptr(), 16)
+                                    };
+                                    assert_eq!(b.to_le_bytes(), buf)
+                                }
+                                (WastRetCore::V128(V128Pattern::I8x16(x)), WasmValue::V128(b)) => {
+                                    let x = x.as_ptr() as *const u8;
+                                    let mut buf = [0; 16];
+                                    unsafe {
+                                        std::ptr::copy_nonoverlapping(x, buf.as_mut_ptr(), 16)
+                                    };
+                                    assert_eq!(b.to_le_bytes(), buf)
+                                }
+                                (WastRetCore::V128(V128Pattern::F32x4(x)), WasmValue::V128(b)) => {
+                                    let x = x
+                                        .iter()
+                                        .flat_map(|x| match x {
+                                            NanPattern::Value(x) => x.bits.to_le_bytes(),
+                                            _ => todo!(),
+                                        })
+                                        .collect::<Vec<_>>();
+                                    assert_eq!(x, b.to_le_bytes())
                                 }
                                 (WastRetCore::RefNull(_), WasmValue::ExternRef(0)) => {
                                     // ok

@@ -32,7 +32,7 @@ fn test_print() {
             }],
         },
         &mut store,
-        &mut registry,
+        &registry,
     )
     .unwrap();
     registry.register("host", host.clone());
@@ -106,7 +106,7 @@ fn test_tail_call_wasm() {
             }],
         },
         &mut store,
-        &mut registry,
+        &registry,
     )
     .unwrap();
     registry.register("host", host.clone());

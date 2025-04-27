@@ -108,7 +108,7 @@ impl MemoryPool {
     }
     #[cfg(test)]
     fn new_u32_fixed_array(&mut self, data: &[u32]) -> U32FixedArray {
-        U32FixedArray(self.new_raw_region(data.as_ptr() as *const u32, data.len()))
+        U32FixedArray(self.new_raw_region(data.as_ptr(), data.len()))
     }
     fn new_gc_ref_fixed_array(&mut self, data: &[GcRef]) -> GcRefFixedArray {
         GcRefFixedArray(self.new_raw_region(data.as_ptr() as *const u32, data.len()))

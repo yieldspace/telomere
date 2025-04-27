@@ -1,0 +1,160 @@
+use crate::binary::BinaryReader;
+
+use super::{instruction_generator::InstructionGenerator, type_checker::TypeChecker};
+
+pub(crate) struct SimdParserContext<'a, R: BinaryReader> {
+    pub(crate) instrs: &'a mut InstructionGenerator,
+    pub(crate) checker: &'a mut TypeChecker,
+    pub(crate) reader: &'a mut R,
+}
+mod prelude {
+    pub(crate) use super::SimdParserContext;
+    pub(crate) use crate::common::ValType;
+    pub(crate) use crate::{
+        binary::BinaryReader, common::Operand, parser::core::values, runtime::vm, WasmParserError,
+    };
+}
+
+macro_rules! unary_op_simd_parser {
+    ($name: ident,$code: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                ctx.checker.unary_op(ValType::V128)?;
+                ctx.instrs.push_instr1(vm::simd::$name);
+                Ok(0)
+            }
+        }
+    };
+}
+macro_rules! binary_op_simd_parser {
+    ($name: ident,$code: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                ctx.checker.binary_op(ValType::V128)?;
+                ctx.instrs.push_instr1(vm::simd::$name);
+                Ok(0)
+            }
+        }
+    };
+}
+
+pub(crate) mod v128_load {
+    use super::prelude::*;
+
+    pub(crate) const CODE: u32 = 0;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 4)?; // TODO:
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::op_v128_load, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+unary_op_simd_parser!(i8x16_swizzle, 14);
+
+pub(crate) mod i8x16_extract_lane_s {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 21;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, lane) = values::parse_byte(ctx.reader)?;
+        ctx.checker.op(&[ValType::V128], &[ValType::I32])?;
+
+        ctx.instrs.push_with_operand(
+            vm::simd::op_i8x16_extract_lane_s,
+            &[Operand { u32: lane as u32 }],
+        );
+        Ok(len)
+    }
+}
+pub(crate) mod i8x16_eq {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 35;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        ctx.checker.unary_op(ValType::V128)?;
+        ctx.instrs.push_instr1(vm::simd::op_i8x16_eq);
+        Ok(0)
+    }
+}
+pub(crate) mod v128_not {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 77;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        ctx.checker.binary_op(ValType::V128)?;
+        ctx.instrs.push_instr1(vm::simd::op_v128_not);
+        Ok(0)
+    }
+}
+pub(crate) mod v128_bitselect {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 82;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        ctx.checker.op(
+            &[ValType::V128, ValType::V128, ValType::V128],
+            &[ValType::V128],
+        )?;
+        ctx.instrs.push_instr1(vm::simd::op_v128_bitselect);
+        Ok(0)
+    }
+}
+
+pub(crate) mod i8x16_all_true {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 99;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        ctx.checker.op(&[ValType::V128], &[ValType::I32])?;
+        ctx.instrs.push_instr1(vm::simd::op_i8x16_all_true);
+        Ok(0)
+    }
+}
+
+pub(crate) mod i8x16_shl {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 107;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        ctx.checker
+            .op(&[ValType::V128, ValType::I32], &[ValType::V128])?;
+        ctx.instrs.push_instr1(vm::simd::op_i8x16_shl);
+        Ok(0)
+    }
+}
+
+unary_op_simd_parser!(i8x16_add, 110);
+unary_op_simd_parser!(i8x16_sub, 113);
+unary_op_simd_parser!(i8x16_min, 118);
+unary_op_simd_parser!(u8x16_min, 119);
+unary_op_simd_parser!(i8x16_max, 120);
+unary_op_simd_parser!(u8x16_max, 121);
+
+binary_op_simd_parser!(f32x4_abs, 224);
+binary_op_simd_parser!(i32x4_abs, 160);
+unary_op_simd_parser!(f32x4_mul, 230);
+unary_op_simd_parser!(f32x4_div, 231);
+unary_op_simd_parser!(f32x4_min, 232);
+unary_op_simd_parser!(f32x4_max, 233);
+unary_op_simd_parser!(f32x4_pmin, 234);
+unary_op_simd_parser!(f32x4_pmax, 235);
+
+binary_op_simd_parser!(i32x4_trunc_sat_f32x4_s, 248);
+binary_op_simd_parser!(f32x4_convert_i32x4_u, 251);

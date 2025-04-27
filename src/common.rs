@@ -13,7 +13,7 @@ use gc::MemoryPool;
 pub use vm_result::VMResult;
 mod memory;
 pub use memory::{MemArg, Memory};
-mod stack;
+pub(crate) mod stack;
 pub use stack::{LocalReference, Stack};
 mod registry;
 pub use registry::Registry;
@@ -372,7 +372,7 @@ pub enum WasmValue {
     I64(i64),
     F32(f32),
     F64(f64),
-    //V128,
+    V128(u128),
     FuncRef(u32),
     ExternRef(u32),
 }
