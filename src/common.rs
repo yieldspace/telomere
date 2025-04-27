@@ -356,6 +356,7 @@ pub union Operand {
     pub memarg: MemArg,
     pub block_return: BlockReturn,
     pub loop_param: LoopParam,
+    pub encoded: [u8; 8],
 }
 
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
@@ -382,6 +383,7 @@ pub enum ConstExpr {
     I64(i64),
     F32(f32),
     F64(f64),
+    V128(u128),
     FuncRef(u32),
     RefNull(RefType),
     GlobalGet(u32),

@@ -10,8 +10,7 @@ use crate::{
 use super::object::U32FixedArray;
 use super::{
     object::{
-        FunctionInstanceData, GcRefDynamicArray, Global4Data, Global8Data, GlobalRefData,
-        InstanceData, RootTable,
+        FunctionInstanceData, GcRefDynamicArray, Global16Data, Global4Data, Global8Data, GlobalRefData, InstanceData, RootTable
     },
     GcRef, GcView, Header, ObjectType,
 };
@@ -525,6 +524,16 @@ impl MemoryPool {
     pub fn new_global_data8(&mut self, data: u64) -> GcRef {
         let gc_ref =
             self.allocate(Header::new(ObjectType::Raw, word_size::<Global8Data>()).initialized());
+        unsafe {
+            let bytes = data.to_le_bytes();
+            (self.memory.as_mut_ptr().add(gc_ref.get_value_addr_usize()) as *mut u8)
+                .copy_from_nonoverlapping(bytes.as_ptr(), bytes.len());
+        }
+        gc_ref
+    }
+    pub fn new_global_data16(&mut self, data: u128) -> GcRef {
+        let gc_ref =
+            self.allocate(Header::new(ObjectType::Raw, word_size::<Global16Data>()).initialized());
         unsafe {
             let bytes = data.to_le_bytes();
             (self.memory.as_mut_ptr().add(gc_ref.get_value_addr_usize()) as *mut u8)

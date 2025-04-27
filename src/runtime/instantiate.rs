@@ -29,6 +29,8 @@ pub(crate) fn init_global(
         ConstExpr::I64(v) => gc.new_global_data8(*v as u64),
         ConstExpr::F32(v) => gc.new_global_data4(v.to_bits()),
         ConstExpr::F64(v) => gc.new_global_data8(v.to_bits()),
+        ConstExpr::V128(v) => gc.new_global_data16(*v),
+
         ConstExpr::RefNull(_t) => gc.new_global_ref(GcRef(0)),
         ConstExpr::FuncRef(v) => {
             let addr = funcs.get(*v as usize);

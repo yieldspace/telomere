@@ -30,7 +30,9 @@ fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
                 wast::core::WastArgCore::I64(v) => WasmValue::I64(*v),
                 wast::core::WastArgCore::F32(f32) => WasmValue::F32(f32::from_bits(f32.bits)),
                 wast::core::WastArgCore::F64(f64) => WasmValue::F64(f64::from_bits(f64.bits)),
-                wast::core::WastArgCore::V128(_) => todo!(),
+                wast::core::WastArgCore::V128(v) => {
+                    WasmValue::V128(u128::from_le_bytes(v.to_le_bytes()))
+                }
                 wast::core::WastArgCore::RefNull(rt) => match rt {
                     HeapType::Abstract {
                         shared: _,
@@ -231,6 +233,16 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                     assert_eq!(b.to_le_bytes(), buf)
                                 }
                                 (WastRetCore::V128(V128Pattern::F32x4(x)), WasmValue::V128(b)) => {
+                                    let x = x
+                                        .iter()
+                                        .flat_map(|x| match x {
+                                            NanPattern::Value(x) => x.bits.to_le_bytes(),
+                                            _ => todo!(),
+                                        })
+                                        .collect::<Vec<_>>();
+                                    assert_eq!(x, b.to_le_bytes())
+                                }
+                                (WastRetCore::V128(V128Pattern::F64x2(x)), WasmValue::V128(b)) => {
                                     let x = x
                                         .iter()
                                         .flat_map(|x| match x {

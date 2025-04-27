@@ -772,7 +772,13 @@ pub unsafe fn op_local_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_local_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    vm_try!(ctx.stack.local_get(&ctx.local_reference(), addr, 16));
+    trace!("op_local_get16: {addr}");
 
+    call_next(tail_code, 1, ctx)
+}
 pub unsafe fn op_local_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     ctx.stack.local_set(&ctx.local_reference(), addr, 4);
@@ -781,6 +787,12 @@ pub unsafe fn op_local_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 pub unsafe fn op_local_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     ctx.stack.local_set(&ctx.local_reference(), addr, 8);
+
+    call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_local_set16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    ctx.stack.local_set(&ctx.local_reference(), addr, 16);
 
     call_next(tail_code, 1, ctx)
 }
@@ -795,6 +807,12 @@ pub unsafe fn op_local_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 
     call_next(tail_code, 1, ctx)
 }
+pub unsafe fn op_local_tee16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    ctx.stack.local_tee(&ctx.local_reference(), addr, 16);
+
+    call_next(tail_code, 1, ctx)
+}
 pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
     let addr = ctx.instance().globals.as_slice(ctx.gc)[idx];
@@ -802,6 +820,12 @@ pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_global_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32 as usize;
+    let addr = ctx.instance().globals.as_slice(ctx.gc)[idx];
+    vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
+    call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_global_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
     let addr = ctx.instance().globals.as_slice(ctx.gc)[idx];
     vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
@@ -821,6 +845,14 @@ pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     ctx.gc
         .get_global_mut(addr)
         .copy_from_slice(&ctx.stack.pop_u8_array::<8>());
+    call_next(tail_code, 1, ctx)
+}
+pub unsafe fn op_global_set16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32 as usize;
+    let addr = ctx.instance().globals.as_slice(ctx.gc)[idx];
+    ctx.gc
+        .get_global_mut(addr)
+        .copy_from_slice(&ctx.stack.pop_u8_array::<16>());
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
