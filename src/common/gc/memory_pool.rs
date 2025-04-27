@@ -10,7 +10,8 @@ use crate::{
 use super::object::U32FixedArray;
 use super::{
     object::{
-        FunctionInstanceData, GcRefDynamicArray, Global16Data, Global4Data, Global8Data, GlobalRefData, InstanceData, RootTable
+        FunctionInstanceData, GcRefDynamicArray, Global16Data, Global4Data, Global8Data,
+        GlobalRefData, InstanceData, RootTable,
     },
     GcRef, GcView, Header, ObjectType,
 };
