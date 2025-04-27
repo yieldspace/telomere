@@ -6,10 +6,7 @@ use crate::component_model::{
 };
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;
-use crate::parser::component_model::{
-    parse_core_func_idx, parse_core_memory_idx, parse_func_idx, parse_type_idx,
-    ComponentParseError, ParseContext, SizedResult, Validator,
-};
+use crate::parser::component_model::{parse_core_func_idx, parse_core_memory_idx, parse_func_idx, parse_type_idx, ComponentParseError, DefaultValidator, ParseContext, SizedResult, Validator};
 #[cfg(any(
     feature = "component-gated-feature-async",
     feature = "component-gated-feature-threading-builtins"
@@ -20,7 +17,7 @@ use crate::runtime::component_model::instantiate::{
     instantiate_core_function, instantiate_function, InstantiateInstr, InstantiateOperand,
 };
 
-pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<()> {
+pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
     match ctx.reader.read_exact_one()? {
         // canon lift
@@ -315,8 +312,8 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) ->
 
     Ok((ctx.reader.read_count() - start_count, ()))
 }
-#[allow(dead_code)]
-fn parse_async(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> SizedResult<bool> {
+
+fn parse_async(ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>) -> SizedResult<bool> {
     let a = match ctx.reader.read_exact_one()? {
         0x00 => false,
         0x01 => true,
@@ -326,7 +323,7 @@ fn parse_async(ctx: &mut ParseContext<impl BinaryReader, impl Validator>) -> Siz
 }
 
 fn parse_canon_opt(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> SizedResult<CanonOpt> {
     let start_count = ctx.reader.read_count();
     let opt = match ctx.reader.read_exact_one()? {

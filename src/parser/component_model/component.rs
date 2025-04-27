@@ -6,20 +6,19 @@ use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
 use crate::parser::component_model::error::ComponentParseError;
-use crate::parser::component_model::inex::{parse_export, parse_import};
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
-use crate::parser::component_model::{
-    parse_alias, parse_layer, parse_magic, parse_section_type, parse_version, ComponentValidator,
-    Validator,
-};
+use crate::parser::component_model::{parse_alias, parse_layer, parse_magic, parse_section_type, parse_version, ComponentValidator, DefaultValidator, Validator};
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
 use crate::{Module, WasmParser};
+use crate::parser::component_model::export::parse_export;
+use crate::parser::component_model::import::parse_import;
+use crate::parser::component_model::validator::DefaultParent;
 
 pub fn parse_component(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     _parse_component(ctx)?;
     ctx.push_instr(InstantiateInstr {
@@ -29,7 +28,7 @@ pub fn parse_component(
 }
 
 pub fn _parse_component(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     parse_magic(ctx.reader)?;
     parse_version(ctx.reader)?;
@@ -54,7 +53,8 @@ pub fn _parse_component(
             ComponentSectionType::CoreType => todo!(),
             ComponentSectionType::Component => {
                 let mut sized_reader = ctx.reader.take(section_size as usize);
-                let mut validator = ComponentValidator::new_child(ctx.validator);
+                let parent = DefaultParent::new(ctx.validator);
+                let mut validator = ComponentValidator::new_child(parent);
                 let mut instrs = Vec::new();
                 {
                     let mut child_ctx =
@@ -110,7 +110,7 @@ fn parse_core_module_section<R: BinaryReader>(
 
 #[inline]
 fn parse_core_instance_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     // Core instance parsing logic
     parse_vec(ctx, |v| v.reader, parse_core_instance)?;
@@ -119,7 +119,7 @@ fn parse_core_instance_section(
 
 #[inline]
 fn parse_instance_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     // Core instance parsing logic
     parse_vec(ctx, |v| v.reader, parse_instance)?;
@@ -128,7 +128,7 @@ fn parse_instance_section(
 
 #[inline]
 fn parse_alias_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     // Alias parsing logic
     parse_vec(ctx, |v| v.reader, parse_alias)?;
@@ -137,7 +137,7 @@ fn parse_alias_section(
 
 #[inline]
 fn parse_type_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     // Type parsing logic
     parse_vec(ctx, |v| v.reader, parse_type)?;
@@ -146,7 +146,7 @@ fn parse_type_section(
 
 #[inline]
 fn parse_canon_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     // Canon parsing logic
     parse_vec(ctx, |v| v.reader, parse_canon)?;
@@ -155,7 +155,7 @@ fn parse_canon_section(
 
 #[inline]
 fn parse_import_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     // Import parsing logic
     parse_vec(ctx, |v| v.reader, parse_import)?;
@@ -164,7 +164,7 @@ fn parse_import_section(
 
 #[inline]
 fn parse_export_section(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> Result<(), ComponentParseError> {
     // Export parsing logic
     parse_vec(ctx, |v| v.reader, parse_export)?;

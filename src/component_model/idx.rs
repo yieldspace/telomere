@@ -1,7 +1,4 @@
-use crate::component_model::{
-    ComponentFunction, CoreFunction, CoreInstance, CoreModule, CoreType, InlineComponent, Instance,
-    Type,
-};
+use crate::component_model::{ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, InlineComponent, Instance, InstanceType, Type};
 use std::ops::Deref;
 
 pub trait Idx: Clone + Deref<Target = usize> {
@@ -10,7 +7,7 @@ pub trait Idx: Clone + Deref<Target = usize> {
 }
 
 pub trait Resolvable<V>: Idx {
-    fn resolve<'a, T: Resolver<V> + ?Sized>(&self, resolver: &'a T) -> Result<&'a V, T::Error> {
+    fn resolve<'a, T: Resolver<V>>(&self, resolver: &'a T) -> Result<&'a V, T::Error> {
         resolver.resolve(self)
     }
 }
@@ -20,7 +17,7 @@ pub trait Resolver<O> {
 
     fn resolve<I>(&self, idx: &I) -> Result<&O, Self::Error>
     where
-        I: Idx + Resolvable<O>;
+        I: Idx + Resolvable<O>, Self: Sized;
 }
 
 macro_rules! impl_idx {
@@ -72,14 +69,17 @@ impl_resolve!(FuncIdx, ComponentFunction);
 pub struct CoreMemoryIdx(usize);
 
 impl_idx!(CoreMemoryIdx);
+impl_resolve!(CoreMemoryIdx, CoreMemoryRef);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreTableIdx(usize);
 impl_idx!(CoreTableIdx);
+impl_resolve!(CoreTableIdx, CoreTableRef);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreGlobalIdx(usize);
 impl_idx!(CoreGlobalIdx);
+impl_resolve!(CoreGlobalIdx, CoreGlobalRef);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreTypeIdx(usize);
@@ -98,6 +98,7 @@ pub struct InstanceIdx(usize);
 
 impl_idx!(InstanceIdx);
 impl_resolve!(InstanceIdx, Instance);
+impl_resolve!(InstanceIdx, InstanceType);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreModuleIdx(usize);

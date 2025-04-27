@@ -4,9 +4,10 @@ use crate::component_model::{
     CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreMemoryRef,
     CoreModuleIdx, CoreReference, CoreSort, CoreTableRef, Idx, Resolvable, Slot,
 };
-use crate::parser::component_model::{ComponentParseError, Validator};
+use crate::parser::component_model::{ComponentParseError, DefaultValidator, Validator};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone)]
 pub enum CoreInstance {
     Real {
         module_idx: CoreModuleIdx,
@@ -34,7 +35,7 @@ impl CoreInstance {
 
     pub fn get_export(
         &self,
-        validator: &dyn Validator,
+        validator: &impl DefaultValidator,
         self_idx: CoreInstanceIdx,
         sort: CoreSort,
         name: String,

@@ -1,8 +1,8 @@
-use crate::component_model::{Case, Label, LabelValType, PrimValType, TypeIdx};
+use crate::component_model::{Case, Label, LabelValType, PrimValType, Type, TypeIdx};
 
 #[derive(Debug, Clone)]
 pub enum ValType {
-    TypeId(TypeIdx),
+    Type(Type),
     Primitive(PrimValType),
 }
 
@@ -17,8 +17,8 @@ pub enum DefValType {
     Enum(Vec<Label>),
     Option(ValType),
     Result(Option<ValType>, Option<ValType>),
-    Own(TypeIdx),
-    Borrow(TypeIdx),
+    Own(Type),
+    Borrow(Type),
     #[cfg(feature = "component-gated-feature-async")]
     Stream(Option<ValType>),
     #[cfg(feature = "component-gated-feature-async")]

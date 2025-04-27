@@ -35,7 +35,7 @@ macro_rules! impl_try_into_type {
 
 #[derive(Debug, Clone)]
 pub enum Type {
-    DefVal(DefValType),
+    DefVal(Box<DefValType>),
     Func(FuncType),
     Component(ComponentType),
     Instance(InstanceType),
@@ -44,7 +44,6 @@ pub enum Type {
     // todo: 処理系はatomic usize等でunique性を担保する
     UniqueResource, // (usize)
     Eq(TypeIdx),
-    SuperTypedUniqueResource(TypeIdx),
     Referenced(Box<Type>, Reference),
 }
 

@@ -1,17 +1,11 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    AliasIdx, Binding, CoreExportSlot, CoreSortWithIdx, Idx,
-    Resolvable, Sort, SortWithIdx,
-};
+use crate::component_model::{AliasIdx, Binding, ComponentIdx, CoreExportSlot, CoreSortWithIdx, Idx, Instance, Resolvable, Sort, SortWithIdx, TypeIdx};
 use crate::parser::component_model::validator::Validator;
-use crate::parser::component_model::{
-    parse_core_instance_idx, parse_instance_idx, parse_sort, ParseContext,
-    SizedResult,
-};
+use crate::parser::component_model::{parse_core_instance_idx, parse_instance_idx, parse_sort, DefaultValidator, ParseContext, SizedResult};
 use crate::parser::core::{parse_name, parse_u32};
 
 pub fn parse_alias(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> SizedResult<AliasIdx> {
     let start_count = ctx.reader.read_count();
 
@@ -19,7 +13,7 @@ pub fn parse_alias(
     let idx: AliasIdx = match ctx.reader.read_exact_one()? {
         0x00 => {
             let (_, instance_idx) = parse_instance_idx(ctx)?;
-            let instance = instance_idx.resolve(ctx.validator)?;
+            let instance: &Instance = instance_idx.resolve(ctx.validator)?;
             let (_, name) = parse_name(ctx.reader)?;
             let export = instance.get_export(&name)?;
             if export.is_none() {
@@ -137,15 +131,14 @@ pub fn parse_alias(
         0x02 => {
             let (_, ct) = parse_u32(ctx.reader)?;
             let (_, idx) = parse_u32(ctx.reader)?;
-            let target_validator = get_outer(ctx.validator, ct);
             // question: module?
             match sort {
                 Sort::Type => {
-                    let type_idx = target_validator.validate_type_idx(idx as usize)?;
+                    let type_idx: TypeIdx = ctx.validator.validate_outer_idx(ct, idx)?;
                     AliasIdx::Type(ctx.validator.add_type(Binding::Alias(type_idx.global()))?)
                 }
                 Sort::Component => {
-                    let component_idx = target_validator.validate_component_idx(idx as usize)?;
+                    let component_idx: ComponentIdx = ctx.validator.validate_outer_idx(ct, idx)?;
                     AliasIdx::Component(
                         ctx.validator
                             .add_component(Binding::Alias(component_idx.global()))?,
@@ -157,12 +150,4 @@ pub fn parse_alias(
         _ => unreachable!("invalid"),
     };
     Ok((ctx.reader.read_count() - start_count, idx))
-}
-
-fn get_outer(validator: &dyn Validator, ct: u32) -> &dyn Validator {
-    if ct == 0 {
-        validator
-    } else {
-        get_outer(validator.get_parent().unwrap(), ct - 1)
-    }
 }

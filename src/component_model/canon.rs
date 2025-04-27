@@ -76,7 +76,7 @@ pub enum CanonicalFuncKind {
     ThreadAvailableParallelism,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CanonOpt {
     StringEncodingUtf8,
     StringEncodingUtf16,

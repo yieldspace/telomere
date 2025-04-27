@@ -14,8 +14,7 @@ pub use instance::*;
 pub use section::*;
 pub use sort::*;
 pub use types::*;
-pub(crate) use validator::Validator;
-pub use validator::{ChildValidator, ComponentValidator};
+pub use validator::{ComponentValidator, Validator, DefaultValidator, EmptyParent, DefaultParent, Parent};
 
 mod alias;
 mod canon;
@@ -24,12 +23,13 @@ mod context;
 mod core;
 mod error;
 mod idx;
-mod inex;
 mod instance;
 mod section;
 mod sort;
 mod types;
 mod validator;
+mod import;
+mod export;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;
 

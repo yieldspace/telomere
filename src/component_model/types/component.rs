@@ -1,4 +1,4 @@
-use crate::component_model::{CoreTypeIdx, ImportDecl, InstanceDecl, InstanceIdx, TypeIdx};
+use crate::component_model::{CoreModuleType, CoreTypeIdx, FuncType, ImportDecl, InstanceDecl, InstanceIdx, InstanceType, Type, TypeIdx};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -26,7 +26,15 @@ impl ComponentType {
 pub struct ComponentExportType {}
 
 #[derive(Debug, Clone)]
-pub struct ComponentImportType {}
+pub enum ComponentImportType {
+    CoreModule(CoreModuleType),
+    Func(FuncType),
+    #[cfg(feature = "component-gated-feature-value-imports-exports")]
+    Value(crate::component_model::types::instance::ValueBound),
+    Type(Type),
+    Component(ComponentType),
+    Instance(InstanceType),
+}
 
 #[derive(Debug, Clone)]
 pub enum ComponentDecl {

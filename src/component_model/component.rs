@@ -41,11 +41,14 @@ impl SortLike for ComponentExportSlot {
 //     Typed(ComponentType, Reference),
 //     SuperTyped(ComponentType, ComponentIdx, Reference),
 // }
+
+#[derive(Clone)]
 pub struct InlineComponent {
     pub value: Option<InlineComponentValue>,
     pub ty: ComponentType,
 }
 
+#[derive(Clone)]
 pub struct InlineComponentValue {
     instrs: Vec<InstantiateInstr>,
     imports: HashMap<String, ComponentImport>,

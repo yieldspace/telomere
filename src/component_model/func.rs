@@ -1,5 +1,6 @@
 use crate::component_model::{CanonOpt, CoreFuncIdx, FuncType, TypeIdx};
 
+#[derive(Clone)]
 pub struct ComponentFunction {
     pub(crate) value: Option<FuncValue>,
     pub(crate) ty: FuncType,
@@ -18,6 +19,7 @@ impl ComponentFunction {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum FuncValue {
     CanonLift {
         core_func_idx: CoreFuncIdx,

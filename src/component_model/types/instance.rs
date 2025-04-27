@@ -39,7 +39,7 @@ pub enum ExternDesc {
     Func(FuncType),
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     Value(ValueBound),
-    Type(TypeBound),
+    Type(Type),
     Component(ComponentType),
     Instance(InstanceType),
 }

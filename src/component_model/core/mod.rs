@@ -34,6 +34,7 @@ pub enum CoreBinding<T, R> {
     Binding(Binding<T>),
 }
 
+#[derive(Debug, Clone)]
 pub enum CoreInstanceInlineExport {
     Func(CoreFuncIdx),
     Table(CoreTableIdx),
@@ -44,6 +45,7 @@ pub enum CoreInstanceInlineExport {
     Instance(CoreInstanceIdx),
 }
 
+#[derive(Debug, Clone)]
 pub enum CoreInstanceImport {
     Instance(CoreInstanceIdx),
 }

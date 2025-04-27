@@ -1,21 +1,18 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{AliasType, Resolvable, Sort, SortWithIdx};
-use crate::parser::component_model::validator::get_outer_validator;
-use crate::parser::component_model::{
-    parse_instance_idx, parse_sort, ComponentParseError, ParseContext,
-    SizedResult, Validator,
-};
+use crate::component_model::{AliasType, Instance, InstanceIdx, Resolvable, Sort, SortWithIdx, TypeIdx};
+use crate::parser::component_model::{parse_instance_idx, parse_sort, ComponentParseError, DefaultValidator, ParseContext, SizedResult, Validator};
+use crate::parser::component_model::validator::IdxValidator;
 use crate::parser::core::{parse_name, parse_u32};
 
 pub fn parse_alias_type(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> SizedResult<AliasType> {
     let start_count = ctx.reader.read_count();
     let (_, sort) = parse_sort(ctx)?;
     let alias = match ctx.reader.read_exact_one()? {
         0x00 => {
             let (_, instance_idx) = parse_instance_idx(ctx)?;
-            let instance = instance_idx.resolve(ctx.validator)?;
+            let instance: &Instance = instance_idx.resolve(ctx.validator)?;
             let (_, name) = parse_name(ctx.reader)?;
             if let Some(sort) = instance.get_export(&name)? {
                 match sort {
@@ -24,7 +21,7 @@ pub fn parse_alias_type(
                         AliasType::Type(ty.clone())
                     }
                     SortWithIdx::Instance(idx) => {
-                        let inst = idx.resolve(ctx.validator)?;
+                        let inst: &Instance = idx.resolve(ctx.validator)?;
                         AliasType::Instance(inst.ty.clone())
                     }
                     _ => panic!("Invalid sort type"),
@@ -41,10 +38,8 @@ pub fn parse_alias_type(
                     "Invalid alias sort for core instance decl: {sort:?}"
                 )));
             }
-            let target_validator = get_outer_validator(ctx.validator, ct);
-            let type_idx = target_validator.validate_type_idx(idx as usize)?;
-            let ty = type_idx.resolve(target_validator)?;
-            AliasType::Type(ty.clone())
+            let ty: TypeIdx = ctx.validator.validate_outer_idx(ct, idx)?;
+            AliasType::Type(ty.resolve(ctx.validator)?.clone())
         }
         _ => {
             return Err(ComponentParseError::InvalidSignature(format!(

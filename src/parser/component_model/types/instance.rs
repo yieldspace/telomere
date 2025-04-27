@@ -1,113 +1,84 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    AliasType, CoreType, ExportDecl, ExternDesc, InstanceDecl,
-    InstanceExportType, InstanceType, Resolvable, Type, TypeBound,
-};
+use crate::component_model::{AliasType, CoreType, ExportDecl, ExternDesc, Instance, InstanceDecl, InstanceExportType, InstanceIdx, InstanceType, Type, TypeIdx};
 use crate::parser::component_model::types::alias::parse_alias_type;
-use crate::parser::component_model::types::parse_export_decl;
-use crate::parser::component_model::{
-    parse_core_type, parse_vec_range, ParseContext, SizedResult,
-    Validator,
-};
-use crate::parser::core::parse_vec;
+use crate::parser::component_model::types::{parse_export_decl, TypeValidator};
+use crate::parser::component_model::{parse_core_type, parse_type, parse_vec_range, DefaultValidator, ParseContext, SizedResult, Validator};
+use crate::parser::component_model::validator::{DefaultParent, IdxValidator};
 
 pub fn parse_instance_type(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    parent_ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> SizedResult<InstanceType> {
-    for _ in parse_vec_range(ctx)? {
-        let (_, decl) = parse_instance_decl(ctx)?;
+    let mut new_validator = TypeValidator::new(DefaultParent::new(parent_ctx.validator));
+    let mut new_ctx = ParseContext::new(
+        parent_ctx.reader,
+        parent_ctx.instrs,
+        &mut new_validator,
+    );
+    let start_count = new_ctx.reader.read_count();
+    let mut inst_type = InstanceType::new();
+    for _ in parse_vec_range(&mut new_ctx)? {
+        let (_, decl) = parse_instance_decl(&mut new_ctx)?;
         match decl {
             InstanceDecl::CoreModuleType(ty) => {
+                new_ctx.validator.add_core_module_type(ty.clone());
+                inst_type.core_types.push(CoreType::ModuleType(ty));
                 // type_validator.add_core_type(CoreType::ModuleType(ty));
             }
             InstanceDecl::Type(ty) => {
+                new_ctx.validator.add_type(ty.clone());
+                inst_type.types.push(ty);
                 // type_validator.add_type(ty.clone());
             }
             InstanceDecl::Alias(ty) => match ty {
                 AliasType::Type(ty) => {
+                    new_ctx.validator.add_type(ty.clone());
+                    inst_type.types.push(ty);
                     // type_validator.add_type(ty.clone());
                 }
                 AliasType::Instance(ty) => {
+                    new_ctx.validator.add_instance_type(ty.clone());
+                    inst_type.instances.push(ty)
                     // type_validator.add_instance_type(ty);
                 }
             },
             InstanceDecl::ExportDecl(ExportDecl { name, ed }) => match ed {
-                ExternDesc::CoreModule(ty) => {}
-                ExternDesc::Func(_) => {}
-                #[cfg(feature = "component-gated-feature-value-imports-exports")]
-                ExternDesc::Value(_) => {}
-                ExternDesc::Type(_) => {}
-                ExternDesc::Component(_) => {}
-                ExternDesc::Instance(_) => {}
-            },
-        }
-    }
-    let (len, decls) = parse_vec(ctx, |v| v.reader, parse_instance_decl)?;
-    let mut inst_type = InstanceType::new();
-    for decl in decls {
-        match decl {
-            InstanceDecl::CoreModuleType(ty) => {
-                inst_type.core_types.push(CoreType::ModuleType(ty));
-            }
-            InstanceDecl::Type(ty) => {
-                inst_type.types.push(ty);
-            }
-            InstanceDecl::Alias(ty) => match ty {
-                AliasType::Type(ty) => {}
-                AliasType::Instance(_) => {}
-            },
-            InstanceDecl::ExportDecl(decl) => match &decl.ed {
                 ExternDesc::CoreModule(ty) => {
-                    inst_type.exports.insert(
-                        decl.name.clone(),
-                        InstanceExportType::CoreModule(ty.clone()),
-                    );
+                    new_ctx.validator.add_core_module_type(ty.clone());
+                    inst_type.exports.insert(name, InstanceExportType::CoreModule(ty));
                 }
                 ExternDesc::Func(ty) => {
-                    inst_type
-                        .exports
-                        .insert(decl.name.clone(), InstanceExportType::Func(ty.clone()));
+                    new_ctx.validator.add_func_type(ty.clone());
+                    inst_type.exports.insert(name, InstanceExportType::Func(ty));
                 }
                 #[cfg(feature = "component-gated-feature-value-imports-exports")]
-                ExternDesc::Value(_) => todo!(),
-                ExternDesc::Type(bound) => match bound {
-                    TypeBound::Eq(idx) => {
-                        let ty = idx.resolve(ctx.validator)?;
-                        inst_type
-                            .exports
-                            .insert(decl.name.clone(), InstanceExportType::Type(ty.clone()));
-                    }
-                    TypeBound::Sub => {
-                        inst_type.exports.insert(
-                            decl.name.clone(),
-                            InstanceExportType::Type(Type::UniqueResource),
-                        );
-                    }
-                },
+                ExternDesc::Value(_) => {}
+                ExternDesc::Type(ty) => {
+                    new_ctx.validator.add_type(ty.clone());
+                    inst_type.exports.insert(name, InstanceExportType::Type(ty));
+                }
                 ExternDesc::Component(ty) => {
-                    inst_type
-                        .exports
-                        .insert(decl.name.clone(), InstanceExportType::Component(ty.clone()));
+                    new_ctx.validator.add_component_type(ty.clone());
+                    inst_type.exports.insert(name, InstanceExportType::Component(ty));
                 }
                 ExternDesc::Instance(ty) => {
-                    inst_type
-                        .exports
-                        .insert(decl.name.clone(), InstanceExportType::Instance(ty.clone()));
+                    new_ctx.validator.add_instance_type(ty.clone());
+                    inst_type.exports.insert(name, InstanceExportType::Instance(ty));
                 }
             },
         }
     }
-    Ok((len, inst_type))
+
+    Ok((new_ctx.reader.read_count() - start_count, inst_type))
 }
 
 pub fn parse_instance_decl(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
 ) -> SizedResult<InstanceDecl> {
     _parse_instance_decl(ctx, None)
 }
 
 pub fn _parse_instance_decl(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
     byte: Option<u8>,
 ) -> SizedResult<InstanceDecl> {
     let start_count = ctx.reader.read_count();
@@ -121,17 +92,16 @@ pub fn _parse_instance_decl(
             InstanceDecl::CoreModuleType(t.try_into()?)
         }
         0x01 => {
-            // let (_, t) = parse_type(ctx, Some(type_validator))?;
-            // InstanceDecl::Type(t)
-            todo!()
+            let (_, t) = parse_type(ctx)?;
+            InstanceDecl::Type(t)
         }
         0x02 => {
             let (_, a) = parse_alias_type(ctx)?;
             InstanceDecl::Alias(a)
         }
         0x04 => {
-            let (_, decl) = parse_export_decl(ctx)?;
-            InstanceDecl::ExportDecl(decl)
+            let (_, d) = parse_export_decl(ctx)?;
+            InstanceDecl::ExportDecl(d)
         }
         _ => todo!(),
     };

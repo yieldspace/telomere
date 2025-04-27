@@ -3,7 +3,7 @@ use crate::component_model::ValType;
 #[derive(Debug, Clone)]
 pub struct FuncType {
     pub params: Vec<LabelValType>,
-    pub result: Option<ValType>,
+    pub result: Option<Box<ValType>>,
 }
 
 #[derive(Debug, Clone)]
