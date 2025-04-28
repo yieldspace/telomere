@@ -5,7 +5,8 @@ use crate::component_model::{
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
-use crate::parser::component_model::{DefaultValidator, SizedResult};
+use crate::parser::component_model::validator::DefaultValidatorState;
+use crate::parser::component_model::SizedResult;
 use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError, Validator};
 use crate::parser::core::{parse_name, parse_vec};
 use crate::runtime::component_model::instantiate::{
@@ -15,19 +16,19 @@ use crate::runtime::component_model::instantiate::{
 use std::collections::HashMap;
 
 pub fn parse_instance(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
 ) -> SizedResult<InstanceIdx> {
     let start_count = ctx.reader.read_count();
 
     match ctx.reader.read_exact_one()? {
         0x00 => {
-            let (_, component_idx) = parse_component_idx(ctx)?;
+            let component_idx = parse_component_idx(ctx)?;
             let (_, args) = parse_vec(ctx, |v| v.reader, parse_instantiate_arg)?;
             let args = args
                 .into_iter()
                 .map(|InstantiateArg { name, sort }| (name, sort))
                 .collect::<HashMap<String, SortWithIdx>>();
-            let component = component_idx.resolve(ctx.validator)?;
+            let component = ctx.validator.resolve_idx(&component_idx)?;
             if args.len() != component.ty.imports.len() {
                 return Err(ComponentParseError::InvalidSignature(format!(
                     "Invalid number of args: {}",
@@ -48,6 +49,7 @@ pub fn parse_instance(
             let ty = value.get_type();
             let idx = ctx
                 .validator
+                .state
                 .add_instance(Binding::Real(Instance::new(Some(value), ty)))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_instance_start,
@@ -78,6 +80,7 @@ pub fn parse_instance(
             let ty = value.get_type();
             let idx = ctx
                 .validator
+                .state
                 .add_instance(Binding::Real(Instance::new(Some(value), ty)))?;
             ctx.push_instr(InstantiateInstr {
                 op: instantiate_inline_instance,
@@ -94,7 +97,7 @@ pub fn parse_instance(
 }
 
 fn parse_instantiate_arg(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
 ) -> SizedResult<InstantiateArg> {
     let start_count = ctx.reader.read_count();
 
@@ -107,7 +110,7 @@ fn parse_instantiate_arg(
 }
 
 fn parse_inlineexport(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
 ) -> SizedResult<InlineExport> {
     let start_count = ctx.reader.read_count();
 

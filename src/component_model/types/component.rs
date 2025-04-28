@@ -1,4 +1,7 @@
-use crate::component_model::{CoreModuleType, CoreTypeIdx, FuncType, ImportDecl, InstanceDecl, InstanceIdx, InstanceType, Type, TypeIdx};
+use crate::component_model::{
+    CoreModuleType, CoreTypeIdx, FuncType, ImportDecl, InstanceDecl, InstanceIdx, InstanceType,
+    Type, TypeIdx,
+};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

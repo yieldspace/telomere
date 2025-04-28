@@ -1,68 +1,104 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{AliasType, CoreType, ExportDecl, ExternDesc, Instance, InstanceDecl, InstanceExportType, InstanceIdx, InstanceType, Type, TypeIdx};
+use crate::component_model::{
+    AliasType, Binding, ComponentFunction, ComponentIdx, CoreModule, CoreModuleIdx, CoreType,
+    CoreTypeIdx, ExportDecl, ExternDesc, FuncIdx, InlineComponent, Instance, InstanceDecl,
+    InstanceExportType, InstanceIdx, InstanceType, Resolver, Type, TypeIdx,
+};
 use crate::parser::component_model::types::alias::parse_alias_type;
-use crate::parser::component_model::types::{parse_export_decl, TypeValidator};
-use crate::parser::component_model::{parse_core_type, parse_type, parse_vec_range, DefaultValidator, ParseContext, SizedResult, Validator};
-use crate::parser::component_model::validator::{DefaultParent, IdxValidator};
+use crate::parser::component_model::types::{parse_export_decl, TypeValidatorState};
+use crate::parser::component_model::validator::{
+    DefaultValidatorState, IdxValidator, ValidatorState, ValidatorStateImpl,
+};
+use crate::parser::component_model::{
+    parse_core_type, parse_type, parse_vec_range, ComponentParseError, ParseContext, SizedResult,
+    Validator,
+};
+use crate::parser::component_model::types::validator::TypeSuperValidator;
 
-pub fn parse_instance_type(
-    parent_ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+pub fn parse_instance_type<
+    R: BinaryReader,
+    S: ValidatorStateImpl
+        + IdxValidator<TypeIdx, Resolved = Type>
+        + IdxValidator<CoreModuleIdx, Resolved = CoreModule>
+        + IdxValidator<InstanceIdx, Resolved = Instance>
+        + IdxValidator<ComponentIdx, Resolved = InlineComponent>
+        + IdxValidator<FuncIdx, Resolved = ComponentFunction>
+        + IdxValidator<CoreTypeIdx, Resolved = CoreType> + TypeSuperValidator,
+>(
+    parent_ctx: &mut ParseContext<R, S>,
 ) -> SizedResult<InstanceType> {
-    let mut new_validator = TypeValidator::new(DefaultParent::new(parent_ctx.validator));
-    let mut new_ctx = ParseContext::new(
-        parent_ctx.reader,
-        parent_ctx.instrs,
-        &mut new_validator,
-    );
+    let mut new_validator =
+        Validator::new(TypeValidatorState::new(&mut parent_ctx.validator.state));
+    let mut new_ctx = ParseContext::new(parent_ctx.reader, parent_ctx.instrs, &mut new_validator);
     let start_count = new_ctx.reader.read_count();
     let mut inst_type = InstanceType::new();
     for _ in parse_vec_range(&mut new_ctx)? {
         let (_, decl) = parse_instance_decl(&mut new_ctx)?;
         match decl {
             InstanceDecl::CoreModuleType(ty) => {
-                new_ctx.validator.add_core_module_type(ty.clone());
+                new_ctx
+                    .validator
+                    .state
+                    .add_core_module(Binding::Real(CoreModule::new(None, ty.clone())))?;
                 inst_type.core_types.push(CoreType::ModuleType(ty));
-                // type_validator.add_core_type(CoreType::ModuleType(ty));
             }
             InstanceDecl::Type(ty) => {
-                new_ctx.validator.add_type(ty.clone());
+                new_ctx.validator.state.add_type(ty.clone().into())?;
                 inst_type.types.push(ty);
-                // type_validator.add_type(ty.clone());
             }
             InstanceDecl::Alias(ty) => match ty {
                 AliasType::Type(ty) => {
-                    new_ctx.validator.add_type(ty.clone());
+                    new_ctx.validator.state.add_type(ty.clone().into())?;
                     inst_type.types.push(ty);
-                    // type_validator.add_type(ty.clone());
                 }
                 AliasType::Instance(ty) => {
-                    new_ctx.validator.add_instance_type(ty.clone());
+                    new_ctx
+                        .validator
+                        .state
+                        .add_instance(Instance::new(None, ty.clone()).into())?;
                     inst_type.instances.push(ty)
-                    // type_validator.add_instance_type(ty);
                 }
             },
             InstanceDecl::ExportDecl(ExportDecl { name, ed }) => match ed {
                 ExternDesc::CoreModule(ty) => {
-                    new_ctx.validator.add_core_module_type(ty.clone());
-                    inst_type.exports.insert(name, InstanceExportType::CoreModule(ty));
+                    new_ctx
+                        .validator
+                        .state
+                        .add_core_module(CoreModule::new(None, ty.clone()).into())?;
+                    inst_type
+                        .exports
+                        .insert(name, InstanceExportType::CoreModule(ty));
                 }
                 ExternDesc::Func(ty) => {
-                    new_ctx.validator.add_func_type(ty.clone());
+                    new_ctx
+                        .validator
+                        .state
+                        .add_func(ComponentFunction::new(None, ty.clone()).into())?;
                     inst_type.exports.insert(name, InstanceExportType::Func(ty));
                 }
                 #[cfg(feature = "component-gated-feature-value-imports-exports")]
                 ExternDesc::Value(_) => {}
                 ExternDesc::Type(ty) => {
-                    new_ctx.validator.add_type(ty.clone());
+                    new_ctx.validator.state.add_type(ty.clone().into())?;
                     inst_type.exports.insert(name, InstanceExportType::Type(ty));
                 }
                 ExternDesc::Component(ty) => {
-                    new_ctx.validator.add_component_type(ty.clone());
-                    inst_type.exports.insert(name, InstanceExportType::Component(ty));
+                    new_ctx
+                        .validator
+                        .state
+                        .add_component(InlineComponent::new(None, ty.clone()).into())?;
+                    inst_type
+                        .exports
+                        .insert(name, InstanceExportType::Component(ty));
                 }
                 ExternDesc::Instance(ty) => {
-                    new_ctx.validator.add_instance_type(ty.clone());
-                    inst_type.exports.insert(name, InstanceExportType::Instance(ty));
+                    new_ctx
+                        .validator
+                        .state
+                        .add_instance(Instance::new(None, ty.clone()).into())?;
+                    inst_type
+                        .exports
+                        .insert(name, InstanceExportType::Instance(ty));
                 }
             },
         }
@@ -72,13 +108,41 @@ pub fn parse_instance_type(
 }
 
 pub fn parse_instance_decl(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+    ctx: &mut ParseContext<
+        impl BinaryReader,
+        impl ValidatorStateImpl
+            + IdxValidator<InstanceIdx, Resolved = Instance>
+            + IdxValidator<TypeIdx, Resolved = Type>
+            + Resolver<Type, Error = ComponentParseError>
+            + Resolver<Instance, Error = ComponentParseError>
+            + IdxValidator<FuncIdx, Resolved = ComponentFunction>
+            + IdxValidator<CoreModuleIdx, Resolved = CoreModule>
+            + IdxValidator<ComponentIdx, Resolved = InlineComponent>
+            + Resolver<ComponentFunction, Error = ComponentParseError>
+            + IdxValidator<CoreTypeIdx, Resolved = CoreType>
+            + Resolver<CoreType, Error = ComponentParseError>
+            + TypeSuperValidator,
+    >,
 ) -> SizedResult<InstanceDecl> {
     _parse_instance_decl(ctx, None)
 }
 
 pub fn _parse_instance_decl(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+    ctx: &mut ParseContext<
+        impl BinaryReader,
+        impl ValidatorStateImpl
+            + IdxValidator<InstanceIdx, Resolved = Instance>
+            + IdxValidator<TypeIdx, Resolved = Type>
+            + Resolver<Type, Error = ComponentParseError>
+            + Resolver<Instance, Error = ComponentParseError>
+            + IdxValidator<FuncIdx, Resolved = ComponentFunction>
+            + IdxValidator<CoreModuleIdx, Resolved = CoreModule>
+            + IdxValidator<ComponentIdx, Resolved = InlineComponent>
+            + Resolver<ComponentFunction, Error = ComponentParseError>
+            + IdxValidator<CoreTypeIdx, Resolved = CoreType>
+            + Resolver<CoreType, Error = ComponentParseError>
+            + TypeSuperValidator,
+    >,
     byte: Option<u8>,
 ) -> SizedResult<InstanceDecl> {
     let start_count = ctx.reader.read_count();

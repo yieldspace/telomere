@@ -1,33 +1,37 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{AliasType, Instance, InstanceIdx, Resolvable, Sort, SortWithIdx, TypeIdx};
-use crate::parser::component_model::{parse_instance_idx, parse_sort, ComponentParseError, DefaultValidator, ParseContext, SizedResult, Validator};
-use crate::parser::component_model::validator::IdxValidator;
+use crate::component_model::{
+    AliasType, CoreTypeIdx, Instance, InstanceExportType, InstanceIdx, Resolvable, Resolver, Sort,
+    SortWithIdx, Type, TypeIdx,
+};
+use crate::parser::component_model::validator::{IdxValidator, ValidatorStateImpl};
+use crate::parser::component_model::{parse_instance_idx, parse_instance_idx_resolved, parse_sort, ComponentParseError, ParseContext, SizedResult, Validator};
 use crate::parser::core::{parse_name, parse_u32};
 
-pub fn parse_alias_type(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+pub fn parse_alias_type<
+    R: BinaryReader,
+    S: ValidatorStateImpl
+        + IdxValidator<TypeIdx, Resolved=Type>
+        + IdxValidator<InstanceIdx, Resolved=Instance>
+        + Resolver<Instance, Error = ComponentParseError>
+        + Resolver<Type, Error = ComponentParseError>,
+>(
+    ctx: &mut ParseContext<R, S>,
 ) -> SizedResult<AliasType> {
     let start_count = ctx.reader.read_count();
     let (_, sort) = parse_sort(ctx)?;
     let alias = match ctx.reader.read_exact_one()? {
         0x00 => {
-            let (_, instance_idx) = parse_instance_idx(ctx)?;
-            let instance: &Instance = instance_idx.resolve(ctx.validator)?;
+            let instance = parse_instance_idx_resolved(ctx)?;
             let (_, name) = parse_name(ctx.reader)?;
-            if let Some(sort) = instance.get_export(&name)? {
-                match sort {
-                    SortWithIdx::Type(idx) => {
-                        let ty = idx.resolve(ctx.validator)?;
-                        AliasType::Type(ty.clone())
-                    }
-                    SortWithIdx::Instance(idx) => {
-                        let inst: &Instance = idx.resolve(ctx.validator)?;
-                        AliasType::Instance(inst.ty.clone())
-                    }
-                    _ => panic!("Invalid sort type"),
+            let ty = instance.get_export_type(&name)?;
+            match ty {
+                InstanceExportType::Type(ty) => AliasType::Type(ty),
+                InstanceExportType::Instance(ty) => AliasType::Instance(ty),
+                _ => {
+                    return Err(ComponentParseError::InvalidSignature(format!(
+                        "Invalid alias type for instance decl: {sort:?}"
+                    )));
                 }
-            } else {
-                return Err(ComponentParseError::ExportNotFound(name.clone()));
             }
         }
         0x02 => {
@@ -38,8 +42,8 @@ pub fn parse_alias_type(
                     "Invalid alias sort for core instance decl: {sort:?}"
                 )));
             }
-            let ty: TypeIdx = ctx.validator.validate_outer_idx(ct, idx)?;
-            AliasType::Type(ty.resolve(ctx.validator)?.clone())
+            let ty = ctx.validator.validate_outer_idx_resolved::<Type, TypeIdx>(ct, idx)?;
+            AliasType::Type(ty)
         }
         _ => {
             return Err(ComponentParseError::InvalidSignature(format!(

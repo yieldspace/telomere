@@ -1,6 +1,6 @@
 use crate::component_model::{
-    ComponentFunction, ComponentIdx, ComponentType, CoreModule, CoreModuleIdx,
-    CoreSort, ExternDesc, FuncIdx, Instance, InstanceIdx, Slot, Sort, SortLike, SortWithIdx, Type, TypeIdx,
+    ComponentFunction, ComponentIdx, ComponentType, CoreModule, CoreModuleIdx, CoreSort,
+    ExternDesc, FuncIdx, Instance, InstanceIdx, Slot, Sort, SortLike, SortWithIdx, Type, TypeIdx,
 };
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 use std::collections::HashMap;
@@ -31,16 +31,6 @@ impl SortLike for ComponentExportSlot {
         }
     }
 }
-
-// pub enum InlineComponent {
-//     Defined {
-//         instrs: Vec<InstantiateInstr>,
-//         imports: Vec<ComponentImport>,
-//         exports: Vec<ComponentExport>,
-//     },
-//     Typed(ComponentType, Reference),
-//     SuperTyped(ComponentType, ComponentIdx, Reference),
-// }
 
 #[derive(Clone)]
 pub struct InlineComponent {

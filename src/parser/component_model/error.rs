@@ -1,4 +1,4 @@
-use crate::component_model::SortWithIdx;
+use crate::component_model::{Sort, SortWithIdx};
 use crate::WasmParserError;
 use thiserror::Error;
 
@@ -33,8 +33,10 @@ pub enum ComponentParseError {
     InvalidSignature(String),
     #[error("export `{0:?}` not found")]
     ExportNotFound(String),
+    #[error("Sort with idx `{0:?}` is invalid (expected {1})")]
+    InvalidSortWithIdx(SortWithIdx, String),
     #[error("Sort `{0:?}` is invalid (expected {1})")]
-    InvalidSort(SortWithIdx, String),
+    InvalidSort(Sort, String),
     #[error("Index `{0:?}` is not found in {1}")]
     InvalidIdx(usize, String),
     #[error("Expected {0} Type")]

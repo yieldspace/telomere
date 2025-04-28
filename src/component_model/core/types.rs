@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use crate::common::ExportDesc;
-use crate::component_model::{CoreExportSlot, CoreInstanceIdx, CoreSort, CoreTypeRef};
+use crate::component_model::{CoreExportSlot, CoreGlobalIdx, CoreGlobalRef, CoreInstanceIdx, CoreInstanceInlineExport, CoreMemoryIdx, CoreMemoryRef, CoreSort, CoreTableIdx, CoreTableRef, CoreTypeIdx, CoreTypeRef};
 use crate::parser::component_model::ComponentParseError;
 use crate::Module;
 
@@ -10,7 +11,26 @@ pub enum CoreType {
 }
 
 #[derive(Debug, Clone)]
-pub struct CoreModuleType {}
+pub enum CoreAlias {
+    
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CoreModuleType {
+    pub(crate) imports: Vec<crate::common::Import>,
+    pub(crate) types: Vec<CoreType>,
+    pub(crate) globals: Vec<CoreGlobalRef>,
+    pub(crate) tables: Vec<CoreTableRef>,
+    pub(crate) memories: Vec<CoreMemoryRef>,
+    pub(crate) exports: HashMap<String, crate::common::ImportDesc>,
+}
+
+pub enum CoreExportType {
+    Memory(crate::common::MemIdx),
+    Table(crate::common::TableIdx),
+    Func(crate::common::FuncIdx),
+    Global(crate::common::GlobalIdx),
+}
 
 impl TryFrom<CoreType> for CoreModuleType {
     type Error = ComponentParseError;
@@ -26,24 +46,24 @@ impl TryFrom<CoreType> for CoreModuleType {
 
 impl CoreModuleType {
     pub fn from_module(module: &Module) -> Self {
-        for export in module.exs.0.iter() {
-            let name = export.0.clone();
-            match export.1 {
-                ExportDesc::Func(_) => {}
-                ExportDesc::Table(_) => {}
-                ExportDesc::Mem(_) => {}
-                ExportDesc::Global(_) => {}
-            }
-        }
-        Self {}
+        todo!();
+        // for export in module.exs.0.iter() {
+        //     let name = export.0.clone();
+        //     match export.1 {
+        //         ExportDesc::Func(_) => {}
+        //         ExportDesc::Table(_) => {}
+        //         ExportDesc::Mem(_) => {}
+        //         ExportDesc::Global(_) => {}
+        //     }
+        // }
+        // Self {}
     }
 
-    pub fn get_export(
+    pub fn get_export_type(
         &self,
-        _self_idx: CoreInstanceIdx,
-        _sort: CoreSort,
-        _name: String,
-    ) -> Result<CoreExportSlot, ComponentParseError> {
+        sort: &CoreSort,
+        name: &String,
+    ) -> Result<CoreExportType, ComponentParseError> {
         todo!()
     }
 }

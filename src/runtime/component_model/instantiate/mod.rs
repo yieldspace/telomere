@@ -1,7 +1,5 @@
-use crate::component_model::{
-    CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport,
-    CoreModule, CoreSortWithIdx, Idx, SortWithIdx,
-};
+use crate::aliasing as core_aliasing;
+use crate::component_model::{CoreFuncRef, CoreFunction, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, CoreInstanceValue, CoreModule, CoreSortWithIdx, Idx, SortWithIdx};
 use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::runtime::component_model::instantiate::context::{
@@ -9,7 +7,6 @@ use crate::runtime::component_model::instantiate::context::{
 };
 use crate::runtime::component_model::ComponentVMError;
 use crate::Registry;
-use crate::aliasing as core_aliasing;
 
 mod context;
 mod instance;
@@ -98,11 +95,11 @@ pub unsafe fn instantiate_core_instance(
     let idx = (*tail_code).operand.core_instance_idx;
     let core_instance = ctx.component.get_core_instance(idx);
     let mut registry = Registry::new();
-    match core_instance {
-        CoreInstance::Real {
-            module_idx,
-            imports,
-        } => {
+    match &core_instance.value {
+        Some(CoreInstanceValue::Real {
+                 module_idx,
+                 imports,
+         }) => {
             for (name, import) in imports {
                 match import {
                     CoreInstanceImport::Instance(idx) => {
@@ -114,7 +111,7 @@ pub unsafe fn instantiate_core_instance(
             let module = ctx.component.get_core_module(module_idx.global()).clone();
             instantiate_core_module_rec(ctx, registry, module)?;
         }
-        CoreInstance::Alias { exports } => {
+        Some(CoreInstanceValue::Alias { exports }) => {
             let triplets = exports
                 .iter()
                 .enumerate()
@@ -122,7 +119,7 @@ pub unsafe fn instantiate_core_instance(
                     CoreInstanceInlineExport::Func(idx) => {
                         let func = ctx.component.get_core_function(idx.global());
                         match func {
-                            CoreFunction::Export(CoreFuncRef(inst_idx, _idx, name)) => {
+                            CoreFunction::Export(CoreFuncRef(inst_idx, name)) => {
                                 let inst = ctx
                                     .instantiated
                                     .core_instances
@@ -155,6 +152,7 @@ pub unsafe fn instantiate_core_instance(
             let inst = core_aliasing(&registry, triplets.as_slice(), ctx.store).unwrap();
             ctx.push_core_module_instance(inst, registry)
         }
+        _ => unreachable!()
     }
 
     instantiate_next(tail_code, 1, ctx)

@@ -4,6 +4,7 @@ use crate::WasmParserError;
 use std::ops::Range;
 use tracing::trace;
 
+use crate::parser::component_model::validator::{DefaultValidatorState, ValidatorStateImpl};
 pub use alias::*;
 pub use component::parse_component;
 pub use context::ParseContext;
@@ -14,7 +15,7 @@ pub use instance::*;
 pub use section::*;
 pub use sort::*;
 pub use types::*;
-pub use validator::{ComponentValidator, Validator, DefaultValidator, EmptyParent, DefaultParent, Parent};
+pub use validator::{Validator, ValidatorState};
 
 mod alias;
 mod canon;
@@ -22,16 +23,17 @@ mod component;
 mod context;
 mod core;
 mod error;
+mod export;
 mod idx;
+mod import;
 mod instance;
 mod section;
 mod sort;
 mod types;
 mod validator;
-mod import;
-mod export;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;
+pub type ParseResult<T> = std::result::Result<T, ComponentParseError>;
 
 pub fn parse_magic<R: BinaryReader>(reader: &mut R) -> Result<(), ComponentParseError> {
     let magic = reader.read_exact::<4>()?;
@@ -112,25 +114,25 @@ where
     Ok((read_bytes, ()))
 }
 
-pub(crate) fn parse_option<R: BinaryReader, V: Validator, T, E>(
+pub(crate) fn parse_option<R: BinaryReader, V: ValidatorStateImpl, T, E>(
     ctx: &mut ParseContext<R, V>,
-    mut f: impl FnMut(&mut ParseContext<R, V>) -> Result<(usize, T), E>,
-) -> SizedResult<Option<T>>
+    mut f: impl FnMut(&mut ParseContext<R, V>) -> Result<T, E>,
+) -> ParseResult<Option<T>>
 where
     ComponentParseError: From<E>,
 {
     match ctx.reader.read_exact_one()? {
-        0x00 => Ok((1, None)),
+        0x00 => Ok(None),
         0x01 => {
-            let (len, v) = f(ctx)?;
-            Ok((len + 1, Some(v)))
+            let t = f(ctx)?;
+            Ok(Some(t))
         }
         x => Err(ComponentParseError::WrongMagic(x, "option".to_string())),
     }
 }
 
 pub(crate) fn parse_vec_range(
-    ctx: &mut ParseContext<impl BinaryReader, impl Validator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl ValidatorStateImpl>,
 ) -> Result<Range<u32>, ComponentParseError> {
     let (_, size) = parse_u32(ctx.reader)?;
     Ok(0..size)

@@ -42,7 +42,7 @@ pub enum Type {
     Resource(ResourceType),
     // from (sub resource)
     // todo: 処理系はatomic usize等でunique性を担保する
-    UniqueResource, // (usize)
+    UniqueResource(usize), // (usize)
     Eq(TypeIdx),
     Referenced(Box<Type>, Reference),
 }
@@ -50,3 +50,10 @@ pub enum Type {
 impl_try_into_type!(FuncType, Func);
 impl_try_into_type!(ComponentType, Component);
 impl_try_into_type!(InstanceType, Instance);
+
+impl Type {
+    /// Checks if the type is a resource type.
+    pub fn is_resource_type(&self) -> bool {
+        todo!()
+    }
+}

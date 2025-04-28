@@ -1,50 +1,49 @@
-use crate::component_model::{Binding, ComponentFunction, ComponentIdx, ComponentImportType, ComponentType, CoreFuncIdx, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreModuleType, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, ExternDesc, FlattenComponent, FuncIdx, FuncType, Idx, InlineComponent, Instance, InstanceIdx, InstanceType, Resolvable, Resolver, Type, TypeIdx};
-use crate::parser::component_model::validator::{IdxValidator, LocalStore, Parent};
-use crate::parser::component_model::{ComponentParseError, DefaultValidator, Validator};
+use crate::component_model::{
+    Binding, ComponentBinding, ComponentFunction, ComponentIdx, ComponentImportType, ComponentType,
+    CoreFuncIdx, CoreFunction, CoreFunctionBinding, CoreGlobalBinding, CoreGlobalIdx,
+    CoreGlobalRef, CoreInstance, CoreInstanceBinding, CoreInstanceIdx, CoreMemoryBinding,
+    CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleBinding, CoreModuleIdx, CoreModuleType,
+    CoreTableBinding, CoreTableIdx, CoreTableRef, CoreType, CoreTypeBinding, CoreTypeIdx,
+    ExternDesc, FlattenComponent, FuncIdx, FuncType, FunctionBinding, Idx, InlineComponent,
+    Instance, InstanceBinding, InstanceIdx, InstanceType, Resolvable, Resolver, Type, TypeBinding,
+    TypeIdx,
+};
+use crate::parser::component_model::validator::{IdxValidator, LocalStore, ValidatorStateImpl};
+use crate::parser::component_model::{ComponentParseError, Validator, ValidatorState};
 use std::collections::HashMap;
+
+pub trait TypeSuperValidator: ValidatorStateImpl + IdxValidator<CoreModuleIdx, Resolved = CoreModule>
++ IdxValidator<FuncIdx, Resolved = ComponentFunction> + IdxValidator<TypeIdx, Resolved = Type> + IdxValidator<InstanceIdx, Resolved = Instance>
++ IdxValidator<ComponentIdx, Resolved = InlineComponent> + IdxValidator<CoreTypeIdx, Resolved = CoreType> + Resolver<CoreModule, Error=ComponentParseError>
++Resolver<ComponentFunction, Error=ComponentParseError> + Resolver<Type, Error=ComponentParseError>
+{}
+
+impl TypeSuperValidator for ValidatorState<'_> {}
+impl<P: TypeSuperValidator> TypeSuperValidator for TypeValidatorState<'_, P> {}
 
 /// A type validator that can be used to validate types in a component model.
 ///
 /// 型のパースをする際に，実際にglobal idxを付与してvalidateをすると無駄な情報をinstantiate時まで持つ必要があるため，
 /// type validatorを使って型レベルでvalidateを行えるようにした．
-pub struct TypeValidator<P> where P: Parent {
-    parent: P,
+pub struct TypeValidatorState<'a, P: TypeSuperValidator + 'a>
+{
+    parent: &'a mut P,
     type_map: TypeMap,
 }
 
-impl<P> TypeValidator<P> where P: Parent {
-    pub fn new(parent: P) -> Self {
-        Self { parent, type_map: TypeMap::default()}
+impl<'a, P: TypeSuperValidator> TypeValidatorState<'a, P>
+{
+    pub fn new(parent: &'a mut P) -> Self {
+        Self {
+            parent,
+            type_map: TypeMap::default(),
+        }
     }
 }
 
-impl<P> Validator for TypeValidator<P> where P: Parent {
-    fn get_flatten_component(&self) -> &FlattenComponent {
-        unreachable!("Flatten Component can't use in type validating");
-    }
-
-    fn get_flatten_component_mut(&mut self) -> &mut FlattenComponent {
-        unreachable!("Flatten Component can't use in type validating");
-    }
-
-    fn get_parent(&self) -> Option<&impl Parent>
-    where
-        Self: Sized
-    {
-        Some(&self.parent)
-    }
-
-    fn get_local_store(&self) -> &LocalStore {
-        unreachable!("Local Store can't use in type validating");
-    }
-
-    fn get_local_store_mut(&mut self) -> &mut LocalStore {
-        unreachable!("Local Store can't use in type validating");
-    }
-}
-
-impl<P> TypeValidator<P> where P: Parent {
-    pub fn validate_core_module_type(&self, local: u32) -> Result<CoreModuleType, ComponentParseError> {
+impl<P: TypeSuperValidator> TypeValidatorState<'_, P>
+{
+    fn validate_core_module_type(&self, local: u32) -> Result<CoreModuleType, ComponentParseError> {
         match self.type_map.core_module_types.get(local as usize) {
             Some(ty) => Ok(ty.clone()),
             None => Err(ComponentParseError::InvalidIdx(
@@ -54,7 +53,7 @@ impl<P> TypeValidator<P> where P: Parent {
         }
     }
 
-    pub fn validate_type(&self, local: u32) -> Result<Type, ComponentParseError> {
+    fn validate_type(&self, local: u32) -> Result<Type, ComponentParseError> {
         match self.type_map.types.get(local as usize) {
             Some(ty) => Ok(ty.clone()),
             None => Err(ComponentParseError::InvalidIdx(
@@ -64,7 +63,7 @@ impl<P> TypeValidator<P> where P: Parent {
         }
     }
 
-    pub fn validate_instance(&self, local: u32) -> Result<InstanceType, ComponentParseError> {
+    fn validate_instance(&self, local: u32) -> Result<InstanceType, ComponentParseError> {
         match self.type_map.instance_types.get(local as usize) {
             Some(ty) => Ok(ty.clone()),
             None => Err(ComponentParseError::InvalidIdx(
@@ -74,7 +73,7 @@ impl<P> TypeValidator<P> where P: Parent {
         }
     }
 
-    pub fn validate_component(&self, local: u32) -> Result<ComponentType, ComponentParseError> {
+    fn validate_component(&self, local: u32) -> Result<ComponentType, ComponentParseError> {
         match self.type_map.component_types.get(local as usize) {
             Some(ty) => Ok(ty.clone()),
             None => Err(ComponentParseError::InvalidIdx(
@@ -83,128 +82,390 @@ impl<P> TypeValidator<P> where P: Parent {
             )),
         }
     }
+}
 
-    pub fn add_core_module_type(&mut self, ty: CoreModuleType) {
-        self.type_map.core_module_types.push(ty);
+impl<P: TypeSuperValidator> ValidatorStateImpl for TypeValidatorState<'_, P>
+{
+    fn component(&self) -> &FlattenComponent {
+        self.parent.component()
     }
 
-    pub fn add_type(&mut self, ty: Type) {
-        self.type_map.types.push(ty);
+    fn component_mut(&mut self) -> &mut FlattenComponent {
+        self.parent.component_mut()
     }
 
-    pub fn add_instance_type(&mut self, ty: InstanceType) {
-        self.type_map.instance_types.push(ty);
+    fn add_component(
+        &mut self,
+        component: ComponentBinding,
+    ) -> Result<ComponentIdx, ComponentParseError>
+    where
+        Self: Resolver<InlineComponent, Error = ComponentParseError>
+            + IdxValidator<ComponentIdx>
+            + Sized,
+    {
+        match component {
+            ComponentBinding::Real(component) => {
+                self.type_map.component_types.push(component.ty);
+            }
+            ComponentBinding::Alias(idx) => {
+                let component = self
+                    .type_map
+                    .component_types
+                    .get(idx)
+                    .ok_or_else(|| {
+                        ComponentParseError::InvalidIdx(idx, "component type".to_string())
+                    })?;
+                self.type_map.component_types.push(component.clone());
+            }
+            ComponentBinding::Reference(component, _) => {
+                self.type_map.component_types.push(component.ty);
+            }
+        }
+        Ok(ComponentIdx::new(usize::MAX))
     }
 
-    pub fn add_component_type(&mut self, ty: ComponentType) {
-        self.type_map.component_types.push(ty);
-    }
-    
-    pub fn add_func_type(&mut self, ty: FuncType) {
-        self.type_map.func_types.push(ty);
+    fn add_instance(
+        &mut self,
+        instance: InstanceBinding,
+    ) -> Result<InstanceIdx, ComponentParseError>
+    where
+        Self: Resolver<Instance, Error = ComponentParseError>
+            + IdxValidator<InstanceIdx, Resolved = Instance>
+            + Sized,
+    {
+        match instance {
+            InstanceBinding::Real(instance) => {
+                self.type_map.instance_types.push(instance.ty);
+            }
+            InstanceBinding::Alias(idx) => {
+                let instance = self
+                    .type_map
+                    .instance_types
+                    .get(idx)
+                    .ok_or_else(|| {
+                        ComponentParseError::InvalidIdx(idx, "instance type".to_string())
+                    })?;
+                self.type_map.instance_types.push(instance.clone());
+            }
+            InstanceBinding::Reference(instance, _) => {
+                self.type_map.instance_types.push(instance.ty);
+            }
+        }
+        Ok(InstanceIdx::new(usize::MAX))
     }
 
-    pub fn add_export(&mut self, name: String, ty: ExternDesc) {
-        self.type_map.exports.insert(name, ty);
+    fn add_func(&mut self, func: FunctionBinding) -> Result<FuncIdx, ComponentParseError>
+    where
+        Self: Resolver<ComponentFunction, Error = ComponentParseError>
+            + IdxValidator<FuncIdx>
+            + Sized,
+    {
+        match func {
+            FunctionBinding::Real(func) => {
+                self.type_map.func_types.push(func.ty);
+            }
+            FunctionBinding::Alias(idx) => {
+                let func = self
+                    .type_map
+                    .func_types
+                    .get(idx)
+                    .ok_or_else(|| {
+                        ComponentParseError::InvalidIdx(idx, "function type".to_string())
+                    })?;
+                self.type_map.func_types.push(func.clone());
+            }
+            FunctionBinding::Reference(func, _) => {
+                self.type_map.func_types.push(func.ty);
+            }
+        }
+        Ok(FuncIdx::new(usize::MAX))
+    }
+
+    fn add_type(&mut self, ty: TypeBinding) -> Result<TypeIdx, ComponentParseError>
+    where
+        Self: Resolver<Type, Error = ComponentParseError> + IdxValidator<TypeIdx> + Sized,
+    {
+        match ty {
+            TypeBinding::Real(ty) => {
+                self.type_map.types.push(ty);
+            }
+            TypeBinding::Alias(idx) => {
+                let ty = self.type_map.types.get(idx).ok_or_else(|| {
+                    ComponentParseError::InvalidIdx(idx, "type".to_string())
+                })?;
+                self.type_map.types.push(ty.clone());
+            }
+            TypeBinding::Reference(ty, _) => {
+                self.type_map.types.push(ty.clone());
+            }
+        }
+        Ok(TypeIdx::new(usize::MAX))
+    }
+}
+
+impl<P: TypeSuperValidator> IdxValidator<CoreModuleIdx> for TypeValidatorState<'_, P>
+{
+    type Resolved = CoreModule;
+
+    fn validate_local_idx(&self, _local_idx: u32) -> Result<CoreModuleIdx, ComponentParseError> {
+        unimplemented!("Cannot validate local idx in type validator")
+    }
+
+    fn validate_idx_resolved(&self, local_idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        FuncIdx: Resolvable<ComponentFunction>,
+        Self: Resolver<ComponentFunction, Error = ComponentParseError> + Sized,
+        ComponentFunction: Clone,
+    {
+        self.type_map
+            .core_module_types
+            .get(local_idx as usize)
+            .ok_or_else(|| {
+                ComponentParseError::InvalidIdx(local_idx as usize, "core module".to_string())
+            })
+            .map(|x| CoreModule::new(None, x.clone()))
+    }
+
+    fn validate_outer_idx(&self, ct: u32, idx: u32) -> Result<CoreModuleIdx, ComponentParseError> {
+        if ct == 0 {
+            unimplemented!("Cannot validate local idx in type validator")
+        } else {
+            self.parent.validate_outer_idx(ct - 1, idx)
+        }
+    }
+
+    fn validate_outer_idx_resolved(&self, ct: u32, idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        CoreModuleIdx: Resolvable<Self::Resolved>,
+        Self: Resolver<Self::Resolved, Error=ComponentParseError> + Sized,
+    {
+        if ct == 0 {
+            <TypeValidatorState<'_, P> as IdxValidator<CoreModuleIdx>>::validate_idx_resolved(self, idx)
+        } else {
+            <P as IdxValidator<CoreModuleIdx>>::validate_outer_idx_resolved(self.parent, ct - 1, idx)
+        }
+    }
+}
+
+impl<P: TypeSuperValidator> IdxValidator<FuncIdx> for TypeValidatorState<'_, P>
+{
+    type Resolved = ComponentFunction;
+    fn validate_local_idx(&self, _local_idx: u32) -> Result<FuncIdx, ComponentParseError> {
+        unimplemented!("Cannot validate local idx in type validator")
+    }
+
+    fn validate_idx_resolved(&self, local_idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        FuncIdx: Resolvable<ComponentFunction>,
+        Self: Resolver<ComponentFunction, Error = ComponentParseError> + Sized,
+        ComponentFunction: Clone,
+    {
+        self.type_map
+            .func_types
+            .get(local_idx as usize)
+            .ok_or_else(|| {
+                ComponentParseError::InvalidIdx(local_idx as usize, "function type".to_string())
+            })
+            .map(|x| ComponentFunction::new(None, x.clone()))
+    }
+
+    fn validate_outer_idx(&self, ct: u32, idx: u32) -> Result<FuncIdx, ComponentParseError> {
+        if ct == 0 {
+            unimplemented!("Cannot validate local idx in type validator")
+        } else {
+            self.parent.validate_outer_idx(ct - 1, idx)
+        }
+    }
+
+    fn validate_outer_idx_resolved(&self, ct: u32, idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        FuncIdx: Resolvable<Self::Resolved>,
+        Self: Resolver<Self::Resolved, Error=ComponentParseError> + Sized,
+    {
+        if ct == 0 {
+            <TypeValidatorState<'_, P> as IdxValidator<FuncIdx>>::validate_idx_resolved(self, idx)
+        } else {
+            <P as IdxValidator<FuncIdx>>::validate_outer_idx_resolved(self.parent, ct - 1, idx)
+        }
+    }
+}
+
+impl<P: TypeSuperValidator> IdxValidator<TypeIdx> for TypeValidatorState<'_, P>
+{
+    type Resolved = Type;
+
+    fn validate_local_idx(&self, _local_idx: u32) -> Result<TypeIdx, ComponentParseError> {
+        unimplemented!("Cannot validate local idx in type validator")
+    }
+
+    fn validate_idx_resolved(&self, local_idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        FuncIdx: Resolvable<ComponentFunction>,
+        Self: Resolver<ComponentFunction, Error = ComponentParseError> + Sized,
+        ComponentFunction: Clone,
+    {
+        self.type_map
+            .types
+            .get(local_idx as usize)
+            .ok_or_else(|| ComponentParseError::InvalidIdx(local_idx as usize, "type".to_string()))
+            .cloned()
+    }
+
+    fn validate_outer_idx(&self, ct: u32, idx: u32) -> Result<TypeIdx, ComponentParseError> {
+        if ct == 0 {
+            unimplemented!("Cannot validate local idx in type validator")
+        } else {
+            self.parent.validate_outer_idx(ct - 1, idx)
+        }
+    }
+
+    fn validate_outer_idx_resolved(&self, ct: u32, idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        TypeIdx: Resolvable<Self::Resolved>,
+        Self: Resolver<Self::Resolved, Error=ComponentParseError> + Sized,
+    {
+        if ct == 0 {
+            <TypeValidatorState<'_, P> as IdxValidator<TypeIdx>>::validate_idx_resolved(self, idx)
+        } else {
+            <P as IdxValidator<TypeIdx>>::validate_outer_idx_resolved(self.parent, ct - 1, idx)
+        }
+    }
+}
+
+impl<P: TypeSuperValidator> IdxValidator<InstanceIdx> for TypeValidatorState<'_, P>
+{
+    type Resolved = Instance;
+
+    fn validate_local_idx(&self, _local_idx: u32) -> Result<InstanceIdx, ComponentParseError> {
+        unimplemented!("Cannot validate local idx in type validator")
+    }
+
+    fn validate_idx_resolved(&self, local_idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        FuncIdx: Resolvable<ComponentFunction>,
+        Self: Resolver<ComponentFunction, Error = ComponentParseError> + Sized,
+        ComponentFunction: Clone,
+    {
+        self.type_map
+            .instance_types
+            .get(local_idx as usize)
+            .ok_or_else(|| {
+                ComponentParseError::InvalidIdx(local_idx as usize, "instance type".to_string())
+            })
+            .map(|x| Instance::new(None, x.clone()))
+    }
+
+    fn validate_outer_idx(&self, ct: u32, idx: u32) -> Result<InstanceIdx, ComponentParseError> {
+        if ct == 0 {
+            unimplemented!("Cannot validate local idx in type validator")
+        } else {
+            self.parent.validate_outer_idx(ct - 1, idx)
+        }
+    }
+}
+
+impl<P: TypeSuperValidator> IdxValidator<ComponentIdx> for TypeValidatorState<'_, P>
+{
+    type Resolved = InlineComponent;
+
+    fn validate_local_idx(&self, _local_idx: u32) -> Result<ComponentIdx, ComponentParseError> {
+        unimplemented!("Cannot validate local idx in type validator")
+    }
+
+    fn validate_idx_resolved(&self, local_idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        FuncIdx: Resolvable<ComponentFunction>,
+        Self: Resolver<ComponentFunction, Error = ComponentParseError> + Sized,
+        ComponentFunction: Clone,
+    {
+        self.type_map
+            .component_types
+            .get(local_idx as usize)
+            .ok_or_else(|| {
+                ComponentParseError::InvalidIdx(local_idx as usize, "component type".to_string())
+            })
+            .map(|x| InlineComponent::new(None, x.clone()))
+    }
+
+    fn validate_outer_idx(&self, ct: u32, idx: u32) -> Result<ComponentIdx, ComponentParseError> {
+        if ct == 0 {
+            unimplemented!("Cannot validate local idx in type validator")
+        } else {
+            self.parent.validate_outer_idx(ct - 1, idx)
+        }
+    }
+}
+
+impl<P: TypeSuperValidator> IdxValidator<CoreTypeIdx> for TypeValidatorState<'_, P>
+{
+    type Resolved = CoreType;
+
+    fn validate_local_idx(&self, _local_idx: u32) -> Result<CoreTypeIdx, ComponentParseError> {
+        unimplemented!("Cannot validate local idx in type validator")
+    }
+
+    fn validate_idx_resolved(&self, local_idx: u32) -> Result<Self::Resolved, ComponentParseError>
+    where
+        FuncIdx: Resolvable<ComponentFunction>,
+        Self: Resolver<ComponentFunction, Error = ComponentParseError> + Sized,
+        ComponentFunction: Clone,
+    {
+        self.type_map
+            .core_module_types
+            .get(local_idx as usize)
+            .ok_or_else(|| {
+                ComponentParseError::InvalidIdx(local_idx as usize, "core type".to_string())
+            })
+            .map(|x| CoreType::ModuleType(x.clone()))
+    }
+
+    fn validate_outer_idx(&self, ct: u32, idx: u32) -> Result<CoreTypeIdx, ComponentParseError> {
+        if ct == 0 {
+            unimplemented!("Cannot validate local idx in type validator")
+        } else {
+            self.parent.validate_outer_idx(ct - 1, idx)
+        }
     }
 }
 
 macro_rules! unimplemented_resolver {
-    ($name:ident) => {
-        impl<P> Resolver<$name> for TypeValidator<P>
-        where
-            P: Parent,
+    ($ty:ident, $message:expr) => {
+        impl<P: TypeSuperValidator> Resolver<$ty> for TypeValidatorState<'_, P>
         {
             type Error = ComponentParseError;
-        
-            fn resolve<I>(&self, _idx: &I) -> Result<&$name, Self::Error>
+
+            fn resolve<I>(&self, _idx: &I) -> Result<&$ty, Self::Error>
             where
-                I: Idx + Resolvable<$name>
+                I: Idx + Resolvable<$ty>,
+                Self: Sized,
             {
-                unimplemented!("unimplemented resolver for {} in type validator", stringify!($name));
-            }
-        }
-    };
-}
-macro_rules! unimplemented_validator {
-    ($name:ident, $target:ident) => {
-        impl<P> IdxValidator<$name, $target> for TypeValidator<P>
-        where
-            P: Parent,
-        {
-            fn validate_idx(&self, _local_idx: u32) -> Result<$name, ComponentParseError> {
-                unimplemented!("unimplemented resolver for {} in type validator", stringify!($name));
-            }
-        
-            fn validate_outer_idx(&self, _ct: u32, _idx: u32) -> Result<$name, ComponentParseError> {
-                unimplemented!("unimplemented resolver for {} in type validator", stringify!($name));
+                unimplemented!($message)
             }
         }
     };
 }
 
-impl<P> Resolver<Instance> for TypeValidator<P> where P: Parent {
-    type Error = ComponentParseError;
-
-    fn resolve<I>(&self, _idx: &I) -> Result<&Instance, Self::Error>
-    where
-        I: Idx + Resolvable<Instance>
-    {
-        unimplemented!("idx resolver can't be used in type validator");
-    }
-}
-
-impl<P> IdxValidator<InstanceIdx, Instance> for TypeValidator<P> where P: Parent {
-    fn validate_idx(&self, _local_idx: u32) -> Result<InstanceIdx, ComponentParseError> {
-        unreachable!("idx validator can't be used in type validator");
-    }
-
-    fn validate_idx_resolved(&self, local_idx: u32) -> Result<Instance, ComponentParseError> {
-        match self.type_map.instance_types.get(local_idx as usize) {
-            Some(ty) => Ok(Instance::new(None, ty.clone())),
-            None => Err(ComponentParseError::InvalidIdx(
-                local_idx as usize,
-                "instance type".to_string(),
-            )),
-        }
-    }
-
-    fn validate_outer_idx(&self, _ct: u32, _idx: u32) -> Result<InstanceIdx, ComponentParseError> {
-        unreachable!("idx validator can't be used in type validator");
-    }
-
-    fn validate_outer_idx_resolved(&self, ct: u32, idx: u32) -> Result<Instance, ComponentParseError> {
-        if ct == 0 {
-            self.validate_idx_resolved(idx)
-        } else {
-            self.parent.get().unwrap().validate_outer_idx_resolved(ct - 1, idx)
-        }
-    }
-}
-
-unimplemented_resolver!(CoreType);
-unimplemented_resolver!(CoreModule);
-unimplemented_resolver!(CoreInstance);
-unimplemented_resolver!(CoreFunction);
-unimplemented_resolver!(CoreTableRef);
-unimplemented_resolver!(CoreMemoryRef);
-unimplemented_resolver!(CoreGlobalRef);
-unimplemented_resolver!(Type);
-unimplemented_resolver!(InlineComponent);
-unimplemented_resolver!(ComponentFunction);
-unimplemented_validator!(CoreTypeIdx, CoreType);
-unimplemented_validator!(CoreModuleIdx, CoreModule);
-unimplemented_validator!(CoreInstanceIdx, CoreInstance);
-unimplemented_validator!(CoreFuncIdx, CoreFunction);
-unimplemented_validator!(CoreTableIdx, CoreTableRef);
-unimplemented_validator!(CoreMemoryIdx, CoreMemoryRef);
-unimplemented_validator!(CoreGlobalIdx, CoreGlobalRef);
-unimplemented_validator!(ComponentIdx, InlineComponent);
-unimplemented_validator!(FuncIdx, ComponentFunction);
-unimplemented_validator!(TypeIdx, Type);
-
-
-impl<P> DefaultValidator for TypeValidator<P> where P: Parent {}
+unimplemented_resolver!(
+    CoreModule,
+    "Cannot resolve core module from idx in type validator"
+);
+unimplemented_resolver!(
+    CoreType,
+    "Cannot resolve core type from idx in type validator"
+);
+unimplemented_resolver!(Type, "Cannot resolve type from idx in type validator");
+unimplemented_resolver!(
+    InlineComponent,
+    "Cannot resolve component from idx in type validator"
+);
+unimplemented_resolver!(
+    ComponentFunction,
+    "Cannot resolve component function from idx in type validator"
+);
+unimplemented_resolver!(
+    Instance,
+    "Cannot resolve instance from idx in type validator"
+);
 
 #[derive(Default)]
 pub struct TypeMap {

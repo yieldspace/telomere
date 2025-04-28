@@ -1,13 +1,11 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Binding, CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreSort,
-    Idx,
-};
+use crate::component_model::{Binding, CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreInstanceType, CoreInstanceValue, CoreModuleType, CoreSort, Idx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_core_module_idx};
 use crate::parser::component_model::core::sort::parse_core_sort;
 use crate::parser::component_model::error::ComponentParseError;
-use crate::parser::component_model::{DefaultValidator, SizedResult, Validator};
+use crate::parser::component_model::validator::DefaultValidatorState;
+use crate::parser::component_model::{ParseResult, SizedResult, Validator};
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{
     instantiate_core_instance, InstantiateInstr, InstantiateOperand,
@@ -15,65 +13,75 @@ use crate::runtime::component_model::instantiate::{
 use std::collections::HashMap;
 
 pub fn parse_core_instance(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
-) -> SizedResult<CoreInstanceIdx> {
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+) -> SizedResult<CoreInstance> {
     let start = ctx.reader.read_count();
     match ctx.reader.read_exact_one()? {
         0x00 => {
-            let (_, idx) = parse_core_module_idx(ctx)?;
+            let idx = parse_core_module_idx(ctx)?;
+            let module = ctx.validator.resolve_idx(&idx)?;
             let imports =
                 HashMap::from_iter(parse_vec(ctx, |c| c.reader, parse_core_instantiate_arg)?.1);
-            let idx = ctx
-                .validator
-                .add_core_instance(Binding::Real(CoreInstance::Real {
+            // let idx = ctx
+            //     .validator
+            //     .state
+            //     .add_core_instance(Binding::Real(CoreInstance::Real {
+            //         module_idx: idx,
+            //         imports,
+            //     }))?;
+            // ctx.push_instr(InstantiateInstr {
+            //     op: instantiate_core_instance,
+            // });
+            // ctx.push_instr(InstantiateInstr {
+            //     operand: InstantiateOperand {
+            //         core_instance_idx: idx.global(),
+            //     },
+            // });
+            Ok((ctx.reader.read_count() - start, CoreInstance::new(
+                Some(CoreInstanceValue::Real {
                     module_idx: idx,
                     imports,
-                }))?;
-            ctx.push_instr(InstantiateInstr {
-                op: instantiate_core_instance,
-            });
-            ctx.push_instr(InstantiateInstr {
-                operand: InstantiateOperand {
-                    core_instance_idx: idx.global(),
-                },
-            });
-            Ok((ctx.reader.read_count() - start, idx))
+                }),
+                CoreInstanceType::new(), // todo from module type
+            )))
         }
         0x01 => {
             let exports = HashMap::<String, CoreInstanceInlineExport>::from_iter(
                 parse_vec(ctx, |c| c.reader, parse_core_instance_inline_export)?.1,
             );
-            let idx = ctx
-                .validator
-                .add_core_instance(Binding::Real(CoreInstance::Alias { exports }))?;
-            ctx.push_instr(InstantiateInstr {
-                op: instantiate_core_instance,
-            });
-            ctx.push_instr(InstantiateInstr {
-                operand: InstantiateOperand {
-                    core_instance_idx: idx.global(),
-                },
-            });
-            Ok((ctx.reader.read_count() - start, idx))
+            // let idx = ctx
+            //     .validator
+            //     .state
+            //     .add_core_instance(Binding::Real(CoreInstance::Alias { exports }))?;
+            // ctx.push_instr(InstantiateInstr {
+            //     op: instantiate_core_instance,
+            // });
+            // ctx.push_instr(InstantiateInstr {
+            //     operand: InstantiateOperand {
+            //         core_instance_idx: idx.global(),
+            //     },
+            // });
+            Ok((ctx.reader.read_count() - start, CoreInstance::new(
+                Some(CoreInstanceValue::Alias { exports }),
+                CoreInstanceType::new(),
+            )))
         }
         _ => unreachable!(),
     }
 }
 
 pub fn parse_core_instantiate_arg(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
 ) -> SizedResult<(String, CoreInstanceImport)> {
+    let start_count = ctx.reader.read_count();
     let (name_len, name) = parse_name(ctx.reader)?;
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x12], "instantiate arg")?;
-    let (idx_len, instance_idx) = parse_core_instance_idx(ctx)?;
-    Ok((
-        name_len + 1 + idx_len,
-        (name, CoreInstanceImport::Instance(instance_idx)),
-    ))
+    let instance_idx = parse_core_instance_idx(ctx)?;
+    Ok((ctx.reader.read_count() - start_count, (name, CoreInstanceImport::Instance(instance_idx))))
 }
 
 pub fn parse_core_instance_inline_export(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidator>,
+    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
 ) -> SizedResult<(String, CoreInstanceInlineExport)> {
     let (name_len, name) = parse_name(ctx.reader)?;
     let (sort_len, sort) = parse_core_sort(ctx)?;
@@ -83,61 +91,49 @@ pub fn parse_core_instance_inline_export(
             name_len + sort_len + idx_len,
             (
                 name,
-                CoreInstanceInlineExport::Func(
-                    ctx.validator.validate_idx(idx)?,
-                ),
+                CoreInstanceInlineExport::Func(ctx.validator.validate_local_idx(idx)?),
             ),
         )),
         CoreSort::Table => Ok((
             name_len + sort_len + idx_len,
             (
                 name,
-                CoreInstanceInlineExport::Table(
-                    ctx.validator.validate_idx(idx)?,
-                ),
+                CoreInstanceInlineExport::Table(ctx.validator.validate_local_idx(idx)?),
             ),
         )),
         CoreSort::Memory => Ok((
             name_len + sort_len + idx_len,
             (
                 name,
-                CoreInstanceInlineExport::Memory(
-                    ctx.validator.validate_idx(idx)?,
-                ),
+                CoreInstanceInlineExport::Memory(ctx.validator.validate_local_idx(idx)?),
             ),
         )),
         CoreSort::Global => Ok((
             name_len + sort_len + idx_len,
             (
                 name,
-                CoreInstanceInlineExport::Global(
-                    ctx.validator.validate_idx(idx)?,
-                ),
+                CoreInstanceInlineExport::Global(ctx.validator.validate_local_idx(idx)?),
             ),
         )),
         CoreSort::Type => Ok((
             name_len + sort_len + idx_len,
             (
                 name,
-                CoreInstanceInlineExport::Type(ctx.validator.validate_idx(idx)?),
+                CoreInstanceInlineExport::Type(ctx.validator.validate_local_idx(idx)?),
             ),
         )),
         CoreSort::Module => Ok((
             name_len + sort_len + idx_len,
             (
                 name,
-                CoreInstanceInlineExport::Module(
-                    ctx.validator.validate_idx(idx)?,
-                ),
+                CoreInstanceInlineExport::Module(ctx.validator.validate_local_idx(idx)?),
             ),
         )),
         CoreSort::Instance => Ok((
             name_len + sort_len + idx_len,
             (
                 name,
-                CoreInstanceInlineExport::Instance(
-                    ctx.validator.validate_idx(idx)?,
-                ),
+                CoreInstanceInlineExport::Instance(ctx.validator.validate_local_idx(idx)?),
             ),
         )),
     }

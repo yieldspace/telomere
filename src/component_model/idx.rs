@@ -1,4 +1,7 @@
-use crate::component_model::{ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, InlineComponent, Instance, InstanceType, Type};
+use crate::component_model::{
+    ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule,
+    CoreTableRef, CoreType, InlineComponent, Instance, InstanceType, Type,
+};
 use std::ops::Deref;
 
 pub trait Idx: Clone + Deref<Target = usize> {
@@ -17,7 +20,8 @@ pub trait Resolver<O> {
 
     fn resolve<I>(&self, idx: &I) -> Result<&O, Self::Error>
     where
-        I: Idx + Resolvable<O>, Self: Sized;
+        I: Idx + Resolvable<O>,
+        Self: Sized;
 }
 
 macro_rules! impl_idx {
@@ -36,6 +40,12 @@ macro_rules! impl_idx {
             type Target = usize;
             fn deref(&self) -> &Self::Target {
                 &self.0
+            }
+        }
+
+        impl From<usize> for $name {
+            fn from(global: usize) -> Self {
+                Self::new(global)
             }
         }
     };

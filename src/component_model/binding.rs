@@ -1,13 +1,16 @@
-use crate::component_model::{
-    ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule,
-    CoreTableRef, CoreType, ImportName, InlineComponent, Instance, Type,
-};
+use crate::component_model::{ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, ImportName, InlineComponent, Instance, InstanceIdx, Type};
 
 #[derive(Debug)]
 pub enum Binding<T, R = ()> {
     Real(T),
     Alias(usize),
     Reference(T, R),
+}
+
+impl<T, R> From<T> for Binding<T, R> {
+    fn from(value: T) -> Self {
+        Self::Real(value)
+    }
 }
 
 impl<T, R> Binding<T, R> {
@@ -25,12 +28,18 @@ impl<T, R> Binding<T, R> {
 }
 
 pub enum CoreModuleReference {
+    Alias(InstanceIdx, String),
     Imported(ImportName),
 }
+pub enum FuncReference {
+    Alias(InstanceIdx, String),
+}
 pub enum InlineComponentReference {
+    Alias(InstanceIdx, String),
     Imported(ImportName),
 }
 pub enum InstanceReference {
+    Alias(InstanceIdx, String),
     Imported(ImportName),
 }
 
@@ -42,6 +51,6 @@ pub type CoreMemoryBinding = Binding<CoreMemoryRef>;
 pub type CoreTableBinding = Binding<CoreTableRef>;
 pub type CoreGlobalBinding = Binding<CoreGlobalRef>;
 pub type TypeBinding = Binding<Type>;
-pub type FunctionBinding = Binding<ComponentFunction>;
+pub type FunctionBinding = Binding<ComponentFunction, FuncReference>;
 pub type ComponentBinding = Binding<InlineComponent, InlineComponentReference>;
 pub type InstanceBinding = Binding<Instance, InstanceReference>;

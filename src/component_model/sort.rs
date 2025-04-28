@@ -60,7 +60,7 @@ impl TryFrom<SortWithIdx> for CoreModuleIdx {
         if let SortWithIdx::Core(CoreSortWithIdx::Module(idx)) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(
+            Err(ComponentParseError::InvalidSortWithIdx(
                 value,
                 "CoreModule".to_string(),
             ))
@@ -75,7 +75,7 @@ impl TryFrom<SortWithIdx> for FuncIdx {
         if let SortWithIdx::Func(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(value, "Func".to_string()))
+            Err(ComponentParseError::InvalidSortWithIdx(value, "Func".to_string()))
         }
     }
 }
@@ -87,7 +87,7 @@ impl TryFrom<SortWithIdx> for TypeIdx {
         if let SortWithIdx::Type(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(value, "Type".to_string()))
+            Err(ComponentParseError::InvalidSortWithIdx(value, "Type".to_string()))
         }
     }
 }
@@ -99,7 +99,7 @@ impl TryFrom<SortWithIdx> for ComponentIdx {
         if let SortWithIdx::Component(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(
+            Err(ComponentParseError::InvalidSortWithIdx(
                 value,
                 "Component".to_string(),
             ))
@@ -114,7 +114,7 @@ impl TryFrom<SortWithIdx> for InstanceIdx {
         if let SortWithIdx::Instance(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSort(
+            Err(ComponentParseError::InvalidSortWithIdx(
                 value,
                 "Instance".to_string(),
             ))

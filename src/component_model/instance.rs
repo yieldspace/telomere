@@ -1,8 +1,4 @@
-use crate::component_model::{
-    ComponentIdx,
-    InstanceExportType, InstanceType,
-    SortWithIdx,
-};
+use crate::component_model::{ComponentIdx, InstanceExportType, InstanceType, SortWithIdx};
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
 

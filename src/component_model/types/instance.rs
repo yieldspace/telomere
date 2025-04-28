@@ -1,7 +1,6 @@
-use crate::component_model::{
-    AliasType, ComponentType, CoreModuleType, CoreType, FuncType, Type, TypeIdx,
-};
+use crate::component_model::{AliasType, ComponentType, CoreModuleType, CoreSort, CoreType, FuncType, Sort, Type, TypeIdx};
 use std::collections::HashMap;
+use crate::parser::component_model::ComponentParseError;
 
 #[derive(Debug, Clone)]
 pub struct InstanceType {
@@ -20,6 +19,12 @@ impl InstanceType {
             exports: Default::default(),
         }
     }
+    
+    pub(crate) fn get_export_type(&self, name: &String) -> Result<&InstanceExportType, ComponentParseError> {
+        self.exports
+            .get(name)
+            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +36,21 @@ pub enum InstanceExportType {
     Type(Type),
     Component(ComponentType),
     Instance(InstanceType),
+}
+
+impl PartialEq<Sort> for InstanceExportType {
+    fn eq(&self, other: &Sort) -> bool {
+        match other {
+            Sort::Core(CoreSort::Module) => matches!(self, InstanceExportType::CoreModule(_)),
+            Sort::Func => matches!(self, InstanceExportType::Func(_)),
+            #[cfg(feature = "component-gated-feature-value-imports-exports")]
+            Sort::Value => matches!(self, InstanceExportType::Value(_)),
+            Sort::Type => matches!(self, InstanceExportType::Type(_)),
+            Sort::Component => matches!(self, InstanceExportType::Component(_)),
+            Sort::Instance => matches!(self, InstanceExportType::Instance(_)),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

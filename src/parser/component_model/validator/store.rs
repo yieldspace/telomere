@@ -1,5 +1,9 @@
+use crate::component_model::{
+    ComponentExport, ComponentIdx, ComponentImport, ComponentType, CoreFuncIdx, CoreGlobalIdx,
+    CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTableIdx, CoreTypeIdx, FuncIdx, InstanceIdx,
+    TypeIdx,
+};
 use std::collections::HashMap;
-use crate::component_model::{ComponentExport, ComponentIdx, ComponentImport, ComponentType, CoreFuncIdx, CoreGlobalIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTableIdx, CoreTypeIdx, FuncIdx, InstanceIdx, TypeIdx};
 
 #[derive(Default)]
 pub struct LocalStore {
