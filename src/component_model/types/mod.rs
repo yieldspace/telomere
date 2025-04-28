@@ -1,13 +1,11 @@
 mod alias;
 mod component;
 mod func;
-mod idx;
 mod instance;
 mod prim;
 mod resource;
 mod val;
 
-use crate::component_model::{Reference, TypeIdx};
 use crate::parser::component_model::ComponentParseError;
 pub use alias::*;
 pub use component::*;
@@ -44,8 +42,7 @@ pub enum Type {
     // from (sub resource)
     // todo: 処理系はatomic usize等でunique性を担保する
     UniqueResource(usize), // (usize)
-    Eq(TypeIdx),
-    Referenced(Box<Type>, Reference),
+    Eq(Box<Type>),
 }
 
 impl_try_into_type!(FuncType, Func);

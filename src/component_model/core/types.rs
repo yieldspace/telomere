@@ -1,7 +1,4 @@
-use crate::component_model::{
-    CoreGlobalRef,
-    CoreMemoryRef, CoreSort, CoreTableRef, CoreTypeRef,
-};
+use crate::component_model::{CoreGlobalRef, CoreMemoryRef, CoreSort, CoreTableRef, CoreTypeRef};
 use crate::parser::component_model::ComponentParseError;
 use crate::Module;
 use std::collections::HashMap;

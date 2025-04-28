@@ -1,10 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    ComponentImport, ExternDesc, GlobalIdx, Relation,
-};
+use crate::component_model::{ComponentImport, ExternDesc, GlobalIdx, Relation};
 use crate::parser::component_model::{
-    parse_externdesc, ComponentParseError, ParseContext,
-    ParseResult, SizedResult,
+    parse_externdesc, ComponentParseError, ParseContext, ParseResult, SizedResult,
 };
 use crate::parser::core::parse_name;
 

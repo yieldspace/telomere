@@ -1,12 +1,10 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    ComponentDecl, ComponentImportType, ComponentType, ExternDesc,
-    InstanceDecl,
+    ComponentDecl, ComponentImportType, ComponentType, ExternDesc, InstanceDecl,
 };
 use crate::parser::component_model::types::parse_import_decl;
 use crate::parser::component_model::{
-    parse_vec_range, ParseContext, SizedResult, Validator,
-    _parse_instance_decl,
+    parse_vec_range, ParseContext, SizedResult, Validator, _parse_instance_decl,
 };
 
 pub fn parse_component_type(

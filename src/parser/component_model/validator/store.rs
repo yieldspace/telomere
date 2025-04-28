@@ -1,8 +1,7 @@
 use crate::component_model::{
-    ComponentExport, ComponentImport, ComponentType, CoreFunc,
-    CoreFuncType, CoreGlobalRef, CoreInstance, CoreInstanceType, CoreMemoryRef, CoreModule, CoreModuleType,
-    CoreTableRef, CoreType, Func, FuncType, GlobalIdx, InlineComponent,
-    Instance, InstanceType, Type,
+    ComponentExport, ComponentImport, ComponentType, CoreFunc, CoreFuncType, CoreGlobalRef,
+    CoreInstance, CoreInstanceType, CoreMemoryRef, CoreModule, CoreModuleType, CoreTableRef,
+    CoreType, Func, FuncType, GlobalIdx, InlineComponent, Instance, InstanceType, Type,
 };
 use crate::parser::component_model::validator::LocalIdx;
 use std::collections::HashMap;

@@ -1,20 +1,13 @@
-use super::idx::TypeIdx;
 use crate::component_model::{
-    CoreFunc, CoreFuncIdx, CoreFuncType, CoreMemoryRef,
-    FuncIdx, FuncType, GlobalIdx, ResourceType,
+    CoreFunc, CoreFuncType, CoreMemoryRef, FuncType, GlobalIdx, ResourceType,
 };
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::{CoreTableIdx, ValType};
 
 #[derive(Debug)]
 pub enum CanonicalFuncKind {
-    CanonLift(CoreFuncIdx, Vec<CanonOpt>, TypeIdx),
-    CanonLower(FuncIdx, Vec<CanonOpt>),
-    ResourceNew(TypeIdx),
-    ResourceDrop(TypeIdx),
     #[cfg(feature = "component-gated-feature-async")]
     ResourceDropAsync(TypeIdx),
-    ResourceRep(TypeIdx),
     #[cfg(feature = "component-gated-feature-async")]
     BackPressureSet,
     #[cfg(feature = "component-gated-feature-async")]

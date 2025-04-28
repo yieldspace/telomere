@@ -1,7 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    CoreModule, CoreModuleType, GlobalIdx, Relation,
-};
+use crate::component_model::{CoreModule, CoreModuleType, GlobalIdx, Relation};
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;

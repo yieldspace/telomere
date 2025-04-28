@@ -1,7 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    AliasType, InstanceExportType, Sort,
-};
+use crate::component_model::{AliasType, InstanceExportType, Sort};
 use crate::parser::component_model::{
     parse_instance_idx, parse_sort, ComponentParseError, ParseContext, SizedResult,
 };

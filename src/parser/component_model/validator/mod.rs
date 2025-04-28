@@ -2,8 +2,8 @@ mod store;
 
 use crate::component_model::{
     ComponentExport, ComponentImport, ComponentType, CoreFunc, CoreGlobalRef, CoreInstance,
-    CoreInstanceType, CoreMemoryRef, CoreModule, CoreModuleType, CoreTableRef,
-    CoreType, Func, FuncType, GlobalIdx, InlineComponent, Instance, InstanceType, Type,
+    CoreInstanceType, CoreMemoryRef, CoreModule, CoreModuleType, CoreTableRef, CoreType, Func,
+    FuncType, GlobalIdx, InlineComponent, Instance, InstanceType, Type,
 };
 use crate::parser::component_model::validator::store::GlobalStore;
 use crate::parser::component_model::{ComponentParseError, ParseResult};

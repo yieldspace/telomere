@@ -1,5 +1,5 @@
 use crate::component_model::{
-    AliasType, ComponentType, CoreModuleType, CoreSort, CoreType, FuncType, Sort, Type, TypeIdx,
+    AliasType, ComponentType, CoreModuleType, CoreSort, CoreType, FuncType, Sort, Type,
 };
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
@@ -71,7 +71,7 @@ pub enum ExternDesc {
 
 #[derive(Debug, Clone)]
 pub enum TypeBound {
-    Eq(TypeIdx),
+    Eq(Type),
     Sub,
 }
 

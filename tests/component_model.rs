@@ -1,4 +1,4 @@
-use telomere::component_model::{CompiledState, FlattenComponent};
+use telomere::component_model::CompiledState;
 use telomere::parser::component_model::{ParseContext, Validator};
 use tracing::Level;
 
@@ -25,20 +25,14 @@ fn test_basic_component() {
     // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     let mut instrs = Vec::new();
-    let component = FlattenComponent::new();
     let mut validator = Validator::new();
     let mut state = CompiledState::new();
     let mut ctx = ParseContext::new(&mut reader, &mut instrs, &mut validator, &mut state);
     telomere::parser::component_model::parse_component(&mut ctx).unwrap();
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();
-    let instance = telomere::runtime::component_model::instantiate(
-        component,
-        &mut instrs,
-        &mut store,
-        &linker,
-    )
-    .unwrap();
+    let instance =
+        telomere::runtime::component_model::instantiate(&mut instrs, &mut store, &linker).unwrap();
     println!("{:?}", instance);
 }*/
 

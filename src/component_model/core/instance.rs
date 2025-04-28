@@ -1,6 +1,5 @@
 use crate::component_model::{
-    CoreInstanceImport,
-    CoreInstanceInlineExport, CoreModule, CoreModuleType, CoreSort, GlobalIdx,
+    CoreInstanceImport, CoreInstanceInlineExport, CoreModule, CoreModuleType, CoreSort, GlobalIdx,
 };
 use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;

@@ -1,5 +1,5 @@
 use crate::common::InstanceAddr;
-use crate::component_model::{CoreModuleIdx, FlattenComponent, InstanceIdx};
+use crate::component_model::{CoreModule, GlobalIdx, Instance};
 use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
 use crate::{Module, Registry, Store};
 use std::collections::HashMap;
@@ -8,7 +8,6 @@ pub struct InstantiateContext<'a> {
     pub current: Option<usize>,
     pub(crate) store: &'a mut Store,
     pub instantiated: &'a mut ComponentInstantiated,
-    pub component: FlattenComponent,
     pub core_functions: Vec<(InstanceAddr, String)>,
     pub core_memories: Vec<(InstanceAddr, String)>,
     pub core_tables: Vec<(InstanceAddr, String)>,
@@ -20,14 +19,12 @@ pub struct InstantiateContext<'a> {
 impl<'a> InstantiateContext<'a> {
     pub fn new(
         store: &'a mut Store,
-        component: FlattenComponent,
         instantiated: &'a mut ComponentInstantiated,
         linker: &'a Linker,
     ) -> Self {
         Self {
             current: None,
             store,
-            component,
             instantiated,
             core_functions: vec![],
             core_memories: vec![],
@@ -47,8 +44,8 @@ impl<'a> InstantiateContext<'a> {
 }
 
 pub enum InstantiatedInstanceExport {
-    Module(CoreModuleIdx),
-    Instance(InstanceIdx),
+    Module(GlobalIdx<CoreModule>),
+    Instance(GlobalIdx<Instance>),
 }
 
 pub struct InstantiatedInstance {
@@ -62,7 +59,7 @@ pub enum ResolvedImportKey {
 }
 
 pub struct ResolvedImportMap {
-    pub core_modules: HashMap<CoreModuleIdx, Module>,
+    pub core_modules: HashMap<GlobalIdx<CoreModule>, Module>,
 }
 
 impl ResolvedImportMap {
@@ -74,6 +71,6 @@ impl ResolvedImportMap {
 }
 
 pub enum ResolvedImport {
-    CoreModule(CoreModuleIdx),
-    Instance(InstanceIdx),
+    CoreModule(GlobalIdx<CoreModule>),
+    Instance(GlobalIdx<Instance>),
 }

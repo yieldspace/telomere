@@ -1,5 +1,6 @@
 use crate::component_model::{
-    CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, GlobalIdx,
+    CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType,
+    GlobalIdx,
 };
 
 #[repr(u8)]

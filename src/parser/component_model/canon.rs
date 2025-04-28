@@ -2,8 +2,7 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::CanonicalFuncKind;
 use crate::component_model::{
-    CanonOpt, CanonicalFuncType, CoreFunc, CoreFuncType, Func,
-    GlobalIdx, Idx, Relation, ResourceType,
+    CanonOpt, CanonicalFuncType, CoreFunc, CoreFuncType, Func, GlobalIdx, Relation, ResourceType,
 };
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;

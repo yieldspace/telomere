@@ -1,8 +1,7 @@
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueIdx;
 use crate::component_model::{
-    CoreModule, CoreSort, CoreSortWithIdx, Func, GlobalIdx,
-    InlineComponent, Instance, Type,
+    CoreModule, CoreSort, CoreSortWithIdx, Func, GlobalIdx, InlineComponent, Instance, Type,
 };
 use crate::parser::component_model::ComponentParseError;
 

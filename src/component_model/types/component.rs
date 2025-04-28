@@ -1,6 +1,6 @@
 use crate::component_model::{
-    CoreModuleType, CoreTypeIdx, FuncType, ImportDecl, InstanceDecl, InstanceIdx, InstanceType,
-    Type, TypeIdx,
+    CoreModuleType, CoreType, FuncType, GlobalIdx, ImportDecl, Instance, InstanceDecl,
+    InstanceType, Type,
 };
 use std::collections::HashMap;
 
@@ -8,9 +8,9 @@ use std::collections::HashMap;
 pub struct ComponentType {
     pub(crate) imports: HashMap<String, ComponentImportType>,
     pub(crate) exports: HashMap<String, ComponentExportType>,
-    pub(crate) core_types: Vec<CoreTypeIdx>,
-    pub(crate) types: Vec<TypeIdx>,
-    pub(crate) instances: Vec<InstanceIdx>,
+    pub(crate) core_types: Vec<GlobalIdx<CoreType>>,
+    pub(crate) types: Vec<Type>,
+    pub(crate) instances: Vec<GlobalIdx<Instance>>,
 }
 
 impl ComponentType {
