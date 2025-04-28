@@ -6,7 +6,7 @@ use crate::parser::component_model::{
     parse_component_idx, parse_core_func_idx, parse_core_global_idx, parse_core_instance_idx,
     parse_core_memory_idx, parse_core_module_idx, parse_core_sort, parse_core_table_idx,
     parse_core_type_idx, parse_func_idx, parse_instance_idx, parse_type_idx, ParseContext,
-    SizedResult, Validator,
+    SizedResult,
 };
 
 pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Sort> {

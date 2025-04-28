@@ -1,10 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasIdx, Binding, ComponentIdx, CoreExportType, CoreFunc, CoreFuncRef, CoreGlobalRef,
-    CoreInstance, CoreInstanceExportType, CoreMemoryRef, CoreModule, CoreModuleBinding,
-    CoreModuleIdx, CoreModuleReference, CoreSort, CoreSortWithIdx, CoreTableRef, Func,
-    FuncReference, GlobalIdx, Idx, InlineComponent, InlineComponentReference, Instance,
-    InstanceExportType, InstanceIdx, InstanceReference, Relation, Sort, SortWithIdx, TypeIdx,
+    AliasIdx, CoreGlobalRef, CoreInstanceExportType, CoreMemoryRef, CoreSort, CoreTableRef, GlobalIdx, Idx,
+    InstanceExportType, Relation, Sort,
 };
 use crate::parser::component_model::{
     parse_core_instance_idx, parse_instance_idx, parse_sort, ComponentParseError, ParseContext,

@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, CoreModule, CoreModuleType, GlobalIdx, InlineComponent, InlineComponentValue, Relation,
+    CoreModule, CoreModuleType, GlobalIdx, Relation,
 };
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
@@ -17,7 +17,7 @@ use crate::parser::component_model::{
 };
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
-use crate::{Module, WasmParser};
+use crate::WasmParser;
 
 pub fn parse_component(
     ctx: &mut ParseContext<impl BinaryReader>,

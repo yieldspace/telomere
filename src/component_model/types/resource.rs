@@ -1,4 +1,4 @@
-use crate::component_model::{FuncIdx, FuncType};
+use crate::component_model::FuncType;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResourceType {

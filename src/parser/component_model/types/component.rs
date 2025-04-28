@@ -1,12 +1,11 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    ComponentDecl, ComponentIdx, ComponentImportType, ComponentType, CoreModule, CoreModuleIdx,
-    CoreType, CoreTypeIdx, ExternDesc, Func, FuncIdx, FunctionBinding, InlineComponent, Instance,
-    InstanceDecl, InstanceIdx, Type, TypeIdx,
+    ComponentDecl, ComponentImportType, ComponentType, ExternDesc,
+    InstanceDecl,
 };
 use crate::parser::component_model::types::parse_import_decl;
 use crate::parser::component_model::{
-    parse_vec_range, ComponentParseError, ParseContext, SizedResult, Validator,
+    parse_vec_range, ParseContext, SizedResult, Validator,
     _parse_instance_decl,
 };
 

@@ -1,4 +1,4 @@
-use crate::component_model::{CanonOpt, CoreFunc, CoreFuncIdx, FuncType, GlobalIdx, TypeIdx};
+use crate::component_model::{CanonOpt, CoreFunc, FuncType, GlobalIdx};
 
 #[derive(Clone)]
 pub enum Func {

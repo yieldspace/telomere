@@ -25,7 +25,7 @@ fn test_basic_component() {
     // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     let mut instrs = Vec::new();
-    let mut component = FlattenComponent::new();
+    let component = FlattenComponent::new();
     let mut validator = Validator::new();
     let mut state = CompiledState::new();
     let mut ctx = ParseContext::new(&mut reader, &mut instrs, &mut validator, &mut state);

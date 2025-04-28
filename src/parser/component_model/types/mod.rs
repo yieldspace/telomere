@@ -6,15 +6,15 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueBound;
 use crate::component_model::{
-    Case, ComponentIdx, CoreModule, CoreModuleIdx, CoreType, CoreTypeIdx, DefValType, ExportDecl,
-    ExternDesc, Func, FuncIdx, FuncType, ImportDecl, InlineComponent, Instance, InstanceIdx, Label,
-    LabelValType, PrimValType, ResourceType, Type, TypeBound, TypeIdx, ValType,
+    Case, DefValType, ExportDecl,
+    ExternDesc, FuncType, ImportDecl, Label,
+    LabelValType, PrimValType, ResourceType, Type, ValType,
 };
 use crate::parser::component_model::export::parse_export_name_dash;
 use crate::parser::component_model::import::parse_import_name_dash;
 use crate::parser::component_model::{
     parse_core_type_idx, parse_func_idx, parse_option, parse_type_idx, ComponentParseError,
-    ParseContext, ParseResult, SizedResult, Validator,
+    ParseContext, ParseResult, SizedResult,
 };
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;

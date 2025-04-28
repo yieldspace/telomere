@@ -1,10 +1,9 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasType, CoreTypeIdx, Instance, InstanceExportType, InstanceIdx, Sort, SortWithIdx, Type,
-    TypeIdx,
+    AliasType, InstanceExportType, Sort,
 };
 use crate::parser::component_model::{
-    parse_instance_idx, parse_sort, ComponentParseError, ParseContext, SizedResult, Validator,
+    parse_instance_idx, parse_sort, ComponentParseError, ParseContext, SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};
 

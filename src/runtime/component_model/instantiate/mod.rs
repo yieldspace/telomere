@@ -1,15 +1,9 @@
-use crate::aliasing as core_aliasing;
-use crate::component_model::{
-    CoreFunc, CoreFuncRef, CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, CoreModule,
-    CoreSortWithIdx, Idx, SortWithIdx,
-};
-use crate::instantiate as core_instantiate;
+use crate::component_model::Idx;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::runtime::component_model::instantiate::context::{
-    InstantiatedInstance, InstantiatedInstanceExport, ResolvedImportKey, ResolvedImportMap,
+    ResolvedImportKey, ResolvedImportMap,
 };
 use crate::runtime::component_model::ComponentVMError;
-use crate::Registry;
 
 mod context;
 mod instance;

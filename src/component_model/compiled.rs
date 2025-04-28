@@ -1,6 +1,5 @@
 use crate::component_model::{
-    CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreSort, CoreTableRef,
-    CoreType, Func, GlobalIdx, InlineComponent, Instance, InstanceIdx, Sort,
+    CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, Func, GlobalIdx, InlineComponent, Instance,
 };
 use std::collections::HashMap;
 

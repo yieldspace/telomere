@@ -1,13 +1,12 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasType, Binding, ComponentIdx, CoreModule, CoreModuleIdx, CoreType, CoreTypeIdx, ExportDecl,
-    ExternDesc, Func, FuncIdx, InlineComponent, Instance, InstanceDecl, InstanceExportType,
-    InstanceIdx, InstanceType, Type, TypeIdx,
+    AliasType, CoreType, ExportDecl,
+    ExternDesc, InstanceDecl, InstanceExportType, InstanceType,
 };
 use crate::parser::component_model::types::alias::parse_alias_type;
 use crate::parser::component_model::types::parse_export_decl;
 use crate::parser::component_model::{
-    parse_core_type, parse_type, parse_vec_range, ComponentParseError, ParseContext, SizedResult,
+    parse_core_type, parse_type, parse_vec_range, ParseContext, SizedResult,
     Validator,
 };
 

@@ -1,7 +1,3 @@
-use crate::component_model::{
-    CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, Func,
-    InlineComponent, Instance, InstanceType, Type,
-};
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;

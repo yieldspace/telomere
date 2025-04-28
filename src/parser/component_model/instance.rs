@@ -1,17 +1,13 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, GlobalIdx, Idx, InlineExport, Instance, InstanceIdx, InstantiateArg, Relation,
+    GlobalIdx, Idx, InlineExport, Instance, InstantiateArg, Relation,
     SortWithIdx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
 use crate::parser::component_model::SizedResult;
-use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError, Validator};
+use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError};
 use crate::parser::core::{parse_name, parse_vec};
-use crate::runtime::component_model::instantiate::{
-    instantiate_inline_instance, instantiate_instance_end, instantiate_instance_start,
-    InstantiateInstr, InstantiateOperand,
-};
 use std::collections::HashMap;
 
 pub fn parse_instance(

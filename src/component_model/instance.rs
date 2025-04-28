@@ -1,5 +1,5 @@
 use crate::component_model::{
-    ComponentIdx, GlobalIdx, InlineComponent, InstanceExportType, InstanceType, SortWithIdx,
+    GlobalIdx, InlineComponent, InstanceType, SortWithIdx,
 };
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;

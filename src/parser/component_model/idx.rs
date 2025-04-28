@@ -1,12 +1,9 @@
 use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueIdx;
-use crate::component_model::{
-    ComponentIdx, Func, FuncIdx, InlineComponent, Instance, InstanceIdx, Type, TypeIdx,
-};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::validator::LocalIdx;
-use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
+use crate::parser::component_model::ParseResult;
 use crate::parser::core::parse_u32;
 
 pub fn parse_component_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx> {

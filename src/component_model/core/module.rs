@@ -1,4 +1,3 @@
-use crate::component_model::CoreModuleType;
 use crate::Module;
 
 #[derive(Clone)]

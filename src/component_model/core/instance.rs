@@ -1,10 +1,8 @@
-use crate::common::ExportDesc;
 use crate::component_model::{
-    Binding, CoreFunc, CoreFuncRef, CoreGlobalRef, CoreInstanceIdx, CoreInstanceImport,
-    CoreInstanceInlineExport, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreModuleType, CoreSort,
-    CoreTableRef, GlobalIdx, Idx, Slot,
+    CoreInstanceImport,
+    CoreInstanceInlineExport, CoreModule, CoreModuleType, CoreSort, GlobalIdx,
 };
-use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
+use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

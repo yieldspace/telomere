@@ -1,10 +1,8 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    Binding, ComponentExport, CoreModule, CoreSortWithIdx, ExternDesc, Idx, SortWithIdx,
-};
+use crate::component_model::ComponentExport;
 use crate::parser::component_model::{
     parse_externdesc, parse_option, parse_sort_with_idx, ComponentParseError, ParseContext,
-    ParseResult, SizedResult, Validator,
+    ParseResult, SizedResult,
 };
 use crate::parser::core::parse_name;
 

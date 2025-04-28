@@ -1,11 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    CoreFuncIdx, CoreGlobalIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTableIdx,
-    CoreType, CoreTypeIdx,
-};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::validator::LocalIdx;
-use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
+use crate::parser::component_model::ParseResult;
 use crate::parser::core::parse_u32;
 
 pub fn parse_core_module_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx> {

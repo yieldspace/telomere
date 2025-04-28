@@ -5,10 +5,7 @@ mod sort;
 mod types;
 
 pub use crate::common::FuncType as CoreFuncType;
-use crate::component_model::{
-    Binding, CoreFuncIdx, CoreGlobalIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx,
-    CoreTableIdx, CoreTypeIdx, GlobalIdx, Slot, Type,
-};
+use crate::component_model::GlobalIdx;
 pub use func::*;
 pub use instance::*;
 pub use module::*;

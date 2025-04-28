@@ -2,14 +2,14 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::CanonicalFuncKind;
 use crate::component_model::{
-    Binding, CanonOpt, CanonicalFuncKind, CanonicalFuncType, CoreFunc, CoreFuncType, Func,
+    CanonOpt, CanonicalFuncType, CoreFunc, CoreFuncType, Func,
     GlobalIdx, Idx, Relation, ResourceType,
 };
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;
 use crate::parser::component_model::{
     parse_core_func_idx, parse_core_memory_idx, parse_func_idx, parse_type_idx,
-    ComponentParseError, ParseContext, SizedResult, Validator,
+    ComponentParseError, ParseContext, SizedResult,
 };
 #[cfg(any(
     feature = "component-gated-feature-async",
@@ -17,9 +17,6 @@ use crate::parser::component_model::{
 ))]
 use crate::parser::component_model::{parse_option, parse_resultlist, parse_u32};
 use crate::parser::core::parse_vec;
-use crate::runtime::component_model::instantiate::{
-    instantiate_core_function, instantiate_function, InstantiateInstr, InstantiateOperand,
-};
 
 pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();

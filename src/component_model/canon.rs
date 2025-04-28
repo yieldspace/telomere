@@ -1,7 +1,7 @@
 use super::idx::TypeIdx;
 use crate::component_model::{
-    CoreFunc, CoreFuncIdx, CoreFuncType, CoreMemoryIdx, CoreMemoryRef, CoreTypeIdx, CoreTypeRef,
-    FuncIdx, FuncType, GlobalIdx, ResourceType, Type,
+    CoreFunc, CoreFuncIdx, CoreFuncType, CoreMemoryRef,
+    FuncIdx, FuncType, GlobalIdx, ResourceType,
 };
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::{CoreTableIdx, ValType};

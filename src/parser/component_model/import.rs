@@ -1,16 +1,12 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, ComponentImport, CoreModule, CoreType, ExternDesc, Func, GlobalIdx, InlineComponent,
-    Instance, InstanceReference, Reference, Relation, Type,
+    ComponentImport, ExternDesc, GlobalIdx, Relation,
 };
 use crate::parser::component_model::{
-    parse_core_type_idx, parse_externdesc, parse_type_idx, ComponentParseError, ParseContext,
-    ParseResult, SizedResult, Validator,
+    parse_externdesc, ComponentParseError, ParseContext,
+    ParseResult, SizedResult,
 };
 use crate::parser::core::parse_name;
-use crate::runtime::component_model::instantiate::{
-    instantiate_import_core_module, InstantiateInstr,
-};
 
 // fn parse_externdesc_import(
 //     ctx: &mut ParseContext<impl BinaryReader>,

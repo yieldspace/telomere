@@ -1,7 +1,6 @@
-use crate::common::ExportDesc;
 use crate::component_model::{
-    CoreGlobalIdx, CoreGlobalRef, CoreInstanceIdx, CoreInstanceInlineExport, CoreMemoryIdx,
-    CoreMemoryRef, CoreSort, CoreTableIdx, CoreTableRef, CoreTypeIdx, CoreTypeRef,
+    CoreGlobalRef,
+    CoreMemoryRef, CoreSort, CoreTableRef, CoreTypeRef,
 };
 use crate::parser::component_model::ComponentParseError;
 use crate::Module;
