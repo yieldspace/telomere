@@ -1,10 +1,9 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreInstanceType, CoreInstanceValue, CoreModuleType, CoreSort, Idx};
+use crate::component_model::{Binding, CoreInstance, CoreInstanceIdx, CoreInstanceImport, CoreInstanceInlineExport, CoreInstanceType, CoreModuleType, CoreSort, Idx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_core_module_idx};
 use crate::parser::component_model::core::sort::parse_core_sort;
 use crate::parser::component_model::error::ComponentParseError;
-use crate::parser::component_model::validator::DefaultValidatorState;
 use crate::parser::component_model::{ParseResult, SizedResult, Validator};
 use crate::parser::core::{parse_name, parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{
@@ -13,8 +12,8 @@ use crate::runtime::component_model::instantiate::{
 use std::collections::HashMap;
 
 pub fn parse_core_instance(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
-) -> SizedResult<CoreInstance> {
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> SizedResult<(CoreInstance, CoreInstanceType)> {
     let start = ctx.reader.read_count();
     match ctx.reader.read_exact_one()? {
         0x00 => {
@@ -37,12 +36,14 @@ pub fn parse_core_instance(
             //         core_instance_idx: idx.global(),
             //     },
             // });
-            Ok((ctx.reader.read_count() - start, CoreInstance::new(
-                Some(CoreInstanceValue::Real {
-                    module_idx: idx,
-                    imports,
-                }),
-                CoreInstanceType::new(), // todo from module type
+            let inst = CoreInstance::Real {
+                module_idx: idx,
+                imports,
+            };
+            let ty = CoreInstanceType::from(&inst);
+            Ok((ctx.reader.read_count() - start, (
+                inst,
+                ty
             )))
         }
         0x01 => {
@@ -61,17 +62,16 @@ pub fn parse_core_instance(
             //         core_instance_idx: idx.global(),
             //     },
             // });
-            Ok((ctx.reader.read_count() - start, CoreInstance::new(
-                Some(CoreInstanceValue::Alias { exports }),
-                CoreInstanceType::new(),
-            )))
+            let inst = CoreInstance::Alias { exports };
+            let ty = CoreInstanceType::from(&inst);
+            Ok((ctx.reader.read_count() - start, (inst, ty)))
         }
         _ => unreachable!(),
     }
 }
 
 pub fn parse_core_instantiate_arg(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<(String, CoreInstanceImport)> {
     let start_count = ctx.reader.read_count();
     let (name_len, name) = parse_name(ctx.reader)?;
@@ -81,7 +81,7 @@ pub fn parse_core_instantiate_arg(
 }
 
 pub fn parse_core_instance_inline_export(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<(String, CoreInstanceInlineExport)> {
     let (name_len, name) = parse_name(ctx.reader)?;
     let (sort_len, sort) = parse_core_sort(ctx)?;

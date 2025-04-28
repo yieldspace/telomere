@@ -2,12 +2,11 @@ use crate::binary::BinaryReader;
 use crate::component_model::{
     Binding, ComponentExport, CoreModule, CoreSortWithIdx, ExternDesc, Idx, SortWithIdx,
 };
-use crate::parser::component_model::validator::{DefaultValidatorState, ValidatorStateImpl};
 use crate::parser::component_model::{parse_externdesc, parse_option, parse_sort_with_idx, ComponentParseError, ParseContext, ParseResult, SizedResult, Validator};
 use crate::parser::core::parse_name;
 
 pub fn parse_export(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<(String, ComponentExport)> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_export_name_dash(ctx)?;
@@ -70,7 +69,7 @@ pub fn parse_export(
 }
 
 pub fn parse_export_name_dash(
-    ctx: &mut ParseContext<impl BinaryReader, impl ValidatorStateImpl>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<String> {
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "export name")?;
     // todo: check name

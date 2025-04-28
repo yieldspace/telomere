@@ -1,11 +1,10 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, Idx, InlineExport, Instance, InstanceIdx, InstanceValue, InstantiateArg, Resolvable,
+    Binding, Idx, InlineExport, Instance, InstanceIdx, InstanceValue, InstantiateArg,
     SortWithIdx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
-use crate::parser::component_model::validator::DefaultValidatorState;
 use crate::parser::component_model::SizedResult;
 use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError, Validator};
 use crate::parser::core::{parse_name, parse_vec};
@@ -16,7 +15,7 @@ use crate::runtime::component_model::instantiate::{
 use std::collections::HashMap;
 
 pub fn parse_instance(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<InstanceIdx> {
     let start_count = ctx.reader.read_count();
 
@@ -97,7 +96,7 @@ pub fn parse_instance(
 }
 
 fn parse_instantiate_arg(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<InstantiateArg> {
     let start_count = ctx.reader.read_count();
 
@@ -110,7 +109,7 @@ fn parse_instantiate_arg(
 }
 
 fn parse_inlineexport(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<InlineExport> {
     let start_count = ctx.reader.read_count();
 

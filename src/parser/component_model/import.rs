@@ -1,17 +1,16 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
     Binding, ComponentFunction, ComponentImport, CoreModule, CoreType, ExternDesc, InlineComponent,
-    Instance, InstanceReference, Reference, Resolvable, Resolver, Type,
+    Instance, InstanceReference, Reference, Type,
 };
-use crate::parser::component_model::validator::{DefaultValidatorState, ValidatorStateImpl};
-use crate::parser::component_model::{parse_core_type_idx, parse_core_type_idx_resolved, parse_externdesc, parse_type_idx, parse_type_idx_resolved, ComponentParseError, ParseContext, ParseResult, SizedResult, Validator};
+use crate::parser::component_model::{parse_core_type_idx, parse_externdesc, parse_type_idx, parse_type_idx_resolved, ComponentParseError, ParseContext, ParseResult, SizedResult, Validator};
 use crate::parser::core::parse_name;
 use crate::runtime::component_model::instantiate::{
     instantiate_import_core_module, InstantiateInstr,
 };
 
 fn parse_externdesc_import(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<ExternDesc> {
     let start_count = ctx.reader.read_count();
     let start_count = ctx.reader.read_count();
@@ -53,7 +52,7 @@ fn parse_externdesc_import(
 }
 
 pub fn parse_import(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<(String, ComponentImport)> {
     let (_, name) = parse_import_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;
@@ -117,7 +116,7 @@ pub fn parse_import(
 }
 
 pub fn parse_import_name_dash(
-    ctx: &mut ParseContext<impl BinaryReader, impl ValidatorStateImpl>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<String> {
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "import name")?;
     // todo: check name

@@ -7,12 +7,11 @@ pub struct CoreModule {
     // Typed(CoreModuleType, Reference),
     // /// Typedだが，exportを経由しており型が変化したもの．
     // SuperTyped(CoreModuleType, CoreModuleIdx, Reference),
-    pub value: Option<Module>,
-    pub ty: CoreModuleType,
+    pub value: Module,
 }
 
 impl CoreModule {
-    pub fn new(value: Option<Module>, ty: CoreModuleType) -> Self {
-        Self { value, ty }
+    pub fn new(value: Module) -> Self {
+        Self { value }
     }
 }

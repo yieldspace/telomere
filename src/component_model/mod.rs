@@ -7,6 +7,7 @@ mod idx;
 mod instance;
 mod sort;
 mod types;
+mod compiled;
 
 pub use binding::*;
 pub use canon::*;
@@ -17,28 +18,7 @@ pub use idx::*;
 pub use instance::*;
 pub use sort::*;
 pub use types::*;
-#[derive(Debug, Clone)]
-pub enum LazyValue<V, R> {
-    Value(V),
-    Lazy(R),
-}
-
-impl<V, R> LazyValue<V, R> {
-    pub fn unwrap(self) -> V {
-        match self {
-            LazyValue::Value(value) => value,
-            LazyValue::Lazy(_) => panic!("Tried to unwrap a lazy value"),
-        }
-    }
-
-    pub fn is_value(&self) -> bool {
-        matches!(self, LazyValue::Value(_))
-    }
-
-    pub fn is_lazy(&self) -> bool {
-        matches!(self, LazyValue::Lazy(_))
-    }
-}
+pub use compiled::{CompiledState, Relation};
 
 #[derive(Clone)]
 pub enum Slot<T, I: Idx> {

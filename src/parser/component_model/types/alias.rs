@@ -1,21 +1,15 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasType, CoreTypeIdx, Instance, InstanceExportType, InstanceIdx, Resolvable, Resolver, Sort,
+    AliasType, CoreTypeIdx, Instance, InstanceExportType, InstanceIdx, Sort,
     SortWithIdx, Type, TypeIdx,
 };
-use crate::parser::component_model::validator::{IdxValidator, ValidatorStateImpl};
 use crate::parser::component_model::{parse_instance_idx, parse_instance_idx_resolved, parse_sort, ComponentParseError, ParseContext, SizedResult, Validator};
 use crate::parser::core::{parse_name, parse_u32};
 
 pub fn parse_alias_type<
     R: BinaryReader,
-    S: ValidatorStateImpl
-        + IdxValidator<TypeIdx, Resolved=Type>
-        + IdxValidator<InstanceIdx, Resolved=Instance>
-        + Resolver<Instance, Error = ComponentParseError>
-        + Resolver<Type, Error = ComponentParseError>,
 >(
-    ctx: &mut ParseContext<R, S>,
+    ctx: &mut ParseContext<R>,
 ) -> SizedResult<AliasType> {
     let start_count = ctx.reader.read_count();
     let (_, sort) = parse_sort(ctx)?;

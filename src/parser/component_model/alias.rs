@@ -1,11 +1,10 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{AliasIdx, Binding, ComponentFunction, ComponentIdx, CoreExportSlot, CoreExportType, CoreFuncRef, CoreFunction, CoreGlobalRef, CoreInstance, CoreInstanceExportType, CoreMemoryRef, CoreModule, CoreModuleBinding, CoreModuleIdx, CoreModuleReference, CoreSort, CoreSortWithIdx, CoreTableRef, FuncReference, Idx, InlineComponent, InlineComponentReference, Instance, InstanceExportType, InstanceIdx, InstanceReference, Resolvable, Sort, SortWithIdx, TypeIdx};
-use crate::parser::component_model::validator::{DefaultValidatorState, Validator};
+use crate::component_model::{AliasIdx, Binding, ComponentFunction, ComponentIdx, CoreExportSlot, CoreExportType, CoreFuncRef, CoreFunction, CoreGlobalRef, CoreInstance, CoreInstanceExportType, CoreMemoryRef, CoreModule, CoreModuleBinding, CoreModuleIdx, CoreModuleReference, CoreSort, CoreSortWithIdx, CoreTableRef, FuncReference, GlobalIdx, Idx, InlineComponent, InlineComponentReference, Instance, InstanceExportType, InstanceIdx, InstanceReference, Relation, Sort, SortWithIdx, TypeIdx};
 use crate::parser::component_model::{parse_core_instance_idx, parse_instance_idx, parse_instance_idx_resolved, parse_sort, ComponentParseError, ParseContext, ParseResult, SizedResult};
 use crate::parser::core::{parse_name, parse_u32};
 
 pub fn parse_alias(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<AliasIdx> {
     let start_count = ctx.reader.read_count();
 
@@ -25,172 +24,179 @@ pub fn parse_alias(
     Ok((ctx.reader.read_count() - start_count, idx))
 }
 
-fn parse_export_alias(ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>, sort: Sort) -> ParseResult<AliasIdx> {
+fn parse_export_alias(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> ParseResult<AliasIdx> {
     let instance_idx = parse_instance_idx(ctx)?;
-    let instance = ctx.validator.resolve_idx::<Instance>(&instance_idx)?;
+    let instance_global_idx = ctx.validator.get_global_instance(instance_idx)?;
+    let instance = ctx.validator.get_instance_type(instance_idx)?;
     let (_, name) = parse_name(ctx.reader)?;
-    let export = instance.ty.get_export_type(&name)?.clone();
+    let export = instance.get_export_type(&name)?.clone();
     if export != sort {
         return Err(ComponentParseError::InvalidSignature(format!(
             "Invalid export type: expected {:?}, found {:?}",
             export, sort
         )));
     }
-    let idx = if let Some(s) = instance.get_export(&name)? {
-        match s {
-            SortWithIdx::Core(CoreSortWithIdx::Module(idx)) => {
-                let idx = ctx.validator.state.add_core_module(
-                    Binding::Alias(idx.global())
-                )?;
-                AliasIdx::CoreModule(idx)
-            }
-            SortWithIdx::Func(idx) => {
-                let idx = ctx.validator.state.add_func(
-                    Binding::Alias(idx.global())
-                )?;
-                AliasIdx::Func(idx)
-            }
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            SortWithIdx::Value(_) => {}
-            SortWithIdx::Type(idx) => {
-                let idx = ctx.validator.state.add_type(
-                    Binding::Alias(idx.global())
-                )?;
-                AliasIdx::Type(idx)
-            }
-            SortWithIdx::Component(idx) => {
-                let idx = ctx.validator.state.add_component(
-                    Binding::Alias(idx.global())
-                )?;
-                AliasIdx::Component(idx)
-            }
-            SortWithIdx::Instance(idx) => {
-                let idx = ctx.validator.state.add_instance(
-                    Binding::Alias(idx.global())
-                )?;
-                AliasIdx::Instance(idx)
-            }
-            _ => unreachable!()
+    let idx = match export {
+        InstanceExportType::CoreModule(ty) => {
+            let idx = ctx.validator.add_core_module_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state.register_core_module(
+                global_idx.clone(),
+                Relation::FromExport(instance_global_idx, name)
+            );
+            ctx.validator.register_global_core_module(idx, global_idx)?;
+            AliasIdx::CoreModule
         }
-    } else {
-        match export {
-            InstanceExportType::CoreModule(ty) => {
-                let idx = ctx.validator.state.add_core_module(
-                    Binding::Reference(CoreModule::new(None, ty), CoreModuleReference::Alias(instance_idx, name))
-                )?;
-                AliasIdx::CoreModule(idx)
-            }
-            InstanceExportType::Func(ty) => {
-                let idx = ctx.validator.state.add_func(
-                    Binding::Reference(ComponentFunction::new(None, ty), FuncReference::Alias(instance_idx, name))
-                )?;
-                AliasIdx::Func(idx)
-            }
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            InstanceExportType::Value(_) => {}
-            InstanceExportType::Type(ty) => {
-                let idx = ctx.validator.state.add_type(
-                    Binding::Real(ty)
-                )?;
-                AliasIdx::Type(idx)
-            }
-            InstanceExportType::Component(ty) => {
-                let idx = ctx.validator.state.add_component(
-                    Binding::Reference(
-                        InlineComponent::new(None, ty),
-                        InlineComponentReference::Alias(instance_idx, name),
-                    )
-                )?;
-                AliasIdx::Component(idx)
-            }
-            InstanceExportType::Instance(ty) => {
-                let idx = ctx.validator.state.add_instance(
-                    Binding::Reference(
-                        Instance::new(None, ty),
-                        InstanceReference::Alias(instance_idx, name),
-                    )
-                )?;
-                AliasIdx::Instance(idx)
-            }
+        InstanceExportType::Func(ty) => {
+            let idx = ctx.validator.add_func_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state.register_func(
+                global_idx.clone(),
+            Relation::FromExport(instance_global_idx, name)
+            );
+            ctx.validator.register_global_func(idx, global_idx)?;
+            AliasIdx::Func
+        }
+        #[cfg(feature = "component-gated-feature-value-imports-exports")]
+        InstanceExportType::Value(_) => {}
+        InstanceExportType::Type(ty) => {
+            ctx.validator.add_type(ty)?;
+            AliasIdx::Type
+        }
+        InstanceExportType::Component(ty) => {
+            let idx = ctx.validator.add_component_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state.register_component(
+                global_idx.clone(),
+                Relation::FromExport(instance_global_idx, name)
+            );
+            ctx.validator.register_global_component(idx, global_idx)?;
+            AliasIdx::Component
+        }
+        InstanceExportType::Instance(ty) => {
+            let idx = ctx.validator.add_instance_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state.register_instance(
+                global_idx.clone(),
+                Relation::FromExport(instance_global_idx, name)
+            );
+            ctx.validator.register_global_instance(idx, global_idx)?;
+            AliasIdx::Instance
         }
     };
     Ok(idx)
 }
 
-fn parse_core_export(ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>, sort: Sort) -> ParseResult<AliasIdx> {
+fn parse_core_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> ParseResult<AliasIdx> {
     let core_inst_idx = parse_core_instance_idx(ctx)?;
-    let core_instance = ctx.validator.resolve_idx(&core_inst_idx)?;
+    let core_inst_global_idx = ctx.validator.get_global_core_instance(core_inst_idx)?;
+    let core_instance_type = ctx.validator.get_core_instance_type(core_inst_idx)?;
     let (_, name) = parse_name(ctx.reader)?;
     let Sort::Core(coresort) = sort else {
         return Err(ComponentParseError::InvalidSort(sort, "Core".to_string()));
     };
-    let export = core_instance.ty.get_export_type(&coresort, &name)?;
+    let export = core_instance_type.get_export_type(&coresort, &name)?;
     match export {
-        CoreInstanceExportType::Memory(name) => {
-            let idx = ctx.validator.state.add_core_memory(
-                Binding::Real(CoreMemoryRef(core_inst_idx, name))
-            )?;
-            Ok(AliasIdx::CoreMemory(idx))
+        CoreInstanceExportType::Memory(name, ty) => {
+            let idx = ctx.validator.add_core_memory_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state.register_core_memory(
+                global_idx.clone(),
+                CoreMemoryRef(core_inst_global_idx, name)
+            );
+            ctx.validator.register_global_core_memory(idx, global_idx)?;
+            Ok(AliasIdx::CoreMemory)
         }
-        CoreInstanceExportType::Table(name) => {
-            let idx = ctx.validator.state.add_core_table(
-                Binding::Real(CoreTableRef(core_inst_idx, name))
-            )?;
-            Ok(AliasIdx::CoreTable(idx))
+        CoreInstanceExportType::Table(name, ty) => {
+            let idx = ctx.validator.add_core_table_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state.register_core_table(
+                global_idx.clone(),
+                CoreTableRef(core_inst_global_idx, name)
+            );
+            ctx.validator.register_global_core_table(idx, global_idx)?;
+            Ok(AliasIdx::CoreTable)
         }
-        CoreInstanceExportType::Func(name) => {
-            let idx = ctx.validator.state.add_core_func(
-                Binding::Real(CoreFunction::Export(CoreFuncRef(core_inst_idx, name)))
-            )?;
-            Ok(AliasIdx::CoreFunc(idx))
+        CoreInstanceExportType::Func(name, ty) => {
+            let idx = ctx.validator.add_core_func_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state.register_core_func(
+                global_idx.clone(),
+                Relation::FromCoreExport(core_inst_global_idx, name)
+            );
+            ctx.validator.register_global_core_func(idx, global_idx)?;
+            Ok(AliasIdx::CoreFunc)
         }
-        CoreInstanceExportType::Global(name) => {
-            let idx = ctx.validator.state.add_core_global(
-                Binding::Real(CoreGlobalRef(core_inst_idx, name))
-            )?;
-            Ok(AliasIdx::CoreGlobal(idx))
+        CoreInstanceExportType::Global(name, ty) => {
+            let idx = ctx.validator.add_core_global_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state.register_core_global(
+                global_idx.clone(),
+                CoreGlobalRef(core_inst_global_idx, name)
+            );
+            ctx.validator.register_global_core_global(idx, global_idx)?;
+            Ok(AliasIdx::CoreGlobal)
         }
     }
 }
 
-fn parse_outer_export(ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>, sort: Sort) -> ParseResult<AliasIdx> {
+fn parse_outer_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> ParseResult<AliasIdx> {
     let (_, ct) = parse_u32(ctx.reader)?;
     let (_, idx) = parse_u32(ctx.reader)?;
     match sort {
         Sort::Core(CoreSort::Module) => {
-            let idx = ctx.validator.validate_outer_idx::<CoreModuleIdx>(ct, idx)?;
-            Ok(AliasIdx::CoreModule(
-                ctx.validator.state.add_core_module(
-                    CoreModuleBinding::Alias(idx.global())
-                )?
-            ))
+            let (ty, global_idx) = {
+                let outer_validator = ctx.validator.get_outer(ct);
+                let super_idx = outer_validator.validate_core_module_idx(idx)?;
+                let super_type = outer_validator.get_core_module_type(super_idx)?;
+                let super_global_idx = outer_validator.get_global_core_module(super_idx)?;
+                (super_type, super_global_idx)
+            };
+            let idx = ctx.validator.add_core_module_type(ty)?;
+            ctx.validator.register_global_core_module(idx, global_idx)?;
+            Ok(AliasIdx::CoreModule)
         }
         Sort::Type => {
-            let idx = ctx.validator.validate_outer_idx::<TypeIdx>(ct, idx)?;
-            let ty = ctx.validator.resolve_idx(&idx)?;
+            let ty = {
+                let outer = ctx.validator.get_outer(ct);
+                let super_idx = outer.validate_core_type_idx(idx)?;
+                let super_type = outer.get_type(super_idx)?;
+                super_type
+            };
             if ty.is_resource_type() {
                 return Err(ComponentParseError::InvalidSignature(
                     "Outer alias type cannot be a resource type".to_string(),
                 ));
             }
-            let idx = ctx.validator.state.add_type(
-                Binding::Alias(idx.global())
+            ctx.validator.add_type(
+                ty
             )?;
-            Ok(AliasIdx::Type(idx))
+            Ok(AliasIdx::Type)
         }
         Sort::Component => {
-            let idx = ctx.validator.validate_outer_idx::<ComponentIdx>(ct, idx)?;
-            let idx = ctx.validator.state.add_component(
-                Binding::Alias(idx.global())
-            )?;
-            Ok(AliasIdx::Component(idx))
+            let (ty, global_idx) = {
+                let outer = ctx.validator.get_outer(ct);
+                let super_idx = outer.validate_component_idx(idx)?;
+                let super_type = outer.get_component_type(super_idx)?;
+                let super_global_idx = outer.get_global_component(super_idx)?;
+                (super_type, super_global_idx)
+            };
+            
+            let idx = ctx.validator.add_component_type(ty)?;
+            ctx.validator.register_global_component(idx, global_idx)?;
+            Ok(AliasIdx::Component)
         }
         Sort::Instance => {
-            let idx = ctx.validator.validate_outer_idx::<InstanceIdx>(ct, idx)?;
-            let idx = ctx.validator.state.add_instance(
-                Binding::Alias(idx.global())
-            )?;
-            Ok(AliasIdx::Instance(idx))
+            let (ty, global_idx) = {
+                let outer = ctx.validator.get_outer(ct);
+                let super_idx = outer.validate_instance_idx(idx)?;
+                let super_type = outer.get_instance_type(super_idx)?;
+                let super_global_idx = outer.get_global_instance(super_idx)?;
+                (super_type, super_global_idx)
+            };
+            let idx = ctx.validator.add_instance_type(ty)?;
+            ctx.validator.register_global_instance(idx, global_idx)?;
+            Ok(AliasIdx::Instance)
         }
         _ => {
             Err(ComponentParseError::InvalidSort(

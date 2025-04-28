@@ -5,10 +5,7 @@ mod sort;
 mod types;
 
 pub use crate::common::FuncType as CoreFuncType;
-use crate::component_model::{
-    Binding, CoreFuncIdx, CoreGlobalIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx,
-    CoreTableIdx, CoreTypeIdx, Slot,
-};
+use crate::component_model::{Binding, CoreFuncIdx, CoreGlobalIdx, CoreInstanceIdx, CoreMemoryIdx, CoreModuleIdx, CoreTableIdx, CoreTypeIdx, GlobalIdx, Slot};
 pub use func::*;
 pub use instance::*;
 pub use module::*;
@@ -51,15 +48,15 @@ pub enum CoreInstanceImport {
 }
 
 #[derive(Debug, Clone)]
-pub struct CoreMemoryRef(pub CoreInstanceIdx, pub String);
+pub struct CoreMemoryRef(pub GlobalIdx<CoreInstance>, pub String);
 #[derive(Debug, Clone)]
-pub struct CoreTableRef(pub CoreInstanceIdx, pub String);
+pub struct CoreTableRef(pub GlobalIdx<CoreInstance>, pub String);
 #[derive(Debug, Clone)]
 pub struct CoreGlobalRef(
-    pub CoreInstanceIdx,
+    pub GlobalIdx<CoreInstance>,
     pub String,
 );
 #[derive(Debug, Clone)]
-pub struct CoreFuncRef(pub CoreInstanceIdx, pub String);
+pub struct CoreFuncRef(pub GlobalIdx<CoreInstance>, pub String);
 #[derive(Debug, Clone)]
-pub struct CoreTypeRef(pub CoreInstanceIdx, pub String);
+pub struct CoreTypeRef(pub GlobalIdx<CoreInstance>, pub String);

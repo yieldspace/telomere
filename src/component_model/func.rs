@@ -1,29 +1,10 @@
-use crate::component_model::{CanonOpt, CoreFuncIdx, FuncType, TypeIdx};
+use crate::component_model::{CanonOpt, CoreFuncIdx, CoreFunction, FuncType, GlobalIdx, TypeIdx};
 
 #[derive(Clone)]
-pub struct ComponentFunction {
-    pub(crate) value: Option<FuncValue>,
-    pub(crate) ty: FuncType,
-    // CanonLift {
-    //     core_func_idx: CoreFuncIdx,
-    //     opts: Vec<CanonOpt>,
-    //     ty: TypeIdx,
-    // },
-    // SuperTyped(FuncType, FuncIdx, Reference),
-    // Typed(FuncType, Reference),
-}
-
-impl ComponentFunction {
-    pub fn new(value: Option<FuncValue>, ty: FuncType) -> Self {
-        Self { value, ty }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum FuncValue {
+pub enum ComponentFunction {
     CanonLift {
-        core_func_idx: CoreFuncIdx,
+        core_func_idx: GlobalIdx<CoreFunction>,
         opts: Vec<CanonOpt>,
-        ty: TypeIdx,
+        ty: FuncType,
     },
 }

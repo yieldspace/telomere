@@ -5,6 +5,7 @@ mod instance;
 mod prim;
 mod resource;
 mod val;
+mod idx;
 
 use crate::component_model::{Reference, TypeIdx};
 use crate::parser::component_model::ComponentParseError;
@@ -50,6 +51,7 @@ pub enum Type {
 impl_try_into_type!(FuncType, Func);
 impl_try_into_type!(ComponentType, Component);
 impl_try_into_type!(InstanceType, Instance);
+impl_try_into_type!(ResourceType, Resource);
 
 impl Type {
     /// Checks if the type is a resource type.

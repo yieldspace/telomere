@@ -2,7 +2,6 @@ use crate::binary::BinaryReader;
 use crate::component_model::{CoreSort, CoreSortWithIdx, Sort, SortWithIdx};
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::parser::component_model::parse_value_idx;
-use crate::parser::component_model::validator::{DefaultValidatorState, ValidatorStateImpl};
 use crate::parser::component_model::{
     parse_component_idx, parse_core_func_idx, parse_core_global_idx, parse_core_instance_idx,
     parse_core_memory_idx, parse_core_module_idx, parse_core_sort, parse_core_table_idx,
@@ -11,7 +10,7 @@ use crate::parser::component_model::{
 };
 
 pub fn parse_sort(
-    ctx: &mut ParseContext<impl BinaryReader, impl ValidatorStateImpl>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<Sort> {
     let start_count = ctx.reader.read_count();
 
@@ -29,7 +28,7 @@ pub fn parse_sort(
 }
 
 pub fn parse_sort_with_idx(
-    ctx: &mut ParseContext<impl BinaryReader, impl DefaultValidatorState>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<SortWithIdx> {
     let start_count = ctx.reader.read_count();
 

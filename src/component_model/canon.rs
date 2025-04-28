@@ -1,5 +1,5 @@
 use super::idx::TypeIdx;
-use crate::component_model::{CoreFuncIdx, CoreMemoryIdx, FuncIdx};
+use crate::component_model::{CoreFuncIdx, CoreFuncType, CoreFunction, CoreMemoryIdx, CoreMemoryRef, CoreTypeIdx, CoreTypeRef, FuncIdx, FuncType, GlobalIdx, ResourceType, Type};
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::{CoreTableIdx, ValType};
 
@@ -71,7 +71,7 @@ pub enum CanonicalFuncKind {
     #[cfg(feature = "component-gated-feature-threading-builtins")]
     ThreadSpawnRef(TypeIdx),
     #[cfg(feature = "component-gated-feature-threading-builtins")]
-    ThreadSpawnIndirect(TypeIdx, CoreTableIdx),
+    ThreadSpawnIndirect(Type, GlobalIdx<CoreFunction>),
     #[cfg(feature = "component-gated-feature-threading-builtins")]
     ThreadAvailableParallelism,
 }
@@ -81,13 +81,38 @@ pub enum CanonOpt {
     StringEncodingUtf8,
     StringEncodingUtf16,
     StringEncodingLatin1Utf16,
-    Memory(CoreMemoryIdx),
-    Realloc(CoreFuncIdx),
-    PostReturn(CoreFuncIdx),
+    Memory(GlobalIdx<CoreMemoryRef>),
+    Realloc(GlobalIdx<CoreFunction>),
+    PostReturn(GlobalIdx<CoreFunction>),
     #[cfg(feature = "component-gated-feature-async")]
     Async,
     #[cfg(feature = "component-gated-feature-async")]
-    Callback(CoreFuncIdx),
+    Callback(GlobalIdx<CoreFunction>),
     #[cfg(feature = "component-gated-feature-async")]
     AlwaysTaskReturn,
+}
+
+pub trait CanonicalFuncType {
+    fn canon_lower(ty: FuncType) -> Self;
+    fn canon_resource_new(ty: ResourceType) -> Self;
+    fn canon_resource_drop(ty: ResourceType) -> Self;
+    fn canon_resource_rep(ty: ResourceType) -> Self;
+}
+
+impl CanonicalFuncType for CoreFuncType {
+    fn canon_lower(ty: FuncType) -> Self {
+        todo!()
+    }
+
+    fn canon_resource_new(ty: ResourceType) -> Self {
+        todo!()
+    }
+
+    fn canon_resource_drop(ty: ResourceType) -> Self {
+        todo!()
+    }
+
+    fn canon_resource_rep(ty: ResourceType) -> Self {
+        todo!()
+    }
 }

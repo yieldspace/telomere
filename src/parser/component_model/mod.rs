@@ -4,7 +4,6 @@ use crate::WasmParserError;
 use std::ops::Range;
 use tracing::trace;
 
-use crate::parser::component_model::validator::{DefaultValidatorState, ValidatorStateImpl};
 pub use alias::*;
 pub use component::parse_component;
 pub use context::ParseContext;
@@ -15,7 +14,7 @@ pub use instance::*;
 pub use section::*;
 pub use sort::*;
 pub use types::*;
-pub use validator::{Validator, ValidatorState};
+pub use validator::{Validator, LocalStore};
 
 mod alias;
 mod canon;
@@ -114,9 +113,9 @@ where
     Ok((read_bytes, ()))
 }
 
-pub(crate) fn parse_option<R: BinaryReader, V: ValidatorStateImpl, T, E>(
-    ctx: &mut ParseContext<R, V>,
-    mut f: impl FnMut(&mut ParseContext<R, V>) -> Result<T, E>,
+pub(crate) fn parse_option<R: BinaryReader, T, E>(
+    ctx: &mut ParseContext<R>,
+    mut f: impl FnMut(&mut ParseContext<R>) -> Result<T, E>,
 ) -> ParseResult<Option<T>>
 where
     ComponentParseError: From<E>,
@@ -132,7 +131,7 @@ where
 }
 
 pub(crate) fn parse_vec_range(
-    ctx: &mut ParseContext<impl BinaryReader, impl ValidatorStateImpl>,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<Range<u32>, ComponentParseError> {
     let (_, size) = parse_u32(ctx.reader)?;
     Ok(0..size)
