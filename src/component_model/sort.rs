@@ -1,7 +1,8 @@
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueIdx;
 use crate::component_model::{
-    ComponentIdx, CoreModuleIdx, CoreSort, CoreSortWithIdx, FuncIdx, InstanceIdx, TypeIdx,
+    ComponentIdx, CoreModule, CoreModuleIdx, CoreSort, CoreSortWithIdx, Func, FuncIdx, GlobalIdx,
+    InlineComponent, Instance, InstanceIdx, Type, TypeIdx,
 };
 use crate::parser::component_model::ComponentParseError;
 
@@ -22,12 +23,12 @@ pub trait SortLike {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SortWithIdx {
     Core(CoreSortWithIdx),
-    Func(FuncIdx),
+    Func(GlobalIdx<Func>),
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     Value(ValueIdx),
-    Type(TypeIdx),
-    Component(ComponentIdx),
-    Instance(InstanceIdx),
+    Type(Type),
+    Component(GlobalIdx<InlineComponent>),
+    Instance(GlobalIdx<Instance>),
 }
 
 impl SortWithIdx {
@@ -53,7 +54,7 @@ impl SortWithIdx {
     }
 }
 
-impl TryFrom<SortWithIdx> for CoreModuleIdx {
+impl TryFrom<SortWithIdx> for GlobalIdx<CoreModule> {
     type Error = ComponentParseError;
 
     fn try_from(value: SortWithIdx) -> Result<Self, Self::Error> {
@@ -68,31 +69,37 @@ impl TryFrom<SortWithIdx> for CoreModuleIdx {
     }
 }
 
-impl TryFrom<SortWithIdx> for FuncIdx {
+impl TryFrom<SortWithIdx> for GlobalIdx<Func> {
     type Error = ComponentParseError;
 
     fn try_from(value: SortWithIdx) -> Result<Self, Self::Error> {
         if let SortWithIdx::Func(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSortWithIdx(value, "Func".to_string()))
+            Err(ComponentParseError::InvalidSortWithIdx(
+                value,
+                "Func".to_string(),
+            ))
         }
     }
 }
 
-impl TryFrom<SortWithIdx> for TypeIdx {
+impl TryFrom<SortWithIdx> for Type {
     type Error = ComponentParseError;
 
     fn try_from(value: SortWithIdx) -> Result<Self, Self::Error> {
         if let SortWithIdx::Type(idx) = value {
             Ok(idx)
         } else {
-            Err(ComponentParseError::InvalidSortWithIdx(value, "Type".to_string()))
+            Err(ComponentParseError::InvalidSortWithIdx(
+                value,
+                "Type".to_string(),
+            ))
         }
     }
 }
 
-impl TryFrom<SortWithIdx> for ComponentIdx {
+impl TryFrom<SortWithIdx> for GlobalIdx<InlineComponent> {
     type Error = ComponentParseError;
 
     fn try_from(value: SortWithIdx) -> Result<Self, Self::Error> {
@@ -107,7 +114,7 @@ impl TryFrom<SortWithIdx> for ComponentIdx {
     }
 }
 
-impl TryFrom<SortWithIdx> for InstanceIdx {
+impl TryFrom<SortWithIdx> for GlobalIdx<Instance> {
     type Error = ComponentParseError;
 
     fn try_from(value: SortWithIdx) -> Result<Self, Self::Error> {

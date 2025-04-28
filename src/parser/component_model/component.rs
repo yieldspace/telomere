@@ -1,5 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{Binding, CoreModule, CoreModuleType, GlobalIdx, InlineComponent, InlineComponentValue, Relation};
+use crate::component_model::{
+    Binding, CoreModule, CoreModuleType, GlobalIdx, InlineComponent, InlineComponentValue, Relation,
+};
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::parse_core_instance;
@@ -9,7 +11,10 @@ use crate::parser::component_model::import::parse_import;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
-use crate::parser::component_model::{parse_alias, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version, Validator};
+use crate::parser::component_model::{
+    parse_alias, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,
+    Validator,
+};
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
 use crate::{Module, WasmParser};
@@ -44,7 +49,10 @@ pub fn _parse_component(
                 let ty = CoreModuleType::from_module(&module);
                 let idx = ctx.validator.add_core_module_type(ty)?;
                 let global_idx = GlobalIdx::new();
-                ctx.state.register_core_module(global_idx.clone(), Relation::Defined(CoreModule::new(module)));
+                ctx.state.register_core_module(
+                    global_idx.clone(),
+                    Relation::Defined(CoreModule::new(module)),
+                );
                 ctx.validator.register_global_core_module(idx, global_idx)?
             }
             ComponentSectionType::CoreInstance => parse_core_instance_section(ctx)?,
@@ -105,8 +113,10 @@ fn parse_core_instance_section(
         let (_, (inst, ty)) = parse_core_instance(ctx)?;
         let idx = ctx.validator.add_core_instance_type(ty)?;
         let global_idx = GlobalIdx::new();
-        ctx.state.register_core_instance(global_idx.clone(), Relation::Defined(inst));
-        ctx.validator.register_global_core_instance(idx, global_idx)?;
+        ctx.state
+            .register_core_instance(global_idx.clone(), Relation::Defined(inst));
+        ctx.validator
+            .register_global_core_instance(idx, global_idx)?;
     }
     Ok(())
 }
@@ -157,7 +167,7 @@ fn parse_import_section(
     // Import parsing logic
     for _ in parse_vec_range(ctx)? {
         let (name, import) = parse_import(ctx)?;
-        ctx.validator.state.add_import(name, import)?;
+        ctx.validator.add_import(name, import);
     }
     Ok(())
 }
@@ -169,7 +179,7 @@ fn parse_export_section(
     // Export parsing logic
     for _ in parse_vec_range(ctx)? {
         let (name, export) = parse_export(ctx)?;
-        ctx.validator.state.add_export(name, export)?;
+        ctx.validator.add_export(name, export);
     }
     Ok(())
 }

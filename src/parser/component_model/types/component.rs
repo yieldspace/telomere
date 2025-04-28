@@ -1,26 +1,23 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    ComponentDecl, ComponentFunction, ComponentIdx, ComponentImportType, ComponentType, CoreModule,
-    CoreModuleIdx, CoreType, CoreTypeIdx, ExternDesc, FuncIdx, FunctionBinding, InlineComponent,
-    Instance, InstanceDecl, InstanceIdx, Type, TypeIdx,
+    ComponentDecl, ComponentIdx, ComponentImportType, ComponentType, CoreModule, CoreModuleIdx,
+    CoreType, CoreTypeIdx, ExternDesc, Func, FuncIdx, FunctionBinding, InlineComponent, Instance,
+    InstanceDecl, InstanceIdx, Type, TypeIdx,
 };
-use crate::parser::component_model::types::{parse_import_decl};
-use crate::parser::component_model::validator::{
-};
+use crate::parser::component_model::types::parse_import_decl;
 use crate::parser::component_model::{
     parse_vec_range, ComponentParseError, ParseContext, SizedResult, Validator,
     _parse_instance_decl,
 };
 
 pub fn parse_component_type(
-    ctx: &mut ParseContext<
-        impl BinaryReader,
-    >,
+    ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<ComponentType> {
     let start_count = ctx.reader.read_count();
     let mut new_validator = Validator::new_child(ctx.validator);
     let mut instrs = Vec::new();
-    let mut new_ctx = ParseContext::new(ctx.reader, &mut instrs, &mut new_validator);
+    let state = &mut ctx.state;
+    let mut new_ctx = ParseContext::new(ctx.reader, &mut instrs, &mut new_validator, state);
 
     let mut component_type = ComponentType::new();
 
@@ -29,9 +26,7 @@ pub fn parse_component_type(
         match decl {
             ComponentDecl::Import(import) => match import.ed {
                 ExternDesc::CoreModule(ty) => {
-                    new_ctx
-                        .validator
-                        .add_core_module_type(ty.clone())?;
+                    new_ctx.validator.add_core_module_type(ty.clone())?;
                     component_type
                         .imports
                         .insert(import.name, ComponentImportType::CoreModule(ty.clone()));
@@ -51,17 +46,13 @@ pub fn parse_component_type(
                         .insert(import.name, ComponentImportType::Type(ty.clone()));
                 }
                 ExternDesc::Component(ty) => {
-                    new_ctx
-                        .validator
-                        .add_component_type(ty.clone())?;
+                    new_ctx.validator.add_component_type(ty.clone())?;
                     component_type
                         .imports
                         .insert(import.name, ComponentImportType::Component(ty.clone()));
                 }
                 ExternDesc::Instance(ty) => {
-                    new_ctx
-                        .validator
-                        .add_instance_type(ty.clone())?;
+                    new_ctx.validator.add_instance_type(ty.clone())?;
                     component_type
                         .imports
                         .insert(import.name, ComponentImportType::Instance(ty.clone()));
@@ -69,9 +60,7 @@ pub fn parse_component_type(
             },
             ComponentDecl::Instance(decl) => match decl {
                 InstanceDecl::CoreModuleType(ty) => {
-                    new_ctx
-                        .validator
-                        .add_core_module_type(ty.clone())?;
+                    new_ctx.validator.add_core_module_type(ty.clone())?;
                 }
                 InstanceDecl::Type(_) => {}
                 InstanceDecl::Alias(_) => {}
@@ -83,11 +72,7 @@ pub fn parse_component_type(
     Ok((ctx.reader.read_count() - start_count, component_type))
 }
 
-fn parse_component_decl(
-    ctx: &mut ParseContext<
-        impl BinaryReader,
-    >,
-) -> SizedResult<ComponentDecl> {
+fn parse_component_decl(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ComponentDecl> {
     let start_count = ctx.reader.read_count();
     let decl = match ctx.reader.read_exact_one()? {
         0x03 => {

@@ -1,6 +1,12 @@
-use crate::component_model::{ComponentExport, ComponentFunction, ComponentIdx, ComponentImport, ComponentType, CoreFuncIdx, CoreFuncType, CoreFunction, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreInstanceType, CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreModuleType, CoreTableIdx, CoreTableRef, CoreType, CoreTypeIdx, FuncIdx, FuncType, GlobalIdx, InlineComponent, Instance, InstanceIdx, InstanceType, Type, TypeIdx};
-use std::collections::HashMap;
+use crate::component_model::{
+    ComponentExport, ComponentIdx, ComponentImport, ComponentType, CoreFunc, CoreFuncIdx,
+    CoreFuncType, CoreGlobalIdx, CoreGlobalRef, CoreInstance, CoreInstanceIdx, CoreInstanceType,
+    CoreMemoryIdx, CoreMemoryRef, CoreModule, CoreModuleIdx, CoreModuleType, CoreTableIdx,
+    CoreTableRef, CoreType, CoreTypeIdx, Func, FuncIdx, FuncType, GlobalIdx, InlineComponent,
+    Instance, InstanceIdx, InstanceType, Type, TypeIdx,
+};
 use crate::parser::component_model::validator::LocalIdx;
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct LocalStore {
@@ -25,12 +31,12 @@ pub struct LocalStore {
 pub struct GlobalStore {
     pub core_modules: HashMap<LocalIdx, GlobalIdx<CoreModule>>,
     pub core_instances: HashMap<LocalIdx, GlobalIdx<CoreInstance>>,
-    pub core_funcs: HashMap<LocalIdx, GlobalIdx<CoreFunction>>,
+    pub core_funcs: HashMap<LocalIdx, GlobalIdx<CoreFunc>>,
     pub components: HashMap<LocalIdx, GlobalIdx<InlineComponent>>,
     pub instances: HashMap<LocalIdx, GlobalIdx<Instance>>,
     pub core_memories: HashMap<LocalIdx, GlobalIdx<CoreMemoryRef>>,
     pub core_tables: HashMap<LocalIdx, GlobalIdx<CoreTableRef>>,
     pub core_globals: HashMap<LocalIdx, GlobalIdx<CoreGlobalRef>>,
     pub core_types: HashMap<LocalIdx, GlobalIdx<CoreType>>,
-    pub funcs: HashMap<LocalIdx, GlobalIdx<ComponentFunction>>,
+    pub funcs: HashMap<LocalIdx, GlobalIdx<Func>>,
 }

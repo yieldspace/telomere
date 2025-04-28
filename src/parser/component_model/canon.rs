@@ -1,7 +1,10 @@
 use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::CanonicalFuncKind;
-use crate::component_model::{Binding, CanonOpt, CanonicalFuncType, ComponentFunction, CoreFuncType, CoreFunction, GlobalIdx, Idx, Relation, ResourceType};
+use crate::component_model::{
+    Binding, CanonOpt, CanonicalFuncKind, CanonicalFuncType, CoreFunc, CoreFuncType, Func,
+    GlobalIdx, Idx, Relation, ResourceType,
+};
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;
 use crate::parser::component_model::{
@@ -18,9 +21,7 @@ use crate::runtime::component_model::instantiate::{
     instantiate_core_function, instantiate_function, InstantiateInstr, InstantiateOperand,
 };
 
-pub fn parse_canon(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<()> {
+pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
     match ctx.reader.read_exact_one()? {
         // canon lift
@@ -29,15 +30,17 @@ pub fn parse_canon(
             let func_idx = parse_core_func_idx(ctx)?;
             let func_global_idx = ctx.validator.get_global_core_func(func_idx)?;
             let (_, opts) = parse_vec(ctx, |v| v.reader, parse_canon_opt)?;
-            let ty = ctx.validator.get_func_type(parse_type_idx(ctx)?)?;
-            let value = ComponentFunction::CanonLift {
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_func_type(idx)?;
+            let value = Func::CanonLift {
                 core_func_idx: func_global_idx,
                 opts,
                 ty: ty.clone(),
             };
             let idx = ctx.validator.add_func_type(ty)?;
             let global_idx = GlobalIdx::new();
-            ctx.state.register_func(global_idx, Relation::Defined(value));
+            ctx.state
+                .register_func(global_idx, Relation::Defined(value));
             ctx.validator.register_global_func(idx, global_idx)?;
             // ctx.push_instr(InstantiateInstr {
             //     op: instantiate_function,
@@ -55,15 +58,18 @@ pub fn parse_canon(
             let func_global_idx = ctx.validator.get_global_func(func_idx)?;
             let ft = ctx.validator.get_func_type(func_idx)?;
             let (_, opts) = parse_vec(ctx, |v| v.reader, parse_canon_opt)?;
-            let idx = ctx.validator.add_core_func_type(CoreFuncType::canon_lower(ft))?;
-            let value = CoreFunction::CanonLower(func_global_idx, opts);
+            let idx = ctx
+                .validator
+                .add_core_func_type(CoreFuncType::canon_lower(ft))?;
+            let value = CoreFunc::CanonLower(func_global_idx, opts);
             let global_idx = GlobalIdx::new();
-            ctx.state.register_core_func(global_idx, Relation::Defined(value));
+            ctx.state
+                .register_core_func(global_idx, Relation::Defined(value));
             ctx.validator.register_global_core_func(idx, global_idx)?;
             // let idx = ctx
             //     .validator
             //     .state
-            //     .add_core_func(Binding::Real(CoreFunction::CanonLower(f, opts)))?;
+            //     .add_core_func(Binding::Real(CoreFunc::CanonLower(f, opts)))?;
             // ctx.push_instr(InstantiateInstr {
             //     op: instantiate_core_function,
             // });
@@ -74,11 +80,20 @@ pub fn parse_canon(
             // });
         }
         0x02 => {
-            let resource_type: ResourceType = ctx.validator.get_type(parse_type_idx(ctx)?)?.try_into()?;
+            let idx = parse_type_idx(ctx)?;
+            let resource_type: ResourceType = ctx.validator.get_type(idx)?.try_into()?;
+            let idx = ctx
+                .validator
+                .add_core_func_type(CoreFuncType::canon_resource_new(resource_type.clone()))?;
+            let value = CoreFunc::ResourceNew(resource_type);
+            let global_idx = GlobalIdx::new();
+            ctx.state
+                .register_core_func(global_idx, Relation::Defined(value));
+            ctx.validator.register_global_core_func(idx, global_idx)?;
             // let idx = ctx
             //     .validator
             //     .state
-            //     .add_core_func(Binding::Real(CoreFunction::ResourceNew(rt)))?;
+            //     .add_core_func(Binding::Real(CoreFunc::ResourceNew(rt)))?;
             // ctx.push_instr(InstantiateInstr {
             //     op: instantiate_core_function,
             // });
@@ -89,11 +104,20 @@ pub fn parse_canon(
             // });
         }
         0x03 => {
-            let rt = parse_type_idx(ctx)?;
+            let idx = parse_type_idx(ctx)?;
+            let resource_type: ResourceType = ctx.validator.get_type(idx)?.try_into()?;
+            let idx = ctx
+                .validator
+                .add_core_func_type(CoreFuncType::canon_resource_drop(resource_type.clone()))?;
+            let value = CoreFunc::ResourceDrop(resource_type);
+            let global_idx = GlobalIdx::new();
+            ctx.state
+                .register_core_func(global_idx, Relation::Defined(value));
+            ctx.validator.register_global_core_func(idx, global_idx)?;
             // let idx = ctx
             //     .validator
             //     .state
-            //     .add_core_func(Binding::Real(CoreFunction::ResourceDrop(rt)))?;
+            //     .add_core_func(Binding::Real(CoreFunc::ResourceDrop(rt)))?;
             // ctx.push_instr(InstantiateInstr {
             //     op: instantiate_core_function,
             // });
@@ -110,11 +134,20 @@ pub fn parse_canon(
             todo!();
         }
         0x04 => {
-            let rt = parse_type_idx(ctx)?;
+            let idx = parse_type_idx(ctx)?;
+            let resource_type: ResourceType = ctx.validator.get_type(idx)?.try_into()?;
+            let idx = ctx
+                .validator
+                .add_core_func_type(CoreFuncType::canon_resource_rep(resource_type.clone()))?;
+            let value = CoreFunc::ResourceRep(resource_type);
+            let global_idx = GlobalIdx::new();
+            ctx.state
+                .register_core_func(global_idx, Relation::Defined(value));
+            ctx.validator.register_global_core_func(idx, global_idx)?;
             // let idx = ctx
             //     .validator
             //     .state
-            //     .add_core_func(Binding::Real(CoreFunction::ResourceRep(rt)))?;
+            //     .add_core_func(Binding::Real(CoreFunc::ResourceRep(rt)))?;
             // ctx.push_instr(InstantiateInstr {
             //     op: instantiate_core_function,
             // });
@@ -327,9 +360,7 @@ pub fn parse_canon(
     Ok((ctx.reader.read_count() - start_count, ()))
 }
 
-fn parse_async(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<bool> {
+fn parse_async(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<bool> {
     let a = match ctx.reader.read_exact_one()? {
         0x00 => false,
         0x01 => true,
@@ -338,9 +369,7 @@ fn parse_async(
     Ok((1, a))
 }
 
-fn parse_canon_opt(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<CanonOpt> {
+fn parse_canon_opt(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<CanonOpt> {
     let start_count = ctx.reader.read_count();
     let opt = match ctx.reader.read_exact_one()? {
         0x00 => CanonOpt::StringEncodingUtf8,
@@ -349,15 +378,15 @@ fn parse_canon_opt(
         0x03 => {
             let idx = parse_core_memory_idx(ctx)?;
             CanonOpt::Memory(ctx.validator.get_global_core_memory(idx)?)
-        },
+        }
         0x04 => {
             let idx = parse_core_func_idx(ctx)?;
             CanonOpt::Realloc(ctx.validator.get_global_core_func(idx)?)
-        },
-        0x05 => { 
+        }
+        0x05 => {
             let idx = parse_core_func_idx(ctx)?;
-            CanonOpt::PostReturn(ctx.validator.get_global_core_func(idx)?) 
-        },
+            CanonOpt::PostReturn(ctx.validator.get_global_core_func(idx)?)
+        }
         #[cfg(feature = "component-gated-feature-async")]
         0x06 => CanonOpt::Async,
         #[cfg(feature = "component-gated-feature-async")]

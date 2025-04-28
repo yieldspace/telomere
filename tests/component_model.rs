@@ -1,5 +1,5 @@
-use telomere::component_model::FlattenComponent;
-use telomere::parser::component_model::{ParseContext, Validator, ValidatorState};
+use telomere::component_model::{CompiledState, FlattenComponent};
+use telomere::parser::component_model::{ParseContext, Validator};
 use tracing::Level;
 
 #[test]
@@ -26,8 +26,9 @@ fn test_basic_component() {
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     let mut instrs = Vec::new();
     let mut component = FlattenComponent::new();
-    let mut validator = Validator::new(ValidatorState::new(&mut component));
-    let mut ctx = ParseContext::new(&mut reader, &mut instrs, &mut validator);
+    let mut validator = Validator::new();
+    let mut state = CompiledState::new();
+    let mut ctx = ParseContext::new(&mut reader, &mut instrs, &mut validator, &mut state);
     telomere::parser::component_model::parse_component(&mut ctx).unwrap();
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();

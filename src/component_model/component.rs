@@ -1,6 +1,6 @@
 use crate::component_model::{
-    ComponentFunction, ComponentIdx, ComponentType, CoreModule, CoreModuleIdx, CoreSort,
-    ExternDesc, FuncIdx, Instance, InstanceIdx, Slot, Sort, SortLike, SortWithIdx, Type, TypeIdx,
+    ComponentIdx, ComponentType, CoreModule, CoreModuleIdx, CoreSort, ExternDesc, Func, FuncIdx,
+    GlobalIdx, Instance, InstanceIdx, Slot, Sort, SortLike, SortWithIdx, Type, TypeIdx,
 };
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 #[allow(clippy::large_enum_variant)]
 pub enum ComponentExportSlot {
     CoreModule(Slot<CoreModule, CoreModuleIdx>),
-    Func(Slot<ComponentFunction, FuncIdx>),
+    Func(Slot<Func, FuncIdx>),
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     Value,
     Type(Slot<Type, TypeIdx>),
@@ -67,13 +67,13 @@ impl InlineComponent {
 
 #[derive(Debug, Clone)]
 pub enum ComponentImport {
-    CoreModule(CoreModuleIdx),
-    Func(FuncIdx),
+    CoreModule(GlobalIdx<CoreModule>),
+    Func(GlobalIdx<Func>),
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     Value,
-    Type(TypeIdx),
-    Component(ComponentIdx),
-    Instance(InstanceIdx),
+    Type(Type),
+    Component(GlobalIdx<InlineComponent>),
+    Instance(GlobalIdx<Instance>),
 }
 
 #[derive(Debug, Clone)]

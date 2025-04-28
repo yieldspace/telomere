@@ -9,9 +9,7 @@ use crate::parser::component_model::{
     SizedResult, Validator,
 };
 
-pub fn parse_sort(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<Sort> {
+pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Sort> {
     let start_count = ctx.reader.read_count();
 
     let sort = match ctx.reader.read_exact_one()? {
@@ -27,9 +25,7 @@ pub fn parse_sort(
     Ok((ctx.reader.read_count() - start_count, sort))
 }
 
-pub fn parse_sort_with_idx(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<SortWithIdx> {
+pub fn parse_sort_with_idx(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<SortWithIdx> {
     let start_count = ctx.reader.read_count();
 
     match ctx.reader.read_exact_one()? {
@@ -37,49 +33,56 @@ pub fn parse_sort_with_idx(
             let (_, sort) = parse_core_sort(ctx)?;
             match sort {
                 CoreSort::Func => {
-                    let func_idx = parse_core_func_idx(ctx)?;
+                    let idx = parse_core_func_idx(ctx)?;
+                    let func_idx = ctx.validator.get_global_core_func(idx)?;
                     Ok((
                         ctx.reader.read_count() - start_count,
                         SortWithIdx::Core(CoreSortWithIdx::Func(func_idx)),
                     ))
                 }
                 CoreSort::Table => {
-                    let table_idx = parse_core_table_idx(ctx)?;
+                    let idx = parse_core_table_idx(ctx)?;
+                    let table_idx = ctx.validator.get_global_core_table(idx)?;
                     Ok((
                         ctx.reader.read_count() - start_count,
                         SortWithIdx::Core(CoreSortWithIdx::Table(table_idx)),
                     ))
                 }
                 CoreSort::Memory => {
-                    let memory_idx = parse_core_memory_idx(ctx)?;
+                    let idx = parse_core_memory_idx(ctx)?;
+                    let memory_idx = ctx.validator.get_global_core_memory(idx)?;
                     Ok((
                         ctx.reader.read_count() - start_count,
                         SortWithIdx::Core(CoreSortWithIdx::Memory(memory_idx)),
                     ))
                 }
                 CoreSort::Global => {
-                    let global_idx = parse_core_global_idx(ctx)?;
+                    let idx = parse_core_global_idx(ctx)?;
+                    let global_idx = ctx.validator.get_global_core_global(idx)?;
                     Ok((
                         ctx.reader.read_count() - start_count,
                         SortWithIdx::Core(CoreSortWithIdx::Global(global_idx)),
                     ))
                 }
                 CoreSort::Type => {
-                    let type_idx = parse_core_type_idx(ctx)?;
+                    let idx = parse_core_type_idx(ctx)?;
+                    let ty = ctx.validator.get_core_type(idx)?;
                     Ok((
                         ctx.reader.read_count() - start_count,
-                        SortWithIdx::Core(CoreSortWithIdx::Type(type_idx)),
+                        SortWithIdx::Core(CoreSortWithIdx::Type(ty)),
                     ))
                 }
                 CoreSort::Module => {
-                    let module_idx = parse_core_module_idx(ctx)?;
+                    let idx = parse_core_module_idx(ctx)?;
+                    let module_idx = ctx.validator.get_global_core_module(idx)?;
                     Ok((
                         ctx.reader.read_count() - start_count,
                         SortWithIdx::Core(CoreSortWithIdx::Module(module_idx)),
                     ))
                 }
                 CoreSort::Instance => {
-                    let instance_idx = parse_core_instance_idx(ctx)?;
+                    let idx = parse_core_instance_idx(ctx)?;
+                    let instance_idx = ctx.validator.get_global_core_instance(idx)?;
                     Ok((
                         ctx.reader.read_count() - start_count,
                         SortWithIdx::Core(CoreSortWithIdx::Instance(instance_idx)),
@@ -89,6 +92,7 @@ pub fn parse_sort_with_idx(
         }
         0x01 => {
             let idx = parse_func_idx(ctx)?;
+            let idx = ctx.validator.get_global_func(idx)?;
             Ok((
                 ctx.reader.read_count() - start_count,
                 SortWithIdx::Func(idx),
@@ -104,13 +108,12 @@ pub fn parse_sort_with_idx(
         }
         0x03 => {
             let idx = parse_type_idx(ctx)?;
-            Ok((
-                ctx.reader.read_count() - start_count,
-                SortWithIdx::Type(idx),
-            ))
+            let ty = ctx.validator.get_type(idx)?;
+            Ok((ctx.reader.read_count() - start_count, SortWithIdx::Type(ty)))
         }
         0x04 => {
             let idx = parse_component_idx(ctx)?;
+            let idx = ctx.validator.get_global_component(idx)?;
             Ok((
                 ctx.reader.read_count() - start_count,
                 SortWithIdx::Component(idx),
@@ -118,6 +121,7 @@ pub fn parse_sort_with_idx(
         }
         0x05 => {
             let idx = parse_instance_idx(ctx)?;
+            let idx = ctx.validator.get_global_instance(idx)?;
             Ok((
                 ctx.reader.read_count() - start_count,
                 SortWithIdx::Instance(idx),

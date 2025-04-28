@@ -1,8 +1,10 @@
-use crate::component_model::{AliasType, ComponentType, CoreModuleType, CoreSort, CoreType, FuncType, Sort, Type, TypeIdx};
-use std::collections::HashMap;
+use crate::component_model::{
+    AliasType, ComponentType, CoreModuleType, CoreSort, CoreType, FuncType, Sort, Type, TypeIdx,
+};
 use crate::parser::component_model::ComponentParseError;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InstanceType {
     pub(crate) core_types: Vec<CoreType>,
     pub(crate) types: Vec<Type>,
@@ -19,15 +21,18 @@ impl InstanceType {
             exports: Default::default(),
         }
     }
-    
-    pub(crate) fn get_export_type(&self, name: &String) -> Result<&InstanceExportType, ComponentParseError> {
+
+    pub(crate) fn get_export_type(
+        &self,
+        name: &String,
+    ) -> Result<&InstanceExportType, ComponentParseError> {
         self.exports
             .get(name)
             .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InstanceExportType {
     CoreModule(CoreModuleType),
     Func(FuncType),

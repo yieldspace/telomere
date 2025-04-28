@@ -1,10 +1,10 @@
+use crate::component_model::{
+    CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, Func,
+    InlineComponent, Instance, InstanceType, Type,
+};
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use crate::component_model::{
-    ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule,
-    CoreTableRef, CoreType, InlineComponent, Instance, InstanceType, Type,
-};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -42,7 +42,10 @@ static GLOBAL_IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 impl<T> GlobalIdx<T> {
     pub fn new() -> Self {
-        Self(GLOBAL_IDX_COUNTER.fetch_add(1, Ordering::Relaxed), PhantomData)
+        Self(
+            GLOBAL_IDX_COUNTER.fetch_add(1, Ordering::Relaxed),
+            PhantomData,
+        )
     }
 }
 
@@ -88,40 +91,33 @@ pub struct CoreFuncIdx(usize);
 
 impl_idx!(CoreFuncIdx);
 
-
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct FuncIdx(usize);
 
 impl_idx!(FuncIdx);
-
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreMemoryIdx(usize);
 
 impl_idx!(CoreMemoryIdx);
 
-
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreTableIdx(usize);
 impl_idx!(CoreTableIdx);
 
-
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreGlobalIdx(usize);
 impl_idx!(CoreGlobalIdx);
-
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreTypeIdx(usize);
 
 impl_idx!(CoreTypeIdx);
 
-
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ComponentIdx(usize);
 
 impl_idx!(ComponentIdx);
-
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct InstanceIdx(usize);
@@ -131,7 +127,6 @@ impl_idx!(InstanceIdx);
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreModuleIdx(usize);
 impl_idx!(CoreModuleIdx);
-
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct CoreInstanceIdx(usize);

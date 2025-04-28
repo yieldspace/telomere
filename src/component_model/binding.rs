@@ -1,4 +1,7 @@
-use crate::component_model::{ComponentFunction, CoreFunction, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, ImportName, InlineComponent, Instance, InstanceIdx, Type};
+use crate::component_model::{
+    CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, CoreType, Func,
+    ImportName, InlineComponent, Instance, InstanceIdx, Type,
+};
 
 #[derive(Debug)]
 pub enum Binding<T, R = ()> {
@@ -45,12 +48,12 @@ pub enum InstanceReference {
 
 pub type CoreModuleBinding = Binding<CoreModule, CoreModuleReference>;
 pub type CoreInstanceBinding = Binding<CoreInstance>;
-pub type CoreFunctionBinding = Binding<CoreFunction>;
+pub type CoreFunctionBinding = Binding<CoreFunc>;
 pub type CoreTypeBinding = Binding<CoreType>;
 pub type CoreMemoryBinding = Binding<CoreMemoryRef>;
 pub type CoreTableBinding = Binding<CoreTableRef>;
 pub type CoreGlobalBinding = Binding<CoreGlobalRef>;
 pub type TypeBinding = Binding<Type>;
-pub type FunctionBinding = Binding<ComponentFunction, FuncReference>;
+pub type FunctionBinding = Binding<Func, FuncReference>;
 pub type ComponentBinding = Binding<InlineComponent, InlineComponentReference>;
 pub type InstanceBinding = Binding<Instance, InstanceReference>;

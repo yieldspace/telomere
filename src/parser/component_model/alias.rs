@@ -1,30 +1,34 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{AliasIdx, Binding, ComponentFunction, ComponentIdx, CoreExportSlot, CoreExportType, CoreFuncRef, CoreFunction, CoreGlobalRef, CoreInstance, CoreInstanceExportType, CoreMemoryRef, CoreModule, CoreModuleBinding, CoreModuleIdx, CoreModuleReference, CoreSort, CoreSortWithIdx, CoreTableRef, FuncReference, GlobalIdx, Idx, InlineComponent, InlineComponentReference, Instance, InstanceExportType, InstanceIdx, InstanceReference, Relation, Sort, SortWithIdx, TypeIdx};
-use crate::parser::component_model::{parse_core_instance_idx, parse_instance_idx, parse_instance_idx_resolved, parse_sort, ComponentParseError, ParseContext, ParseResult, SizedResult};
+use crate::component_model::{
+    AliasIdx, Binding, ComponentIdx, CoreExportType, CoreFunc, CoreFuncRef, CoreGlobalRef,
+    CoreInstance, CoreInstanceExportType, CoreMemoryRef, CoreModule, CoreModuleBinding,
+    CoreModuleIdx, CoreModuleReference, CoreSort, CoreSortWithIdx, CoreTableRef, Func,
+    FuncReference, GlobalIdx, Idx, InlineComponent, InlineComponentReference, Instance,
+    InstanceExportType, InstanceIdx, InstanceReference, Relation, Sort, SortWithIdx, TypeIdx,
+};
+use crate::parser::component_model::{
+    parse_core_instance_idx, parse_instance_idx, parse_sort, ComponentParseError, ParseContext,
+    ParseResult, SizedResult,
+};
 use crate::parser::core::{parse_name, parse_u32};
 
-pub fn parse_alias(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<AliasIdx> {
+pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<AliasIdx> {
     let start_count = ctx.reader.read_count();
 
     let (_, sort) = parse_sort(ctx)?;
     let idx: AliasIdx = match ctx.reader.read_exact_one()? {
-        0x00 => {
-            parse_export_alias(ctx, sort)?
-        }
-        0x01 => {
-            parse_core_export(ctx, sort)?
-        }
-        0x02 => {
-            parse_outer_export(ctx, sort)?
-        }
+        0x00 => parse_export_alias(ctx, sort)?,
+        0x01 => parse_core_export(ctx, sort)?,
+        0x02 => parse_outer_export(ctx, sort)?,
         _ => unreachable!("invalid"),
     };
     Ok((ctx.reader.read_count() - start_count, idx))
 }
 
-fn parse_export_alias(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> ParseResult<AliasIdx> {
+fn parse_export_alias(
+    ctx: &mut ParseContext<impl BinaryReader>,
+    sort: Sort,
+) -> ParseResult<AliasIdx> {
     let instance_idx = parse_instance_idx(ctx)?;
     let instance_global_idx = ctx.validator.get_global_instance(instance_idx)?;
     let instance = ctx.validator.get_instance_type(instance_idx)?;
@@ -42,7 +46,7 @@ fn parse_export_alias(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> 
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_module(
                 global_idx.clone(),
-                Relation::FromExport(instance_global_idx, name)
+                Relation::FromExport(instance_global_idx, name),
             );
             ctx.validator.register_global_core_module(idx, global_idx)?;
             AliasIdx::CoreModule
@@ -52,7 +56,7 @@ fn parse_export_alias(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> 
             let global_idx = GlobalIdx::new();
             ctx.state.register_func(
                 global_idx.clone(),
-            Relation::FromExport(instance_global_idx, name)
+                Relation::FromExport(instance_global_idx, name),
             );
             ctx.validator.register_global_func(idx, global_idx)?;
             AliasIdx::Func
@@ -68,7 +72,7 @@ fn parse_export_alias(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> 
             let global_idx = GlobalIdx::new();
             ctx.state.register_component(
                 global_idx.clone(),
-                Relation::FromExport(instance_global_idx, name)
+                Relation::FromExport(instance_global_idx, name),
             );
             ctx.validator.register_global_component(idx, global_idx)?;
             AliasIdx::Component
@@ -78,7 +82,7 @@ fn parse_export_alias(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> 
             let global_idx = GlobalIdx::new();
             ctx.state.register_instance(
                 global_idx.clone(),
-                Relation::FromExport(instance_global_idx, name)
+                Relation::FromExport(instance_global_idx, name),
             );
             ctx.validator.register_global_instance(idx, global_idx)?;
             AliasIdx::Instance
@@ -87,7 +91,10 @@ fn parse_export_alias(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> 
     Ok(idx)
 }
 
-fn parse_core_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> ParseResult<AliasIdx> {
+fn parse_core_export(
+    ctx: &mut ParseContext<impl BinaryReader>,
+    sort: Sort,
+) -> ParseResult<AliasIdx> {
     let core_inst_idx = parse_core_instance_idx(ctx)?;
     let core_inst_global_idx = ctx.validator.get_global_core_instance(core_inst_idx)?;
     let core_instance_type = ctx.validator.get_core_instance_type(core_inst_idx)?;
@@ -102,7 +109,7 @@ fn parse_core_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> P
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_memory(
                 global_idx.clone(),
-                CoreMemoryRef(core_inst_global_idx, name)
+                CoreMemoryRef(core_inst_global_idx, name),
             );
             ctx.validator.register_global_core_memory(idx, global_idx)?;
             Ok(AliasIdx::CoreMemory)
@@ -110,10 +117,8 @@ fn parse_core_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> P
         CoreInstanceExportType::Table(name, ty) => {
             let idx = ctx.validator.add_core_table_type(ty)?;
             let global_idx = GlobalIdx::new();
-            ctx.state.register_core_table(
-                global_idx.clone(),
-                CoreTableRef(core_inst_global_idx, name)
-            );
+            ctx.state
+                .register_core_table(global_idx.clone(), CoreTableRef(core_inst_global_idx, name));
             ctx.validator.register_global_core_table(idx, global_idx)?;
             Ok(AliasIdx::CoreTable)
         }
@@ -122,7 +127,7 @@ fn parse_core_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> P
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_func(
                 global_idx.clone(),
-                Relation::FromCoreExport(core_inst_global_idx, name)
+                Relation::FromCoreExport(core_inst_global_idx, name),
             );
             ctx.validator.register_global_core_func(idx, global_idx)?;
             Ok(AliasIdx::CoreFunc)
@@ -132,7 +137,7 @@ fn parse_core_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> P
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_global(
                 global_idx.clone(),
-                CoreGlobalRef(core_inst_global_idx, name)
+                CoreGlobalRef(core_inst_global_idx, name),
             );
             ctx.validator.register_global_core_global(idx, global_idx)?;
             Ok(AliasIdx::CoreGlobal)
@@ -140,7 +145,10 @@ fn parse_core_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> P
     }
 }
 
-fn parse_outer_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> ParseResult<AliasIdx> {
+fn parse_outer_export(
+    ctx: &mut ParseContext<impl BinaryReader>,
+    sort: Sort,
+) -> ParseResult<AliasIdx> {
     let (_, ct) = parse_u32(ctx.reader)?;
     let (_, idx) = parse_u32(ctx.reader)?;
     match sort {
@@ -168,9 +176,7 @@ fn parse_outer_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> 
                     "Outer alias type cannot be a resource type".to_string(),
                 ));
             }
-            ctx.validator.add_type(
-                ty
-            )?;
+            ctx.validator.add_type(ty)?;
             Ok(AliasIdx::Type)
         }
         Sort::Component => {
@@ -181,7 +187,7 @@ fn parse_outer_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> 
                 let super_global_idx = outer.get_global_component(super_idx)?;
                 (super_type, super_global_idx)
             };
-            
+
             let idx = ctx.validator.add_component_type(ty)?;
             ctx.validator.register_global_component(idx, global_idx)?;
             Ok(AliasIdx::Component)
@@ -198,11 +204,9 @@ fn parse_outer_export(ctx: &mut ParseContext<impl BinaryReader>, sort: Sort) -> 
             ctx.validator.register_global_instance(idx, global_idx)?;
             Ok(AliasIdx::Instance)
         }
-        _ => {
-            Err(ComponentParseError::InvalidSort(
-                sort,
-                "Core Module, Type, Component or Instance".to_string(),
-            ))
-        }
+        _ => Err(ComponentParseError::InvalidSort(
+            sort,
+            "Core Module, Type, Component or Instance".to_string(),
+        )),
     }
 }

@@ -1,5 +1,6 @@
 mod binding;
 mod canon;
+mod compiled;
 mod component;
 mod core;
 mod func;
@@ -7,10 +8,10 @@ mod idx;
 mod instance;
 mod sort;
 mod types;
-mod compiled;
 
 pub use binding::*;
 pub use canon::*;
+pub use compiled::{CompiledState, Relation};
 pub use component::*;
 pub use core::*;
 pub use func::*;
@@ -18,7 +19,6 @@ pub use idx::*;
 pub use instance::*;
 pub use sort::*;
 pub use types::*;
-pub use compiled::{CompiledState, Relation};
 
 #[derive(Clone)]
 pub enum Slot<T, I: Idx> {
@@ -38,7 +38,7 @@ impl<T, I: Idx> From<Slot<T, I>> for Binding<T> {
 pub type ExportName = String;
 pub type ImportName = String;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Reference {
     Instance(InstanceIdx, ExportName),
     Component(ComponentIdx, ExportName),
@@ -111,7 +111,7 @@ impl FlattenComponent {
         }
     }
 
-    pub fn get_core_function(&self, idx: usize) -> &CoreFunction {
+    pub fn get_core_function(&self, idx: usize) -> &CoreFunc {
         match self
             .core_functions
             .get(idx)
@@ -123,7 +123,7 @@ impl FlattenComponent {
         }
     }
 
-    pub fn get_function(&self, idx: usize) -> &ComponentFunction {
+    pub fn get_function(&self, idx: usize) -> &Func {
         match self
             .functions
             .get(idx)

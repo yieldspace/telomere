@@ -6,14 +6,16 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueBound;
 use crate::component_model::{
-    Case, ComponentFunction, ComponentIdx, CoreModule, CoreModuleIdx, CoreType, CoreTypeIdx,
-    DefValType, ExportDecl, ExternDesc, FuncIdx, FuncType, ImportDecl, InlineComponent, Instance,
-    InstanceIdx, Label, LabelValType, PrimValType, ResourceType, Type,
-    TypeBound, TypeIdx, ValType,
+    Case, ComponentIdx, CoreModule, CoreModuleIdx, CoreType, CoreTypeIdx, DefValType, ExportDecl,
+    ExternDesc, Func, FuncIdx, FuncType, ImportDecl, InlineComponent, Instance, InstanceIdx, Label,
+    LabelValType, PrimValType, ResourceType, Type, TypeBound, TypeIdx, ValType,
 };
 use crate::parser::component_model::export::parse_export_name_dash;
 use crate::parser::component_model::import::parse_import_name_dash;
-use crate::parser::component_model::{parse_core_type_idx, parse_func_idx, parse_option, parse_type_idx, parse_type_idx_resolved, ComponentParseError, ParseContext, ParseResult, SizedResult, Validator};
+use crate::parser::component_model::{
+    parse_core_type_idx, parse_func_idx, parse_option, parse_type_idx, ComponentParseError,
+    ParseContext, ParseResult, SizedResult, Validator,
+};
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
 pub use component::*;
@@ -69,11 +71,7 @@ fn is_type_opcode(opcode: i32) -> bool {
     opcode <= -1
 }
 
-pub fn parse_type(
-    ctx: &mut ParseContext<
-        impl BinaryReader,
-    >,
-) -> SizedResult<Type> {
+pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type> {
     let start_count = ctx.reader.read_count();
     let (_, opcode) = parse_i32(ctx.reader)?;
 
@@ -100,7 +98,11 @@ pub fn parse_type(
             Type::DefVal(Box::from(DefValType::List(valtype, Some(len as usize))))
         }
         DEFVALTYPE_TUPLE => {
-            let (_, types) = parse_vec(ctx, |v| v.reader, |ctx| SizedResult::Ok((0, parse_valtype(ctx)?)))?;
+            let (_, types) = parse_vec(
+                ctx,
+                |v| v.reader,
+                |ctx| SizedResult::Ok((0, parse_valtype(ctx)?)),
+            )?;
             Type::DefVal(Box::from(DefValType::Tuple(types)))
         }
         DEFVALTYPE_FLAGS => {
@@ -131,12 +133,12 @@ pub fn parse_type(
             Type::DefVal(Box::from(DefValType::Result(t, u)))
         }
         DEFVALTYPE_OWN => {
-            let ty = parse_type_idx_resolved(ctx)?;
-            Type::DefVal(Box::from(DefValType::Own(ty)))
+            let idx = parse_type_idx(ctx)?;
+            Type::DefVal(Box::from(DefValType::Own(ctx.validator.get_type(idx)?)))
         }
         DEFVALTYPE_BORROW => {
-            let ty = parse_type_idx_resolved(ctx)?;
-            Type::DefVal(Box::from(DefValType::Borrow(ty)))
+            let idx = parse_type_idx(ctx)?;
+            Type::DefVal(Box::from(DefValType::Borrow(ctx.validator.get_type(idx)?)))
         }
         #[cfg(feature = "component-gated-feature-async")]
         DEFVALTYPE_STREAM => {
@@ -159,16 +161,25 @@ pub fn parse_type(
         COMPONENT_TYPE => Type::Component(parse_component_type(ctx)?.1),
         INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?.1),
         RESOURCE_TYPE => {
-            let func = parse_option(ctx, parse_func_idx)?;
-            Type::Resource(ResourceType::Resource(func.map(|x| x.ty)))
+            if let Some(idx) = parse_option(ctx, parse_func_idx)? {
+                Type::Resource(ResourceType::Resource(Some(
+                    ctx.validator.get_func_type(idx)?,
+                )))
+            } else {
+                Type::Resource(ResourceType::Resource(None))
+            }
         }
         RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
-            let func = parse_func_idx(ctx)?;
-            let cb = parse_option(ctx, parse_func_idx)?;
-            Type::Resource(ResourceType::ResourceWithAsyncCallback(
-                func.ty,
-                cb.map(|x| x.ty),
-            ))
+            let func = {
+                let idx = parse_func_idx(ctx)?;
+                ctx.validator.get_func_type(idx)?
+            };
+            let cb = if let Some(idx) = parse_option(ctx, parse_func_idx)? {
+                Some(ctx.validator.get_func_type(idx)?)
+            } else {
+                None
+            };
+            Type::Resource(ResourceType::ResourceWithAsyncCallback(func, cb))
         }
         _ => unreachable!(),
     };
@@ -177,9 +188,7 @@ pub fn parse_type(
     Ok((ctx.reader.read_count() - start_count, ty))
 }
 
-pub fn parse_resultlist<
-    R: BinaryReader,
->(
+pub fn parse_resultlist<R: BinaryReader>(
     ctx: &mut ParseContext<R>,
 ) -> SizedResult<Option<ValType>> {
     let start_count = ctx.reader.read_count();
@@ -205,11 +214,7 @@ pub fn parse_resultlist<
     Ok((ctx.reader.read_count() - start_count, t))
 }
 
-fn parse_label_valtype<
-    R: BinaryReader,
->(
-    ctx: &mut ParseContext<R>,
-) -> SizedResult<LabelValType> {
+fn parse_label_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<LabelValType> {
     let start_count = ctx.reader.read_count();
     let (_, l) = parse_label_dash(ctx)?;
     let ty = LabelValType {
@@ -219,11 +224,7 @@ fn parse_label_valtype<
     Ok((ctx.reader.read_count() - start_count, ty))
 }
 
-fn parse_case<
-    R: BinaryReader,
->(
-    ctx: &mut ParseContext<R>,
-) -> SizedResult<Case> {
+fn parse_case<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Case> {
     let start_count = ctx.reader.read_count();
     let (_, l) = parse_label_dash(ctx)?;
     let t = parse_option(ctx, parse_valtype)?;
@@ -231,32 +232,24 @@ fn parse_case<
     Ok((ctx.reader.read_count() - start_count, Case { label: l, t }))
 }
 
-fn parse_valtype<
-    R: BinaryReader,
->(
-    ctx: &mut ParseContext<R>,
-) -> ParseResult<ValType> {
+fn parse_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ValType> {
     let start_count = ctx.reader.read_count();
     let (_, value) = parse_i32(ctx.reader)?;
     if is_type_opcode(value) {
         Ok(ValType::Primitive(PrimValType::from_i32(value).unwrap()))
     } else {
-        Ok(ValType::Type(ctx.validator.validate_idx_resolved(value as u32)?))
+        Ok(ValType::Type(ctx.validator.get_type(
+            ctx.validator.validate_type_idx(value as u32)?,
+        )?))
     }
 }
 
-fn parse_label_dash<R: BinaryReader>(
-    ctx: &mut ParseContext<R>,
-) -> SizedResult<Label> {
+fn parse_label_dash<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Label> {
     let (len, label) = parse_name(ctx.reader)?;
     Ok((len, Label { len, label }))
 }
 
-fn parse_import_decl<
-    R: BinaryReader,
->(
-    ctx: &mut ParseContext<R>,
-) -> SizedResult<ImportDecl> {
+fn parse_import_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ImportDecl> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_import_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;
@@ -266,11 +259,7 @@ fn parse_import_decl<
     ))
 }
 
-pub fn parse_externdesc<
-    R: BinaryReader,
->(
-    ctx: &mut ParseContext<R>,
-) -> ParseResult<ExternDesc> {
+pub fn parse_externdesc<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ExternDesc> {
     let start_count = ctx.reader.read_count();
     let desc = match ctx.reader.read_exact_one()? {
         0x00 => {
@@ -279,11 +268,13 @@ pub fn parse_externdesc<
                 [0x00],
                 "extern desc",
             )?;
-            let ty = parse_core_type_idx_resolved(ctx)?;
+            let idx = parse_core_type_idx(ctx)?;
+            let ty = ctx.validator.get_core_type(idx)?;
             ExternDesc::CoreModule(ty.try_into()?)
         }
         0x01 => {
-            let ty = parse_type_idx_resolved(ctx)?;
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_type(idx)?;
             ExternDesc::Func(ty.try_into()?)
         }
         #[cfg(feature = "component-gated-feature-value-imports-exports")]
@@ -296,11 +287,13 @@ pub fn parse_externdesc<
             ExternDesc::Type(b)
         }
         0x04 => {
-            let ty = parse_type_idx_resolved(ctx)?;
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_type(idx)?;
             ExternDesc::Component(ty.try_into()?)
         }
         0x05 => {
-            let ty = parse_type_idx_resolved(ctx)?;
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_type(idx)?;
             ExternDesc::Instance(ty.try_into()?)
         }
         _ => todo!(),
@@ -308,13 +301,12 @@ pub fn parse_externdesc<
     Ok(desc)
 }
 
-fn parse_typebound<R: BinaryReader>(
-    ctx: &mut ParseContext<R>,
-) -> SizedResult<Type> {
+fn parse_typebound<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Type> {
     let start_count = ctx.reader.read_count();
     let bound = match ctx.reader.read_exact_one()? {
         0x00 => {
-            let ty = parse_type_idx_resolved(ctx)?;
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_type(idx)?;
             ty
         }
         0x01 => {
@@ -327,9 +319,7 @@ fn parse_typebound<R: BinaryReader>(
 }
 
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
-fn parse_valuebound(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<ValueBound> {
+fn parse_valuebound(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ValueBound> {
     let start_count = ctx.reader.read_count();
     let bound = match ctx.reader.read_exact_one()? {
         0x00 => {
@@ -345,9 +335,7 @@ fn parse_valuebound(
     Ok((ctx.reader.read_count() - start_count, bound))
 }
 
-fn parse_export_decl<R: BinaryReader>(
-    ctx: &mut ParseContext<R>,
-) -> SizedResult<ExportDecl> {
+fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ExportDecl> {
     let start_count = ctx.reader.read_count();
     let (_, en) = parse_export_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;

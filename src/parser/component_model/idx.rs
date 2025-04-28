@@ -2,56 +2,31 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueIdx;
 use crate::component_model::{
-    ComponentFunction, ComponentIdx, FuncIdx, InlineComponent, Instance, InstanceIdx,
-    Type, TypeIdx,
+    ComponentIdx, Func, FuncIdx, InlineComponent, Instance, InstanceIdx, Type, TypeIdx,
 };
 use crate::parser::component_model::context::ParseContext;
-use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
 use crate::parser::component_model::validator::LocalIdx;
+use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
 use crate::parser::core::parse_u32;
 
-pub fn parse_component_idx(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<LocalIdx> {
+pub fn parse_component_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx> {
     let (_, idx) = parse_u32(ctx.reader)?;
-    Ok(ctx.validator.validate_local_idx(idx)?)
+    Ok(ctx.validator.validate_component_idx(idx)?)
 }
 
-pub fn parse_func_idx(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<LocalIdx> {
+pub fn parse_func_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx> {
     let (_, idx) = parse_u32(ctx.reader)?;
-    Ok(ctx.validator.validate_local_idx(idx)?)
+    Ok(ctx.validator.validate_func_idx(idx)?)
 }
 
-pub fn parse_type_idx(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<LocalIdx> {
+pub fn parse_type_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx> {
     let (_, idx) = parse_u32(ctx.reader)?;
-    Ok(ctx.validator.validate_local_idx(idx)?)
+    Ok(ctx.validator.validate_type_idx(idx)?)
 }
 
-pub fn parse_type_idx_resolved(
-    ctx: &mut ParseContext<
-        impl BinaryReader,
-    >,
-) -> ParseResult<LocalIdx> {
+pub fn parse_instance_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx> {
     let (_, idx) = parse_u32(ctx.reader)?;
-    Ok(ctx.validator.validate_idx_resolved(idx)?)
-}
-
-pub fn parse_instance_idx(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<LocalIdx> {
-    let (_, idx) = parse_u32(ctx.reader)?;
-    Ok(ctx.validator.validate_local_idx(idx)?)
-}
-
-pub fn parse_instance_idx_resolved(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<LocalIdx> {
-    let (_, idx) = parse_u32(ctx.reader)?;
-    Ok(ctx.validator.validate_idx_resolved(idx)?)
+    Ok(ctx.validator.validate_instance_idx(idx)?)
 }
 
 #[cfg(feature = "component-gated-feature-value-imports-exports")]

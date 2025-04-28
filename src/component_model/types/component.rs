@@ -4,7 +4,7 @@ use crate::component_model::{
 };
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComponentType {
     pub(crate) imports: HashMap<String, ComponentImportType>,
     pub(crate) exports: HashMap<String, ComponentExportType>,
@@ -25,10 +25,10 @@ impl ComponentType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComponentExportType {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ComponentImportType {
     CoreModule(CoreModuleType),
     Func(FuncType),

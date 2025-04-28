@@ -14,7 +14,7 @@ pub use instance::*;
 pub use section::*;
 pub use sort::*;
 pub use types::*;
-pub use validator::{Validator, LocalStore};
+pub use validator::{LocalStore, Validator};
 
 mod alias;
 mod canon;

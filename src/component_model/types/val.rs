@@ -1,12 +1,12 @@
 use crate::component_model::{Case, Label, LabelValType, PrimValType, Type, TypeIdx};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ValType {
     Type(Type),
     Primitive(PrimValType),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DefValType {
     Primitive(PrimValType),
     Record(Vec<LabelValType>),

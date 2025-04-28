@@ -1,9 +1,9 @@
-use crate::component_model::{CanonOpt, CoreFuncIdx, CoreFunction, FuncType, GlobalIdx, TypeIdx};
+use crate::component_model::{CanonOpt, CoreFunc, CoreFuncIdx, FuncType, GlobalIdx, TypeIdx};
 
 #[derive(Clone)]
-pub enum ComponentFunction {
+pub enum Func {
     CanonLift {
-        core_func_idx: GlobalIdx<CoreFunction>,
+        core_func_idx: GlobalIdx<CoreFunc>,
         opts: Vec<CanonOpt>,
         ty: FuncType,
     },

@@ -1,11 +1,11 @@
 mod alias;
 mod component;
 mod func;
+mod idx;
 mod instance;
 mod prim;
 mod resource;
 mod val;
-mod idx;
 
 use crate::component_model::{Reference, TypeIdx};
 use crate::parser::component_model::ComponentParseError;
@@ -34,7 +34,7 @@ macro_rules! impl_try_into_type {
     };
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     DefVal(Box<DefValType>),
     Func(FuncType),

@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::CompiledState;
-use crate::parser::component_model::validator::{Validator};
+use crate::parser::component_model::validator::Validator;
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 
 pub struct ParseContext<'a, R>

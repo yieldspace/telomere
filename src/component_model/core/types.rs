@@ -1,21 +1,22 @@
-use std::collections::HashMap;
 use crate::common::ExportDesc;
-use crate::component_model::{CoreExportSlot, CoreGlobalIdx, CoreGlobalRef, CoreInstanceIdx, CoreInstanceInlineExport, CoreMemoryIdx, CoreMemoryRef, CoreSort, CoreTableIdx, CoreTableRef, CoreTypeIdx, CoreTypeRef};
+use crate::component_model::{
+    CoreGlobalIdx, CoreGlobalRef, CoreInstanceIdx, CoreInstanceInlineExport, CoreMemoryIdx,
+    CoreMemoryRef, CoreSort, CoreTableIdx, CoreTableRef, CoreTypeIdx, CoreTypeRef,
+};
 use crate::parser::component_model::ComponentParseError;
 use crate::Module;
+use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CoreType {
     Ref(CoreTypeRef),
     ModuleType(CoreModuleType),
 }
 
 #[derive(Debug, Clone)]
-pub enum CoreAlias {
-    
-}
+pub enum CoreAlias {}
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CoreModuleType {
     pub(crate) imports: Vec<crate::common::Import>,
     pub(crate) types: Vec<CoreType>,

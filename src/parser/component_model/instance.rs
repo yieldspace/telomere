@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Binding, Idx, InlineExport, Instance, InstanceIdx, InstanceValue, InstantiateArg,
+    Binding, GlobalIdx, Idx, InlineExport, Instance, InstanceIdx, InstantiateArg, Relation,
     SortWithIdx,
 };
 use crate::parser::component_model::context::ParseContext;
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 pub fn parse_instance(
     ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<InstanceIdx> {
+) -> SizedResult<GlobalIdx<Instance>> {
     let start_count = ctx.reader.read_count();
 
     match ctx.reader.read_exact_one()? {
@@ -27,48 +27,49 @@ pub fn parse_instance(
                 .into_iter()
                 .map(|InstantiateArg { name, sort }| (name, sort))
                 .collect::<HashMap<String, SortWithIdx>>();
-            let component = ctx.validator.resolve_idx(&component_idx)?;
-            if args.len() != component.ty.imports.len() {
+            let component = ctx.validator.get_component_type(component_idx)?;
+            if args.len() != component.imports.len() {
                 return Err(ComponentParseError::InvalidSignature(format!(
                     "Invalid number of args: {}",
                     args.len()
                 )));
             }
             let mut exports = HashMap::new();
-            for (export_name, ty) in component.ty.exports.iter() {
+            for (export_name, ty) in component.exports.iter() {
                 // todo: check ty and arg type
                 let arg = args.get(export_name).expect("export not found");
                 exports.insert(export_name.clone(), arg.clone());
             }
-            let value = InstanceValue {
-                component_idx: Some(component_idx),
+            let value = Instance {
+                component_idx: Some(ctx.validator.get_global_component(component_idx)?),
                 args,
                 exports,
             };
-            let ty = value.get_type();
-            let idx = ctx
-                .validator
-                .state
-                .add_instance(Binding::Real(Instance::new(Some(value), ty)))?;
-            ctx.push_instr(InstantiateInstr {
-                op: instantiate_instance_start,
-            });
-            ctx.push_instr(InstantiateInstr {
-                operand: InstantiateOperand {
-                    instance_idx: idx.global(),
-                },
-            });
+            let ty = value.as_type();
+            let idx = ctx.validator.add_instance_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state
+                .register_instance(global_idx, Relation::Defined(value));
+            ctx.validator.register_global_instance(idx, global_idx)?;
+            // ctx.push_instr(InstantiateInstr {
+            //     op: instantiate_instance_start,
+            // });
+            // ctx.push_instr(InstantiateInstr {
+            //     operand: InstantiateOperand {
+            //         instance_idx: idx.global(),
+            //     },
+            // });
             // todo: instantiateしている間にやる
             // let instrs = ctx.validator.get_component(&component_idx).instrs.clone();
             // ctx.extend_instr(instrs.into_iter());
-            ctx.push_instr(InstantiateInstr {
-                op: instantiate_instance_end,
-            });
-            Ok((ctx.reader.read_count() - start_count, idx))
+            // ctx.push_instr(InstantiateInstr {
+            //     op: instantiate_instance_end,
+            // });
+            Ok((ctx.reader.read_count() - start_count, global_idx))
         }
         0x01 => {
             let (_, exports) = parse_vec(ctx, |v| v.reader, parse_inlineexport)?;
-            let value = InstanceValue {
+            let value = Instance {
                 component_idx: None,
                 args: Default::default(),
                 exports: exports
@@ -76,28 +77,27 @@ pub fn parse_instance(
                     .map(|InlineExport { name, sort }| (name, sort))
                     .collect(),
             };
-            let ty = value.get_type();
-            let idx = ctx
-                .validator
-                .state
-                .add_instance(Binding::Real(Instance::new(Some(value), ty)))?;
-            ctx.push_instr(InstantiateInstr {
-                op: instantiate_inline_instance,
-            });
-            ctx.push_instr(InstantiateInstr {
-                operand: InstantiateOperand {
-                    instance_idx: idx.global(),
-                },
-            });
-            Ok((ctx.reader.read_count() - start_count, idx))
+            let ty = value.as_type();
+            let idx = ctx.validator.add_instance_type(ty)?;
+            let global_idx = GlobalIdx::new();
+            ctx.state
+                .register_instance(global_idx, Relation::Defined(value));
+            ctx.validator.register_global_instance(idx, global_idx)?;
+            // ctx.push_instr(InstantiateInstr {
+            //     op: instantiate_inline_instance,
+            // });
+            // ctx.push_instr(InstantiateInstr {
+            //     operand: InstantiateOperand {
+            //         instance_idx: idx.global(),
+            //     },
+            // });
+            Ok((ctx.reader.read_count() - start_count, global_idx))
         }
         _ => unreachable!(),
     }
 }
 
-fn parse_instantiate_arg(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<InstantiateArg> {
+fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstantiateArg> {
     let start_count = ctx.reader.read_count();
 
     let (_, name) = parse_name(ctx.reader)?;
@@ -108,9 +108,7 @@ fn parse_instantiate_arg(
     ))
 }
 
-fn parse_inlineexport(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<InlineExport> {
+fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InlineExport> {
     let start_count = ctx.reader.read_count();
 
     let (_, name) = parse_name(ctx.reader)?;
