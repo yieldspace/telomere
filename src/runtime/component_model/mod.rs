@@ -6,7 +6,7 @@ mod func;
 pub mod instantiate;
 mod linker;
 
-use crate::common::InstanceAddr;
+use crate::common::InstanceHandle;
 use crate::runtime::component_model::instantiate::{
     instantiate_next, InstantiateContext, InstantiateInstr,
 };

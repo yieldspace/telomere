@@ -8,7 +8,7 @@ fn test_basic_component() {
         .with_max_level(Level::TRACE)
         .init();
 
-    let _component = r#"
+    let component = r#"
        (component
           (type (;0;)
             (instance
@@ -21,7 +21,7 @@ fn test_basic_component() {
           (alias export 0 "exit" (func (;0;)))
        )
     "#;
-    let binary = wat::parse_str(std::fs::read_to_string("foo.wat").unwrap()).unwrap();
+    let binary = wat::parse_str(component).unwrap();
     // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     let mut instrs = Vec::new();
@@ -33,7 +33,7 @@ fn test_basic_component() {
     let instance =
         telomere::runtime::component_model::instantiate(&mut instrs, &mut store, &linker).unwrap();
     println!("{:?}", instance);
-}*/
+}
 
 /*#[test]
 fn test_with_core_wasm() {

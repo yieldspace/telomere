@@ -1,8 +1,5 @@
 use crate::common::ExportDesc;
-use crate::component_model::{
-    CoreInstanceInlineExportType, CoreSort,
-    CoreTypeRef, ExternDesc,
-};
+use crate::component_model::{CoreInstanceInlineExportType, CoreSort, CoreTypeRef, ExternDesc};
 use crate::parser::component_model::ComponentParseError;
 use crate::Module;
 use std::collections::HashMap;

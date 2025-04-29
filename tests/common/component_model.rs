@@ -17,8 +17,7 @@ pub fn run_component_wast(text: &str) {
                 let mut instrs = Vec::new();
                 let validator = Validator::new();
                 let mut state = telomere::component_model::CompiledState::new();
-                let mut ctx =
-                    ParseContext::new(&mut reader, &mut instrs, validator, &mut state);
+                let mut ctx = ParseContext::new(&mut reader, &mut instrs, validator, &mut state);
                 if let Err(v) = telomere::parser::component_model::parse_component(&mut ctx) {
                     panic!("{:?} {:?}", span.linecol_in(text), v);
                 }

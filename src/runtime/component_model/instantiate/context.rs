@@ -1,4 +1,4 @@
-use crate::common::InstanceAddr;
+use crate::common::InstanceHandle;
 use crate::component_model::{CoreModule, GlobalIdx, Instance};
 use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
 use crate::{Module, Registry, Store};
@@ -8,9 +8,9 @@ pub struct InstantiateContext<'a> {
     pub current: Option<usize>,
     pub(crate) store: &'a mut Store,
     pub instantiated: &'a mut ComponentInstantiated,
-    pub core_functions: Vec<(InstanceAddr, String)>,
-    pub core_memories: Vec<(InstanceAddr, String)>,
-    pub core_tables: Vec<(InstanceAddr, String)>,
+    pub core_functions: Vec<(InstanceHandle, String)>,
+    pub core_memories: Vec<(InstanceHandle, String)>,
+    pub core_tables: Vec<(InstanceHandle, String)>,
     pub resolved_imports: HashMap<ResolvedImportKey, ResolvedImportMap>,
     pub instances: HashMap<usize, InstantiatedInstance>,
     pub linker: &'a Linker,

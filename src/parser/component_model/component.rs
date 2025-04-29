@@ -13,7 +13,8 @@ use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::{
-    parse_alias, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version, Validator,
+    parse_alias, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,
+    Validator,
 };
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};

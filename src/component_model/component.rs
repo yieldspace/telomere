@@ -1,6 +1,6 @@
 use crate::component_model::{
-    ComponentType, CoreModule, CoreModuleType, Func, FuncType, GlobalIdx,
-    Instance, InstanceType, Type,
+    ComponentType, CoreModule, CoreModuleType, Func, FuncType, GlobalIdx, Instance, InstanceType,
+    Type,
 };
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 use std::collections::HashMap;

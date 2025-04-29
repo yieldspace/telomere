@@ -1,7 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreInstance, CoreInstanceInlineExport, CoreInstanceInlineExportType,
-    CoreInstanceType, CoreSort, GlobalIdx, Instance, InstanceType,
+    CoreInstance, CoreInstanceInlineExport, CoreInstanceInlineExportType, CoreInstanceType,
+    CoreSort, GlobalIdx, Instance, InstanceType,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_core_module_idx};
