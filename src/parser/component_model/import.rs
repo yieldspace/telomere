@@ -5,52 +5,6 @@ use crate::parser::component_model::{
 };
 use crate::parser::core::parse_name;
 
-// fn parse_externdesc_import(
-//     ctx: &mut ParseContext<impl BinaryReader>,
-// ) -> SizedResult<ExternDesc> {
-//     let start_count = ctx.reader.read_count();
-//     let start_count = ctx.reader.read_count();
-//     let desc = match ctx.reader.read_exact_one()? {
-//         0x00 => {
-//             ComponentParseError::assert_magic(
-//                 [ctx.reader.read_exact_one()?],
-//                 [0x00],
-//                 "extern desc",
-//             )?;
-//             let idx = parse_core_type_idx(ctx)?;
-//             let ty = ctx.validator.get_core_type(idx)?;
-//             ExternDesc::CoreModule(ty.try_into()?)
-//         }
-//         0x01 => {
-//             let idx = parse_type_idx(ctx)?;
-//             let ty = ctx.validator.get_type(idx)?;
-//             ExternDesc::Func(ty.try_into()?)
-//         }
-//         #[cfg(feature = "component-gated-feature-value-imports-exports")]
-//         0x02 => {
-//             let (_, b) = crate::parser::component_model::types::parse_valuebound(ctx)?;
-//             ExternDesc::Value(b)
-//         }
-//         0x03 => {
-//             // let (_, b) = crate::parser::component_model::types::parse_typebound(ctx)?;
-//             // ExternDesc::Type(b)
-//             todo!()
-//         }
-//         0x04 => {
-//             let idx = parse_type_idx(ctx)?;
-//             let ty = ctx.validator.get_type(idx)?;
-//             ExternDesc::Component(ty.try_into()?)
-//         }
-//         0x05 => {
-//             let idx = parse_type_idx(ctx)?;
-//             let ty = ctx.validator.get_type(idx)?;
-//             ExternDesc::Instance(ty.try_into()?)
-//         }
-//         _ => todo!(),
-//     };
-//     Ok((ctx.reader.read_count() - start_count, desc))
-// }
-
 pub fn parse_import(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<(String, ComponentImport)> {
@@ -67,7 +21,7 @@ pub fn parse_import(
             // ctx.push_instr(InstantiateInstr {
             //     op: instantiate_import_core_module,
             // });
-            ComponentImport::CoreModule(global_idx)
+            ComponentImport::CoreModule(ty, global_idx)
         }
         ExternDesc::Func(ty) => {
             let idx = ctx.validator.add_func_type(ty.clone())?;
@@ -75,7 +29,7 @@ pub fn parse_import(
             ctx.state
                 .register_func(global_idx.clone(), Relation::Import(name.clone()));
             ctx.validator.register_global_func(idx, global_idx)?;
-            ComponentImport::Func(global_idx)
+            ComponentImport::Func(ty, global_idx)
         }
         #[cfg(feature = "component-gated-feature-value-imports-exports")]
         ExternDesc::Value(_) => todo!(),
@@ -99,7 +53,7 @@ pub fn parse_import(
             ctx.state
                 .register_component(global_idx.clone(), Relation::Import(name.clone()));
             ctx.validator.register_global_component(idx, global_idx)?;
-            ComponentImport::Component(global_idx)
+            ComponentImport::Component(ty, global_idx)
         }
         ExternDesc::Instance(ty) => {
             let idx = ctx.validator.add_instance_type(ty.clone())?;
@@ -107,7 +61,7 @@ pub fn parse_import(
             ctx.state
                 .register_instance(global_idx.clone(), Relation::Import(name.clone()));
             ctx.validator.register_global_instance(idx, global_idx)?;
-            ComponentImport::Instance(global_idx)
+            ComponentImport::Instance(ty, global_idx)
         }
     };
     Ok((name, import))

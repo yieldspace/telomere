@@ -1,5 +1,7 @@
+use crate::common::{ResultType as CoreResultType, ResultType, ValType as CoreValType};
+use crate::component_model::flatten::Flattenable;
 use crate::component_model::{
-    CoreFunc, CoreFuncType, CoreMemoryRef, FuncType, GlobalIdx, ResourceType,
+    CoreFunc, CoreFuncType, CoreMemoryRef, FuncType, GlobalIdx, ResourceType, ValType,
 };
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::{CoreTableIdx, ValType};
@@ -97,18 +99,34 @@ pub trait CanonicalFuncType {
 
 impl CanonicalFuncType for CoreFuncType {
     fn canon_lower(ty: FuncType) -> Self {
-        todo!()
+        let FuncType { params, result } = ty;
+        let params = params
+            .into_iter()
+            .map(|param| param.t.flat())
+            .flatten()
+            .collect::<Vec<_>>();
+        let result = result.map(|x| x.flat()).unwrap_or_default();
+        Self(ResultType(params), ResultType(result))
     }
 
     fn canon_resource_new(ty: ResourceType) -> Self {
-        todo!()
+        Self(
+            CoreResultType(vec![CoreValType::I32]),
+            CoreResultType(vec![CoreValType::I32]),
+        )
     }
 
     fn canon_resource_drop(ty: ResourceType) -> Self {
-        todo!()
+        Self(
+            CoreResultType(vec![CoreValType::I32]),
+            CoreResultType(vec![CoreValType::I32]),
+        )
     }
 
     fn canon_resource_rep(ty: ResourceType) -> Self {
-        todo!()
+        Self(
+            CoreResultType(vec![CoreValType::I32]),
+            CoreResultType(vec![CoreValType::I32]),
+        )
     }
 }

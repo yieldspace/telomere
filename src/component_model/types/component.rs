@@ -1,13 +1,14 @@
 use crate::component_model::{
-    CoreModuleType, CoreType, FuncType, GlobalIdx, ImportDecl, Instance, InstanceDecl,
+    CoreModuleType, CoreType, ExternDesc, FuncType, GlobalIdx, ImportDecl, Instance, InstanceDecl,
     InstanceType, Type,
 };
+use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComponentType {
-    pub(crate) imports: HashMap<String, ComponentImportType>,
-    pub(crate) exports: HashMap<String, ComponentExportType>,
+    pub(crate) imports: HashMap<String, ExternDesc>,
+    pub(crate) exports: HashMap<String, ExternDesc>,
     pub(crate) core_types: Vec<GlobalIdx<CoreType>>,
     pub(crate) types: Vec<Type>,
     pub(crate) instances: Vec<GlobalIdx<Instance>>,
@@ -25,18 +26,18 @@ impl ComponentType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ComponentExportType {}
+impl TryFrom<ExternDesc> for ComponentType {
+    type Error = ComponentParseError;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ComponentImportType {
-    CoreModule(CoreModuleType),
-    Func(FuncType),
-    #[cfg(feature = "component-gated-feature-value-imports-exports")]
-    Value(crate::component_model::types::instance::ValueBound),
-    Type(Type),
-    Component(ComponentType),
-    Instance(InstanceType),
+    fn try_from(value: ExternDesc) -> Result<Self, Self::Error> {
+        if let ExternDesc::Component(component_type) = value {
+            Ok(component_type)
+        } else {
+            Err(ComponentParseError::InvalidType(
+                "ComponentType".to_string(),
+            ))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -1,7 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    ComponentDecl, ComponentImportType, ComponentType, ExternDesc, InstanceDecl,
-};
+use crate::component_model::{ComponentDecl, ComponentType, ExternDesc, InstanceDecl};
 use crate::parser::component_model::types::parse_import_decl;
 use crate::parser::component_model::{
     parse_vec_range, ParseContext, SizedResult, Validator, _parse_instance_decl,
@@ -11,10 +9,10 @@ pub fn parse_component_type(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<ComponentType> {
     let start_count = ctx.reader.read_count();
-    let mut new_validator = Validator::new_child(ctx.validator);
+    let new_validator = Validator::new_child(&mut ctx.validator);
     let mut instrs = Vec::new();
     let state = &mut ctx.state;
-    let mut new_ctx = ParseContext::new(ctx.reader, &mut instrs, &mut new_validator, state);
+    let mut new_ctx = ParseContext::new(ctx.reader, &mut instrs, new_validator, state);
 
     let mut component_type = ComponentType::new();
 
@@ -26,13 +24,13 @@ pub fn parse_component_type(
                     new_ctx.validator.add_core_module_type(ty.clone())?;
                     component_type
                         .imports
-                        .insert(import.name, ComponentImportType::CoreModule(ty.clone()));
+                        .insert(import.name, ExternDesc::CoreModule(ty.clone()));
                 }
                 ExternDesc::Func(ty) => {
                     new_ctx.validator.add_func_type(ty.clone())?;
                     component_type
                         .imports
-                        .insert(import.name, ComponentImportType::Func(ty.clone()));
+                        .insert(import.name, ExternDesc::Func(ty.clone()));
                 }
                 #[cfg(feature = "component-gated-feature-value-imports-exports")]
                 ExternDesc::Value(_) => {}
@@ -40,19 +38,19 @@ pub fn parse_component_type(
                     new_ctx.validator.add_type(ty.clone())?;
                     component_type
                         .imports
-                        .insert(import.name, ComponentImportType::Type(ty.clone()));
+                        .insert(import.name, ExternDesc::Type(ty.clone()));
                 }
                 ExternDesc::Component(ty) => {
                     new_ctx.validator.add_component_type(ty.clone())?;
                     component_type
                         .imports
-                        .insert(import.name, ComponentImportType::Component(ty.clone()));
+                        .insert(import.name, ExternDesc::Component(ty.clone()));
                 }
                 ExternDesc::Instance(ty) => {
                     new_ctx.validator.add_instance_type(ty.clone())?;
                     component_type
                         .imports
-                        .insert(import.name, ComponentImportType::Instance(ty.clone()));
+                        .insert(import.name, ExternDesc::Instance(ty.clone()));
                 }
             },
             ComponentDecl::Instance(decl) => match decl {

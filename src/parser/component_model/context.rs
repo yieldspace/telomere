@@ -3,24 +3,24 @@ use crate::component_model::CompiledState;
 use crate::parser::component_model::validator::Validator;
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 
-pub struct ParseContext<'a, R>
+pub struct ParseContext<'a, 'b, R>
 where
     R: BinaryReader,
 {
     pub reader: &'a mut R,
     pub instrs: &'a mut Vec<InstantiateInstr>,
-    pub validator: &'a mut Validator<'a>,
+    pub validator: Validator<'b>,
     pub state: &'a mut CompiledState,
 }
 
-impl<'a, R> ParseContext<'a, R>
+impl<'a, 'b, R> ParseContext<'a, 'b, R>
 where
     R: BinaryReader,
 {
     pub fn new(
         reader: &'a mut R,
         instrs: &'a mut Vec<InstantiateInstr>,
-        validator: &'a mut Validator<'a>,
+        validator: Validator<'b>,
         state: &'a mut CompiledState,
     ) -> Self {
         Self {

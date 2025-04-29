@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{AliasType, InstanceExportType, Sort};
+use crate::component_model::{AliasType, ExternDesc, Sort};
 use crate::parser::component_model::{
     parse_instance_idx, parse_sort, ComponentParseError, ParseContext, SizedResult,
 };
@@ -15,8 +15,8 @@ pub fn parse_alias_type<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResu
             let (_, name) = parse_name(ctx.reader)?;
             let ty = instance.get_export_type(&name)?;
             match ty {
-                InstanceExportType::Type(ty) => AliasType::Type(ty.clone()),
-                InstanceExportType::Instance(ty) => AliasType::Instance(ty.clone()),
+                ExternDesc::Type(ty) => AliasType::Type(ty.clone()),
+                ExternDesc::Instance(ty) => AliasType::Instance(ty.clone()),
                 _ => {
                     return Err(ComponentParseError::InvalidSignature(format!(
                         "Invalid alias type for instance decl: {sort:?}"

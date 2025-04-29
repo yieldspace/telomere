@@ -42,13 +42,24 @@ pub enum Type {
     // from (sub resource)
     // todo: 処理系はatomic usize等でunique性を担保する
     UniqueResource(usize), // (usize)
-    Eq(Box<Type>),
 }
 
 impl_try_into_type!(FuncType, Func);
 impl_try_into_type!(ComponentType, Component);
 impl_try_into_type!(InstanceType, Instance);
 impl_try_into_type!(ResourceType, Resource);
+
+impl TryFrom<ExternDesc> for Type {
+    type Error = ComponentParseError;
+
+    fn try_from(value: ExternDesc) -> Result<Self, Self::Error> {
+        if let ExternDesc::Type(ty) = value {
+            Ok(ty)
+        } else {
+            Err(ComponentParseError::InvalidType("Type".to_string()))
+        }
+    }
+}
 
 impl Type {
     /// Checks if the type is a resource type.

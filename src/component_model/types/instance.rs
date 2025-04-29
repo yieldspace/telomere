@@ -6,18 +6,14 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceType {
-    pub(crate) core_types: Vec<CoreType>,
-    pub(crate) types: Vec<Type>,
-    pub(crate) instances: Vec<InstanceType>,
-    pub(crate) exports: HashMap<String, InstanceExportType>,
+    pub(crate) imports: HashMap<String, ExternDesc>,
+    pub(crate) exports: HashMap<String, ExternDesc>,
 }
 
 impl InstanceType {
     pub(crate) fn new() -> Self {
         Self {
-            core_types: vec![],
-            types: vec![],
-            instances: vec![],
+            imports: Default::default(),
             exports: Default::default(),
         }
     }
@@ -25,40 +21,41 @@ impl InstanceType {
     pub(crate) fn get_export_type(
         &self,
         name: &String,
-    ) -> Result<&InstanceExportType, ComponentParseError> {
+    ) -> Result<&ExternDesc, ComponentParseError> {
         self.exports
             .get(name)
             .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum InstanceExportType {
-    CoreModule(CoreModuleType),
-    Func(FuncType),
-    #[cfg(feature = "component-gated-feature-value-imports-exports")]
-    Value(ValueBound),
-    Type(Type),
-    Component(ComponentType),
-    Instance(InstanceType),
+impl TryFrom<ExternDesc> for InstanceType {
+    type Error = ComponentParseError;
+
+    fn try_from(value: ExternDesc) -> Result<Self, Self::Error> {
+        if let ExternDesc::Instance(instance_type) = value {
+            Ok(instance_type)
+        } else {
+            Err(ComponentParseError::InvalidType("InstanceType".to_string()))
+        }
+    }
 }
 
-impl PartialEq<Sort> for InstanceExportType {
+impl PartialEq<Sort> for ExternDesc {
     fn eq(&self, other: &Sort) -> bool {
         match other {
-            Sort::Core(CoreSort::Module) => matches!(self, InstanceExportType::CoreModule(_)),
-            Sort::Func => matches!(self, InstanceExportType::Func(_)),
+            Sort::Core(CoreSort::Module) => matches!(self, ExternDesc::CoreModule(_)),
+            Sort::Func => matches!(self, ExternDesc::Func(_)),
             #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            Sort::Value => matches!(self, InstanceExportType::Value(_)),
-            Sort::Type => matches!(self, InstanceExportType::Type(_)),
-            Sort::Component => matches!(self, InstanceExportType::Component(_)),
-            Sort::Instance => matches!(self, InstanceExportType::Instance(_)),
+            Sort::Value => matches!(self, ExternDesc::Value(_)),
+            Sort::Type => matches!(self, ExternDesc::Type(_)),
+            Sort::Component => matches!(self, ExternDesc::Component(_)),
+            Sort::Instance => matches!(self, ExternDesc::Instance(_)),
             _ => false,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExternDesc {
     CoreModule(CoreModuleType),
     Func(FuncType),

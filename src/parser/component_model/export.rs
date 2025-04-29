@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::ComponentExport;
+use crate::component_model::{ComponentExport, CoreSortWithIdx, SortWithIdx};
 use crate::parser::component_model::{
     parse_externdesc, parse_option, parse_sort_with_idx, ComponentParseError, ParseContext,
     ParseResult, SizedResult,
@@ -9,62 +9,53 @@ use crate::parser::core::parse_name;
 pub fn parse_export(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<(String, ComponentExport)> {
-    let start_count = ctx.reader.read_count();
     let (_, name) = parse_export_name_dash(ctx)?;
     let (_, si) = parse_sort_with_idx(ctx)?;
     let ed = parse_option(ctx, parse_externdesc)?;
-    // let sort = match si {
-    //     SortWithIdx::Core(CoreSortWithIdx::Module(idx)) => {
-    //         if ed.is_some() {
-    //             if let ExternDesc::CoreModule(ty) = ed.clone().unwrap() {
-    //                 let idx = ctx
-    //                     .validator
-    //                     .add_core_module_type(ty.clone())?;
-    //                 SortWithIdx::Core(CoreSortWithIdx::Module(idx))
-    //             } else {
-    //                 return Err(ComponentParseError::InvalidSignature(format!(
-    //                     "Invalid core type for import: {si:?}"
-    //                 )));
-    //             }
-    //         } else {
-    //             let idx = ctx
-    //                 .validator
-    //                 .state
-    //                 .add_core_module(Binding::Alias(idx.global()))?;
-    //             SortWithIdx::Core(CoreSortWithIdx::Module(idx))
-    //         }
-    //     }
-    //     SortWithIdx::Func(idx) => {
-    //         let idx = ctx.validator.state.add_func(Binding::Alias(idx.global()))?;
-    //         SortWithIdx::Func(idx)
-    //     }
-    //     #[cfg(feature = "component-gated-feature-value-imports-exports")]
-    //     SortWithIdx::Value(_) => todo!(),
-    //     SortWithIdx::Type(idx) => {
-    //         let idx = ctx.validator.state.add_type(Binding::Alias(idx.global()))?;
-    //         SortWithIdx::Type(idx)
-    //     }
-    //     SortWithIdx::Component(idx) => {
-    //         let idx = ctx
-    //             .validator
-    //             .state
-    //             .add_component(Binding::Alias(idx.global()))?;
-    //         SortWithIdx::Component(idx)
-    //     }
-    //     SortWithIdx::Instance(idx) => {
-    //         let idx = ctx
-    //             .validator
-    //             .state
-    //             .add_instance(Binding::Alias(idx.global()))?;
-    //         SortWithIdx::Instance(idx)
-    //     }
-    //     _ => {
-    //         return Err(ComponentParseError::InvalidSignature(format!(
-    //             "Invalid core type for import: {si:?}"
-    //         )));
-    //     }
-    // };
-    let export = ComponentExport { sort: si, desc: ed };
+    let export = match si {
+        SortWithIdx::Core(CoreSortWithIdx::Module(idx, ty)) => {
+            let ty = if let Some(ed) = ed {
+                // todo: check ed is super type of ty
+                ed.try_into()?
+            } else {
+                ty
+            };
+            ComponentExport::CoreModule(ty, idx)
+        }
+        SortWithIdx::Func(idx, ty) => {
+            let ty = if let Some(ed) = ed {
+                // todo: check ed is super type of ty
+                ed.try_into()?
+            } else {
+                ty
+            };
+            ComponentExport::Func(ty, idx)
+        }
+        SortWithIdx::Type(ty) => ComponentExport::Type(ty),
+        SortWithIdx::Component(idx, ty) => {
+            let ty = if let Some(ed) = ed {
+                // todo: check ed is super type of ty
+                ed.try_into()?
+            } else {
+                ty
+            };
+            ComponentExport::Component(ty, idx)
+        }
+        SortWithIdx::Instance(idx, ty) => {
+            let ty = if let Some(ed) = ed {
+                // todo: check ed is super type of ty
+                ed.try_into()?
+            } else {
+                ty
+            };
+            ComponentExport::Instance(ty, idx)
+        }
+        _ => {
+            return Err(ComponentParseError::InvalidSignature(format!(
+                "Invalid core type for export: {si:?}"
+            )));
+        }
+    };
     Ok((name, export))
 }
 

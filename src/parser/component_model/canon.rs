@@ -2,7 +2,8 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::CanonicalFuncKind;
 use crate::component_model::{
-    CanonOpt, CanonicalFuncType, CoreFunc, CoreFuncType, Func, GlobalIdx, Relation, ResourceType,
+    CanonOpt, CanonicalFuncType, CoreFunc, CoreFuncType, Func, FuncType, GlobalIdx, Relation,
+    ResourceType,
 };
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;
@@ -16,18 +17,20 @@ use crate::parser::component_model::{
 ))]
 use crate::parser::component_model::{parse_option, parse_resultlist, parse_u32};
 use crate::parser::core::parse_vec;
+use tracing::trace;
 
 pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()> {
     let start_count = ctx.reader.read_count();
     match ctx.reader.read_exact_one()? {
         // canon lift
         0x00 => {
+            trace!("parse canon lift");
             assert_eq!(ctx.reader.read_exact_one()?, 0x00);
             let func_idx = parse_core_func_idx(ctx)?;
             let func_global_idx = ctx.validator.get_global_core_func(func_idx)?;
             let (_, opts) = parse_vec(ctx, |v| v.reader, parse_canon_opt)?;
             let idx = parse_type_idx(ctx)?;
-            let ty = ctx.validator.get_func_type(idx)?;
+            let ty: FuncType = ctx.validator.get_type(idx)?.try_into()?;
             let value = Func::CanonLift {
                 core_func_idx: func_global_idx,
                 opts,
@@ -49,6 +52,7 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
         }
         // canon lower
         0x01 => {
+            trace!("parse canon lower");
             assert_eq!(ctx.reader.read_exact_one()?, 0x00);
             let func_idx = parse_func_idx(ctx)?;
             let func_global_idx = ctx.validator.get_global_func(func_idx)?;
@@ -76,6 +80,7 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
             // });
         }
         0x02 => {
+            trace!("parse canon resource new");
             let idx = parse_type_idx(ctx)?;
             let resource_type: ResourceType = ctx.validator.get_type(idx)?.try_into()?;
             let idx = ctx
@@ -100,6 +105,7 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
             // });
         }
         0x03 => {
+            trace!("parse canon resource drop");
             let idx = parse_type_idx(ctx)?;
             let resource_type: ResourceType = ctx.validator.get_type(idx)?.try_into()?;
             let idx = ctx
@@ -130,6 +136,7 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
             todo!();
         }
         0x04 => {
+            trace!("parse resource rep");
             let idx = parse_type_idx(ctx)?;
             let resource_type: ResourceType = ctx.validator.get_type(idx)?.try_into()?;
             let idx = ctx

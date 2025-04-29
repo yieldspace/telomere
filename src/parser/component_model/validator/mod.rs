@@ -7,7 +7,9 @@ use crate::component_model::{
 };
 use crate::parser::component_model::validator::store::GlobalStore;
 use crate::parser::component_model::{ComponentParseError, ParseResult};
+use std::collections::HashMap;
 pub use store::LocalStore;
+use tracing::trace;
 
 pub struct Validator<'a> {
     parent: Option<&'a Validator<'a>>,
@@ -51,6 +53,14 @@ impl<'a> Validator<'a> {
     pub(crate) fn add_export(&mut self, name: String, export: ComponentExport) {
         // todo check name exists
         self.store.exports.insert(name, export);
+    }
+
+    pub(crate) fn get_imports(&self) -> HashMap<String, ComponentImport> {
+        self.store.imports.clone()
+    }
+
+    pub(crate) fn get_exports(&self) -> HashMap<String, ComponentExport> {
+        self.store.exports.clone()
     }
 
     pub(crate) fn validate_core_module_idx(&self, local: u32) -> ParseResult<LocalIdx> {
@@ -328,6 +338,7 @@ impl<'a> Validator<'a> {
 
     pub(crate) fn add_core_module_type(&mut self, module: CoreModuleType) -> ParseResult<LocalIdx> {
         let idx = self.store.core_modules.len();
+        trace!("added core module type {module:?} idx: {idx}");
         self.store.core_modules.push(module);
         Ok(LocalIdx(idx as u32))
     }
@@ -337,6 +348,7 @@ impl<'a> Validator<'a> {
         instance: CoreInstanceType,
     ) -> ParseResult<LocalIdx> {
         let idx = self.store.core_instances.len();
+        trace!("added core instance type {instance:?} idx: {idx}");
         self.store.core_instances.push(instance);
         Ok(LocalIdx(idx as u32))
     }
@@ -346,6 +358,7 @@ impl<'a> Validator<'a> {
         memory: crate::common::MemType,
     ) -> ParseResult<LocalIdx> {
         let idx = self.store.core_memories.len();
+        trace!("added core memory type {memory:?} idx: {idx}");
         self.store.core_memories.push(memory);
         Ok(LocalIdx(idx as u32))
     }
@@ -355,6 +368,7 @@ impl<'a> Validator<'a> {
         global: crate::common::GlobalType,
     ) -> ParseResult<LocalIdx> {
         let idx = self.store.core_globals.len();
+        trace!("added core global type {global:?} idx: {idx}");
         self.store.core_globals.push(global);
         Ok(LocalIdx(idx as u32))
     }
@@ -364,6 +378,7 @@ impl<'a> Validator<'a> {
         table: crate::common::TableType,
     ) -> ParseResult<LocalIdx> {
         let idx = self.store.core_tables.len();
+        trace!("added core table type {table:?} idx: {idx}");
         self.store.core_tables.push(table);
         Ok(LocalIdx(idx as u32))
     }
@@ -373,30 +388,35 @@ impl<'a> Validator<'a> {
         function: crate::common::FuncType,
     ) -> ParseResult<LocalIdx> {
         let idx = self.store.core_funcs.len();
+        trace!("added core func type {function:?} idx: {idx}");
         self.store.core_funcs.push(function);
         Ok(LocalIdx(idx as u32))
     }
 
     pub(crate) fn add_component_type(&mut self, component: ComponentType) -> ParseResult<LocalIdx> {
         let idx = self.store.components.len();
+        trace!("added component type {component:?} idx: {idx}");
         self.store.components.push(component);
         Ok(LocalIdx(idx as u32))
     }
 
     pub(crate) fn add_instance_type(&mut self, instance: InstanceType) -> ParseResult<LocalIdx> {
         let idx = self.store.instances.len();
+        trace!("added instance type {instance:?} idx: {idx}");
         self.store.instances.push(instance);
         Ok(LocalIdx(idx as u32))
     }
 
     pub(crate) fn add_type(&mut self, ty: Type) -> ParseResult<LocalIdx> {
         let idx = self.store.types.len();
+        trace!("added type {ty:?} idx: {idx}");
         self.store.types.push(ty);
         Ok(LocalIdx(idx as u32))
     }
 
     pub(crate) fn add_func_type(&mut self, func: FuncType) -> ParseResult<LocalIdx> {
         let idx = self.store.functions.len();
+        trace!("added func type {func:?} idx: {idx}");
         self.store.functions.push(func);
         Ok(LocalIdx(idx as u32))
     }

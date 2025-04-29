@@ -1,46 +1,44 @@
+use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreInstanceImport, CoreInstanceInlineExport, CoreModule, CoreModuleType, CoreSort, GlobalIdx,
+    CoreExportType, CoreInstanceImport, CoreInstanceInlineExport, CoreModule, CoreModuleType,
+    CoreSort, GlobalIdx, Instance, InstanceType,
 };
-use crate::parser::component_model::ParseResult;
+use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum CoreInstance {
     Real {
         module_idx: GlobalIdx<CoreModule>,
-        imports: HashMap<String, CoreInstanceImport>,
+        imports: HashMap<String, GlobalIdx<Instance>>,
     },
     Alias {
         exports: HashMap<String, CoreInstanceInlineExport>,
     },
 }
 
-#[derive(Debug, Clone)]
-pub struct CoreInstanceType {}
-
-pub enum CoreInstanceExportType {
-    Memory(String, crate::common::MemType),
-    Table(String, crate::common::TableType),
-    Func(String, crate::common::FuncType),
-    Global(String, crate::common::GlobalType),
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreInstanceType {
+    pub(crate) exports: HashMap<String, CoreExportType>,
 }
 
 impl CoreInstanceType {
-    pub fn new() -> Self {
-        CoreInstanceType {}
+    pub fn new(exports: HashMap<String, CoreExportType>) -> Self {
+        CoreInstanceType { exports }
     }
 
-    pub fn get_export_type(
-        &self,
-        sort: &CoreSort,
-        name: &String,
-    ) -> ParseResult<CoreInstanceExportType> {
-        todo!()
+    pub fn get_export_type(&self, name: &String) -> ParseResult<CoreExportType> {
+        self.exports
+            .get(name)
+            .cloned()
+            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
     }
 }
 
-impl From<(&CoreInstance, Option<&CoreModuleType>)> for CoreInstanceType {
-    fn from(value: (&CoreInstance, Option<&CoreModuleType>)) -> Self {
-        todo!()
+impl From<CoreModuleType> for CoreInstanceType {
+    fn from(value: CoreModuleType) -> Self {
+        Self {
+            exports: value.exports,
+        }
     }
 }

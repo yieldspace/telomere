@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasType, CoreType, ExportDecl, ExternDesc, InstanceDecl, InstanceExportType, InstanceType,
+    AliasType, CoreType, ExportDecl, ExternDesc, InstanceDecl, InstanceType,
 };
 use crate::parser::component_model::types::alias::parse_alias_type;
 use crate::parser::component_model::types::parse_export_decl;
@@ -11,14 +11,9 @@ use crate::parser::component_model::{
 pub fn parse_instance_type<R: BinaryReader>(
     parent_ctx: &mut ParseContext<R>,
 ) -> SizedResult<InstanceType> {
-    let mut new_validator = Validator::new_child(parent_ctx.validator);
+    let new_validator = Validator::new_child(&mut parent_ctx.validator);
     let state = &mut parent_ctx.state;
-    let mut new_ctx = ParseContext::new(
-        parent_ctx.reader,
-        parent_ctx.instrs,
-        &mut new_validator,
-        state,
-    );
+    let mut new_ctx = ParseContext::new(parent_ctx.reader, parent_ctx.instrs, new_validator, state);
     let start_count = new_ctx.reader.read_count();
     let mut inst_type = InstanceType::new();
     for _ in parse_vec_range(&mut new_ctx)? {
@@ -26,50 +21,44 @@ pub fn parse_instance_type<R: BinaryReader>(
         match decl {
             InstanceDecl::CoreModuleType(ty) => {
                 new_ctx.validator.add_core_module_type(ty.clone())?;
-                inst_type.core_types.push(CoreType::ModuleType(ty));
+                // inst_type.core_types.push(CoreType::ModuleType(ty));
             }
             InstanceDecl::Type(ty) => {
                 new_ctx.validator.add_type(ty.clone())?;
-                inst_type.types.push(ty);
+                // inst_type.types.push(ty);
             }
             InstanceDecl::Alias(ty) => match ty {
                 AliasType::Type(ty) => {
                     new_ctx.validator.add_type(ty.clone())?;
-                    inst_type.types.push(ty);
+                    // inst_type.types.push(ty);
                 }
                 AliasType::Instance(ty) => {
                     new_ctx.validator.add_instance_type(ty.clone())?;
-                    inst_type.instances.push(ty)
+                    // inst_type.instances.push(ty)
                 }
             },
             InstanceDecl::ExportDecl(ExportDecl { name, ed }) => match ed {
                 ExternDesc::CoreModule(ty) => {
                     new_ctx.validator.add_core_module_type(ty.clone())?;
-                    inst_type
-                        .exports
-                        .insert(name, InstanceExportType::CoreModule(ty));
+                    inst_type.exports.insert(name, ExternDesc::CoreModule(ty));
                 }
                 ExternDesc::Func(ty) => {
                     new_ctx.validator.add_func_type(ty.clone())?;
-                    inst_type.exports.insert(name, InstanceExportType::Func(ty));
+                    inst_type.exports.insert(name, ExternDesc::Func(ty));
                 }
                 #[cfg(feature = "component-gated-feature-value-imports-exports")]
                 ExternDesc::Value(_) => {}
                 ExternDesc::Type(ty) => {
                     new_ctx.validator.add_type(ty.clone().into())?;
-                    inst_type.exports.insert(name, InstanceExportType::Type(ty));
+                    inst_type.exports.insert(name, ExternDesc::Type(ty));
                 }
                 ExternDesc::Component(ty) => {
                     new_ctx.validator.add_component_type(ty.clone())?;
-                    inst_type
-                        .exports
-                        .insert(name, InstanceExportType::Component(ty));
+                    inst_type.exports.insert(name, ExternDesc::Component(ty));
                 }
                 ExternDesc::Instance(ty) => {
                     new_ctx.validator.add_instance_type(ty.clone())?;
-                    inst_type
-                        .exports
-                        .insert(name, InstanceExportType::Instance(ty));
+                    inst_type.exports.insert(name, ExternDesc::Instance(ty));
                 }
             },
         }

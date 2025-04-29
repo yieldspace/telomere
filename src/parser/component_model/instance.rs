@@ -8,10 +8,12 @@ use crate::parser::component_model::SizedResult;
 use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError};
 use crate::parser::core::{parse_name, parse_vec};
 use std::collections::HashMap;
+use tracing::trace;
 
 pub fn parse_instance(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<GlobalIdx<Instance>> {
+    trace!("parse instance");
     let start_count = ctx.reader.read_count();
 
     match ctx.reader.read_exact_one()? {
@@ -23,22 +25,24 @@ pub fn parse_instance(
                 .map(|InstantiateArg { name, sort }| (name, sort))
                 .collect::<HashMap<String, SortWithIdx>>();
             let component = ctx.validator.get_component_type(component_idx)?;
+            trace!("parsed instance for {:?}", component);
             if args.len() != component.imports.len() {
                 return Err(ComponentParseError::InvalidSignature(format!(
                     "Invalid number of args: {}",
                     args.len()
                 )));
             }
-            let mut exports = HashMap::new();
-            for (export_name, ty) in component.exports.iter() {
+            let mut imports = HashMap::new();
+            for (import_name, ty) in component.imports.iter() {
+                trace!("parse_instance imports for {}", import_name);
                 // todo: check ty and arg type
-                let arg = args.get(export_name).expect("export not found");
-                exports.insert(export_name.clone(), arg.clone());
+                let arg = args.get(import_name).expect("export not found");
+                imports.insert(import_name.clone(), arg.clone().try_into()?);
             }
             let value = Instance {
                 component_idx: Some(ctx.validator.get_global_component(component_idx)?),
-                args,
-                exports,
+                imports,
+                exports: component.exports,
             };
             let ty = value.as_type();
             let idx = ctx.validator.add_instance_type(ty)?;
@@ -66,11 +70,14 @@ pub fn parse_instance(
             let (_, exports) = parse_vec(ctx, |v| v.reader, parse_inlineexport)?;
             let value = Instance {
                 component_idx: None,
-                args: Default::default(),
-                exports: exports
-                    .into_iter()
-                    .map(|InlineExport { name, sort }| (name, sort))
-                    .collect(),
+                imports: Default::default(),
+                exports: {
+                    let mut exs = HashMap::new();
+                    for InlineExport { name, sort } in exports {
+                        exs.insert(name, sort.try_into()?);
+                    }
+                    exs
+                },
             };
             let ty = value.as_type();
             let idx = ctx.validator.add_instance_type(ty)?;
@@ -97,6 +104,7 @@ fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResu
 
     let (_, name) = parse_name(ctx.reader)?;
     let (_, sort) = parse_sort_with_idx(ctx)?;
+    trace!("parse_instantiate_arg name: {name}");
     Ok((
         ctx.reader.read_count() - start_count,
         InstantiateArg { name, sort },
