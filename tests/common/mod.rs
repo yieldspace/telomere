@@ -6,7 +6,7 @@ use telomere::{
 };
 use tracing::error;
 use wast::{
-    core::{AbstractHeapType, HeapType, NanPattern, WastRetCore},
+    core::{AbstractHeapType, HeapType, NanPattern, V128Pattern, WastRetCore},
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
