@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasType, CoreType, ExportDecl, ExternDesc, InstanceDecl, InstanceType,
+    AliasType, ExportDecl, ExternDesc, InstanceDecl, InstanceType,
 };
 use crate::parser::component_model::types::alias::parse_alias_type;
 use crate::parser::component_model::types::parse_export_decl;

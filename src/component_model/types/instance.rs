@@ -1,5 +1,5 @@
 use crate::component_model::{
-    AliasType, ComponentType, CoreModuleType, CoreSort, CoreType, FuncType, Sort, Type,
+    AliasType, ComponentType, CoreModuleType, CoreSort, FuncType, Sort, Type,
 };
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;

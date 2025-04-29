@@ -1,9 +1,7 @@
-use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreExportType, CoreInstanceImport, CoreInstanceInlineExport, CoreModule, CoreModuleType,
-    CoreSort, GlobalIdx, Instance, InstanceType,
+    CoreExportType, CoreInstanceInlineExport, CoreModule, CoreModuleType, GlobalIdx, Instance,
 };
-use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
+use crate::parser::component_model::{ComponentParseError, ParseResult};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

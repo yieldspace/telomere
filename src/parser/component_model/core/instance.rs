@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    CoreInstance, CoreInstanceImport, CoreInstanceInlineExport, CoreInstanceInlineExportType,
+    CoreInstance, CoreInstanceInlineExport, CoreInstanceInlineExportType,
     CoreInstanceType, CoreSort, GlobalIdx, Instance, InstanceType,
 };
 use crate::parser::component_model::context::ParseContext;
@@ -8,7 +8,7 @@ use crate::parser::component_model::core::id::{parse_core_instance_idx, parse_co
 use crate::parser::component_model::core::sort::parse_core_sort;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::{parse_vec_range, ParseResult, SizedResult};
-use crate::parser::core::{parse_name, parse_u32, parse_vec};
+use crate::parser::core::{parse_name, parse_u32};
 use std::collections::HashMap;
 use tracing::trace;
 

@@ -13,8 +13,7 @@ use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::{
-    parse_alias, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,
-    validator, Validator,
+    parse_alias, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version, Validator,
 };
 use crate::parser::core::{parse_u32, parse_vec};
 use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
@@ -61,7 +60,7 @@ pub fn _parse_component(
             ComponentSectionType::CoreType => todo!(),
             ComponentSectionType::Component => {
                 let mut sized_reader = ctx.reader.take(section_size as usize);
-                let mut validator = Validator::new_child(&mut ctx.validator);
+                let validator = Validator::new_child(&mut ctx.validator);
                 let mut instrs = Vec::new();
                 let state = &mut ctx.state;
                 // 呼び出し結果を一旦保持し、`child_ctx` をスコープ外に出してから `?` を適用することで

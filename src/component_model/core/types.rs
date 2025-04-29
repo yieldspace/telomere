@@ -1,6 +1,6 @@
 use crate::common::ExportDesc;
 use crate::component_model::{
-    CoreGlobalRef, CoreInstanceInlineExportType, CoreMemoryRef, CoreSort, CoreTableRef,
+    CoreInstanceInlineExportType, CoreSort,
     CoreTypeRef, ExternDesc,
 };
 use crate::parser::component_model::ComponentParseError;
