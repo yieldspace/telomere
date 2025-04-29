@@ -30,7 +30,7 @@ fn flatten_variant(cases: &Vec<Case>) -> Vec<CoreValType> {
             t.flat().into_iter().enumerate().for_each(|(i, x)| {
                 if i < flat.len() {
                     let nth = flat.get(i).unwrap().clone();
-                    flat.insert(i, join_flat_type(nth, x));
+                    flat[i] = join_flat_type(nth, x);
                 } else {
                     flat.push(x);
                 }
