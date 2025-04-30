@@ -19,6 +19,19 @@ pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     call_next(tail_code, 1, ctx)
 }
 
+pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let memarg = (*tail_code).operand.memarg;
+    let v = ctx.stack.pop_u128();
+
+    let offset = ctx.stack.pop_u32();
+    let memory = vm_try!(VMResult::from_option(ctx.memory(), || {
+        VMResult::MemoryIndexOutOfRange
+    }));
+    vm_try!(memory.write_u128(memarg, offset, v));
+    call_next(tail_code, 1, ctx)
+}
+
+
 pub unsafe fn v128_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let left_buf = &(*tail_code).operand.encoded;
     let right_buf = &(*tail_code.add(1)).operand.encoded;

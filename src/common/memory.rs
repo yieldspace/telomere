@@ -57,6 +57,9 @@ impl Memory {
     pub fn write_u64(&mut self, memarg: MemArg, offset: u32, value: u64) -> VMResult<()> {
         self.write_slice(memarg, offset, &value.to_le_bytes())
     }
+    pub fn write_u128(&mut self, memarg: MemArg, offset: u32,value: u128) -> VMResult<()> {
+        self.write_slice(memarg, offset, &value.to_le_bytes())
+    }
     pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) -> VMResult<()> {
         *vm_try!(VMResult::from_option(
             self.0.get_mut(vm_try!(compute_offset(memarg, offset))),

@@ -60,6 +60,22 @@ pub(crate) mod v128_load {
         Ok(len)
     }
 }
+
+pub(crate) mod v128_store {
+    use super::prelude::*;
+
+    pub(crate) const CODE: u32 = 11;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 4)?; // TODO:
+        ctx.checker.store_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_store, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
 pub(crate) mod v128_const {
     use super::prelude::*;
 
