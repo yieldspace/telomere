@@ -2,8 +2,8 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::CanonicalFuncKind;
 use crate::component_model::{
-    CanonOpt, CanonicalFuncType, CoreFunc, CoreFuncType, Func, FuncType, GlobalIdx, Relation,
-    ResourceType,
+    CanonOpt, CanonicalFuncType, CanonicalOptions, CoreFunc, CoreFuncType, Func, FuncType,
+    GlobalIdx, Relation, ResourceType,
 };
 #[cfg(feature = "component-gated-feature-threading-builtins")]
 use crate::parser::component_model::parse_core_table_idx;
@@ -58,10 +58,11 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
             let func_global_idx = ctx.validator.get_global_func(func_idx)?;
             let ft = ctx.validator.get_func_type(func_idx)?;
             let (_, opts) = parse_vec(ctx, |v| v.reader, parse_canon_opt)?;
+            let opt = CanonicalOptions::from(opts);
             let idx = ctx
                 .validator
-                .add_core_func_type(CoreFuncType::canon_lower(ft))?;
-            let value = CoreFunc::CanonLower(func_global_idx, opts);
+                .add_core_func_type(CoreFuncType::canon_lower(ft, &opt))?;
+            let value = CoreFunc::CanonLower(func_global_idx, opt);
             let global_idx = GlobalIdx::new();
             ctx.state
                 .register_core_func(global_idx, Relation::Defined(value));

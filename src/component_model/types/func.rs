@@ -31,8 +31,21 @@ pub struct Case {
     pub t: Option<ValType>,
 }
 
+impl Case {
+    pub fn new(label: Label, t: Option<ValType>) -> Self {
+        Self { label, t }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Label {
-    pub len: usize,
     pub label: String, // TODO: check label format https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#import-and-export-definitions
+}
+
+impl Label {
+    pub fn new<IntoString: Into<String>>(label: IntoString) -> Self {
+        Self {
+            label: label.into(),
+        }
+    }
 }

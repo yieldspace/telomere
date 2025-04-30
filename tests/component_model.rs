@@ -22,6 +22,7 @@ fn test_basic_component() {
        )
     "#;
     let binary = wat::parse_str(component).unwrap();
+    // let binary = wat::parse_str(std::fs::read_to_string("foo.wat").unwrap()).unwrap();
     // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     let mut instrs = Vec::new();
