@@ -1,7 +1,6 @@
-
-use wide::{u16x8, u64x2};
 #[allow(unused_imports)]
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u32x4, u8x16};
+use wide::{u16x8, u64x2};
 
 use crate::{
     common::{stack::StackOperation, ExecuteContext, Instr},
@@ -142,14 +141,11 @@ pub unsafe fn v128_load32x2_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     let data = vm_try!(memory.read_u64(memarg, offset));
     let bytes = data.to_le_bytes();
     let i32s = [
-        i32::from_le_bytes([bytes[0], bytes[1],bytes[2], bytes[3]]),
-        i32::from_le_bytes([bytes[4], bytes[5],bytes[6], bytes[7]]),
+        i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
     ];
 
-    let extended = [
-        i32s[0] as i64,
-        i32s[1] as i64,
-    ];
+    let extended = [i32s[0] as i64, i32s[1] as i64];
 
     let v = i64x2::from(extended);
     vm_try!(ctx.stack.push(v));
@@ -165,14 +161,11 @@ pub unsafe fn v128_load32x2_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     let data = vm_try!(memory.read_u64(memarg, offset));
     let bytes = data.to_le_bytes();
     let u32s = [
-        u32::from_le_bytes([bytes[0], bytes[1],bytes[2], bytes[3]]),
-        u32::from_le_bytes([bytes[4], bytes[5],bytes[6], bytes[7]]),
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
     ];
 
-    let extended = [
-        u32s[0] as u64,
-        u32s[1] as u64,
-    ];
+    let extended = [u32s[0] as u64, u32s[1] as u64];
 
     let v = u64x2::from(extended);
     vm_try!(ctx.stack.push(v));
@@ -185,7 +178,7 @@ pub unsafe fn v128_load8_splat(tail_code: *const Instr, ctx: &mut ExecuteContext
     let memory = vm_try!(VMResult::from_option(ctx.memory(), || {
         VMResult::MemoryIndexOutOfRange
     }));
-     let value = vm_try!(memory.read_i8(memarg, offset));
+    let value = vm_try!(memory.read_i8(memarg, offset));
     let v = i8x16::from(value);
     vm_try!(ctx.stack.push(v));
     call_next(tail_code, 1, ctx)
@@ -197,7 +190,7 @@ pub unsafe fn v128_load16_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
     let memory = vm_try!(VMResult::from_option(ctx.memory(), || {
         VMResult::MemoryIndexOutOfRange
     }));
-     let value = vm_try!(memory.read_i16(memarg, offset));
+    let value = vm_try!(memory.read_i16(memarg, offset));
     let v = i16x8::from(value);
     vm_try!(ctx.stack.push(v));
     call_next(tail_code, 1, ctx)
@@ -209,7 +202,7 @@ pub unsafe fn v128_load32_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
     let memory = vm_try!(VMResult::from_option(ctx.memory(), || {
         VMResult::MemoryIndexOutOfRange
     }));
-     let value = vm_try!(memory.read_i32(memarg, offset));
+    let value = vm_try!(memory.read_i32(memarg, offset));
     let v = i32x4::from(value);
     vm_try!(ctx.stack.push(v));
     call_next(tail_code, 1, ctx)
@@ -221,7 +214,7 @@ pub unsafe fn v128_load64_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
     let memory = vm_try!(VMResult::from_option(ctx.memory(), || {
         VMResult::MemoryIndexOutOfRange
     }));
-     let value = vm_try!(memory.read_i64(memarg, offset));
+    let value = vm_try!(memory.read_i64(memarg, offset));
     let v = i64x2::from(value);
     vm_try!(ctx.stack.push(v));
     call_next(tail_code, 1, ctx)
@@ -269,25 +262,25 @@ pub unsafe fn v128_not(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
 pub unsafe fn v128_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     let a = ctx.stack.pop_u128();
-    vm_try!(ctx.stack.push_u128(a&b));
+    vm_try!(ctx.stack.push_u128(a & b));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn v128_andnot(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     let a = ctx.stack.pop_u128();
-    vm_try!(ctx.stack.push_u128(a&!b));
+    vm_try!(ctx.stack.push_u128(a & !b));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn v128_or(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     let a = ctx.stack.pop_u128();
-    vm_try!(ctx.stack.push_u128(a|b));
+    vm_try!(ctx.stack.push_u128(a | b));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn v128_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     let a = ctx.stack.pop_u128();
-    vm_try!(ctx.stack.push_u128(a^b));
+    vm_try!(ctx.stack.push_u128(a ^ b));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn v128_any_true(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -301,20 +294,20 @@ macro_rules! all_true_instruction {
     ($name: ident,$target: ident) => {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let v: $target = ctx.stack.pop();
-            let mut all_true = 0x01; 
-            for v in v.to_array(){
-                all_true &= (v!=0) as i32;
+            let mut all_true = 0x01;
+            for v in v.to_array() {
+                all_true &= (v != 0) as i32;
             }
             vm_try!(ctx.stack.push_i32(all_true));
             call_next(tail_code, 0, ctx)
-        }        
+        }
     };
 }
 
-all_true_instruction!(i8x16_all_true,i8x16);
-all_true_instruction!(i16x8_all_true,i16x8);
-all_true_instruction!(i32x4_all_true,i32x4);
-all_true_instruction!(i64x2_all_true,i64x2);
+all_true_instruction!(i8x16_all_true, i8x16);
+all_true_instruction!(i16x8_all_true, i16x8);
+all_true_instruction!(i32x4_all_true, i32x4);
+all_true_instruction!(i64x2_all_true, i64x2);
 macro_rules! bitmask_instruction {
     ($name: ident,$target: ident) => {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -322,14 +315,13 @@ macro_rules! bitmask_instruction {
             let result = v.move_mask();
             vm_try!(ctx.stack.push_i32(result));
             call_next(tail_code, 0, ctx)
-        }        
+        }
     };
 }
-bitmask_instruction!(i8x16_bitmask,i8x16);
-bitmask_instruction!(i16x8_bitmask,i16x8);
-bitmask_instruction!(i32x4_bitmask,i32x4);
-bitmask_instruction!(i64x2_bitmask,i64x2);
-
+bitmask_instruction!(i8x16_bitmask, i8x16);
+bitmask_instruction!(i16x8_bitmask, i16x8);
+bitmask_instruction!(i32x4_bitmask, i32x4);
+bitmask_instruction!(i64x2_bitmask, i64x2);
 
 pub unsafe fn op_v128_bitselect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mask = ctx.stack.pop_u128();
@@ -348,15 +340,15 @@ macro_rules! shl_instruction {
             let v: $target = ctx.stack.pop();
 
             let shift = shift as u32;
-            
+
             let mut v = v.to_array();
-            for i in 0..v.len(){
+            for i in 0..v.len() {
                 v[i] = v[i].wrapping_shl(shift);
             }
-            
+
             vm_try!(ctx.stack.push($target::from(v)));
             call_next(tail_code, 0, ctx)
-        }        
+        }
     };
 }
 
@@ -367,31 +359,31 @@ macro_rules! shr_instruction {
             let v: $target = ctx.stack.pop();
 
             let shift = shift as u32;
-            
+
             let mut v = v.to_array();
-            for i in 0..v.len(){
+            for i in 0..v.len() {
                 v[i] = v[i].wrapping_shr(shift);
             }
-            
+
             vm_try!(ctx.stack.push($target::from(v)));
             call_next(tail_code, 0, ctx)
-        }        
+        }
     };
 }
 
-shl_instruction!(i8x16_shl,i8x16);
-shl_instruction!(i16x8_shl,i16x8);
-shl_instruction!(i32x4_shl,i32x4);
-shl_instruction!(i64x2_shl,i64x2);
+shl_instruction!(i8x16_shl, i8x16);
+shl_instruction!(i16x8_shl, i16x8);
+shl_instruction!(i32x4_shl, i32x4);
+shl_instruction!(i64x2_shl, i64x2);
 
-shr_instruction!(i8x16_shr,i8x16);
-shr_instruction!(i16x8_shr,i16x8);
-shr_instruction!(i32x4_shr,i32x4);
-shr_instruction!(i64x2_shr,i64x2);
-shr_instruction!(u8x16_shr,u8x16);
-shr_instruction!(u16x8_shr,u16x8);
-shr_instruction!(u32x4_shr,u32x4);
-shr_instruction!(u64x2_shr,u64x2);
+shr_instruction!(i8x16_shr, i8x16);
+shr_instruction!(i16x8_shr, i16x8);
+shr_instruction!(i32x4_shr, i32x4);
+shr_instruction!(i64x2_shr, i64x2);
+shr_instruction!(u8x16_shr, u8x16);
+shr_instruction!(u16x8_shr, u16x8);
+shr_instruction!(u32x4_shr, u32x4);
+shr_instruction!(u64x2_shr, u64x2);
 pub unsafe fn i32x4_trunc_sat_f32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

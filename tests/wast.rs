@@ -422,10 +422,10 @@ fn simd_bit_shift() {
     run_test_file("simd_bit_shift");
 }
 #[test]
-fn simd_bitwise(){
+fn simd_bitwise() {
     run_test_file("simd_bitwise");
 }
 #[test]
-fn simd_boolean(){
+fn simd_boolean() {
     run_test_file("simd_boolean");
 }

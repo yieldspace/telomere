@@ -120,7 +120,7 @@ impl Stack {
     pub fn push_u64(&mut self, v: u64) -> VMResult<()> {
         self.push_u8_array(v.to_le_bytes())
     }
-    
+
     pub fn push_u128(&mut self, v: u128) -> VMResult<()> {
         self.push_u8_array(v.to_le_bytes())
     }
