@@ -563,45 +563,10 @@ extend_instruction!(
     15
 );
 
-extend_instruction!(
-    i32x4_extend_low_i16x8_s,
-    i16x8,
-    i32x4,
-    0,
-    1,
-    2,
-    3
-    
-);
-extend_instruction!(
-    i32x4_extend_high_i16x8_s,
-    i16x8,
-    i32x4,
-    4,
-    5,
-    6,
-    7
-);
-extend_instruction!(
-    i32x4_extend_low_i16x8_u,
-    u16x8,
-    u32x4,
-    0,
-    1,
-    2,
-    3
-    
-);
-extend_instruction!(
-    i32x4_extend_high_i16x8_u,
-    u16x8,
-    u32x4,
-    4,
-    5,
-    6,
-    7
-);
-
+extend_instruction!(i32x4_extend_low_i16x8_s, i16x8, i32x4, 0, 1, 2, 3);
+extend_instruction!(i32x4_extend_high_i16x8_s, i16x8, i32x4, 4, 5, 6, 7);
+extend_instruction!(i32x4_extend_low_i16x8_u, u16x8, u32x4, 0, 1, 2, 3);
+extend_instruction!(i32x4_extend_high_i16x8_u, u16x8, u32x4, 4, 5, 6, 7);
 
 #[inline]
 unsafe fn handle_unary_op<T>(

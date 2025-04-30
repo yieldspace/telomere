@@ -2,7 +2,6 @@ mod canon;
 mod compiled;
 mod component;
 mod core;
-mod flatten;
 mod func;
 mod idx;
 mod instance;

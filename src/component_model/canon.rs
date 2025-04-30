@@ -1,5 +1,5 @@
 use crate::common::{ResultType as CoreResultType, ResultType, ValType as CoreValType};
-use crate::component_model::flatten::Flattenable;
+use crate::component_model::types::flatten::Flattenable;
 use crate::component_model::{
     CoreFunc, CoreFuncType, CoreMemoryRef, FuncType, GlobalIdx, ResourceType,
 };
@@ -88,4 +88,83 @@ pub enum CanonOpt {
     Callback(GlobalIdx<CoreFunc>),
     #[cfg(feature = "component-gated-feature-async")]
     AlwaysTaskReturn,
+}
+
+#[derive(Clone, Debug)]
+pub enum CanonStringEncoding {
+    Utf8,
+    Utf16,
+    Latin1Utf16,
+}
+
+#[derive(Clone, Debug)]
+pub struct CanonicalOptions {
+    pub(crate) string_encoding: CanonStringEncoding,
+    pub(crate) memory: Option<GlobalIdx<CoreMemoryRef>>,
+    pub(crate) realloc: Option<GlobalIdx<CoreFunc>>,
+    pub(crate) post_return: Option<GlobalIdx<CoreFunc>>,
+    #[cfg(feature = "component-gated-feature-async")]
+    pub(crate) is_async: bool,
+    #[cfg(feature = "component-gated-feature-async")]
+    pub(crate) callback: Option<GlobalIdx<CoreFunc>>,
+    #[cfg(feature = "component-gated-feature-async")]
+    pub(crate) always_task_return: bool,
+}
+
+impl CanonicalOptions {
+    pub fn is_sync(&self) -> bool {
+        true
+    }
+
+    #[cfg(feature = "component-gated-feature-async")]
+    pub fn is_sync(&self) -> bool {
+        !self.is_async
+    }
+}
+
+impl From<Vec<CanonOpt>> for CanonicalOptions {
+    fn from(value: Vec<CanonOpt>) -> Self {
+        let mut string_encoding = CanonStringEncoding::Utf8;
+        let mut memory = None;
+        let mut realloc = None;
+        let mut post_return = None;
+        #[cfg(feature = "component-gated-feature-async")]
+        let mut is_async = false;
+        #[cfg(feature = "component-gated-feature-async")]
+        let mut callback = None;
+        #[cfg(feature = "component-gated-feature-async")]
+        let mut always_task_return = false;
+
+        for opt in value {
+            match opt {
+                CanonOpt::StringEncodingUtf8 => string_encoding = CanonStringEncoding::Utf8,
+                CanonOpt::StringEncodingUtf16 => string_encoding = CanonStringEncoding::Utf16,
+                CanonOpt::StringEncodingLatin1Utf16 => {
+                    string_encoding = CanonStringEncoding::Latin1Utf16
+                }
+                CanonOpt::Memory(m) => memory = Some(m),
+                CanonOpt::Realloc(r) => realloc = Some(r),
+                CanonOpt::PostReturn(p) => post_return = Some(p),
+                #[cfg(feature = "component-gated-feature-async")]
+                CanonOpt::Async => is_async = true,
+                #[cfg(feature = "component-gated-feature-async")]
+                CanonOpt::Callback(c) => callback = Some(c),
+                #[cfg(feature = "component-gated-feature-async")]
+                CanonOpt::AlwaysTaskReturn => always_task_return = true,
+            }
+        }
+
+        Self {
+            string_encoding,
+            memory,
+            realloc,
+            post_return,
+            #[cfg(feature = "component-gated-feature-async")]
+            is_async,
+            #[cfg(feature = "component-gated-feature-async")]
+            callback,
+            #[cfg(feature = "component-gated-feature-async")]
+            always_task_return,
+        }
+    }
 }

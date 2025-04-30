@@ -1,6 +1,7 @@
 mod alias;
 mod canon;
 mod component;
+pub mod flatten;
 mod func;
 mod instance;
 mod prim;
@@ -49,7 +50,18 @@ pub enum Type {
 impl_try_into_type!(FuncType, Func);
 impl_try_into_type!(ComponentType, Component);
 impl_try_into_type!(InstanceType, Instance);
-impl_try_into_type!(ResourceType, Resource);
+
+impl TryInto<ResourceType> for Type {
+    type Error = ComponentParseError;
+
+    fn try_into(self) -> Result<ResourceType, Self::Error> {
+        match self {
+            Type::Resource(ty) => Ok(ty),
+            Type::UniqueResource(idx) => Ok(ResourceType::Resource(None, Some(idx))),
+            _ => Err(ComponentParseError::InvalidType("Resource".to_string())),
+        }
+    }
+}
 
 impl TryFrom<ExternDesc> for Type {
     type Error = ComponentParseError;

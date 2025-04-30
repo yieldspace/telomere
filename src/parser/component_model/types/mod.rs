@@ -161,11 +161,12 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
         INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?.1),
         RESOURCE_TYPE => {
             if let Some(idx) = parse_option(ctx, parse_func_idx)? {
-                Type::Resource(ResourceType::Resource(Some(
-                    ctx.validator.get_func_type(idx)?,
-                )))
+                Type::Resource(ResourceType::Resource(
+                    Some(ctx.validator.get_func_type(idx)?),
+                    None,
+                ))
             } else {
-                Type::Resource(ResourceType::Resource(None))
+                Type::Resource(ResourceType::Resource(None, None))
             }
         }
         RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
@@ -178,7 +179,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
             } else {
                 None
             };
-            Type::Resource(ResourceType::ResourceWithAsyncCallback(func, cb))
+            Type::Resource(ResourceType::ResourceWithAsyncCallback(func, cb, None))
         }
         _ => unreachable!(),
     };
@@ -245,7 +246,7 @@ fn parse_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ValT
 
 fn parse_label_dash<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Label> {
     let (len, label) = parse_name(ctx.reader)?;
-    Ok((len, Label { len, label }))
+    Ok((len, Label { label }))
 }
 
 fn parse_import_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ImportDecl> {

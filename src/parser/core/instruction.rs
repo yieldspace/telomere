@@ -2801,7 +2801,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         i16x8_extend_high_i8x16_u,
                         i32x4_extend_low_i16x8_s,
                         i32x4_extend_high_i16x8_s,
-                       i32x4_extend_low_i16x8_u,
+                        i32x4_extend_low_i16x8_u,
                         i32x4_extend_high_i16x8_u
                     );
                     (1 + len + len2, false)
