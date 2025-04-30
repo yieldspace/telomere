@@ -1,17 +1,68 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    AliasIdx, Binding, ComponentFunction, CoreModule, CoreType, ExternDesc, InlineComponent,
-    Instance, InstanceDecl, InstanceType, Reference, Type, TypeBound,
-};
-use crate::parser::component_model::types::{parse_export_decl, parse_type};
+use crate::component_model::{AliasType, ExportDecl, ExternDesc, InstanceDecl, InstanceType};
+use crate::parser::component_model::types::alias::parse_alias_type;
+use crate::parser::component_model::types::parse_export_decl;
 use crate::parser::component_model::{
-    parse_alias, parse_core_type, ComponentParseError, ParseContext, SizedResult,
+    parse_core_type, parse_type, parse_vec_range, ParseContext, SizedResult, Validator,
 };
-use crate::parser::core::parse_vec;
 
-pub fn parse_instance_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstanceType> {
-    let (len, decls) = parse_vec(ctx, |v| v.reader, parse_instance_decl)?;
-    Ok((len, InstanceType(decls)))
+pub fn parse_instance_type<R: BinaryReader>(
+    parent_ctx: &mut ParseContext<R>,
+) -> SizedResult<InstanceType> {
+    let new_validator = Validator::new_child(&mut parent_ctx.validator);
+    let state = &mut parent_ctx.state;
+    let mut new_ctx = ParseContext::new(parent_ctx.reader, parent_ctx.instrs, new_validator, state);
+    let start_count = new_ctx.reader.read_count();
+    let mut inst_type = InstanceType::new();
+    for _ in parse_vec_range(&mut new_ctx)? {
+        let (_, decl) = parse_instance_decl(&mut new_ctx)?;
+        match decl {
+            InstanceDecl::CoreModuleType(ty) => {
+                new_ctx.validator.add_core_module_type(ty.clone())?;
+                // inst_type.core_types.push(CoreType::ModuleType(ty));
+            }
+            InstanceDecl::Type(ty) => {
+                new_ctx.validator.add_type(ty.clone())?;
+                // inst_type.types.push(ty);
+            }
+            InstanceDecl::Alias(ty) => match ty {
+                AliasType::Type(ty) => {
+                    new_ctx.validator.add_type(ty.clone())?;
+                    // inst_type.types.push(ty);
+                }
+                AliasType::Instance(ty) => {
+                    new_ctx.validator.add_instance_type(ty.clone())?;
+                    // inst_type.instances.push(ty)
+                }
+            },
+            InstanceDecl::ExportDecl(ExportDecl { name, ed }) => match ed {
+                ExternDesc::CoreModule(ty) => {
+                    new_ctx.validator.add_core_module_type(ty.clone())?;
+                    inst_type.exports.insert(name, ExternDesc::CoreModule(ty));
+                }
+                ExternDesc::Func(ty) => {
+                    new_ctx.validator.add_func_type(ty.clone())?;
+                    inst_type.exports.insert(name, ExternDesc::Func(ty));
+                }
+                #[cfg(feature = "component-gated-feature-value-imports-exports")]
+                ExternDesc::Value(_) => {}
+                ExternDesc::Type(ty) => {
+                    new_ctx.validator.add_type(ty.clone().into())?;
+                    inst_type.exports.insert(name, ExternDesc::Type(ty));
+                }
+                ExternDesc::Component(ty) => {
+                    new_ctx.validator.add_component_type(ty.clone())?;
+                    inst_type.exports.insert(name, ExternDesc::Component(ty));
+                }
+                ExternDesc::Instance(ty) => {
+                    new_ctx.validator.add_instance_type(ty.clone())?;
+                    inst_type.exports.insert(name, ExternDesc::Instance(ty));
+                }
+            },
+        }
+    }
+
+    Ok((new_ctx.reader.read_count() - start_count, inst_type))
 }
 
 pub fn parse_instance_decl(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstanceDecl> {
@@ -30,102 +81,19 @@ pub fn _parse_instance_decl(
     let d = match b {
         0x00 => {
             let (_, t) = parse_core_type(ctx)?;
-            InstanceDecl::CoreType(t)
+            InstanceDecl::CoreModuleType(t.try_into()?)
         }
         0x01 => {
             let (_, t) = parse_type(ctx)?;
             InstanceDecl::Type(t)
         }
         0x02 => {
-            let (_, a) = parse_alias(ctx)?;
-            // validate alias sort is in [type, instance]
-            match a {
-                AliasIdx::Type(_idx) => {}
-                AliasIdx::Instance(_idx) => {}
-                _ => {
-                    return Err(ComponentParseError::InvalidSignature(format!(
-                        "Invalid alias type for instance decl: {a:?}"
-                    )));
-                }
-            }
+            let (_, a) = parse_alias_type(ctx)?;
             InstanceDecl::Alias(a)
         }
         0x04 => {
-            let (_, decl) = parse_export_decl(ctx)?;
-            match decl.ed.clone() {
-                ExternDesc::Core(idx) => {
-                    let ty = ctx.validator.get_core_type(&idx);
-                    if let CoreType::ModuleType(mod_type) = ty {
-                        ctx.validator
-                            .add_core_module(Binding::Real(CoreModule::Typed(
-                                mod_type.clone(),
-                                Reference::Exported(decl.name.clone()),
-                            )))?;
-                    } else {
-                        return Err(ComponentParseError::InvalidSignature(format!(
-                            "Invalid core type for import: {ty:?}"
-                        )));
-                    }
-                }
-                ExternDesc::Func(idx) => {
-                    let ty = ctx.validator.get_type(&idx);
-                    if let Type::Func(func_type) = ty {
-                        ctx.validator
-                            .add_func(Binding::Real(ComponentFunction::Typed(
-                                func_type.clone(),
-                                Reference::Exported(decl.name.clone()),
-                            )))?;
-                    } else {
-                        return Err(ComponentParseError::InvalidSignature(format!(
-                            "Invalid core type for import: {ty:?}"
-                        )));
-                    }
-                }
-                #[cfg(feature = "component-gated-feature-value-imports-exports")]
-                ExternDesc::Value(bound) => todo!(),
-                ExternDesc::Type(bound) => match bound {
-                    TypeBound::Eq(idx) => {
-                        ctx.validator.add_type(Binding::Real(Type::Referenced(
-                            Box::new(Type::Eq(idx)),
-                            Reference::Exported(decl.name.clone()),
-                        )))?;
-                    }
-                    TypeBound::Sub => {
-                        ctx.validator.add_type(Binding::Real(Type::Referenced(
-                            Box::new(Type::UniqueResource),
-                            Reference::Exported(decl.name.clone()),
-                        )))?;
-                    }
-                },
-                ExternDesc::Component(idx) => {
-                    let ty = ctx.validator.get_type(&idx);
-                    if let Type::Component(comp_type) = ty {
-                        ctx.validator
-                            .add_component(Binding::Real(InlineComponent::Typed(
-                                comp_type.clone(),
-                                Reference::Exported(decl.name.clone()),
-                            )))?;
-                    } else {
-                        return Err(ComponentParseError::InvalidSignature(format!(
-                            "Invalid core type for import: {ty:?}"
-                        )));
-                    }
-                }
-                ExternDesc::Instance(idx) => {
-                    let ty = ctx.validator.get_type(&idx);
-                    if let Type::Instance(inst_type) = ty {
-                        ctx.validator.add_instance(Binding::Real(Instance::Typed(
-                            inst_type.clone(),
-                            Reference::Exported(decl.name.clone()),
-                        )))?;
-                    } else {
-                        return Err(ComponentParseError::InvalidSignature(format!(
-                            "Invalid core type for import: {ty:?}"
-                        )));
-                    }
-                }
-            }
-            InstanceDecl::ExportDecl(decl)
+            let (_, d) = parse_export_decl(ctx)?;
+            InstanceDecl::ExportDecl(d)
         }
         _ => todo!(),
     };

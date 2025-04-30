@@ -27,7 +27,7 @@ pub use store::{Store, StoreState};
 use crate::WasmParserError;
 pub mod custom_section;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeIdx(pub u32);
 #[derive(Debug, Clone, Copy)]
 pub struct FuncIdx(pub u32);
@@ -126,8 +126,8 @@ impl TypeSection {
         self.0.get(idx.0 as usize)
     }
 }
-#[derive(Debug, Clone)]
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum ImportDesc {
     TypeIdx(TypeIdx),
     TableType(TableType),
@@ -135,7 +135,7 @@ pub enum ImportDesc {
     GlobalType(GlobalType),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Import {
     pub module: String,
     pub name: String,
@@ -167,7 +167,7 @@ pub struct Limits {
     pub min: u32,
     pub max: Option<u32>,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MemType(pub Limits);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefType {

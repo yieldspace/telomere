@@ -1,9 +1,12 @@
-use crate::component_model::{CoreModuleIdx, CoreModuleType, Reference};
 use crate::Module;
-#[allow(clippy::large_enum_variant)]
-pub enum CoreModule {
-    Defined(Module),
-    Typed(CoreModuleType, Reference),
-    /// Typedだが，exportを経由しており型が変化したもの．
-    SuperTyped(CoreModuleType, CoreModuleIdx, Reference),
+
+#[derive(Clone)]
+pub struct CoreModule {
+    pub value: Module,
+}
+
+impl CoreModule {
+    pub fn new(value: Module) -> Self {
+        Self { value }
+    }
 }

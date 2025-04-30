@@ -1,22 +1,28 @@
+mod alias;
+mod component;
 mod instance;
 
 use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueBound;
 use crate::component_model::{
-    Binding, Case, ComponentDecl, ComponentType, DefValType, ExportDecl, ExternDesc, FuncType,
-    ImportDecl, Label, LabelValType, PrimValType, ResourceType, Type, TypeBound, TypeIdx, ValType,
+    Case, DefValType, ExportDecl, ExternDesc, FuncType, ImportDecl, Label, LabelValType,
+    PrimValType, ResourceType, Type, ValType,
 };
-use crate::parser::component_model::inex::{parse_export_name_dash, parse_import_name_dash};
-use crate::parser::component_model::validator::TypeValidator;
+use crate::parser::component_model::export::parse_export_name_dash;
+use crate::parser::component_model::import::parse_import_name_dash;
 use crate::parser::component_model::{
     parse_core_type_idx, parse_func_idx, parse_option, parse_type_idx, ComponentParseError,
-    ParseContext, SizedResult,
+    ParseContext, ParseResult, SizedResult,
 };
 use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
+pub use component::*;
 pub use instance::*;
 use num_traits::FromPrimitive;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static RESOURCE_HANDLE: AtomicUsize = AtomicUsize::new(0);
 
 /// Macro to define a constant type with a given value and name.
 ///
@@ -64,35 +70,39 @@ fn is_type_opcode(opcode: i32) -> bool {
     opcode <= -1
 }
 
-pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<TypeIdx> {
+pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type> {
     let start_count = ctx.reader.read_count();
     let (_, opcode) = parse_i32(ctx.reader)?;
 
     let may_prim_val_type = PrimValType::from_i32(opcode);
     let ty = match opcode {
         _ if may_prim_val_type.is_some() => {
-            Type::DefVal(DefValType::Primitive(may_prim_val_type.unwrap()))
+            Type::DefVal(Box::from(DefValType::Primitive(may_prim_val_type.unwrap())))
         }
         DEFVALTYPE_RECORD => {
             let (_, fields) = parse_vec(ctx, |v| v.reader, parse_label_valtype)?;
-            Type::DefVal(DefValType::Record(fields))
+            Type::DefVal(Box::from(DefValType::Record(fields)))
         }
         DEFVALTYPE_VARIANT => {
             let (_, cases) = parse_vec(ctx, |v| v.reader, parse_case)?;
-            Type::DefVal(DefValType::Variant(cases))
+            Type::DefVal(Box::from(DefValType::Variant(cases)))
         }
         DEFVALTYPE_LIST => {
-            let (_, valtype) = parse_valtype(ctx)?;
-            Type::DefVal(DefValType::List(valtype, None))
+            let valtype = parse_valtype(ctx)?;
+            Type::DefVal(Box::from(DefValType::List(valtype, None)))
         }
         DEFVALTYPE_LIST_WITH_LEN => {
-            let (_, valtype) = parse_valtype(ctx)?;
+            let valtype = parse_valtype(ctx)?;
             let (_, len) = parse_u32(ctx.reader)?;
-            Type::DefVal(DefValType::List(valtype, Some(len as usize)))
+            Type::DefVal(Box::from(DefValType::List(valtype, Some(len as usize))))
         }
         DEFVALTYPE_TUPLE => {
-            let (_, types) = parse_vec(ctx, |v| v.reader, parse_valtype)?;
-            Type::DefVal(DefValType::Tuple(types))
+            let (_, types) = parse_vec(
+                ctx,
+                |v| v.reader,
+                |ctx| SizedResult::Ok((0, parse_valtype(ctx)?)),
+            )?;
+            Type::DefVal(Box::from(DefValType::Tuple(types)))
         }
         DEFVALTYPE_FLAGS => {
             let (_, labels) = parse_vec(ctx, |v| v.reader, parse_label_dash)?;
@@ -101,7 +111,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
                     "Flags type must have 1-32 labels".to_string(),
                 ));
             }
-            Type::DefVal(DefValType::Flags(labels))
+            Type::DefVal(Box::from(DefValType::Flags(labels)))
         }
         DEFVALTYPE_ENUM => {
             let (_, labels) = parse_vec(ctx, |v| v.reader, parse_label_dash)?;
@@ -110,75 +120,80 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
                     "Enum type cannot be empty".to_string(),
                 ));
             }
-            Type::DefVal(DefValType::Enum(labels))
+            Type::DefVal(Box::from(DefValType::Enum(labels)))
         }
         DEFVALTYPE_OPTION => {
-            let (_, t) = parse_valtype(ctx)?;
-            Type::DefVal(DefValType::Option(t))
+            let t = parse_valtype(ctx)?;
+            Type::DefVal(Box::from(DefValType::Option(t)))
         }
         DEFVALTYPE_RESULT => {
-            let (_, t) = parse_option(ctx, parse_valtype)?;
-            let (_, u) = parse_option(ctx, parse_valtype)?;
-            Type::DefVal(DefValType::Result(t, u))
+            let t = parse_option(ctx, parse_valtype)?;
+            let u = parse_option(ctx, parse_valtype)?;
+            Type::DefVal(Box::from(DefValType::Result(t, u)))
         }
         DEFVALTYPE_OWN => {
-            let (_, id) = parse_type_idx(ctx)?;
-            Type::DefVal(DefValType::Own(id))
+            let idx = parse_type_idx(ctx)?;
+            Type::DefVal(Box::from(DefValType::Own(ctx.validator.get_type(idx)?)))
         }
         DEFVALTYPE_BORROW => {
-            let (_, id) = parse_type_idx(ctx)?;
-            Type::DefVal(DefValType::Borrow(id))
+            let idx = parse_type_idx(ctx)?;
+            Type::DefVal(Box::from(DefValType::Borrow(ctx.validator.get_type(idx)?)))
         }
         #[cfg(feature = "component-gated-feature-async")]
         DEFVALTYPE_STREAM => {
-            let (_, t) = parse_option(ctx, parse_valtype)?;
-            Type::DefVal(DefValType::Stream(t))
+            let t = parse_option(ctx, parse_valtype)?;
+            Type::DefVal(Box::from(DefValType::Stream(t)))
         }
         #[cfg(feature = "component-gated-feature-async")]
         DEFVALTYPE_FUTURE => {
-            let (_, t) = parse_option(ctx, parse_valtype)?;
-            Type::DefVal(DefValType::Future(t))
+            let t = parse_option(ctx, parse_valtype)?;
+            Type::DefVal(Box::from(DefValType::Future(t)))
         }
         FUNC_TYPE => {
             let (_, ps) = parse_vec(ctx, |v| v.reader, parse_label_valtype)?;
             let (_, rs) = parse_resultlist(ctx)?;
             Type::Func(FuncType {
                 params: ps,
-                result: rs,
+                result: rs.map(|x| Box::from(x)),
             })
         }
-        COMPONENT_TYPE => {
-            let mut validator = TypeValidator::new(ctx.validator);
-            let mut new_ctx = ParseContext::new(ctx.reader, ctx.instrs, &mut validator);
-            let (_, cd) = parse_vec(&mut new_ctx, |v| v.reader, parse_component_decl)?;
-            Type::Component(ComponentType(cd))
-        }
-        INSTANCE_TYPE => {
-            let mut validator = TypeValidator::new(ctx.validator);
-            let mut new_ctx = ParseContext::new(ctx.reader, ctx.instrs, &mut validator);
-            Type::Instance(parse_instance_type(&mut new_ctx)?.1)
-        }
+        COMPONENT_TYPE => Type::Component(parse_component_type(ctx)?.1),
+        INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?.1),
         RESOURCE_TYPE => {
-            let (_, idx) = parse_option(ctx, parse_func_idx)?;
-            Type::Resource(ResourceType::Resource(idx))
+            if let Some(idx) = parse_option(ctx, parse_func_idx)? {
+                Type::Resource(ResourceType::Resource(Some(
+                    ctx.validator.get_func_type(idx)?,
+                )))
+            } else {
+                Type::Resource(ResourceType::Resource(None))
+            }
         }
         RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
-            let (_, idx) = parse_func_idx(ctx)?;
-            let (_, cb) = parse_option(ctx, parse_func_idx)?;
-            Type::Resource(ResourceType::ResourceWithAsyncCallback(idx, cb))
+            let func = {
+                let idx = parse_func_idx(ctx)?;
+                ctx.validator.get_func_type(idx)?
+            };
+            let cb = if let Some(idx) = parse_option(ctx, parse_func_idx)? {
+                Some(ctx.validator.get_func_type(idx)?)
+            } else {
+                None
+            };
+            Type::Resource(ResourceType::ResourceWithAsyncCallback(func, cb))
         }
         _ => unreachable!(),
     };
-    let idx = ctx.validator.add_type(Binding::Real(ty))?;
+    // let idx = ctx.validator.add_type(Binding::Real(ty))?;
 
-    Ok((ctx.reader.read_count() - start_count, idx))
+    Ok((ctx.reader.read_count() - start_count, ty))
 }
 
-pub fn parse_resultlist(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Option<ValType>> {
+pub fn parse_resultlist<R: BinaryReader>(
+    ctx: &mut ParseContext<R>,
+) -> SizedResult<Option<ValType>> {
     let start_count = ctx.reader.read_count();
     let t = match ctx.reader.read_exact_one()? {
         0x00 => {
-            let (_, t) = parse_valtype(ctx)?;
+            let t = parse_valtype(ctx)?;
             Some(t)
         }
         0x01 => match ctx.reader.read_exact_one()? {
@@ -198,71 +213,52 @@ pub fn parse_resultlist(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResul
     Ok((ctx.reader.read_count() - start_count, t))
 }
 
-fn parse_label_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<LabelValType> {
+fn parse_label_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<LabelValType> {
     let start_count = ctx.reader.read_count();
     let (_, l) = parse_label_dash(ctx)?;
     let ty = LabelValType {
         label: l,
-        t: parse_valtype(ctx)?.1,
+        t: parse_valtype(ctx)?,
     };
     Ok((ctx.reader.read_count() - start_count, ty))
 }
 
-fn parse_case(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Case> {
+fn parse_case<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Case> {
     let start_count = ctx.reader.read_count();
     let (_, l) = parse_label_dash(ctx)?;
-    let (_, t) = parse_option(ctx, parse_valtype)?;
+    let t = parse_option(ctx, parse_valtype)?;
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "case")?;
     Ok((ctx.reader.read_count() - start_count, Case { label: l, t }))
 }
 
-fn parse_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ValType> {
+fn parse_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ValType> {
     let start_count = ctx.reader.read_count();
     let (_, value) = parse_i32(ctx.reader)?;
     if is_type_opcode(value) {
-        Ok((
-            ctx.reader.read_count() - start_count,
-            ValType::Primitive(PrimValType::from_i32(value).unwrap()),
-        ))
+        Ok(ValType::Primitive(PrimValType::from_i32(value).unwrap()))
     } else {
-        Ok((
-            ctx.reader.read_count() - start_count,
-            ValType::TypeId(ctx.validator.validate_type_idx(value as usize)?),
-        ))
+        Ok(ValType::Type(ctx.validator.get_type(
+            ctx.validator.validate_type_idx(value as u32)?,
+        )?))
     }
 }
 
-fn parse_label_dash(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Label> {
+fn parse_label_dash<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Label> {
     let (len, label) = parse_name(ctx.reader)?;
     Ok((len, Label { len, label }))
 }
 
-fn parse_component_decl(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ComponentDecl> {
-    let start_count = ctx.reader.read_count();
-    let decl = match ctx.reader.read_exact_one()? {
-        0x03 => {
-            let (_, decl) = parse_import_decl(ctx)?;
-            ComponentDecl::Import(decl)
-        }
-        x => {
-            let (_, decl) = _parse_instance_decl(ctx, Some(x))?;
-            ComponentDecl::Instance(decl)
-        }
-    };
-    Ok((ctx.reader.read_count() - start_count, decl))
-}
-
-fn parse_import_decl(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ImportDecl> {
+fn parse_import_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ImportDecl> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_import_name_dash(ctx)?;
-    let (_, ed) = parse_externdesc(ctx)?;
+    let ed = parse_externdesc(ctx)?;
     Ok((
         ctx.reader.read_count() - start_count,
         ImportDecl { name, ed },
     ))
 }
 
-pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ExternDesc> {
+pub fn parse_externdesc<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ExternDesc> {
     let start_count = ctx.reader.read_count();
     let desc = match ctx.reader.read_exact_one()? {
         0x00 => {
@@ -271,12 +267,14 @@ pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResul
                 [0x00],
                 "extern desc",
             )?;
-            let (_, i) = parse_core_type_idx(ctx)?;
-            ExternDesc::Core(i)
+            let idx = parse_core_type_idx(ctx)?;
+            let ty = ctx.validator.get_core_type(idx)?;
+            ExternDesc::CoreModule(ty.try_into()?)
         }
         0x01 => {
-            let (_, i) = parse_type_idx(ctx)?;
-            ExternDesc::Func(i)
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_type(idx)?;
+            ExternDesc::Func(ty.try_into()?)
         }
         #[cfg(feature = "component-gated-feature-value-imports-exports")]
         0x02 => {
@@ -288,26 +286,32 @@ pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResul
             ExternDesc::Type(b)
         }
         0x04 => {
-            let (_, i) = parse_type_idx(ctx)?;
-            ExternDesc::Component(i)
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_type(idx)?;
+            ExternDesc::Component(ty.try_into()?)
         }
         0x05 => {
-            let (_, i) = parse_type_idx(ctx)?;
-            ExternDesc::Instance(i)
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_type(idx)?;
+            ExternDesc::Instance(ty.try_into()?)
         }
         _ => todo!(),
     };
-    Ok((ctx.reader.read_count() - start_count, desc))
+    Ok(desc)
 }
 
-fn parse_typebound(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<TypeBound> {
+fn parse_typebound<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Type> {
     let start_count = ctx.reader.read_count();
     let bound = match ctx.reader.read_exact_one()? {
         0x00 => {
-            let (_, idx) = parse_type_idx(ctx)?;
-            TypeBound::Eq(idx)
+            let idx = parse_type_idx(ctx)?;
+            let ty = ctx.validator.get_type(idx)?;
+            ty
         }
-        0x01 => TypeBound::Sub,
+        0x01 => {
+            let resource_id = RESOURCE_HANDLE.fetch_add(1, Ordering::Relaxed);
+            Type::UniqueResource(resource_id)
+        }
         _ => todo!(),
     };
     Ok((ctx.reader.read_count() - start_count, bound))
@@ -330,10 +334,10 @@ fn parse_valuebound(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Va
     Ok((ctx.reader.read_count() - start_count, bound))
 }
 
-fn parse_export_decl(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<ExportDecl> {
+fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ExportDecl> {
     let start_count = ctx.reader.read_count();
     let (_, en) = parse_export_name_dash(ctx)?;
-    let (_, ed) = parse_externdesc(ctx)?;
+    let ed = parse_externdesc(ctx)?;
     Ok((
         ctx.reader.read_count() - start_count,
         ExportDecl { name: en, ed },

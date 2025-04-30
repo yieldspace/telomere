@@ -1,17 +1,15 @@
-use super::idx::TypeIdx;
-use crate::component_model::{CoreFuncIdx, CoreMemoryIdx, FuncIdx};
+use crate::common::{ResultType as CoreResultType, ResultType, ValType as CoreValType};
+use crate::component_model::flatten::Flattenable;
+use crate::component_model::{
+    CoreFunc, CoreFuncType, CoreMemoryRef, FuncType, GlobalIdx, ResourceType,
+};
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::{CoreTableIdx, ValType};
 
 #[derive(Debug)]
 pub enum CanonicalFuncKind {
-    CanonLift(CoreFuncIdx, Vec<CanonOpt>, TypeIdx),
-    CanonLower(FuncIdx, Vec<CanonOpt>),
-    ResourceNew(TypeIdx),
-    ResourceDrop(TypeIdx),
     #[cfg(feature = "component-gated-feature-async")]
     ResourceDropAsync(TypeIdx),
-    ResourceRep(TypeIdx),
     #[cfg(feature = "component-gated-feature-async")]
     BackPressureSet,
     #[cfg(feature = "component-gated-feature-async")]
@@ -71,23 +69,23 @@ pub enum CanonicalFuncKind {
     #[cfg(feature = "component-gated-feature-threading-builtins")]
     ThreadSpawnRef(TypeIdx),
     #[cfg(feature = "component-gated-feature-threading-builtins")]
-    ThreadSpawnIndirect(TypeIdx, CoreTableIdx),
+    ThreadSpawnIndirect(Type, GlobalIdx<CoreFunc>),
     #[cfg(feature = "component-gated-feature-threading-builtins")]
     ThreadAvailableParallelism,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CanonOpt {
     StringEncodingUtf8,
     StringEncodingUtf16,
     StringEncodingLatin1Utf16,
-    Memory(CoreMemoryIdx),
-    Realloc(CoreFuncIdx),
-    PostReturn(CoreFuncIdx),
+    Memory(GlobalIdx<CoreMemoryRef>),
+    Realloc(GlobalIdx<CoreFunc>),
+    PostReturn(GlobalIdx<CoreFunc>),
     #[cfg(feature = "component-gated-feature-async")]
     Async,
     #[cfg(feature = "component-gated-feature-async")]
-    Callback(CoreFuncIdx),
+    Callback(GlobalIdx<CoreFunc>),
     #[cfg(feature = "component-gated-feature-async")]
     AlwaysTaskReturn,
 }

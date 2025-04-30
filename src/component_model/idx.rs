@@ -1,97 +1,62 @@
-pub trait Idx: Clone {
-    fn new(local: usize, global: usize) -> Self;
-    fn local(&self) -> usize;
-    fn global(&self) -> usize;
+use std::fmt::{Debug, Formatter};
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+pub struct GlobalIdx<T>(usize, PhantomData<T>);
+
+impl<T> Clone for GlobalIdx<T> {
+    fn clone(&self) -> Self {
+        Self(self.0, PhantomData)
+    }
 }
 
-macro_rules! impl_idx {
-    ($name:ident) => {
-        impl Idx for $name {
-            fn new(local: usize, global: usize) -> Self {
-                Self(local, global)
-            }
+impl<T> Copy for GlobalIdx<T> {}
 
-            fn local(&self) -> usize {
-                self.0
-            }
-
-            fn global(&self) -> usize {
-                self.1
-            }
-        }
-    };
+impl<T> Debug for GlobalIdx<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GlobalIdx({})", self.0)
+    }
 }
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct TypeIdx(usize, usize);
+impl<T> Hash for GlobalIdx<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
-impl_idx!(TypeIdx);
+impl<T> PartialEq for GlobalIdx<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct CoreFuncIdx(usize, usize);
+impl<T> Eq for GlobalIdx<T> {}
 
-impl_idx!(CoreFuncIdx);
+static GLOBAL_IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct FuncIdx(usize, usize);
-
-impl_idx!(FuncIdx);
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct CoreMemoryIdx(usize, usize);
-
-impl_idx!(CoreMemoryIdx);
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct CoreTableIdx(usize, usize);
-impl_idx!(CoreTableIdx);
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct CoreGlobalIdx(usize, usize);
-impl_idx!(CoreGlobalIdx);
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct CoreTypeIdx(usize, usize);
-
-impl_idx!(CoreTypeIdx);
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct ComponentIdx(usize, usize);
-
-impl_idx!(ComponentIdx);
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct InstanceIdx(usize, usize);
-
-impl_idx!(InstanceIdx);
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct CoreModuleIdx(usize, usize);
-impl_idx!(CoreModuleIdx);
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct CoreInstanceIdx(usize, usize);
-impl_idx!(CoreInstanceIdx);
-
-#[cfg(feature = "component-gated-feature-value-imports-exports")]
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct ValueIdx(usize, usize);
-#[cfg(feature = "component-gated-feature-value-imports-exports")]
-impl_idx!(ValueIdx);
+impl<T> GlobalIdx<T> {
+    pub fn new() -> Self {
+        Self(
+            GLOBAL_IDX_COUNTER.fetch_add(1, Ordering::Relaxed),
+            PhantomData,
+        )
+    }
+}
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum AliasIdx {
-    CoreFunc(CoreFuncIdx),
-    CoreTable(CoreTableIdx),
-    CoreMemory(CoreMemoryIdx),
-    CoreGlobal(CoreGlobalIdx),
-    CoreType(CoreTypeIdx),
-    CoreModule(CoreModuleIdx),
-    CoreInstance(CoreInstanceIdx),
-    Func(FuncIdx),
+    CoreFunc,
+    CoreTable,
+    CoreMemory,
+    CoreGlobal,
+    CoreType,
+    CoreModule,
+    CoreInstance,
+    Func,
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     Value(ValueIdx),
-    Type(TypeIdx),
-    Component(ComponentIdx),
-    Instance(InstanceIdx),
+    Type,
+    Component,
+    Instance,
 }
