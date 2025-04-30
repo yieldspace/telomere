@@ -429,3 +429,7 @@ fn simd_bitwise() {
 fn simd_boolean() {
     run_test_file("simd_boolean");
 }
+#[test]
+fn simd_conversions() {
+    run_test_file("simd_conversions");
+}

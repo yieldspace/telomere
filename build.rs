@@ -32,8 +32,8 @@ macro_rules! define_simd_operation {
 fn unary_name_op_pairs() -> Vec<(Ident, Vec<Ident>, TokenStream)> {
     vec![
         define_simd_operation!(add, [i8x16, i32x4, i64x2], quote! { |a, b| a + b }),
-        define_simd_operation!(sub, [i8x16], quote! { |a, b| a - b }),
-        define_simd_operation!(mul, [f32x4], quote! { |a, b| a * b }),
+        define_simd_operation!(sub, [i8x16, i32x4], quote! { |a, b| a - b }),
+        define_simd_operation!(mul, [f32x4, i32x4], quote! { |a, b| a * b }),
         define_simd_operation!(div, [f32x4], quote! { |a, b| a / b }),
         define_simd_operation!(swizzle, [i8x16], quote! { |a, b| a.swizzle(b) }),
         define_simd_operation!(min, [i8x16, u8x16, f32x4], quote! { |a, b| a.min(b) }), // FIXME: nan behaviour
