@@ -305,19 +305,26 @@ pub(crate) mod i8x16_all_true {
     }
 }
 
-pub(crate) mod i8x16_shl {
-    use super::prelude::*;
-    pub(crate) const CODE: u32 = 107;
-    pub(crate) fn parse<R: BinaryReader>(
-        ctx: &mut SimdParserContext<R>,
-    ) -> Result<usize, WasmParserError> {
-        ctx.checker
-            .op(&[ValType::V128, ValType::I32], &[ValType::V128])?;
-        ctx.instrs.push_instr1(vm::simd::op_i8x16_shl);
-        Ok(0)
-    }
+macro_rules! shift_instruction_parser {
+    ($name: ident,$code: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                ctx.checker
+                    .op(&[ValType::V128, ValType::I32], &[ValType::V128])?;
+                ctx.instrs.push_instr1(vm::simd::$name);
+                Ok(0)
+            }
+        }        
+    };
 }
 
+shift_instruction_parser!(i8x16_shl,107);
+shift_instruction_parser!(i8x16_shr,108);
+shift_instruction_parser!(u8x16_shr,109);
 unary_op_simd_parser!(i8x16_add, 110);
 unary_op_simd_parser!(i8x16_sub, 113);
 unary_op_simd_parser!(i8x16_min, 118);
@@ -325,8 +332,20 @@ unary_op_simd_parser!(u8x16_min, 119);
 unary_op_simd_parser!(i8x16_max, 120);
 unary_op_simd_parser!(u8x16_max, 121);
 
+shift_instruction_parser!(i16x8_shl,139);
+shift_instruction_parser!(i16x8_shr,140);
+shift_instruction_parser!(u16x8_shr,141);
+
+
+shift_instruction_parser!(i32x4_shl,171);
+shift_instruction_parser!(i32x4_shr,172);
+shift_instruction_parser!(u32x4_shr,173);
 unary_op_simd_parser!(i32x4_add, 174);
 
+
+shift_instruction_parser!(i64x2_shl,203);
+shift_instruction_parser!(i64x2_shr,204);
+shift_instruction_parser!(u64x2_shr,205);
 unary_op_simd_parser!(i64x2_add, 206);
 
 binary_op_simd_parser!(f32x4_abs, 224);

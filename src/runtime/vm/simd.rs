@@ -1,3 +1,4 @@
+
 use wide::{u16x8, u64x2};
 #[allow(unused_imports)]
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u32x4, u8x16};
@@ -233,7 +234,7 @@ pub unsafe fn v128_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
     buf[0..8].copy_from_slice(left_buf);
     buf[8..16].copy_from_slice(right_buf);
 
-    vm_try!(ctx.stack.push_i128(i128::from_le_bytes(buf)));
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(buf)));
     call_next(tail_code, 2, ctx)
 }
 
@@ -290,24 +291,57 @@ pub unsafe fn op_v128_bitselect(tail_code: *const Instr, ctx: &mut ExecuteContex
     vm_try!(ctx.stack.push_u128(result));
     call_next(tail_code, 0, ctx)
 }
+macro_rules! shl_instruction {
+    ($name: ident,$target: ident) => {
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let shift = ctx.stack.pop_u32();
+            let v: $target = ctx.stack.pop();
 
-pub unsafe fn op_i8x16_shl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let shift = ctx.stack.pop_i32();
-    let v = ctx.stack.pop_u128();
-
-    let shift = shift as u32 & 7;
-
-    let mut result = [0u8; 16];
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..16 {
-        result[i] = (((v >> (8 * i)) & 0xff) << shift) as u8;
-    }
-
-    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
-
-    call_next(tail_code, 0, ctx)
+            let shift = shift as u32;
+            
+            let mut v = v.to_array();
+            for i in 0..v.len(){
+                v[i] = v[i].wrapping_shl(shift);
+            }
+            
+            vm_try!(ctx.stack.push($target::from(v)));
+            call_next(tail_code, 0, ctx)
+        }        
+    };
 }
 
+macro_rules! shr_instruction {
+    ($name: ident,$target: ident) => {
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let shift = ctx.stack.pop_u32();
+            let v: $target = ctx.stack.pop();
+
+            let shift = shift as u32;
+            
+            let mut v = v.to_array();
+            for i in 0..v.len(){
+                v[i] = v[i].wrapping_shr(shift);
+            }
+            
+            vm_try!(ctx.stack.push($target::from(v)));
+            call_next(tail_code, 0, ctx)
+        }        
+    };
+}
+
+shl_instruction!(i8x16_shl,i8x16);
+shl_instruction!(i16x8_shl,i16x8);
+shl_instruction!(i32x4_shl,i32x4);
+shl_instruction!(i64x2_shl,i64x2);
+
+shr_instruction!(i8x16_shr,i8x16);
+shr_instruction!(i16x8_shr,i16x8);
+shr_instruction!(i32x4_shr,i32x4);
+shr_instruction!(i64x2_shr,i64x2);
+shr_instruction!(u8x16_shr,u8x16);
+shr_instruction!(u16x8_shr,u16x8);
+shr_instruction!(u32x4_shr,u32x4);
+shr_instruction!(u64x2_shr,u64x2);
 pub unsafe fn i32x4_trunc_sat_f32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

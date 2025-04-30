@@ -417,3 +417,7 @@ fn simd_address() {
 fn simd_align() {
     run_test_file("simd_align");
 }
+#[test]
+fn simd_bit_shift() {
+    run_test_file("simd_bit_shift");
+}
