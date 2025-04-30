@@ -57,7 +57,7 @@ impl Memory {
     pub fn write_u64(&mut self, memarg: MemArg, offset: u32, value: u64) -> VMResult<()> {
         self.write_slice(memarg, offset, &value.to_le_bytes())
     }
-    pub fn write_u128(&mut self, memarg: MemArg, offset: u32,value: u128) -> VMResult<()> {
+    pub fn write_u128(&mut self, memarg: MemArg, offset: u32, value: u128) -> VMResult<()> {
         self.write_slice(memarg, offset, &value.to_le_bytes())
     }
     pub fn write_u8(&mut self, memarg: MemArg, offset: u32, value: u8) -> VMResult<()> {
@@ -75,6 +75,11 @@ impl Memory {
     pub fn read_i32(&self, memarg: MemArg, offset: u32) -> VMResult<i32> {
         VMResult::Success(i32::from_le_bytes(vm_try!(
             self.read_u8_array::<4>(vm_try!(compute_offset(memarg, offset)))
+        )))
+    }
+    pub fn read_i64(&self, memarg: MemArg, offset: u32) -> VMResult<i64> {
+        VMResult::Success(i64::from_le_bytes(vm_try!(
+            self.read_u8_array::<8>(vm_try!(compute_offset(memarg, offset)))
         )))
     }
     pub fn read_u32(&self, memarg: MemArg, offset: u32) -> VMResult<u32> {

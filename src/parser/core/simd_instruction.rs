@@ -61,6 +61,144 @@ pub(crate) mod v128_load {
     }
 }
 
+pub(crate) mod v128_load8x8_s {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 1;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load8x8_s, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
+pub(crate) mod v128_load8x8_u {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 2;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load8x8_u, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
+pub(crate) mod v128_load16x4_s {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 3;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load16x4_s, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
+pub(crate) mod v128_load16x4_u {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 4;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load16x4_u, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
+pub(crate) mod v128_load32x2_s {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 5;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load32x2_s, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
+pub(crate) mod v128_load32x2_u {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 6;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load32x2_u, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
+pub(crate) mod v128_load8_splat {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 7;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load8_splat, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
+pub(crate) mod v128_load16_splat {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 8;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load16_splat, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+pub(crate) mod v128_load32_splat {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 9;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load32_splat, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+pub(crate) mod v128_load64_splat {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 10;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
+        ctx.checker.load_op(ValType::V128)?;
+        ctx.instrs
+            .push_with_operand(vm::simd::v128_load64_splat, &[Operand { memarg }]);
+        Ok(len)
+    }
+}
+
 pub(crate) mod v128_store {
     use super::prelude::*;
 

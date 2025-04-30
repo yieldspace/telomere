@@ -2750,7 +2750,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         f32x4_convert_i32x4_u,
                         i32x4_add,
                         i64x2_add,
-                        v128_store
+                        v128_store,
+                        v128_load8x8_s,
+                        v128_load8x8_u,
+                        v128_load16x4_s,
+                        v128_load16x4_u,
+                        v128_load32x2_s,
+                        v128_load32x2_u,
+                        v128_load8_splat,
+                        v128_load16_splat,
+                        v128_load32_splat,
+                        v128_load64_splat
+
                     );
                     (1 + len + len2, false)
                 }
