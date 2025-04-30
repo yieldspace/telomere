@@ -290,21 +290,47 @@ pub unsafe fn v128_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
     vm_try!(ctx.stack.push_u128(a^b));
     call_next(tail_code, 0, ctx)
 }
-pub unsafe fn op_i8x16_all_true(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+pub unsafe fn v128_any_true(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u128();
-    let bytes = v.to_le_bytes();
-
-    let mut all_true = 0xff;
-
-    for &byte in &bytes {
-        all_true &= byte;
-    }
-
-    let result = if all_true != 0 { 1 } else { 0 };
-
+    let result = if v == 0 { 0 } else { 1 };
     vm_try!(ctx.stack.push_i32(result));
     call_next(tail_code, 0, ctx)
 }
+
+macro_rules! all_true_instruction {
+    ($name: ident,$target: ident) => {
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let v: $target = ctx.stack.pop();
+            let mut all_true = 0x01; 
+            for v in v.to_array(){
+                all_true &= (v!=0) as i32;
+            }
+            vm_try!(ctx.stack.push_i32(all_true));
+            call_next(tail_code, 0, ctx)
+        }        
+    };
+}
+
+all_true_instruction!(i8x16_all_true,i8x16);
+all_true_instruction!(i16x8_all_true,i16x8);
+all_true_instruction!(i32x4_all_true,i32x4);
+all_true_instruction!(i64x2_all_true,i64x2);
+macro_rules! bitmask_instruction {
+    ($name: ident,$target: ident) => {
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let v: $target = ctx.stack.pop();
+            let result = v.move_mask();
+            vm_try!(ctx.stack.push_i32(result));
+            call_next(tail_code, 0, ctx)
+        }        
+    };
+}
+bitmask_instruction!(i8x16_bitmask,i8x16);
+bitmask_instruction!(i16x8_bitmask,i16x8);
+bitmask_instruction!(i32x4_bitmask,i32x4);
+bitmask_instruction!(i64x2_bitmask,i64x2);
+
+
 pub unsafe fn op_v128_bitselect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mask = ctx.stack.pop_u128();
     let b = ctx.stack.pop_u128();

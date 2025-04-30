@@ -2775,8 +2775,15 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         u32x4_shr,
                         i64x2_shl,
                         i64x2_shr,
-                        u64x2_shr
-                    );
+                        u64x2_shr,
+                        v128_any_true,
+                        i8x16_bitmask,
+                        i16x8_all_true,
+                        i16x8_bitmask,
+                        i32x4_all_true,
+                        i32x4_bitmask,
+                        i64x2_all_true,
+                        i64x2_bitmask                    );
                     (1 + len + len2, false)
                 }
                 #[cfg(not(feature = "simd"))]

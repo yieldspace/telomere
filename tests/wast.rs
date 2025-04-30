@@ -425,3 +425,7 @@ fn simd_bit_shift() {
 fn simd_bitwise(){
     run_test_file("simd_bitwise");
 }
+#[test]
+fn simd_boolean(){
+    run_test_file("simd_boolean");
+}
