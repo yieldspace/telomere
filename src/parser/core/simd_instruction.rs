@@ -300,6 +300,10 @@ pub(crate) mod v128_any_true {
     }
 }
 
+binary_op_simd_parser!(f32x4_demote_f64x2_zero, 94);
+
+binary_op_simd_parser!(f64x2_promote_low_f32x4, 95);
+
 pub(crate) mod i8x16_all_true {
     use super::prelude::*;
     pub(crate) const CODE: u32 = 99;
@@ -322,6 +326,9 @@ pub(crate) mod i8x16_bitmask {
         Ok(0)
     }
 }
+
+unary_op_simd_parser!(i8x16_narrow_i16x8_s, 101);
+unary_op_simd_parser!(i8x16_narrow_i16x8_u, 102);
 
 macro_rules! shift_instruction_parser {
     ($name: ident,$code: expr) => {
@@ -374,6 +381,13 @@ pub(crate) mod i16x8_bitmask {
     }
 }
 
+unary_op_simd_parser!(i16x8_narrow_i32x4_s, 133);
+unary_op_simd_parser!(i16x8_narrow_i32x4_u, 134);
+binary_op_simd_parser!(i16x8_extend_low_i8x16_s, 135);
+binary_op_simd_parser!(i16x8_extend_high_i8x16_s, 136);
+binary_op_simd_parser!(i16x8_extend_low_i8x16_u, 137);
+binary_op_simd_parser!(i16x8_extend_high_i8x16_u, 138);
+
 shift_instruction_parser!(i16x8_shl, 139);
 shift_instruction_parser!(i16x8_shr, 140);
 shift_instruction_parser!(u16x8_shr, 141);
@@ -402,10 +416,16 @@ pub(crate) mod i32x4_bitmask {
     }
 }
 
+binary_op_simd_parser!(i32x4_extend_low_i16x8_s, 167);
+binary_op_simd_parser!(i32x4_extend_high_i16x8_s, 168);
+binary_op_simd_parser!(i32x4_extend_low_i16x8_u, 169);
+binary_op_simd_parser!(i32x4_extend_high_i16x8_u, 170);
 shift_instruction_parser!(i32x4_shl, 171);
 shift_instruction_parser!(i32x4_shr, 172);
 shift_instruction_parser!(u32x4_shr, 173);
 unary_op_simd_parser!(i32x4_add, 174);
+unary_op_simd_parser!(i32x4_sub, 177);
+unary_op_simd_parser!(i32x4_mul, 181);
 
 pub(crate) mod i64x2_all_true {
     use super::prelude::*;
@@ -446,4 +466,7 @@ unary_op_simd_parser!(f32x4_pmin, 234);
 unary_op_simd_parser!(f32x4_pmax, 235);
 
 binary_op_simd_parser!(i32x4_trunc_sat_f32x4_s, 248);
+binary_op_simd_parser!(f32x4_convert_i32x4_s, 250);
 binary_op_simd_parser!(f32x4_convert_i32x4_u, 251);
+binary_op_simd_parser!(f64x2_convert_low_i32x4_s, 254);
+binary_op_simd_parser!(f64x2_convert_low_i32x4_u, 255);

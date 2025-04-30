@@ -10,6 +10,7 @@ use wast::{
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
+use wide::f64x2;
 pub fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceHandle {
     let buf = ParseBuffer::new(wat).unwrap();
     let mut wat = wast::parser::parse::<Wat>(&buf).unwrap();
@@ -222,7 +223,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                     unsafe {
                                         std::ptr::copy_nonoverlapping(x, buf.as_mut_ptr(), 16)
                                     };
-                                    assert_eq!(b.to_le_bytes(), buf)
+                                    assert_eq!(b.to_le_bytes(), buf, "{:?}", span.linecol_in(text))
                                 }
                                 (WastRetCore::V128(V128Pattern::I8x16(x)), WasmValue::V128(b)) => {
                                     let x = x.as_ptr() as *const u8;
@@ -233,24 +234,58 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                     assert_eq!(b.to_le_bytes(), buf, "{:?}", span.linecol_in(text))
                                 }
                                 (WastRetCore::V128(V128Pattern::F32x4(x)), WasmValue::V128(b)) => {
-                                    let x = x
-                                        .iter()
-                                        .flat_map(|x| match x {
-                                            NanPattern::Value(x) => x.bits.to_le_bytes(),
-                                            _ => todo!(),
-                                        })
-                                        .collect::<Vec<_>>();
-                                    assert_eq!(x, b.to_le_bytes())
+                                    let b = b.to_le_bytes();
+                                    let mut b_a = [0u8; 4];
+                                    b_a.copy_from_slice(&b[0..4]);
+                                    let mut b_b = [0u8; 4];
+                                    b_b.copy_from_slice(&b[4..8]);
+                                    let mut b_c = [0u8; 4];
+                                    b_c.copy_from_slice(&b[8..12]);
+                                    let mut b_d = [0u8; 4];
+                                    b_d.copy_from_slice(&b[12..16]);
+                                    let actuals = [
+                                        f32::from_le_bytes(b_a),
+                                        f32::from_le_bytes(b_b),
+                                        f32::from_le_bytes(b_c),
+                                        f32::from_le_bytes(b_d),
+                                    ];
+                                    for (a, b) in x.into_iter().zip(actuals.into_iter()) {
+                                        match a {
+                                            NanPattern::Value(a) => {
+                                                assert_eq!(
+                                                    f32::from_bits(a.bits),
+                                                    b,
+                                                    "{:?}",
+                                                    span.linecol_in(text)
+                                                )
+                                            }
+                                            NanPattern::ArithmeticNan
+                                            | NanPattern::CanonicalNan => assert!(b.is_nan()),
+                                        }
+                                    }
                                 }
                                 (WastRetCore::V128(V128Pattern::F64x2(x)), WasmValue::V128(b)) => {
-                                    let x = x
-                                        .iter()
-                                        .flat_map(|x| match x {
-                                            NanPattern::Value(x) => x.bits.to_le_bytes(),
-                                            _ => todo!(),
-                                        })
-                                        .collect::<Vec<_>>();
-                                    assert_eq!(x, b.to_le_bytes())
+                                    let b = b.to_le_bytes();
+                                    let mut b_a = [0u8; 8];
+                                    b_a.copy_from_slice(&b[0..8]);
+                                    let mut b_b = [0u8; 8];
+                                    b_b.copy_from_slice(&b[8..16]);
+                                    let actuals =
+                                        [f64::from_le_bytes(b_a), f64::from_le_bytes(b_b)];
+                                    for (a, b) in x.into_iter().zip(actuals.into_iter()) {
+                                        match a {
+                                            NanPattern::Value(a) => {
+                                                assert_eq!(
+                                                    f64::from_bits(a.bits),
+                                                    b,
+                                                    "{:?}",
+                                                    span.linecol_in(text)
+                                                )
+                                            }
+                                            NanPattern::ArithmeticNan
+                                            | NanPattern::CanonicalNan => assert!(b.is_nan()),
+                                        }
+                                    }
                                 }
                                 (WastRetCore::RefNull(_), WasmValue::ExternRef(0)) => {
                                     // ok

@@ -2783,7 +2783,26 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         i32x4_all_true,
                         i32x4_bitmask,
                         i64x2_all_true,
-                        i64x2_bitmask
+                        i64x2_bitmask,
+                        f32x4_convert_i32x4_s,
+                        f64x2_convert_low_i32x4_s,
+                        f64x2_convert_low_i32x4_u,
+                        i8x16_narrow_i16x8_s,
+                        i8x16_narrow_i16x8_u,
+                        i16x8_narrow_i32x4_s,
+                        i16x8_narrow_i32x4_u,
+                        f64x2_promote_low_f32x4,
+                        f32x4_demote_f64x2_zero,
+                        i32x4_sub,
+                        i32x4_mul,
+                        i16x8_extend_low_i8x16_s,
+                        i16x8_extend_high_i8x16_s,
+                        i16x8_extend_low_i8x16_u,
+                        i16x8_extend_high_i8x16_u,
+                        i32x4_extend_low_i16x8_s,
+                        i32x4_extend_high_i16x8_s,
+                       i32x4_extend_low_i16x8_u,
+                        i32x4_extend_high_i16x8_u
                     );
                     (1 + len + len2, false)
                 }

@@ -3,7 +3,10 @@ use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u32x4, u8x16};
 use wide::{u16x8, u64x2};
 
 use crate::{
-    common::{stack::StackOperation, ExecuteContext, Instr},
+    common::{
+        stack::{LaneType, StackOperation},
+        ExecuteContext, Instr,
+    },
     runtime::vm::call_next,
     Stack, VMResult,
 };
@@ -394,6 +397,17 @@ pub unsafe fn i32x4_trunc_sat_f32x4_s(
     vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn f32x4_convert_i32x4_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    use crate::common::stack::StackOperation;
+    let a: i32x4 = ctx.stack.pop();
+    let [a, b, c, d] = a.to_array();
+    let result = f32x4::from([a as f32, b as f32, c as f32, d as f32]);
+    vm_try!(ctx.stack.push(result));
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn f32x4_convert_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -405,6 +419,189 @@ pub unsafe fn f32x4_convert_i32x4_u(
     vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
+
+pub unsafe fn f64x2_convert_low_i32x4_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    use crate::common::stack::StackOperation;
+    let v: i32x4 = ctx.stack.pop();
+    let result = f64x2::from_i32x4_lower2(v);
+    vm_try!(ctx.stack.push(result));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn f64x2_convert_low_i32x4_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    use crate::common::stack::StackOperation;
+    let a: u32x4 = ctx.stack.pop();
+    let [a, b, _c, _d] = a.to_array();
+    let result = f64x2::from([a as f64, b as f64]);
+    vm_try!(ctx.stack.push(result));
+    call_next(tail_code, 0, ctx)
+}
+macro_rules! narrow_instruction {
+    ($name: ident,$from: ident,$to: ident) => {
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            use crate::common::stack::StackOperation;
+
+            let b: $from = ctx.stack.pop();
+            let a: $from = ctx.stack.pop();
+            let mut result: [<$to as LaneType>::BaseType; <$to as LaneType>::LANE_SIZE] =
+                [0; <$to as LaneType>::LANE_SIZE];
+            let a_arr = a.to_array();
+            let b_arr = b.to_array();
+
+            for i in 0..<$from as LaneType>::LANE_SIZE {
+                result[i] = a_arr[i].clamp(
+                    <$to as LaneType>::BaseType::MIN as <$from as LaneType>::BaseType,
+                    <$to as LaneType>::BaseType::MAX as <$from as LaneType>::BaseType,
+                ) as <$to as LaneType>::BaseType;
+                result[i + <$from as LaneType>::LANE_SIZE] = b_arr[i].clamp(
+                    <$to as LaneType>::BaseType::MIN as <$from as LaneType>::BaseType,
+                    <$to as LaneType>::BaseType::MAX as <$from as LaneType>::BaseType,
+                )
+                    as <$to as LaneType>::BaseType;
+            }
+
+            vm_try!(ctx.stack.push($to::from(result)));
+            call_next(tail_code, 0, ctx)
+        }
+    };
+}
+
+narrow_instruction!(i8x16_narrow_i16x8_s, i16x8, i8x16);
+narrow_instruction!(i8x16_narrow_i16x8_u, i16x8, u8x16);
+narrow_instruction!(i16x8_narrow_i32x4_s, i32x4, i16x8);
+narrow_instruction!(i16x8_narrow_i32x4_u, i32x4, u16x8);
+
+pub unsafe fn f32x4_demote_f64x2_zero(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let v: f64x2 = ctx.stack.pop();
+    let [a, b] = v.to_array();
+    vm_try!(ctx
+        .stack
+        .push(f32x4::from([a as f32, b as f32, 0.0f32, 0.0f32])));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn f64x2_promote_low_f32x4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let v: f32x4 = ctx.stack.pop();
+    let [a, b, _c, _d] = v.to_array();
+    vm_try!(ctx.stack.push(f64x2::from([a as f64, b as f64])));
+    call_next(tail_code, 0, ctx)
+}
+macro_rules! extend_instruction {
+    ($name: ident,$from: ident,$to: ident,$($index: expr),*)=> {
+        pub unsafe fn $name(    tail_code: *const Instr,
+            ctx: &mut ExecuteContext)->VMResult<()>{
+                let v: $from = ctx.stack.pop();
+                let v = v.to_array();
+                vm_try!(ctx.stack.push($to::from([$(v[$index] as <$to as LaneType>::BaseType),*])));
+
+                call_next(tail_code, 0, ctx)
+
+            }
+    }
+}
+
+extend_instruction!(
+    i16x8_extend_low_i8x16_s,
+    i8x16,
+    i16x8,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+);
+extend_instruction!(
+    i16x8_extend_high_i8x16_s,
+    i8x16,
+    i16x8,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+);
+extend_instruction!(
+    i16x8_extend_low_i8x16_u,
+    u8x16,
+    u16x8,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+);
+extend_instruction!(
+    i16x8_extend_high_i8x16_u,
+    u8x16,
+    u16x8,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+);
+
+extend_instruction!(
+    i32x4_extend_low_i16x8_s,
+    i16x8,
+    i32x4,
+    0,
+    1,
+    2,
+    3
+    
+);
+extend_instruction!(
+    i32x4_extend_high_i16x8_s,
+    i16x8,
+    i32x4,
+    4,
+    5,
+    6,
+    7
+);
+extend_instruction!(
+    i32x4_extend_low_i16x8_u,
+    u16x8,
+    u32x4,
+    0,
+    1,
+    2,
+    3
+    
+);
+extend_instruction!(
+    i32x4_extend_high_i16x8_u,
+    u16x8,
+    u32x4,
+    4,
+    5,
+    6,
+    7
+);
+
 
 #[inline]
 unsafe fn handle_unary_op<T>(

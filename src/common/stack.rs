@@ -5,7 +5,7 @@ use std::fmt::Debug;
 
 use super::{gc::GcRef, Instr};
 
-trait LaneType
+pub(crate) trait LaneType
 where
     Self: Sized,
 {
