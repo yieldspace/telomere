@@ -8,9 +8,6 @@ use std::collections::HashMap;
 pub struct ComponentType {
     pub(crate) imports: HashMap<String, ExternDesc>,
     pub(crate) exports: HashMap<String, ExternDesc>,
-    pub(crate) core_types: Vec<GlobalIdx<CoreType>>,
-    pub(crate) types: Vec<Type>,
-    pub(crate) instances: Vec<GlobalIdx<Instance>>,
 }
 
 impl ComponentType {
@@ -18,9 +15,6 @@ impl ComponentType {
         Self {
             imports: HashMap::new(),
             exports: HashMap::new(),
-            core_types: Vec::new(),
-            types: Vec::new(),
-            instances: Vec::new(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::component_model::{CoreExportType, CoreSort, Sort, SortWithIdx};
+use crate::component_model::{CoreModuleExportType, CoreSort, Sort, SortWithIdx};
 use crate::WasmParserError;
 use thiserror::Error;
 
@@ -42,7 +42,7 @@ pub enum ComponentParseError {
     #[error("Expected {0} Type")]
     InvalidType(String),
     #[error("Invalid core export `{0}` type: {1:?} != {2:?}")]
-    InvalidExportType(String, CoreExportType, CoreSort),
+    InvalidExportType(String, CoreModuleExportType, CoreSort),
     #[error("Unsupported: {0}")]
     Unsupported(String),
 }

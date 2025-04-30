@@ -1,4 +1,5 @@
 mod alias;
+mod canon;
 mod component;
 mod func;
 mod instance;
@@ -8,6 +9,7 @@ mod val;
 
 use crate::parser::component_model::ComponentParseError;
 pub use alias::*;
+pub use canon::*;
 pub use component::*;
 pub use func::*;
 pub use instance::*;

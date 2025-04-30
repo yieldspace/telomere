@@ -6,6 +6,7 @@ mod flatten;
 mod func;
 mod idx;
 mod instance;
+pub mod section;
 mod sort;
 mod types;
 
@@ -18,12 +19,3 @@ pub use idx::*;
 pub use instance::*;
 pub use sort::*;
 pub use types::*;
-
-pub type ExportName = String;
-pub type ImportName = String;
-
-#[derive(Debug)]
-pub struct InlineExport {
-    pub name: String,
-    pub sort: SortWithIdx,
-}

@@ -3,7 +3,6 @@ use crate::runtime::component_model::instantiate::context::{ResolvedImportKey, R
 use crate::runtime::component_model::ComponentVMError;
 
 mod context;
-mod instance;
 
 pub type InstantiateResult<T> = Result<T, ComponentVMError>;
 

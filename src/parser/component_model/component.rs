@@ -1,4 +1,5 @@
 use crate::binary::BinaryReader;
+use crate::component_model::section::ComponentSectionType;
 use crate::component_model::{
     ComponentExport, ComponentImport, ComponentType, CoreModule, CoreModuleType, ExternDesc,
     GlobalIdx, InlineComponent, Relation,
@@ -10,7 +11,6 @@ use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::export::parse_export;
 use crate::parser::component_model::import::parse_import;
 use crate::parser::component_model::instance::parse_instance;
-use crate::parser::component_model::section::ComponentSectionType;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::{
     parse_alias, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,

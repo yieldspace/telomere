@@ -1,7 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    AliasIdx, CoreExportType, CoreGlobalRef, CoreMemoryRef, CoreSort, CoreTableRef, ExternDesc,
-    GlobalIdx, Relation, Sort,
+    AliasIdx, CoreGlobalRef, CoreMemoryRef, CoreModuleExportType, CoreSort, CoreTableRef,
+    ExternDesc, GlobalIdx, Relation, Sort,
 };
 use crate::parser::component_model::{
     parse_core_instance_idx, parse_instance_idx, parse_sort, ComponentParseError, ParseContext,
@@ -105,7 +105,7 @@ fn parse_core_export(
     };
     let export = core_instance_type.get_export_type(&name)?;
     match export {
-        CoreExportType::Memory(ty) => {
+        CoreModuleExportType::Memory(ty) => {
             let idx = ctx.validator.add_core_memory_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_memory(
@@ -115,7 +115,7 @@ fn parse_core_export(
             ctx.validator.register_global_core_memory(idx, global_idx)?;
             Ok(AliasIdx::CoreMemory)
         }
-        CoreExportType::Table(ty) => {
+        CoreModuleExportType::Table(ty) => {
             let idx = ctx.validator.add_core_table_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state
@@ -123,7 +123,7 @@ fn parse_core_export(
             ctx.validator.register_global_core_table(idx, global_idx)?;
             Ok(AliasIdx::CoreTable)
         }
-        CoreExportType::Func(ty) => {
+        CoreModuleExportType::Func(ty) => {
             let idx = ctx.validator.add_core_func_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_func(
@@ -133,7 +133,7 @@ fn parse_core_export(
             ctx.validator.register_global_core_func(idx, global_idx)?;
             Ok(AliasIdx::CoreFunc)
         }
-        CoreExportType::Global(ty) => {
+        CoreModuleExportType::Global(ty) => {
             let idx = ctx.validator.add_core_global_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_global(
