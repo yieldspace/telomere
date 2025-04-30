@@ -10,7 +10,7 @@ use wast::{
     parser::ParseBuffer,
     Wast, WastArg, WastRet, Wat,
 };
-use wide::f64x2;
+
 pub fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceHandle {
     let buf = ParseBuffer::new(wat).unwrap();
     let mut wat = wast::parser::parse::<Wat>(&buf).unwrap();
@@ -253,9 +253,10 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                         match a {
                                             NanPattern::Value(a) => {
                                                 assert_eq!(
+                                                    a.bits,
+                                                    b.to_bits(),
+                                                    "expected: {} actual: {b} @ {:?}",
                                                     f32::from_bits(a.bits),
-                                                    b,
-                                                    "{:?}",
                                                     span.linecol_in(text)
                                                 )
                                             }
@@ -276,9 +277,10 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                         match a {
                                             NanPattern::Value(a) => {
                                                 assert_eq!(
+                                                    a.bits,
+                                                    b.to_bits(),
+                                                    "expected: {},actual: {b}@{:?}",
                                                     f64::from_bits(a.bits),
-                                                    b,
-                                                    "{:?}",
                                                     span.linecol_in(text)
                                                 )
                                             }
