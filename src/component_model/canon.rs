@@ -112,6 +112,7 @@ pub struct CanonicalOptions {
 }
 
 impl CanonicalOptions {
+    #[cfg(not(feature = "component-gated-feature-async"))]
     pub fn is_sync(&self) -> bool {
         true
     }
