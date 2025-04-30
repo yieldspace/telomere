@@ -421,3 +421,7 @@ fn simd_align() {
 fn simd_bit_shift() {
     run_test_file("simd_bit_shift");
 }
+#[test]
+fn simd_bitwise(){
+    run_test_file("simd_bitwise");
+}

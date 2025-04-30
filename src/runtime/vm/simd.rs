@@ -261,9 +261,33 @@ pub unsafe fn op_i8x16_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
     call_next(tail_code, 0, ctx)
 }
-pub unsafe fn op_v128_not(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+pub unsafe fn v128_not(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     vm_try!(ctx.stack.push_u128(!b));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn v128_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u128();
+    let a = ctx.stack.pop_u128();
+    vm_try!(ctx.stack.push_u128(a&b));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn v128_andnot(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u128();
+    let a = ctx.stack.pop_u128();
+    vm_try!(ctx.stack.push_u128(a&!b));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn v128_or(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u128();
+    let a = ctx.stack.pop_u128();
+    vm_try!(ctx.stack.push_u128(a|b));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn v128_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b = ctx.stack.pop_u128();
+    let a = ctx.stack.pop_u128();
+    vm_try!(ctx.stack.push_u128(a^b));
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn op_i8x16_all_true(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {

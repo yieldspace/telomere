@@ -267,17 +267,12 @@ pub(crate) mod i8x16_eq {
         Ok(0)
     }
 }
-pub(crate) mod v128_not {
-    use super::prelude::*;
-    pub(crate) const CODE: u32 = 77;
-    pub(crate) fn parse<R: BinaryReader>(
-        ctx: &mut SimdParserContext<R>,
-    ) -> Result<usize, WasmParserError> {
-        ctx.checker.binary_op(ValType::V128)?;
-        ctx.instrs.push_instr1(vm::simd::op_v128_not);
-        Ok(0)
-    }
-}
+
+binary_op_simd_parser!(v128_not,77);
+unary_op_simd_parser!(v128_and,78);
+unary_op_simd_parser!(v128_andnot,79);
+unary_op_simd_parser!(v128_or,80);
+unary_op_simd_parser!(v128_xor,81);
 pub(crate) mod v128_bitselect {
     use super::prelude::*;
     pub(crate) const CODE: u32 = 82;
