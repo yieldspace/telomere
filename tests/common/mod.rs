@@ -206,7 +206,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                     unsafe {
                                         std::ptr::copy_nonoverlapping(x, buf.as_mut_ptr(), 16)
                                     };
-                                    assert_eq!(b.to_le_bytes(), buf)
+                                    assert_eq!(b.to_le_bytes(), buf, "{:?}", span.linecol_in(text))
                                 }
                                 (WastRetCore::V128(V128Pattern::I32x4(x)), WasmValue::V128(b)) => {
                                     let x = x.as_ptr() as *const u8;
@@ -214,7 +214,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                     unsafe {
                                         std::ptr::copy_nonoverlapping(x, buf.as_mut_ptr(), 16)
                                     };
-                                    assert_eq!(b.to_le_bytes(), buf)
+                                    assert_eq!(b.to_le_bytes(), buf, "{:?}", span.linecol_in(text))
                                 }
                                 (WastRetCore::V128(V128Pattern::I16x8(x)), WasmValue::V128(b)) => {
                                     let x = x.as_ptr() as *const u8;
@@ -230,7 +230,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                     unsafe {
                                         std::ptr::copy_nonoverlapping(x, buf.as_mut_ptr(), 16)
                                     };
-                                    assert_eq!(b.to_le_bytes(), buf)
+                                    assert_eq!(b.to_le_bytes(), buf, "{:?}", span.linecol_in(text))
                                 }
                                 (WastRetCore::V128(V128Pattern::F32x4(x)), WasmValue::V128(b)) => {
                                     let x = x

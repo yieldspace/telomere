@@ -406,9 +406,26 @@ fn simd_load() {
 }
 #[test]
 fn simd_const() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
-
     run_test_file("simd_const");
+}
+#[test]
+fn simd_address() {
+    run_test_file("simd_address");
+}
+
+#[test]
+fn simd_align() {
+    run_test_file("simd_align");
+}
+#[test]
+fn simd_bit_shift() {
+    run_test_file("simd_bit_shift");
+}
+#[test]
+fn simd_bitwise() {
+    run_test_file("simd_bitwise");
+}
+#[test]
+fn simd_boolean() {
+    run_test_file("simd_boolean");
 }
