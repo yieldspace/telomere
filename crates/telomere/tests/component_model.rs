@@ -21,8 +21,8 @@ fn test_basic_component() {
           (alias export 0 "exit" (func (;0;)))
        )
     "#;
-    let binary = wat::parse_str(component).unwrap();
-    // let binary = wat::parse_str(std::fs::read_to_string("foo.wat").unwrap()).unwrap();
+    // let binary = wat::parse_str(component).unwrap();
+    let binary = wat::parse_str(std::fs::read_to_string("../../foo.wat").unwrap()).unwrap();
     // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     let mut instrs = Vec::new();
@@ -32,7 +32,7 @@ fn test_basic_component() {
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();
     let instance =
-        telomere::runtime::component_model::instantiate(&mut instrs, &mut store, &linker).unwrap();
+        telomere::runtime::component_model::instantiate(&state, &mut store, &linker).unwrap();
     println!("{:?}", instance);
 }
 

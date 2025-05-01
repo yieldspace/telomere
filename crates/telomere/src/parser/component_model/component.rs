@@ -17,7 +17,10 @@ use crate::parser::component_model::{
     Validator,
 };
 use crate::parser::core::{parse_u32, parse_vec};
-use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
+use crate::runtime::component_model::instantiate::{
+    instantiate_core_instance, instantiate_instance_start, instantiate_special_end,
+    InstantiateInstr, InstantiateOperand,
+};
 use crate::WasmParser;
 use std::collections::HashMap;
 
@@ -172,6 +175,16 @@ fn parse_core_instance_section(
             .register_core_instance(global_idx.clone(), Relation::Defined(inst));
         ctx.validator
             .register_global_core_instance(idx, global_idx)?;
+        ctx.extend_instr(vec![
+            InstantiateInstr {
+                op: instantiate_core_instance,
+            },
+            InstantiateInstr {
+                operand: InstantiateOperand {
+                    core_instance_idx: global_idx,
+                },
+            },
+        ]);
     }
     Ok(())
 }
@@ -181,7 +194,15 @@ fn parse_instance_section(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
     // Core instance parsing logic
-    parse_vec(ctx, |v| v.reader, parse_instance)?;
+    for _ in parse_vec_range(ctx)? {
+        let (_, instance_idx) = parse_instance(ctx)?;
+        ctx.push_instr(InstantiateInstr {
+            op: instantiate_instance_start,
+        });
+        ctx.push_instr(InstantiateInstr {
+            operand: InstantiateOperand { instance_idx },
+        });
+    }
     Ok(())
 }
 

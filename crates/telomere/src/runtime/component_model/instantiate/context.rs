@@ -1,5 +1,5 @@
 use crate::common::InstanceHandle;
-use crate::component_model::{CoreModule, GlobalIdx, Instance};
+use crate::component_model::{CompiledState, CoreModule, GlobalIdx, Instance};
 use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
 use crate::{Module, Registry, Store};
 use std::collections::HashMap;
@@ -8,6 +8,7 @@ pub struct InstantiateContext<'a> {
     pub current: Option<usize>,
     pub(crate) store: &'a mut Store,
     pub instantiated: &'a mut ComponentInstantiated,
+    pub(crate) compiled: &'a CompiledState,
     pub core_functions: Vec<(InstanceHandle, String)>,
     pub core_memories: Vec<(InstanceHandle, String)>,
     pub core_tables: Vec<(InstanceHandle, String)>,
@@ -19,12 +20,14 @@ pub struct InstantiateContext<'a> {
 impl<'a> InstantiateContext<'a> {
     pub fn new(
         store: &'a mut Store,
+        compiled: &'a CompiledState,
         instantiated: &'a mut ComponentInstantiated,
         linker: &'a Linker,
     ) -> Self {
         Self {
             current: None,
             store,
+            compiled,
             instantiated,
             core_functions: vec![],
             core_memories: vec![],

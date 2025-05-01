@@ -1,3 +1,4 @@
+use crate::component_model::{CoreFunc, CoreInstance, CoreModule, Func, GlobalIdx, Instance};
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::runtime::component_model::instantiate::context::{ResolvedImportKey, ResolvedImportMap};
 use crate::runtime::component_model::ComponentVMError;
@@ -19,13 +20,12 @@ pub union InstantiateInstr {
 pub union InstantiateOperand {
     #[allow(dead_code)]
     idx: usize,
-    pub core_module_idx: usize,
-    pub core_instance_idx: usize,
-    pub core_func_idx: usize,
-    pub instance_idx: usize,
-    pub module_idx: usize,
-    pub func_idx: usize,
-    pub type_idx: usize,
+    pub core_module_idx: GlobalIdx<CoreModule>,
+    pub core_instance_idx: GlobalIdx<CoreInstance>,
+    pub core_func_idx: GlobalIdx<CoreFunc>,
+    pub instance_idx: GlobalIdx<Instance>,
+    pub module_idx: GlobalIdx<CoreModule>,
+    pub func_idx: GlobalIdx<Func>,
 }
 
 #[inline(always)]
@@ -73,11 +73,6 @@ pub unsafe fn instantiate_instance_start(
     ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
     let idx = (*tail_code).operand.instance_idx;
-
-    ctx.resolved_imports
-        .insert(ResolvedImportKey::Child(idx), ResolvedImportMap::new());
-
-    ctx.current = Some(idx);
 
     instantiate_next(tail_code, 1, ctx)
 }

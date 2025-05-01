@@ -2,6 +2,7 @@ use crate::component_model::{
     CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, Func,
     GlobalIdx, InlineComponent, Instance,
 };
+use crate::runtime::component_model::instantiate::InstantiateInstr;
 use std::collections::HashMap;
 
 pub enum Relation<T> {
@@ -36,6 +37,7 @@ impl<T> Relation<T> {
 
 #[derive(Default)]
 pub struct CompiledState {
+    pub(crate) instrs: Vec<InstantiateInstr>,
     core_modules: HashMap<GlobalIdx<CoreModule>, Relation<CoreModule>>,
     core_instances: HashMap<GlobalIdx<CoreInstance>, Relation<CoreInstance>>,
     core_funcs: HashMap<GlobalIdx<CoreFunc>, Relation<CoreFunc>>,
@@ -50,6 +52,14 @@ pub struct CompiledState {
 impl CompiledState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn push_instr(&mut self, instr: InstantiateInstr) {
+        self.instrs.push(instr);
+    }
+
+    pub fn extend_instr(&mut self, instrs: impl IntoIterator<Item = InstantiateInstr>) {
+        self.instrs.extend(instrs);
     }
 
     pub fn register_core_module(&mut self, idx: GlobalIdx<CoreModule>, data: Relation<CoreModule>) {

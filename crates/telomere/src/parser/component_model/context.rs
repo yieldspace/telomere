@@ -32,10 +32,10 @@ where
     }
 
     pub fn push_instr(&mut self, instr: InstantiateInstr) {
-        self.instrs.push(instr);
+        self.state.push_instr(instr);
     }
 
-    pub fn extend_instr(&mut self, instrs: impl Iterator<Item = InstantiateInstr>) {
-        self.instrs.extend(instrs);
+    pub fn extend_instr(&mut self, instrs: impl IntoIterator<Item = InstantiateInstr>) {
+        self.state.extend_instr(instrs);
     }
 }

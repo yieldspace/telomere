@@ -83,15 +83,19 @@ pub fn parse_core_instance(
 
 pub fn parse_core_instantiate_arg(
     ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<(String, InstanceType, GlobalIdx<Instance>)> {
+) -> SizedResult<(String, CoreInstanceType, GlobalIdx<CoreInstance>)> {
     let start_count = ctx.reader.read_count();
     let (_, name) = parse_name(ctx.reader)?;
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x12], "instantiate arg")?;
     let instance_idx = parse_core_instance_idx(ctx)?;
-    let ty = ctx.validator.get_instance_type(instance_idx)?;
+    let ty = ctx.validator.get_core_instance_type(instance_idx)?;
     Ok((
         ctx.reader.read_count() - start_count,
-        (name, ty, ctx.validator.get_global_instance(instance_idx)?),
+        (
+            name,
+            ty,
+            ctx.validator.get_global_core_instance(instance_idx)?,
+        ),
     ))
 }
 

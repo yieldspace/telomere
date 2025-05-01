@@ -8,7 +8,7 @@ use std::collections::HashMap;
 pub enum CoreInstance {
     Real {
         module_idx: GlobalIdx<CoreModule>,
-        imports: HashMap<String, GlobalIdx<Instance>>,
+        imports: HashMap<String, GlobalIdx<CoreInstance>>,
     },
     Alias {
         exports: HashMap<String, CoreInstanceInlineExport>,

@@ -7,6 +7,7 @@ pub mod instantiate;
 mod linker;
 
 use crate::common::InstanceHandle;
+use crate::component_model::CompiledState;
 use crate::runtime::component_model::instantiate::{
     instantiate_next, InstantiateContext, InstantiateInstr,
 };
@@ -51,13 +52,13 @@ pub struct CoreInstantiated {
 pub struct CoreFunctionInstantiated {}
 
 pub fn instantiate(
-    instrs: &mut [InstantiateInstr],
+    compiled: &CompiledState,
     store: &mut Store,
     linker: &Linker,
 ) -> Result<ComponentInstantiated, ComponentVMError> {
     let mut instantiated = ComponentInstantiated::new();
-    let ptr = instrs.as_ptr();
-    let mut ctx = InstantiateContext::new(store, &mut instantiated, linker);
+    let ptr = compiled.instrs.as_ptr();
+    let mut ctx = InstantiateContext::new(store, &compiled, &mut instantiated, linker);
     unsafe {
         instantiate_next(ptr, 0, &mut ctx).unwrap();
     }
