@@ -1,45 +1,29 @@
 [package]
-name = "telomere"
-version = "0.1.0"
-edition = "2021"
-
-[profile.release]
-codegen-units = 16
+name = "telomere-cli"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+publish.workspace = true
 
 [dependencies]
-wide = { version = "0.7.32", optional = true }
-thiserror = "2.0.11"
-bytes = "1.10.0"
-bumpalo = { version = "3.17.0", features = ["collections"] }
-tracing = { version = "0.1.41" }
-num-derive = "0.4.2"
-num-traits = "0.2.19"
-typed-arena = "2.0.2"
+clap = {version = "4.5.37", features = ["derive"]}
+anyhow = "1.0.98"
+telomere.workspace = true
 
-[dev-dependencies]
-wast = { version = "229.0.0", features = ["component-model"] }
-tracing-subscriber = { version = "0.3.19" }
-wat = "1.228.0"
+[workspace]
+resolver = "2"
+members = ["crates/telomere"]
 
-[build-dependencies]
-syn = { version = "2.0.100", features = ["full"] }
-quote = "1.0.40"
-proc-macro2 = "1.0.95"
+[workspace.package]
+version = "0.1.0"
+rust-version = "1.86.0"
+edition = "2021"
+publish = false
+authors = ["sizumita", "tignear"]
+homepage = "https://github.com/yieldspace/telomere"
+keywords = ["webassembly", "runtime"]
 
-[features]
-default = ["interpreter", "simd"]
-interpreter = []
-simd = ["wide"]
-
-# 🪙
-component-gated-feature-value-imports-exports = []
-# 🪺
-component-gated-feature-nested-namespaces-and-packages = []
-# 🔀
-component-gated-feature-async = []
-# 🧵
-component-gated-feature-threading-builtins = []
-# 🔧
-component-gated-feature-fixed-length-lists = []
-# 📝
-component-gated-feature-error-context-type = []
+[workspace.dependencies]
+telomere = { path = "crates/telomere" }

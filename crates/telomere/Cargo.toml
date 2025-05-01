@@ -1,0 +1,44 @@
+[package]
+name = "telomere"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+keywords.workspace = true
+
+[profile.release]
+codegen-units = 16
+
+[dependencies]
+wide = { version = "0.7.32", optional = true }
+thiserror = "2.0.11"
+tracing = { version = "0.1.41" }
+num-derive = "0.4.2"
+num-traits = "0.2.19"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.19" }
+wat = "1.228.0"
+
+[build-dependencies]
+syn = { version = "2.0.100", features = ["full"] }
+quote = "1.0.40"
+proc-macro2 = "1.0.95"
+
+[features]
+default = ["interpreter", "simd"]
+interpreter = []
+simd = ["wide"]
+
+# 🪙
+component-gated-feature-value-imports-exports = []
+# 🪺
+component-gated-feature-nested-namespaces-and-packages = []
+# 🔀
+component-gated-feature-async = []
+# 🧵
+component-gated-feature-threading-builtins = []
+# 🔧
+component-gated-feature-fixed-length-lists = []
+# 📝
+component-gated-feature-error-context-type = []
