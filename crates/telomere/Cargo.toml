@@ -18,6 +18,7 @@ num-traits = "0.2.19"
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.19" }
+wast = {version = "229.0.0", features = ["component-model"]}
 wat = "1.228.0"
 
 [build-dependencies]
