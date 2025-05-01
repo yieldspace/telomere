@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 pub enum Relation<T> {
     Defined(T),
-    Alias(GlobalIdx<T>),
     Import(String),
     FromCoreExport(GlobalIdx<CoreInstance>, String),
     FromExport(GlobalIdx<Instance>, String),
@@ -16,10 +15,6 @@ pub enum Relation<T> {
 impl<T> Relation<T> {
     pub fn new(data: T) -> Self {
         Relation::Defined(data)
-    }
-
-    pub fn alias(idx: GlobalIdx<T>) -> Self {
-        Relation::Alias(idx)
     }
 
     pub fn import(name: String) -> Self {
@@ -38,15 +33,15 @@ impl<T> Relation<T> {
 #[derive(Default)]
 pub struct CompiledState {
     pub(crate) instrs: Vec<InstantiateInstr>,
-    core_modules: HashMap<GlobalIdx<CoreModule>, Relation<CoreModule>>,
-    core_instances: HashMap<GlobalIdx<CoreInstance>, Relation<CoreInstance>>,
-    core_funcs: HashMap<GlobalIdx<CoreFunc>, Relation<CoreFunc>>,
-    core_memories: HashMap<GlobalIdx<CoreMemoryRef>, CoreMemoryRef>,
-    core_tables: HashMap<GlobalIdx<CoreTableRef>, CoreTableRef>,
-    core_globals: HashMap<GlobalIdx<CoreGlobalRef>, CoreGlobalRef>,
-    components: HashMap<GlobalIdx<InlineComponent>, Relation<InlineComponent>>,
-    instances: HashMap<GlobalIdx<Instance>, Relation<Instance>>,
-    funcs: HashMap<GlobalIdx<Func>, Relation<Func>>,
+    pub(crate) core_modules: HashMap<GlobalIdx<CoreModule>, Relation<CoreModule>>,
+    pub(crate) core_instances: HashMap<GlobalIdx<CoreInstance>, Relation<CoreInstance>>,
+    pub(crate) core_funcs: HashMap<GlobalIdx<CoreFunc>, Relation<CoreFunc>>,
+    pub(crate) core_memories: HashMap<GlobalIdx<CoreMemoryRef>, CoreMemoryRef>,
+    pub(crate) core_tables: HashMap<GlobalIdx<CoreTableRef>, CoreTableRef>,
+    pub(crate) core_globals: HashMap<GlobalIdx<CoreGlobalRef>, CoreGlobalRef>,
+    pub(crate) components: HashMap<GlobalIdx<InlineComponent>, Relation<InlineComponent>>,
+    pub(crate) instances: HashMap<GlobalIdx<Instance>, Relation<Instance>>,
+    pub(crate) funcs: HashMap<GlobalIdx<Func>, Relation<Func>>,
 }
 
 impl CompiledState {

@@ -1,11 +1,17 @@
-use crate::component_model::{CoreFunc, CoreInstance, CoreModule, Func, GlobalIdx, Instance};
+use crate::component_model::{
+    CoreFunc, CoreInstance, CoreInstanceInlineExport, CoreModule, Func, GlobalIdx, Instance,
+};
+pub use crate::instantiate as core_instantiate;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::runtime::component_model::instantiate::context::{ResolvedImportKey, ResolvedImportMap};
-use crate::runtime::component_model::ComponentVMError;
+pub use crate::runtime::component_model::instantiate::error::InstantiateError;
+use crate::runtime::component_model::CoreInstanceInstantiated;
+use crate::Registry;
+
+pub type InstantiateResult<T> = Result<T, InstantiateError>;
 
 mod context;
-
-pub type InstantiateResult<T> = Result<T, ComponentVMError>;
+mod error;
 
 pub type InstantiateOp =
     unsafe fn(*const InstantiateInstr, &mut InstantiateContext) -> InstantiateResult<()>;
@@ -41,6 +47,46 @@ pub unsafe fn instantiate_core_instance(
     tail_code: *const InstantiateInstr,
     ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
+    let idx = (*tail_code).operand.core_instance_idx;
+    let instance = ctx.get_core_instance(&idx)?;
+    match instance {
+        CoreInstance::Real {
+            module_idx,
+            imports,
+        } => {
+            let module = ctx.get_core_module(&module_idx)?;
+            let mut registry = Registry::new();
+            for (name, idx) in imports {
+                let inst = ctx.get_instantiated_core_instance(idx);
+                registry.register(name, inst.handle.clone());
+            }
+            let result = core_instantiate(module.value.clone(), &mut ctx.store, &registry);
+            if result.is_err() {
+                return Err(InstantiateError::CoreVMError(format!("{result:?}")));
+            }
+            ctx.register_instantiated_core_instance(
+                idx,
+                CoreInstanceInstantiated {
+                    handle: result.unwrap(),
+                    registry,
+                },
+            );
+        }
+        CoreInstance::Alias { exports } => {
+            for (name, export) in exports {
+                match export {
+                    CoreInstanceInlineExport::Func(idx) => {}
+                    CoreInstanceInlineExport::Table(_) => {}
+                    CoreInstanceInlineExport::Memory(_) => {}
+                    CoreInstanceInlineExport::Global(_) => {}
+                    CoreInstanceInlineExport::Type(_) => {}
+                    CoreInstanceInlineExport::Module(_) => {}
+                    CoreInstanceInlineExport::Instance(_) => {}
+                }
+            }
+            todo!()
+        }
+    }
     instantiate_next(tail_code, 1, ctx)
 }
 

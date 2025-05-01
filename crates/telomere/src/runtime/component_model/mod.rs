@@ -7,9 +7,11 @@ pub mod instantiate;
 mod linker;
 
 use crate::common::InstanceHandle;
-use crate::component_model::CompiledState;
+use crate::component_model::{
+    CompiledState, CoreInstance, CoreModule, CoreSortWithIdx, GlobalIdx, Instance, SortWithIdx,
+};
 use crate::runtime::component_model::instantiate::{
-    instantiate_next, InstantiateContext, InstantiateInstr,
+    instantiate_next, InstantiateContext, InstantiateError, InstantiateResult,
 };
 use crate::{Registry, Store};
 pub use error::ComponentVMError;
@@ -17,22 +19,18 @@ pub use func::*;
 pub use linker::Linker;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Default)]
 pub struct ComponentInstantiated {
-    pub core_instances: Vec<CoreInstantiated>,
+    pub core_instances: HashMap<GlobalIdx<CoreInstance>, CoreInstanceInstantiated>,
     pub core_functions: Vec<CoreFunctionInstantiated>,
+    pub instances: HashMap<GlobalIdx<Instance>, InstanceInstantiated>,
     pub functions: Vec<ComponentFunctionInstantiated>,
     pub export: HashMap<String, InstanceExport>,
 }
 
 impl ComponentInstantiated {
     fn new() -> Self {
-        Self {
-            core_instances: vec![],
-            core_functions: vec![],
-            functions: vec![],
-            export: HashMap::new(),
-        }
+        Self::default()
     }
 }
 
@@ -41,11 +39,66 @@ pub enum InstanceExport {
     Instance,
 }
 
-#[derive(Debug)]
-pub struct CoreInstantiated {
-    pub(crate) id: InstanceHandle,
+pub struct CoreInstanceInstantiated {
+    pub(crate) handle: InstanceHandle,
     #[allow(dead_code)]
     pub(crate) registry: Registry,
+}
+
+pub struct InstanceInstantiated {
+    pub(crate) exports: HashMap<String, SortWithIdx>,
+}
+
+impl InstanceInstantiated {
+    pub fn get_export_core_module(
+        &self,
+        name: &String,
+    ) -> InstantiateResult<GlobalIdx<CoreModule>> {
+        let value = self
+            .exports
+            .get(name)
+            .ok_or(InstantiateError::ExportNotFound(name.clone()))?;
+        let SortWithIdx::Core(CoreSortWithIdx::Module(idx, _)) = value else {
+            return Err(InstantiateError::ExportTypeMismatch(
+                name.clone(),
+                "Core Module".to_string(),
+                value.to_string(),
+            ));
+        };
+        Ok(*idx)
+    }
+    pub fn get_export_core_instance(
+        &self,
+        name: &String,
+    ) -> InstantiateResult<GlobalIdx<CoreInstance>> {
+        let value = self
+            .exports
+            .get(name)
+            .ok_or(InstantiateError::ExportNotFound(name.clone()))?;
+        let SortWithIdx::Core(CoreSortWithIdx::Instance(idx, _)) = value else {
+            return Err(InstantiateError::ExportTypeMismatch(
+                name.clone(),
+                "Core Instance".to_string(),
+                value.to_string(),
+            ));
+        };
+        Ok(*idx)
+    }
+
+    pub fn get_export_instance(&self, name: &String) -> InstantiateResult<GlobalIdx<Instance>> {
+        let value = self
+            .exports
+            .get(name)
+            .ok_or(InstantiateError::ExportNotFound(name.clone()))?;
+        let SortWithIdx::Instance(idx, _) = value else {
+            return Err(InstantiateError::ExportTypeMismatch(
+                name.clone(),
+                "Instance".to_string(),
+                value.to_string(),
+            ));
+        };
+        Ok(*idx)
+    }
 }
 
 #[derive(Debug)]

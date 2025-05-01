@@ -5,6 +5,7 @@ use crate::component_model::{
     InlineComponent, Instance, InstanceType, Type,
 };
 use crate::parser::component_model::ComponentParseError;
+use std::fmt::{Debug, Display, Formatter};
 
 #[derive(Debug, PartialEq)]
 pub enum Sort {
@@ -29,6 +30,18 @@ pub enum SortWithIdx {
     Type(Type),
     Component(GlobalIdx<InlineComponent>, ComponentType),
     Instance(GlobalIdx<Instance>, InstanceType),
+}
+
+impl Display for SortWithIdx {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SortWithIdx::Core(idx) => idx.fmt(f),
+            SortWithIdx::Func(idx, _) => write!(f, "Func idx: {idx:?}"),
+            SortWithIdx::Type(ty) => write!(f, "Type: {ty:?}"),
+            SortWithIdx::Component(idx, _) => write!(f, "Component idx: {idx:?}"),
+            SortWithIdx::Instance(idx, _) => write!(f, "Instance idx: {idx:?}"),
+        }
+    }
 }
 
 impl TryFrom<SortWithIdx> for ExternDesc {
