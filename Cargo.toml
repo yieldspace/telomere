@@ -23,6 +23,7 @@ edition = "2021"
 publish = false
 authors = ["sizumita", "tignear"]
 homepage = "https://github.com/yieldspace/telomere"
+keywords = ["webassembly", "runtime"]
 
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }

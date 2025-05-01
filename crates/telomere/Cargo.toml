@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+keywords.workspace = true
 
 [profile.release]
 codegen-units = 16
@@ -11,15 +12,11 @@ codegen-units = 16
 [dependencies]
 wide = { version = "0.7.32", optional = true }
 thiserror = "2.0.11"
-bytes = "1.10.0"
-bumpalo = { version = "3.17.0", features = ["collections"] }
 tracing = { version = "0.1.41" }
 num-derive = "0.4.2"
 num-traits = "0.2.19"
-typed-arena = "2.0.2"
 
 [dev-dependencies]
-wast = { version = "229.0.0", features = ["component-model"] }
 tracing-subscriber = { version = "0.3.19" }
 wat = "1.228.0"
 

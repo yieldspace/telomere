@@ -83,12 +83,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6b1fc10dbac614ebc03540c9dbd60e83887fda27794998c6528f1782047d540"
 
 [[package]]
-name = "bytes"
-version = "1.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f61dac84819c6588b558454b194026eb1f09c293b9036ae9b159e74e73ab6cf9"
-
-[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -315,8 +309,6 @@ dependencies = [
 name = "telomere"
 version = "0.1.0"
 dependencies = [
- "bumpalo",
- "bytes",
  "num-derive",
  "num-traits",
  "proc-macro2",
@@ -325,8 +317,6 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
- "typed-arena",
- "wast 229.0.0",
  "wat",
  "wide",
 ]
@@ -428,12 +418,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "typed-arena"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a"
-
-[[package]]
 name = "unicode-ident"
 version = "1.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -464,17 +448,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05d30290541f2d4242a162bbda76b8f2d8b1ac59eab3568ed6f2327d52c9b2c4"
 dependencies = [
  "leb128fmt",
- "wasmparser 0.228.0",
-]
-
-[[package]]
-name = "wasm-encoder"
-version = "0.229.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38ba1d491ecacb085a2552025c10a675a6fddcbd03b1fc9b36c536010ce265d2"
-dependencies = [
- "leb128fmt",
- "wasmparser 0.229.0",
+ "wasmparser",
 ]
 
 [[package]]
@@ -482,17 +456,6 @@ name = "wasmparser"
 version = "0.228.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4abf1132c1fdf747d56bbc1bb52152400c70f336870f968b85e89ea422198ae3"
-dependencies = [
- "bitflags",
- "indexmap",
- "semver",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.229.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc3b1f053f5d41aa55640a1fa9b6d1b8a9e4418d118ce308d20e24ff3575a8c"
 dependencies = [
  "bitflags",
  "indexmap",
@@ -509,20 +472,7 @@ dependencies = [
  "leb128fmt",
  "memchr",
  "unicode-width",
- "wasm-encoder 0.228.0",
-]
-
-[[package]]
-name = "wast"
-version = "229.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63fcaff613c12225696bb163f79ca38ffb40e9300eff0ff4b8aa8b2f7eadf0d9"
-dependencies = [
- "bumpalo",
- "leb128fmt",
- "memchr",
- "unicode-width",
- "wasm-encoder 0.229.0",
+ "wasm-encoder",
 ]
 
 [[package]]
@@ -531,7 +481,7 @@ version = "1.228.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ec29c89a8d055df988de7236483bf569988ac3d6905899f6af5ef920f9385ad"
 dependencies = [
- "wast 228.0.0",
+ "wast",
 ]
 
 [[package]]
