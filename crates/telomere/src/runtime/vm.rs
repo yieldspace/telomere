@@ -8,7 +8,9 @@ use crate::{
         gc::{GcRef, InstanceData},
         ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, Stack,
         VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
-    }, runtime::scheduler::{ReadyFlag, Scheduler, Task}, Store
+    },
+    runtime::scheduler::{ReadyFlag, Scheduler, Task},
+    Store,
 };
 
 #[derive(Debug)]
@@ -1916,7 +1918,13 @@ pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
         .push_u32(ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize].get()));
     call_next(tail_code, 1, ctx)
 }
-
+pub unsafe fn special_start_host_function_call(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let instr = vm_try!(((*tail_code).operand.start_host_function)(ctx));
+    call_next(instr, 0, ctx)
+}
 pub unsafe fn special_function_return(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1966,8 +1974,8 @@ pub fn run_module_function(
     args: &ResultValue,
 ) -> VMResult<ResultValue> {
     let gc = store.gc.clone();
-    let mut gc = gc.borrow_mut();
-    let gc = &mut gc;
+    let mut gc_holder = gc.borrow_mut();
+    let gc = &mut gc_holder;
     let InstanceData {
         module_addr, funcs, ..
     } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(gc)) };
@@ -2018,17 +2026,18 @@ pub fn run_module_function(
         let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
 
         let mut scheduler = Scheduler::new(store);
-        scheduler.push(Task{
+        scheduler.push(Task {
             fp: ptr,
             task_id: 0,
             stack,
             local_reference,
             ready_flag: ReadyFlag::Ready,
         });
+        scheduler.run_with_ref(gc);
         let ct = scheduler.completed_tasks.pop().unwrap();
         vm_try!(ct.result);
         let mut stack = ct.stack;
-        
+
         let mut result =
             ft.1.stack_pop_iter()
                 .map(|t| match t {

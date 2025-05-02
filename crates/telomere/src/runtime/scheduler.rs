@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::{
-    common::{ExecuteContext, Instr, LocalReference},
+    common::{gc::MemoryPool, ExecuteContext, Instr, LocalReference},
     Stack, Store, VMResult,
 };
 
@@ -24,7 +24,7 @@ pub(crate) struct CompletedTask {
     pub result: VMResult<()>,
 }
 pub(crate) struct Scheduler<'a> {
-    tasks: Vec<Task>,
+    tasks: VecDeque<Task>,
     pub(crate) completed_tasks: Vec<CompletedTask>,
     pub(crate) store: &'a mut Store,
     effects: VecDeque<Effect>,
@@ -36,7 +36,7 @@ pub struct EffectSupplier<'a> {
 impl<'a> Scheduler<'a> {
     pub fn new(store: &'a mut Store) -> Self {
         Self {
-            tasks: vec![],
+            tasks: VecDeque::new(),
             completed_tasks: vec![],
             store,
             effects: VecDeque::new(),
@@ -47,7 +47,7 @@ impl<'a> Scheduler<'a> {
         if task.ready_flag == ReadyFlag::Ready {
             self.ready_count += 1;
         }
-        self.tasks.push(task);
+        self.tasks.push_back(task);
     }
     fn handle_effect(&mut self, effect: Effect) {
         let task = self
@@ -62,60 +62,63 @@ impl<'a> Scheduler<'a> {
             todo!() // FIXME: handle action result
         }
          */
-        task.ready_flag = ReadyFlag::Ready;
-        self.ready_count += 1;
+        //task.ready_flag = ReadyFlag::Ready;
+        //self.ready_count += 1;
     }
-    pub fn run(&mut self) {
+    pub fn run_with_ref(&mut self, gc: &mut MemoryPool) {
         while !self.tasks.is_empty() {
             while self.ready_count != 0 {
-                loop {
-                    let task = self.tasks.pop().unwrap();
-                    if task.ready_flag == ReadyFlag::NonReady {
-                        self.tasks.push(task);
-                        continue;
-                    }
-                    self.ready_count -= 1;
-                    let Task {
-                        local_reference,
-                        fp,
-                        mut stack,
-                        task_id,
-                        ..
-                    } = task;
-                    let gc = self.store.gc.clone();
-                    let mut gc = gc.borrow_mut();
-                    let mut ec = ExecuteContext {
-                        gc: &mut gc,
-                        local_reference,
-                        stack: &mut stack,
-                        store: self.store,
-                        effect: EffectSupplier {
-                            effects: &mut self.effects,
-                        },
-                    };
-                    let res = unsafe { ((*fp).op)(fp.offset(1) as *const Instr, &mut ec) };
-                    match res {
-                        VMResult::Continue(fp) => {
-                            let new_task = Task {
-                                local_reference: ec.local_reference,
-                                fp,
-                                ready_flag: ReadyFlag::NonReady,
-                                task_id,
-                                stack,
-                            };
+                println!("{:?}", self.ready_count);
 
-                            self.tasks.push(new_task);
-                        }
-                        other => self.completed_tasks.push(CompletedTask {
+                let task = self.tasks.pop_front().unwrap();
+                if task.ready_flag == ReadyFlag::NonReady {
+                    self.tasks.push_back(task);
+                    continue;
+                }
+                self.ready_count -= 1;
+                let Task {
+                    local_reference,
+                    fp,
+                    mut stack,
+                    task_id,
+                    ..
+                } = task;
+                let mut ec = ExecuteContext {
+                    gc,
+                    local_reference,
+                    stack: &mut stack,
+                    store: self.store,
+                    effect: EffectSupplier {
+                        effects: &mut self.effects,
+                    },
+                };
+                let res = unsafe { ((*fp).op)(fp.offset(1) as *const Instr, &mut ec) };
+                match res {
+                    /*VMResult::Continue(fp) => {
+                        let new_task = Task {
+                            local_reference: ec.local_reference,
+                            fp,
+                            ready_flag: ReadyFlag::NonReady,
                             task_id,
                             stack,
-                            result: other,
-                        }),
-                    }
+                        };
+
+                        self.tasks.push_back(new_task);
+                    }*/
+                    other => self.completed_tasks.push(CompletedTask {
+                        task_id,
+                        stack,
+                        result: other,
+                    }),
                 }
             }
             self.processing_effect();
         }
+    }
+    pub fn run(&mut self) {
+        let gc = self.store.gc.clone();
+        let mut gc = gc.borrow_mut();
+        self.run_with_ref(&mut gc);
     }
     fn processing_effect(&mut self) {
         while let Some(effect) = self.effects.pop_front() {

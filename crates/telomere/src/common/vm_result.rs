@@ -4,7 +4,6 @@ use super::Instr;
 #[must_use]
 pub enum VMResult<V> {
     Success(V),
-    Continue(*const Instr),
     Unreachable,
     StackOverflow,
     MemoryIndexOutOfRange,
@@ -19,7 +18,6 @@ macro_rules! vm_try {
     ($expr: expr) => {
         match $expr {
             VMResult::Success(v) => v,
-            VMResult::Continue(v) => return VMResult::Continue(v),
             VMResult::Unreachable => return VMResult::Unreachable,
             VMResult::StackOverflow => return VMResult::StackOverflow,
             VMResult::MemoryIndexOutOfRange => return VMResult::MemoryIndexOutOfRange,
@@ -41,9 +39,6 @@ impl<V> VMResult<V> {
     pub fn unwrap(self) -> V {
         match self {
             VMResult::Success(v) => v,
-            VMResult::Continue(_) => {
-                panic!("called `VMResult::unwrap()` on a special value: Continue",)
-            }
             VMResult::Unreachable => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: Unreachable",)
             }

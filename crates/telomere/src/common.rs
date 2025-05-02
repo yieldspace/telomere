@@ -359,6 +359,7 @@ pub union Operand {
     pub block_return: BlockReturn,
     pub loop_param: LoopParam,
     pub encoded: [u8; 8],
+    pub start_host_function: HostFunction,
 }
 
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
