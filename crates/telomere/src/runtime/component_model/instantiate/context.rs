@@ -1,8 +1,5 @@
 use crate::common::InstanceHandle;
-use crate::component_model::{
-    CompiledState, CoreInstance, CoreModule, CoreSortWithIdx, GlobalIdx, Instance, Relation,
-    SortWithIdx,
-};
+use crate::component_model::{CompiledState, CoreFunc, CoreInstance, CoreModule, CoreSortWithIdx, Func, GlobalIdx, Instance, Relation, SortWithIdx};
 use crate::runtime::component_model::instantiate::error::InstantiateError;
 use crate::runtime::component_model::instantiate::InstantiateResult;
 use crate::runtime::component_model::{
@@ -74,6 +71,22 @@ impl CurrentState {
             ))
         }
     }
+
+    pub fn get_import_func(&self, name: &String) -> InstantiateResult<GlobalIdx<Func>> {
+        let import = self
+            .imports
+            .get(name)
+            .ok_or_else(|| InstantiateError::ImportNotFound(name.clone()))?;
+        if let SortWithIdx::Func(idx, _) = &import {
+            Ok(*idx)
+        } else {
+            Err(InstantiateError::ImportTypeMismatch(
+                name.clone(),
+                "Instance".to_string(),
+                import.to_string(),
+            ))
+        }
+    }
 }
 
 pub struct InstantiateContext<'a> {
@@ -123,6 +136,15 @@ impl<'a> InstantiateContext<'a> {
         idx: &GlobalIdx<CoreInstance>,
     ) -> &CoreInstanceInstantiated {
         self.instantiated.core_instances.get(idx).unwrap()
+    }
+    
+    pub(crate) fn get_instantiated_core_function(
+        &self,
+        idx: &GlobalIdx<CoreFunc>,
+    ) -> &(InstanceHandle, String) {
+        self.instantiated
+            .core_funcs
+            .get(idx).unwrap()
     }
 
     pub(crate) fn get_instantiated_instance(
@@ -180,6 +202,20 @@ impl<'a> InstantiateContext<'a> {
         }
     }
 
+    pub(crate) fn get_core_func(
+        &self,
+        idx: &GlobalIdx<CoreFunc>,
+    ) -> InstantiateResult<&CoreFunc> {
+        match self.compiled.core_funcs.get(&idx).unwrap() {
+            Relation::Defined(func) => Ok(func),
+            Relation::Import(_) => unreachable!(),
+            Relation::FromCoreExport(_, _) => {
+                todo!()
+            }
+            Relation::FromExport(_, _) => unreachable!(),
+        }
+    }
+
     pub(crate) fn get_instance(&self, idx: GlobalIdx<Instance>) -> InstantiateResult<&Instance> {
         match self.compiled.instances.get(&idx).unwrap() {
             Relation::Defined(inst) => Ok(inst),
@@ -195,6 +231,25 @@ impl<'a> InstantiateContext<'a> {
                 let inst = self.get_instantiated_instance(idx);
                 let export = inst.get_export_instance(name)?;
                 self.get_instance(export)
+            }
+        }
+    }
+
+    pub(crate) fn get_func(&self, idx: GlobalIdx<Func>) -> InstantiateResult<&Func> {
+        match self.compiled.funcs.get(&idx).unwrap() {
+            Relation::Defined(func) => Ok(func),
+            Relation::Import(name) => {
+                if let Some(state) = &self.current {
+                    self.get_func(state.get_import_func(name)?)
+                } else {
+                    Err(InstantiateError::UnsupportedToplevelImportError(
+                        "function".to_string(),
+                    ))
+                }
+            }
+            Relation::FromCoreExport(_, _) => unreachable!(),
+            Relation::FromExport(idx, name) => {
+                todo!()
             }
         }
     }

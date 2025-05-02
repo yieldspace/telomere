@@ -7,9 +7,7 @@ pub mod instantiate;
 mod linker;
 
 use crate::common::InstanceHandle;
-use crate::component_model::{
-    CompiledState, CoreInstance, CoreModule, CoreSortWithIdx, GlobalIdx, Instance, SortWithIdx,
-};
+use crate::component_model::{CompiledState, CoreFunc, CoreInstance, CoreModule, CoreSortWithIdx, GlobalIdx, Instance, SortWithIdx};
 use crate::runtime::component_model::instantiate::{
     instantiate_next, InstantiateContext, InstantiateError, InstantiateResult,
 };
@@ -24,6 +22,7 @@ pub struct ComponentInstantiated {
     pub core_instances: HashMap<GlobalIdx<CoreInstance>, CoreInstanceInstantiated>,
     pub core_functions: Vec<CoreFunctionInstantiated>,
     pub instances: HashMap<GlobalIdx<Instance>, InstanceInstantiated>,
+    pub core_funcs: HashMap<GlobalIdx<CoreFunc>, (InstanceHandle, String)>,
     pub functions: Vec<ComponentFunctionInstantiated>,
     pub export: HashMap<String, InstanceExport>,
 }

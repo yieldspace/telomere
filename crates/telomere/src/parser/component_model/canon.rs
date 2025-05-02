@@ -61,8 +61,8 @@ pub fn parse_canon(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<()>
             let opt = CanonicalOptions::from(opts);
             let idx = ctx
                 .validator
-                .add_core_func_type(CoreFuncType::canon_lower(ft, &opt))?;
-            let value = CoreFunc::CanonLower(func_global_idx, opt);
+                .add_core_func_type(CoreFuncType::canon_lower(ft.clone(), &opt))?;
+            let value = CoreFunc::CanonLower(func_global_idx, ft, opt);
             let global_idx = GlobalIdx::new();
             ctx.state
                 .register_core_func(global_idx, Relation::Defined(value));

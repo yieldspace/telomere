@@ -75,8 +75,11 @@ pub unsafe fn instantiate_core_instance(
         CoreInstance::Alias { exports } => {
             for (name, export) in exports {
                 match export {
-                    CoreInstanceInlineExport::Func(idx) => {}
-                    CoreInstanceInlineExport::Table(_) => {}
+                    CoreInstanceInlineExport::Func(idx) => {
+                        let (handle, name) = ctx.get_instantiated_core_function(idx);
+                    }
+                    CoreInstanceInlineExport::Table(idx) => {
+                    }
                     CoreInstanceInlineExport::Memory(_) => {}
                     CoreInstanceInlineExport::Global(_) => {}
                     CoreInstanceInlineExport::Type(_) => {}
@@ -144,11 +147,17 @@ pub unsafe fn instantiate_type(
     todo!();
 }
 
-pub unsafe fn instantiate_core_function(
+pub unsafe fn instantiate_canon_lower(
     tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
+    ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    let _idx = (*tail_code).operand.core_func_idx;
+    let idx = (*tail_code).operand.core_func_idx;
+    
+    let func = ctx.get_core_func(&idx)?;
+    let CoreFunc::CanonLower(func_idx, ft, i) = func else {
+        unreachable!()
+    };
+    let func = ctx.get_func(func_idx)?;
 
     todo!();
 }

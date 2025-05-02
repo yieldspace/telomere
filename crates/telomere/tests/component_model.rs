@@ -33,7 +33,7 @@ fn test_basic_component() {
     let linker = telomere::runtime::component_model::Linker::new();
     let instance =
         telomere::runtime::component_model::instantiate(&state, &mut store, &linker).unwrap();
-    println!("{:?}", instance);
+    // println!("{:?}", instance);
 }
 
 /*#[test]
