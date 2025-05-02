@@ -24,6 +24,8 @@ pub use gc::GcRef;
 
 pub use store::{Store, StoreState};
 
+use crate::runtime::scheduler::EffectSupplier;
+use crate::runtime::scheduler::Scheduler;
 use crate::WasmParserError;
 pub mod custom_section;
 
@@ -405,6 +407,7 @@ pub struct ExecuteContext<'a> {
     pub local_reference: LocalReference,
     pub store: &'a mut Store,
     pub gc: &'a mut MemoryPool,
+    pub effect: EffectSupplier<'a>,
 }
 impl ExecuteContext<'_> {
     pub fn func(&self) -> &FunctionInstanceData {

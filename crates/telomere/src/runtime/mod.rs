@@ -1,7 +1,8 @@
 //mod core;
 #[macro_use]
 mod trace;
-
+pub(crate) mod memory_effect;
+pub(crate) mod scheduler;
 pub mod component_model;
 pub(crate) mod instantiate;
 #[allow(clippy::missing_safety_doc)]

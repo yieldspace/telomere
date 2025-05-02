@@ -8,8 +8,7 @@ use crate::{
         gc::{GcRef, InstanceData},
         ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, Stack,
         VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
-    },
-    Store,
+    }, runtime::scheduler::{ReadyFlag, Scheduler, Task}, Store
 };
 
 #[derive(Debug)]
@@ -2018,14 +2017,18 @@ pub fn run_module_function(
 
         let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
 
-        let mut ctx = ExecuteContext {
-            stack: &mut stack,
+        let mut scheduler = Scheduler::new(store);
+        scheduler.push(Task{
+            fp: ptr,
+            task_id: 0,
+            stack,
             local_reference,
-            store,
-            gc,
-        };
-        vm_try!(unsafe { call_next(ptr, 0, &mut ctx) });
-
+            ready_flag: ReadyFlag::Ready,
+        });
+        let ct = scheduler.completed_tasks.pop().unwrap();
+        vm_try!(ct.result);
+        let mut stack = ct.stack;
+        
         let mut result =
             ft.1.stack_pop_iter()
                 .map(|t| match t {
