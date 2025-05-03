@@ -1,4 +1,3 @@
-use std::error::Error;
 use telomere::component_model::CompiledState;
 use telomere::parser::component_model::{ComponentParseError, ParseContext, Validator};
 use tracing::Level;
@@ -24,7 +23,7 @@ fn test_basic_component() -> Result<(), ComponentParseError> {
     "#;
     let binary = wat::parse_str(component).unwrap();
     // let binary = wat::parse_str(std::fs::read_to_string("foo.wat").unwrap()).unwrap();
-    std::fs::write("test.wasm", &binary).unwrap();
+    // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     let mut instrs = Vec::new();
     let mut state = CompiledState::new();

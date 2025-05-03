@@ -3,9 +3,8 @@ use crate::component_model::{ComponentExport, CoreSortWithIdx, ExportName, SortW
 use crate::parser::component_model::name::parse_export_name_dash;
 use crate::parser::component_model::{
     parse_externdesc, parse_option, parse_sort_with_idx, ComponentParseError, ParseContext,
-    ParseResult, SizedResult,
+    ParseResult,
 };
-use crate::parser::core::parse_name;
 
 pub fn parse_export(
     ctx: &mut ParseContext<impl BinaryReader>,

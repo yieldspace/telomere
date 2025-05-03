@@ -4,7 +4,7 @@ use crate::component_model::{
     ExternDesc, GlobalIdx, Relation, Sort,
 };
 use crate::parser::component_model::{
-    parse_core_instance_idx, parse_export_name, parse_export_name_dash, parse_instance_idx,
+    parse_core_instance_idx, parse_export_name, parse_instance_idx,
     parse_sort, ComponentParseError, ParseContext, ParseResult, SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};

@@ -1,4 +1,6 @@
-use crate::component_model::{CoreFunc, CoreMemoryRef, GlobalIdx};
+use crate::component_model::{
+    CoreFunc, CoreMemoryRef, GlobalIdx,
+};
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::{CoreTableIdx, ValType};
 
