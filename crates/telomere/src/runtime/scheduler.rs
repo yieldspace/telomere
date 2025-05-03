@@ -5,7 +5,7 @@ use crate::{
     Stack, Store, VMResult,
 };
 
-use super::memory_effect::{AtomicFlag, Effect, Operation, Target};
+use super::memory_effect::{AtomicFlag, Effect, Operation, ReadOperationHandler, Target};
 
 fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
     VMResult::from_option(
@@ -49,6 +49,7 @@ impl EffectSupplier<'_> {
         memarg: MemArg,
         offset: u32,
         size: u32,
+        handler: ReadOperationHandler,
     ) -> VMResult<()> {
         let start = vm_try!(compute_offset(memarg, offset));
         let end = vm_try!(VMResult::from_option(
@@ -59,7 +60,7 @@ impl EffectSupplier<'_> {
             task_id,
             target: Target::Memory(addr, start..end),
             atomic: AtomicFlag::NonAtomic,
-            operation: Operation::Read,
+            operation: Operation::Read(handler),
         });
         VMResult::Success(())
     }
@@ -89,7 +90,7 @@ impl<'a> Scheduler<'a> {
         }
         self.tasks.push_back(task);
     }
-    fn handle_effect(&mut self, gc: &mut MemoryPool, effect: Effect) {
+    unsafe fn handle_effect(&mut self, gc: &mut MemoryPool, effect: Effect) {
         let task = self
             .tasks
             .iter_mut()
@@ -101,14 +102,14 @@ impl<'a> Scheduler<'a> {
                 task_id: _,
                 target: Target::Memory(addr, range),
                 atomic: AtomicFlag::NonAtomic,
-                operation: Operation::Read,
+                operation: Operation::Read(handler),
             } => {
                 let data = unsafe {
                     gc.get_memory(addr)
                         .get(range.start as usize..range.end as usize)
                 };
                 if let Some(data) = data {
-                    task.stack.push_slice(data).unwrap();
+                    task.fp = handler(&mut task.stack, data, task.fp);
                 } else {
                     task.fp = MEMORY_INDEX_OUT_OF_RANGE.as_ptr();
                 }
@@ -118,7 +119,7 @@ impl<'a> Scheduler<'a> {
             _ => todo!(),
         }
     }
-    pub fn run_with_ref(&mut self, gc: &mut MemoryPool) {
+    pub unsafe fn run_with_ref(&mut self, gc: &mut MemoryPool) {
         while !self.tasks.is_empty() {
             while self.ready_count != 0 {
                 println!("{:?}", self.ready_count);
@@ -177,7 +178,7 @@ impl<'a> Scheduler<'a> {
             self.processing_effect(gc);
         }
     }
-    fn processing_effect(&mut self, gc: &mut MemoryPool) {
+    unsafe fn processing_effect(&mut self, gc: &mut MemoryPool) {
         while let Some(effect) = self.effects.pop_front() {
             self.handle_effect(gc, effect);
         }

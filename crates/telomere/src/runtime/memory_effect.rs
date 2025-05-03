@@ -1,6 +1,9 @@
 use std::ops::Range;
 
-use crate::common::GcRef;
+use crate::{
+    common::{GcRef, Instr},
+    Stack, VMResult,
+};
 
 pub enum Target {
     Memory(GcRef, Range<usize>),
@@ -11,8 +14,9 @@ pub enum AtomicFlag {
     Atomic,
     NonAtomic,
 }
+pub type ReadOperationHandler = unsafe fn(&mut Stack, &[u8], *const Instr) -> *const Instr;
 pub enum Operation {
-    Read,
+    Read(ReadOperationHandler),
     Write,
 }
 pub struct Effect {

@@ -440,7 +440,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 ready_flag: ReadyFlag::Ready,
                 fp: program.as_ptr(),
             });
-            scheduler.run_with_ref(gc);
+            unsafe { scheduler.run_with_ref(gc) };
             vm_try!(scheduler.completed_tasks.pop().unwrap().result)
         } else {
             let (locals, offset) = funcinst.locals_and_code_offset(gc);
@@ -464,7 +464,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 ready_flag: ReadyFlag::Ready,
             });
 
-            scheduler.run_with_ref(gc);
+            unsafe { scheduler.run_with_ref(gc) };
             vm_try!(scheduler.completed_tasks.pop().unwrap().result)
         }
     } else {
