@@ -398,7 +398,7 @@ impl ConstExpr {
     }
 }
 pub const PAGE_SIZE: usize = 64 * 1024;
-pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
+pub const PAGE_SIZE_MAX: usize = u32::MAX / PAGE_SIZE;
 
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
