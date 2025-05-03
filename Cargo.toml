@@ -18,7 +18,7 @@ members = ["crates/telomere"]
 
 [workspace.package]
 version = "0.1.0"
-rust-version = "1.86.0"
+rust-version = "1.85.0"
 edition = "2021"
 publish = false
 authors = ["sizumita", "tignear"]
