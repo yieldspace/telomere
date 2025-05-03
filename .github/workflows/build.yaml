@@ -1,0 +1,29 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - .github/workflows/build.yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-for-openwrt:
+    runs-on: imago-openwrt-runner-set
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+      - name: Create Symbolic link
+        run: |
+          mkdir -p /home/runner/openwrt/package/telomere/telomere-cli/files
+          ln -s $PWD /home/runner/openwrt/package/telomere/telomere-cli/files/telomere
+          echo "CONFIG_PACKAGE_telomere-cli=y" >> /home/runner/openwrt/.config
+      - name: Create Makefile
+        run: |
+          cp -f ./.github/build-scripts/openwrt/Makefile /home/runner/openwrt/package/telomere/telomere-cli/Makefile
+      - name: Build
+        working-directory: /home/runner/openwrt/
+        run: |
+          make -j1 V=s package/telomere/telomere-cli/compile
