@@ -1,6 +1,6 @@
 use crate::component_model::{
-    ComponentType, CoreModule, CoreModuleType, Func, FuncType, GlobalIdx, Instance, InstanceType,
-    Type,
+    ComponentType, CoreModule, CoreModuleType, ExportName, Func, FuncType, GlobalIdx, Instance,
+    InstanceType, Type,
 };
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 pub struct InlineComponent {
     pub(crate) instrs: Vec<InstantiateInstr>,
     pub(crate) imports: HashMap<String, ComponentImport>,
-    pub(crate) exports: HashMap<String, ComponentExport>,
+    pub(crate) exports: HashMap<ExportName, ComponentExport>,
 }
 #[derive(Debug, Clone)]
 pub enum ComponentImport {

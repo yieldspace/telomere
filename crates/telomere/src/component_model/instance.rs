@@ -1,4 +1,6 @@
-use crate::component_model::{ExternDesc, GlobalIdx, InlineComponent, InstanceType, SortWithIdx};
+use crate::component_model::{
+    ExportName, ExternDesc, GlobalIdx, InlineComponent, InstanceType, SortWithIdx,
+};
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
 
@@ -6,7 +8,7 @@ use std::collections::HashMap;
 pub struct Instance {
     pub(crate) component_idx: Option<GlobalIdx<InlineComponent>>,
     pub(crate) imports: HashMap<String, ExternDesc>,
-    pub(crate) exports: HashMap<String, ExternDesc>,
+    pub(crate) exports: HashMap<ExportName, ExternDesc>,
 }
 
 impl Instance {
@@ -19,7 +21,7 @@ impl Instance {
 }
 
 impl Instance {
-    pub fn get_export(&self, name: &String) -> Result<Option<ExternDesc>, ComponentParseError> {
+    pub fn get_export(&self, name: &ExportName) -> Result<Option<ExternDesc>, ComponentParseError> {
         self.exports
             .get(name)
             .cloned()

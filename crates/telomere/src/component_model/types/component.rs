@@ -1,11 +1,13 @@
-use crate::component_model::{ExternDesc, ImportDecl, InstanceDecl};
+use crate::component_model::{
+    CoreType, ExportName, ExternDesc, GlobalIdx, ImportDecl, Instance, InstanceDecl, Type,
+};
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComponentType {
     pub(crate) imports: HashMap<String, ExternDesc>,
-    pub(crate) exports: HashMap<String, ExternDesc>,
+    pub(crate) exports: HashMap<ExportName, ExternDesc>,
 }
 
 impl Default for ComponentType {

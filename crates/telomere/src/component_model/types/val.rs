@@ -2,7 +2,7 @@ use crate::component_model::{Case, Label, LabelValType, PrimValType, Type};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValType {
-    Type(Type),
+    Type(Box<DefValType>),
     Primitive(PrimValType),
 }
 

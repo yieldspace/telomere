@@ -1,5 +1,5 @@
 use crate::component_model::{
-    AliasType, ComponentType, CoreModuleType, CoreSort, FuncType, Sort, Type,
+    AliasType, ComponentType, CoreModuleType, CoreSort, ExportName, FuncType, Sort, Type,
 };
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceType {
     pub(crate) imports: HashMap<String, ExternDesc>,
-    pub(crate) exports: HashMap<String, ExternDesc>,
+    pub(crate) exports: HashMap<ExportName, ExternDesc>,
 }
 
 impl InstanceType {
@@ -20,7 +20,7 @@ impl InstanceType {
 
     pub(crate) fn get_export_type(
         &self,
-        name: &String,
+        name: &ExportName,
     ) -> Result<&ExternDesc, ComponentParseError> {
         self.exports
             .get(name)
@@ -95,6 +95,6 @@ pub struct ImportDecl {
 
 #[derive(Debug, Clone)]
 pub struct ExportDecl {
-    pub name: String,
+    pub name: ExportName,
     pub ed: ExternDesc,
 }

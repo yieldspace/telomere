@@ -76,7 +76,7 @@ impl CoreModuleType {
         let target = self
             .exports
             .get(name)
-            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))?;
+            .ok_or_else(|| ComponentParseError::CoreExportNotFound(name.clone()))?;
         if target == sort {
             Ok(target.clone())
         } else {

@@ -1,8 +1,10 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{GlobalIdx, Instance, InstantiateArg, Relation, SortWithIdx};
+use crate::component_model::{
+    ExportName, GlobalIdx, Instance, InstantiateArg, Relation, SortWithIdx,
+};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
-use crate::parser::component_model::SizedResult;
+use crate::parser::component_model::{parse_export_name, parse_export_name_dash, SizedResult};
 use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError};
 use crate::parser::core::{parse_name, parse_vec};
 use std::collections::HashMap;
@@ -111,10 +113,10 @@ fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResu
 
 fn parse_inlineexport(
     ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<(String, SortWithIdx)> {
+) -> SizedResult<(ExportName, SortWithIdx)> {
     let start_count = ctx.reader.read_count();
 
-    let (_, name) = parse_name(ctx.reader)?;
+    let (_, name) = parse_export_name(ctx)?;
     let (_, sort) = parse_sort_with_idx(ctx)?;
     Ok((ctx.reader.read_count() - start_count, (name, sort)))
 }

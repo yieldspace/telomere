@@ -42,9 +42,12 @@ pub enum Type {
     Component(ComponentType),
     Instance(InstanceType),
     Resource(ResourceType),
-    // from (sub resource)
-    // todo: 処理系はatomic usize等でunique性を担保する
-    UniqueResource(usize), // (usize)
+}
+
+impl Type {
+    pub fn is_resource_type(&self) -> bool {
+        matches!(self, Type::Resource(_))
+    }
 }
 
 impl_try_into_type!(FuncType, Func);
@@ -57,7 +60,6 @@ impl TryInto<ResourceType> for Type {
     fn try_into(self) -> Result<ResourceType, Self::Error> {
         match self {
             Type::Resource(ty) => Ok(ty),
-            Type::UniqueResource(idx) => Ok(ResourceType::Resource(None, Some(idx))),
             _ => Err(ComponentParseError::InvalidType("Resource".to_string())),
         }
     }
@@ -72,12 +74,5 @@ impl TryFrom<ExternDesc> for Type {
         } else {
             Err(ComponentParseError::InvalidType("Type".to_string()))
         }
-    }
-}
-
-impl Type {
-    /// Checks if the type is a resource type.
-    pub fn is_resource_type(&self) -> bool {
-        todo!()
     }
 }

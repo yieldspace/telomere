@@ -1,7 +1,7 @@
 use crate::component_model::{
     ComponentExport, ComponentImport, ComponentType, CoreFunc, CoreFuncType, CoreGlobalRef,
     CoreInstance, CoreInstanceType, CoreMemoryRef, CoreModule, CoreModuleType, CoreTableRef,
-    CoreType, Func, FuncType, GlobalIdx, InlineComponent, Instance, InstanceType, Type,
+    CoreType, ExportName, Func, FuncType, GlobalIdx, InlineComponent, Instance, InstanceType, Type,
 };
 use crate::parser::component_model::validator::LocalIdx;
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ pub struct LocalStore {
     #[cfg(feature = "component-gated-feature-value-imports-exports")]
     pub values: Vec<ValueIdx>,
     pub imports: HashMap<String, ComponentImport>,
-    pub exports: HashMap<String, ComponentExport>,
+    pub exports: HashMap<ExportName, ComponentExport>,
 }
 
 #[derive(Default)]
