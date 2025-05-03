@@ -3,7 +3,7 @@ use std::ops::Range;
 use crate::common::GcRef;
 
 pub enum Target {
-    Memory(GcRef, Range<u32>),
+    Memory(GcRef, Range<usize>),
     Table(GcRef, u32),
     Global(GcRef),
 }

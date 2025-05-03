@@ -1,5 +1,3 @@
-use super::Instr;
-
 #[derive(Debug)]
 #[must_use]
 pub enum VMResult<V> {

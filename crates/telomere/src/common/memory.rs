@@ -32,7 +32,9 @@ impl Memory {
         )));
         VMResult::Success(arr)
     }
-
+    pub fn get<I: SliceIndex<[u8]>>(&self, range: I) -> Option<&I::Output> {
+        self.0.get(range)
+    }
     fn write_slice(&mut self, memarg: MemArg, offset: u32, value: &[u8]) -> VMResult<()> {
         let offset = vm_try!(compute_offset(memarg, offset));
         let n = value.len();

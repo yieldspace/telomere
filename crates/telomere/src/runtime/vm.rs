@@ -1034,11 +1034,13 @@ macro_rules! memory_try {
 pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
-    let memory = memory_try!(ctx);
-    let v = vm_try!(memory.read_u32(memarg, offset));
-    vm_try!(ctx.stack.push_u32(v));
-    trace!("op_i32_load: {:?} {} => {v}", memarg, offset);
-    call_next(tail_code, 1, ctx)
+    let mem_addr = vm_try!(VMResult::from_option(ctx.memory_addr(), || {
+        VMResult::MemoryIndexOutOfRange
+    }));
+    vm_try!(ctx.effect
+        .push_non_atomic_memory_read_effect(ctx.task_id, mem_addr, memarg, offset, 4));
+    ctx.cont = tail_code.add(1);
+    VMResult::Success(())
 }
 pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
