@@ -15,13 +15,6 @@ static INTERFACE_NAME: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^(?<namespace>[0-9a-z-]+):(?<label>[a-zA-Z0-9-]+)/(?<projection>[a-zA-Z0-9-]+)(|@(?<version>[0-9.><=\-]))$").unwrap()
 });
 
-mod plainname {
-    use once_cell::sync::Lazy;
-    use regex::Regex;
-
-    pub static ASYNC: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\[async\](?<name>.+)$").unwrap());
-}
-
 pub fn parse_import_name_dash(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<String> {
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "import name")?;
     // todo: check name
