@@ -211,7 +211,7 @@ impl<'a> Scheduler<'a> {
                         pending_effects: &mut pending_effects,
                         effects: &mut self.effects,
                     },
-                    cont: std::ptr::null(),
+                    cont: fp,
                     task_id,
                 };
                 let res = unsafe { ((*fp).op)(fp.offset(1) as *const Instr, &mut ec) };
