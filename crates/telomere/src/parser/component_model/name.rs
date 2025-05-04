@@ -3,7 +3,7 @@ use crate::component_model::{
     Dependency, ExportName, HashName, ImportName, InterfaceName, Label, PackagePath, PlainName,
     UnlockedDependency, UrlName, VersionRange,
 };
-use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult, SizedResult};
+use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
 use crate::parser::core::parse_name;
 use once_cell::sync::Lazy;
 use regex::Regex;

@@ -6,7 +6,7 @@ use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
 use crate::parser::component_model::{parse_export_name, parse_import_name, SizedResult};
 use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError};
-use crate::parser::core::{parse_name, parse_vec};
+use crate::parser::core::parse_vec;
 use std::collections::HashMap;
 use tracing::trace;
 
