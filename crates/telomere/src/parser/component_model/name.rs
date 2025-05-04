@@ -1,7 +1,8 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    Dependency, ExportName, HashName, ImportName, InterfaceName, Label, PackagePath, PlainName,
-    UnlockedDependency, UrlName, VersionRange,
+    Dependency, ExportName, HashName, ImportName, InterfaceName, Label, LockedDependency,
+    PackagePath, ParsedExportName, ParsedImportName, PlainName, UnlockedDependency, UrlName,
+    VersionRange,
 };
 use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
 use crate::parser::core::parse_name;
@@ -39,13 +40,19 @@ pub fn parse_export_name(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResu
     trace!("parse_export_name");
     let (_, name) = parse_name(ctx.reader)?;
     let plain_name = parse_plain_name_string(name.as_str())?;
-    if let Some(name) = plain_name {
-        return Ok(ExportName::Plain(name));
+    if let Some(parsed) = plain_name {
+        return Ok(ExportName {
+            original: name,
+            parsed: ParsedExportName::Plain(parsed),
+        });
     }
-    if let Some(name) =
+    if let Some(parsed) =
         parse_interface_name(name.as_str()).map_err(ComponentParseError::InvalidExportName)?
     {
-        return Ok(ExportName::Interface(name));
+        return Ok(ExportName {
+            original: name,
+            parsed: ParsedExportName::Interface(parsed),
+        });
     }
     Err(ComponentParseError::InvalidExportName(format!(
         "Invalid export name: `{}`",
@@ -57,28 +64,43 @@ pub fn parse_import_name(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResu
     trace!("parse_import_name");
     let (len, name) = parse_name(ctx.reader)?;
 
-    if let Some(name) = parse_plain_name_string(name.as_str())? {
-        return Ok(ImportName::Plain(name));
+    if let Some(parsed) = parse_plain_name_string(name.as_str())? {
+        return Ok(ImportName {
+            original: name,
+            parsed: ParsedImportName::Plain(parsed),
+        });
     }
-    if let Some(name) =
+    if let Some(parsed) =
         parse_interface_name(name.as_str()).map_err(ComponentParseError::InvalidImportName)?
     {
-        return Ok(ImportName::Interface(name));
+        return Ok(ImportName {
+            original: name,
+            parsed: ParsedImportName::Interface(parsed),
+        });
     }
-    if let Some(name) =
+    if let Some(parsed) =
         parse_dep_name_string(name.to_string()).map_err(ComponentParseError::InvalidImportName)?
     {
-        return Ok(ImportName::Dependency(name));
+        return Ok(ImportName {
+            original: name,
+            parsed: ParsedImportName::Dependency(parsed),
+        });
     }
-    if let Some(name) =
+    if let Some(parsed) =
         parse_url_name_string(name.as_str()).map_err(ComponentParseError::InvalidImportName)?
     {
-        return Ok(ImportName::Url(name));
+        return Ok(ImportName {
+            original: name,
+            parsed: ParsedImportName::Url(parsed),
+        });
     }
-    if let Some(name) =
+    if let Some(parsed) =
         parse_hash_name_string(name.as_str()).map_err(ComponentParseError::InvalidImportName)?
     {
-        return Ok(ImportName::Hash(name));
+        return Ok(ImportName {
+            original: name,
+            parsed: ParsedImportName::Hash(parsed),
+        });
     }
     Err(ComponentParseError::InvalidImportName(format!(
         "Invalid import name: `{}`",
@@ -156,6 +178,9 @@ fn parse_dep_name_string(text: String) -> Result<Option<Dependency>, String> {
     static UNLOCKED_DEP: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r"^unlocked-dep=<(?P<namespace>[a-z][a-z0-9\-]*):(?P<name>[a-z][a-z0-9\-]*)(|@(?P<verrange>\*|\{[^}]+}))>$").unwrap()
     });
+    static LOCKED_DEP: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^locked-dep=<(?P<namespace>[a-z][a-z0-9\-]*):(?P<name>[a-z][a-z0-9\-]*)(|@(?P<version>[^>]+))>(|,integrity=<(?P<integrity>[^>]+)>)$").unwrap()
+    });
     if let Some(captures) = UNLOCKED_DEP.captures(&text) {
         let namespace = captures.name("namespace").unwrap().as_str().to_string();
         let name = captures.name("name").unwrap().as_str().to_string();
@@ -167,6 +192,22 @@ fn parse_dep_name_string(text: String) -> Result<Option<Dependency>, String> {
                 .map(|x| parse_version_range(x.as_str()))
                 .map_or(Ok(None), |x| x.map(Some))?,
         })))
+    } else if let Some(captures) = LOCKED_DEP.captures(&text) {
+        let namespace = captures.name("namespace").unwrap().as_str().to_string();
+        let name = captures.name("name").unwrap().as_str().to_string();
+        let version = if let Some(v) = captures.name("version") {
+            Some(Version::parse(v.as_str()).map_err(|x| x.to_string())?)
+        } else {
+            None
+        };
+        let integrity = captures.name("integrity").map(|x| HashName {
+            integrity: x.as_str().to_string(),
+        });
+        Ok(Some(Dependency::Locked(LockedDependency {
+            package: PackagePath { namespace, name },
+            version,
+            hash_name: integrity,
+        })))
     } else {
         Ok(None)
     }
@@ -174,7 +215,7 @@ fn parse_dep_name_string(text: String) -> Result<Option<Dependency>, String> {
 
 fn parse_url_name_string(text: &str) -> Result<Option<UrlName>, String> {
     static URL_NAME: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"^url=(?P<url>[^<>]*)(|,integrity=<(?P<integrity>[^>]+)>)$").unwrap()
+        Regex::new(r"^url=<(?P<url>[^<>]*)>(|,integrity=<(?P<integrity>[^>]+)>)$").unwrap()
     });
     if let Some(captures) = URL_NAME.captures(text) {
         let url = captures.name("url").unwrap().as_str().to_string();
@@ -201,10 +242,12 @@ fn parse_hash_name_string(text: &str) -> Result<Option<HashName>, String> {
 }
 
 fn parse_version_range(text: &str) -> Result<VersionRange, String> {
-    static VER_LOWER: Lazy<Regex> = Lazy::new(|| Regex::new(r"^>=(?P<version>[0-9.]+)$").unwrap());
-    static VER_UPPER: Lazy<Regex> = Lazy::new(|| Regex::new(r"^<(?P<version>[0-9.]+)$").unwrap());
+    static VER_LOWER: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^\{>=(?P<version>[0-9.]+)}$").unwrap());
+    static VER_UPPER: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^\{<(?P<version>[0-9.]+)}$").unwrap());
     static VER_RANGE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^>=(?P<lower>[0-9.]+) <(?P<upper>[0-9.]+)$").unwrap());
+        Lazy::new(|| Regex::new(r"^\{>=(?P<lower>[0-9.]+) <(?P<upper>[0-9.]+)}$").unwrap());
     if text == "*" {
         Ok(VersionRange::Any)
     } else {

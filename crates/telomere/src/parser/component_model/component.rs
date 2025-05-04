@@ -220,7 +220,7 @@ fn parse_import_section(
     // Import parsing logic
     for _ in parse_vec_range(ctx)? {
         let (name, import) = parse_import(ctx)?;
-        ctx.validator.add_import(name, import);
+        ctx.validator.add_import(name, import)?;
     }
     Ok(())
 }

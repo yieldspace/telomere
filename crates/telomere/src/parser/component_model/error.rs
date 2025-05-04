@@ -1,4 +1,6 @@
-use crate::component_model::{CoreModuleExportType, CoreSort, ExportName, Sort, SortWithIdx};
+use crate::component_model::{
+    CoreModuleExportType, CoreSort, ExportName, ImportName, Sort, SortWithIdx,
+};
 use crate::WasmParserError;
 use thiserror::Error;
 
@@ -55,6 +57,14 @@ pub enum ComponentParseError {
     InvalidImportName(String),
     #[error("Invalid export name: {0}")]
     InvalidExportName(String),
+    #[error("import is redundant defined")]
+    RedundantImport,
+    #[error("Annotated function can use only for func import and export")]
+    InvalidAnnotatedFn,
+    #[error("Annotated function must have their resource type import or export")]
+    NotFoundPreDefinedResource,
+    #[error("export is redundant defined")]
+    RedundantExport,
 }
 
 impl ComponentParseError {

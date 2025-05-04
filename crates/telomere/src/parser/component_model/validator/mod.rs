@@ -4,10 +4,11 @@ use crate::component_model::{
     ComponentExport, ComponentImport, ComponentType, CoreFunc, CoreGlobalRef, CoreInstance,
     CoreInstanceType, CoreMemoryRef, CoreModule, CoreModuleType, CoreTableRef, CoreType,
     ExportName, Func, FuncType, GlobalIdx, ImportName, InlineComponent, Instance, InstanceType,
-    Type,
+    Label, ParsedExportName, ParsedImportName, PlainName, StrongUnique, Type,
 };
 use crate::parser::component_model::validator::store::GlobalStore;
 use crate::parser::component_model::{ComponentParseError, ParseResult};
+use crate::WasmParserError;
 use std::collections::HashMap;
 pub use store::LocalStore;
 use tracing::trace;
@@ -52,14 +53,106 @@ impl<'a> Validator<'a> {
         }
     }
 
-    pub(crate) fn add_import(&mut self, name: ImportName, import: ComponentImport) {
-        // todo check name exists
-        self.store.imports.insert(name, import);
+    /// Check this validator has labeled resource import or export
+    ///
+    /// https://github.com/WebAssembly/component-model/blob/main/design/mvp/Binary.md#import-and-export-definitions
+    /// > Validation requires that annotated plainnames only occur on func imports or exports and that the first label of a [constructor],
+    /// > [method] or [static] matches the plainname of a preceding resource import or export, respectively,
+    /// > in the same scope (component, component type or instance type).
+    fn check_pre_defined_resource(&self, label: &Label) -> ParseResult<()> {
+        let name_ = PlainName::Plain(label.clone());
+        if let Some(resource_import) = self.store.imports.get(&ImportName::new(
+            label.0.clone(),
+            ParsedImportName::Plain(name_.clone()),
+        )) {
+            if !resource_import.is_resource_type() {
+                return Err(ComponentParseError::NotFoundPreDefinedResource);
+            }
+        } else if let Some(resource_export) = self.store.exports.get(&ExportName::new(
+            label.0.clone(),
+            ParsedExportName::Plain(name_),
+        )) {
+            if !resource_export.is_resource_type() {
+                return Err(ComponentParseError::NotFoundPreDefinedResource);
+            }
+        } else {
+            return Err(ComponentParseError::NotFoundPreDefinedResource);
+        }
+        Ok(())
     }
 
-    pub(crate) fn add_export(&mut self, name: ExportName, export: ComponentExport) {
-        // todo check name exists
+    pub(crate) fn add_import(
+        &mut self,
+        name: ImportName,
+        import: ComponentImport,
+    ) -> ParseResult<()> {
+        // https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#name-uniqueness
+        if self.store.imports.keys().any(|n| n.strong_eq(&name)) {
+            return Err(ComponentParseError::RedundantImport);
+        }
+        match name.parsed {
+            ParsedImportName::Plain(ref plain) => match plain {
+                PlainName::Constructor(label) => {
+                    if !import.is_func() {
+                        return Err(ComponentParseError::InvalidAnnotatedFn);
+                    }
+                    self.check_pre_defined_resource(label)?;
+                }
+                PlainName::Method(label, _) => {
+                    if !import.is_func() {
+                        return Err(ComponentParseError::InvalidAnnotatedFn);
+                    }
+                    self.check_pre_defined_resource(label)?;
+                }
+                PlainName::Static(label, _) => {
+                    if !import.is_func() {
+                        return Err(ComponentParseError::InvalidAnnotatedFn);
+                    }
+                    self.check_pre_defined_resource(label)?;
+                }
+                _ => {}
+            },
+            _ => {}
+        };
+        self.store.imports.insert(name, import);
+        Ok(())
+    }
+
+    pub(crate) fn add_export(
+        &mut self,
+        name: ExportName,
+        export: ComponentExport,
+    ) -> ParseResult<()> {
+        // https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#name-uniqueness
+        if self.store.exports.keys().any(|n| n.strong_eq(&name)) {
+            return Err(ComponentParseError::RedundantExport);
+        }
+        match name.parsed {
+            ParsedExportName::Plain(ref plain) => match plain {
+                PlainName::Constructor(label) => {
+                    if !export.is_func() {
+                        return Err(ComponentParseError::InvalidAnnotatedFn);
+                    }
+                    self.check_pre_defined_resource(label)?;
+                }
+                PlainName::Method(label, _) => {
+                    if !export.is_func() {
+                        return Err(ComponentParseError::InvalidAnnotatedFn);
+                    }
+                    self.check_pre_defined_resource(label)?;
+                }
+                PlainName::Static(label, _) => {
+                    if !export.is_func() {
+                        return Err(ComponentParseError::InvalidAnnotatedFn);
+                    }
+                    self.check_pre_defined_resource(label)?;
+                }
+                _ => {}
+            },
+            _ => {}
+        };
         self.store.exports.insert(name, export);
+        Ok(())
     }
 
     pub(crate) fn get_imports(&self) -> HashMap<ImportName, ComponentImport> {

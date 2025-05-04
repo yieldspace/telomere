@@ -1,14 +1,104 @@
 use semver::Version;
 use std::fmt::{Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+
+pub trait StrongUnique<T> {
+    fn strong_eq(&self, other: &T) -> bool;
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportName {
+    pub parsed: ParsedExportName,
+    pub original: String,
+}
+
+impl ExportName {
+    pub fn new(original: impl Into<String>, parsed: ParsedExportName) -> Self {
+        Self {
+            original: original.into(),
+            parsed,
+        }
+    }
+}
+
+impl PartialEq for ExportName {
+    fn eq(&self, other: &Self) -> bool {
+        self.original == other.original
+    }
+}
+
+impl Eq for ExportName {}
+
+impl Hash for ExportName {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.original.hash(state)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ExportName {
+pub enum ParsedExportName {
     Plain(PlainName),
     Interface(InterfaceName),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ImportName {
+impl StrongUnique<Self> for ExportName {
+    fn strong_eq(&self, other: &Self) -> bool {
+        self.parsed.strong_eq(&other.parsed)
+    }
+}
+
+impl StrongUnique<Self> for ParsedExportName {
+    fn strong_eq(&self, other: &Self) -> bool {
+        match self {
+            ParsedExportName::Plain(name) => match other {
+                ParsedExportName::Plain(o) => name.strong_eq(o),
+                _ => false,
+            },
+            ParsedExportName::Interface(inter) => match other {
+                ParsedExportName::Plain(_) => false,
+                ParsedExportName::Interface(other) => inter.flat() == other.flat(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportName {
+    pub original: String,
+    pub parsed: ParsedImportName,
+}
+
+impl ImportName {
+    pub fn new(original: impl Into<String>, parsed: ParsedImportName) -> Self {
+        Self {
+            original: original.into(),
+            parsed,
+        }
+    }
+}
+
+impl StrongUnique<Self> for ImportName {
+    fn strong_eq(&self, other: &Self) -> bool {
+        self.parsed.strong_eq(&other.parsed)
+    }
+}
+
+impl PartialEq for ImportName {
+    fn eq(&self, other: &Self) -> bool {
+        self.original == other.original
+    }
+}
+
+impl Eq for ImportName {}
+
+impl Hash for ImportName {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.original.hash(state)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ParsedImportName {
     Plain(PlainName),
     Interface(InterfaceName),
     Dependency(Dependency),
@@ -16,24 +106,34 @@ pub enum ImportName {
     Hash(HashName),
 }
 
+impl StrongUnique<Self> for ParsedImportName {
+    fn strong_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ParsedImportName::Plain(name), ParsedImportName::Plain(other)) => {
+                name.strong_eq(other)
+            }
+            (ParsedImportName::Interface(lhs), ParsedImportName::Interface(rhs)) => {
+                lhs.flat() == rhs.flat()
+            }
+            (ParsedImportName::Dependency(lhs), ParsedImportName::Dependency(rhs)) => {
+                lhs.strong_eq(rhs)
+            }
+            (ParsedImportName::Url(lhs), ParsedImportName::Url(rhs)) => lhs.strong_eq(rhs),
+            (ParsedImportName::Hash(lhs), ParsedImportName::Hash(rhs)) => lhs.strong_eq(rhs),
+            _ => false,
+        }
+    }
+}
+
 impl Display for ExportName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExportName::Plain(s) => <PlainName as Display>::fmt(s, f),
-            ExportName::Interface(s) => <InterfaceName as Display>::fmt(s, f),
-        }
+        Display::fmt(&self.original, f)
     }
 }
 
 impl Display for ImportName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ImportName::Plain(s) => <PlainName as Display>::fmt(s, f),
-            ImportName::Interface(s) => <InterfaceName as Display>::fmt(s, f),
-            ImportName::Dependency(s) => <Dependency as Display>::fmt(s, f),
-            ImportName::Url(s) => <UrlName as Display>::fmt(s, f),
-            ImportName::Hash(s) => <HashName as Display>::fmt(s, f),
-        }
+        Display::fmt(&self.original, f)
     }
 }
 
@@ -43,6 +143,10 @@ pub struct Label(pub String);
 impl Label {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
+    }
+
+    pub fn flat(&self) -> String {
+        self.0.to_ascii_lowercase()
     }
 }
 
@@ -73,6 +177,48 @@ pub enum PlainName {
     AsyncStatic(Label, Label),
 }
 
+impl PlainName {
+    fn flat(&self) -> String {
+        match self {
+            PlainName::Plain(label) => label.0.to_ascii_lowercase(),
+            PlainName::Constructor(label) => label.0.to_ascii_lowercase(),
+            PlainName::Method(x, y) => {
+                format!("{}.{}", x.0.to_ascii_lowercase(), y.0.to_ascii_lowercase())
+            }
+            PlainName::Static(x, y) => {
+                format!("{}.{}", x.0.to_ascii_lowercase(), y.0.to_ascii_lowercase())
+            }
+        }
+    }
+}
+
+impl StrongUnique<Self> for PlainName {
+    /// 二つのPlainNameが「強く独立」の判定上で等しいかを判定します．
+    fn strong_eq(&self, other: &Self) -> bool {
+        match self {
+            PlainName::Plain(plain) => match other {
+                PlainName::Plain(_) => self.flat() == other.flat(),
+                PlainName::Constructor(_) => false,
+                // If one name is l and the other name is [*]l.l (for the same label l and any annotation * with a dotted l.l name), they are not strongly-unique.
+                PlainName::Method(x, y) => plain.flat() == x.flat() && y.flat() == other.flat(),
+                PlainName::Static(x, y) => plain.flat() == x.flat() && y.flat() == other.flat(),
+            },
+            PlainName::Constructor(_) => match other {
+                PlainName::Plain(_) => false,
+                PlainName::Constructor(_) => self.flat() == other.flat(),
+                PlainName::Method(_, _) => false,
+                PlainName::Static(_, _) => false,
+            },
+            PlainName::Method(lhs, rhs) | PlainName::Static(lhs, rhs) => match other {
+                PlainName::Plain(p) => p.flat() == lhs.flat() && p.flat() == rhs.flat(),
+                PlainName::Constructor(_) => false,
+                PlainName::Method(_, _) => self.flat() == other.flat(),
+                PlainName::Static(_, _) => self.flat() == other.flat(),
+            },
+        }
+    }
+}
+
 impl Display for PlainName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -92,6 +238,22 @@ pub struct InterfaceName {
     pub version: Option<Version>,
 }
 
+impl InterfaceName {
+    fn flat(&self) -> String {
+        format!(
+            "{}:{}/{}{}",
+            self.namespace,
+            self.label,
+            self.projection,
+            if let Some(version) = &self.version {
+                format!("@{}", version)
+            } else {
+                "".into()
+            }
+        )
+    }
+}
+
 impl Display for InterfaceName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:{}/{}", self.namespace, self.label, self.projection)?;
@@ -109,11 +271,12 @@ pub enum Dependency {
     Locked(LockedDependency),
 }
 
-impl Display for Dependency {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Dependency::Unlocked(dep) => <UnlockedDependency as Display>::fmt(dep, f),
-            Dependency::Locked(dep) => <LockedDependency as Display>::fmt(dep, f),
+impl StrongUnique<Self> for Dependency {
+    fn strong_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Dependency::Unlocked(lhs), Dependency::Unlocked(rhs)) => lhs.strong_eq(rhs),
+            (Dependency::Locked(lhs), Dependency::Locked(rhs)) => lhs.strong_eq(rhs),
+            _ => false,
         }
     }
 }
@@ -124,13 +287,9 @@ pub struct UnlockedDependency {
     pub version_range: Option<VersionRange>,
 }
 
-impl Display for UnlockedDependency {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unlocked-dep=<{}", self.package)?;
-        if let Some(version_range) = &self.version_range {
-            write!(f, "{}", version_range)?;
-        }
-        write!(f, ">")
+impl StrongUnique<Self> for UnlockedDependency {
+    fn strong_eq(&self, other: &Self) -> bool {
+        self.package == other.package && self.version_range == other.version_range
     }
 }
 
@@ -141,17 +300,11 @@ pub struct LockedDependency {
     pub hash_name: Option<HashName>,
 }
 
-impl Display for LockedDependency {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "locked-dep=<{}", self.package)?;
-        if let Some(version) = &self.version {
-            write!(f, "@{}", version)?;
-        }
-        write!(f, ">")?;
-        if let Some(hash_name) = &self.hash_name {
-            write!(f, ",{}", hash_name)?;
-        }
-        Ok(())
+impl StrongUnique<Self> for LockedDependency {
+    fn strong_eq(&self, other: &Self) -> bool {
+        self.package == other.package
+            && self.version == other.version
+            && self.hash_name == other.hash_name
     }
 }
 
@@ -159,12 +312,6 @@ impl Display for LockedDependency {
 pub struct PackagePath {
     pub namespace: String,
     pub name: String,
-}
-
-impl Display for PackagePath {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.namespace, self.name)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -177,33 +324,15 @@ pub enum VersionRange {
     },
 }
 
-impl Display for VersionRange {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            VersionRange::Any => write!(f, "@*"),
-            VersionRange::Ranged { lower, upper } => match (lower, upper) {
-                (Some(lower), None) => write!(f, "@{{>={}}}", lower),
-                (None, Some(upper)) => write!(f, "@{{<{}}}", upper),
-                (Some(lower), Some(upper)) => write!(f, "@{{>={} <{}}}", lower, upper),
-                _ => unreachable!(),
-            },
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UrlName {
     pub url: String,
     pub hash_name: Option<HashName>,
 }
 
-impl Display for UrlName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "url=<{}>", self.url)?;
-        if let Some(hash_name) = &self.hash_name {
-            write!(f, ",{}", hash_name)?;
-        }
-        Ok(())
+impl StrongUnique<Self> for UrlName {
+    fn strong_eq(&self, other: &Self) -> bool {
+        self.url == other.url && self.hash_name == other.hash_name
     }
 }
 
@@ -212,80 +341,8 @@ pub struct HashName {
     pub integrity: String,
 }
 
-impl Display for HashName {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "integrity=<{}>", self.integrity)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_display_plain_name() {
-        assert_eq!(format!("{}", PlainName::Plain(Label::new("test"))), "test");
-        assert_eq!(
-            format!("{}", PlainName::Constructor(Label::new("test"))),
-            "[constructor]test"
-        );
-        assert_eq!(
-            format!(
-                "{}",
-                PlainName::Method(Label::new("test"), Label::new("test2"))
-            ),
-            "[method]test.test2"
-        );
-        assert_eq!(
-            format!(
-                "{}",
-                PlainName::Static(Label::new("test"), Label::new("test3"))
-            ),
-            "[static]test.test3"
-        );
-    }
-
-    #[test]
-    fn test_display_interface_name() {
-        let interface_name = InterfaceName {
-            namespace: "test".to_string(),
-            label: Label::new("test"),
-            projection: Label::new("test2"),
-            version: Some(Version::parse("1.0.0").unwrap()),
-        };
-        assert_eq!(format!("{}", interface_name), "test:test/test2@1.0.0");
-    }
-
-    #[test]
-    fn test_display_dependency() {
-        let unlocked_dep = UnlockedDependency {
-            package: PackagePath {
-                namespace: "test".to_string(),
-                name: "test".to_string(),
-            },
-            version_range: Some(VersionRange::Ranged {
-                lower: Some(Version::parse("1.0.0").unwrap()),
-                upper: None,
-            }),
-        };
-        assert_eq!(
-            format!("{}", Dependency::Unlocked(unlocked_dep)),
-            "unlocked-dep=<test:test@{>=1.0.0}>"
-        );
-
-        let locked_dep = LockedDependency {
-            package: PackagePath {
-                namespace: "test".to_string(),
-                name: "test".to_string(),
-            },
-            version: Some(Version::parse("1.0.0").unwrap()),
-            hash_name: Some(HashName {
-                integrity: "sha256-abc123".to_string(),
-            }),
-        };
-        assert_eq!(
-            format!("{}", Dependency::Locked(locked_dep)),
-            "locked-dep=<test:test@1.0.0>,integrity=<sha256-abc123>"
-        );
+impl StrongUnique<Self> for HashName {
+    fn strong_eq(&self, other: &Self) -> bool {
+        self.integrity == other.integrity
     }
 }

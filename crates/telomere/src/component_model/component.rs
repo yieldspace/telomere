@@ -22,6 +22,20 @@ pub enum ComponentImport {
     Instance(InstanceType, GlobalIdx<Instance>),
 }
 
+impl ComponentImport {
+    pub fn is_func(&self) -> bool {
+        matches!(self, ComponentImport::Func(_, _))
+    }
+
+    pub fn is_resource_type(&self) -> bool {
+        if let Self::Type(ty) = self {
+            ty.is_resource_type()
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ComponentExport {
     CoreModule(CoreModuleType, GlobalIdx<CoreModule>),
@@ -31,4 +45,18 @@ pub enum ComponentExport {
     Type(Type),
     Component(ComponentType, GlobalIdx<InlineComponent>),
     Instance(InstanceType, GlobalIdx<Instance>),
+}
+
+impl ComponentExport {
+    pub fn is_func(&self) -> bool {
+        matches!(self, ComponentExport::Func(_, _))
+    }
+
+    pub fn is_resource_type(&self) -> bool {
+        if let Self::Type(ty) = self {
+            ty.is_resource_type()
+        } else {
+            false
+        }
+    }
 }

@@ -17,7 +17,11 @@ fn test_basic_component() -> Result<(), ComponentParseError> {
               (export "exit" (func (type 1)))
             )
           )
+          (type (;1;) (result))
+          (type (;2;) (func (param "status" 1)))
           (import "docs:adder/add@0.1.0" (instance (type 0)))
+          (import "test" (type (sub resource)))
+          (import "[constructor]test" (func (type 2)))
           (alias export 0 "exit" (func (;0;)))
        )
     "#;
