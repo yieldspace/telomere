@@ -14,7 +14,16 @@ use crate::{
     trap_func, Store,
 };
 
-use super::memory_effect::ReadOperationHandler;
+use super::memory_effect::{ReadOperationHandler, WriteOperation};
+macro_rules! wait_effct {
+    ($ctx: expr, $cont: expr) => {
+        if $ctx.effect.get_pending_count() != 0 {
+            trace!("waiting effect");
+            $ctx.cont = $cont;
+            return VMResult::Success(());
+        }
+    };
+}
 
 #[derive(Debug)]
 pub struct ResultValue(Vec<WasmValue>);
@@ -28,12 +37,17 @@ impl ResultValue {
 }
 
 #[inline(always)]
+pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    ctx.cont = tail_code;
+    ((*tail_code).op)(tail_code.offset(1), ctx)
+}
+#[inline(always)]
 pub(crate) unsafe fn call_next(
     tail_code: *const Instr,
     consumed: isize,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    ((*tail_code.offset(consumed)).op)(tail_code.offset(consumed + 1), ctx)
+    call_code(tail_code.offset(consumed), ctx)
 }
 pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = (*tail_code).operand.i32;
@@ -1056,6 +1070,28 @@ unsafe fn load_internal<const N: u32>(
     ctx.cont = tail_code.add(1);
     VMResult::Success(())
 }
+unsafe fn store_internal(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> WriteOperation,
+) -> VMResult<()> {
+    let memarg = (*tail_code).operand.memarg;
+    let operation = make_operation(ctx);
+    let offset = ctx.stack.pop_u32();
+    let mem_addr = vm_try!(VMResult::from_option(ctx.memory_addr(), || {
+        VMResult::MemoryIndexOutOfRange
+    }));
+    trace!("op_store: {:?} {}", memarg, offset);
+    vm_try!(ctx.effect.push_non_atomic_memory_write_effect(
+        ctx.task_id,
+        mem_addr,
+        memarg,
+        offset,
+        ctx.gc,
+        operation
+    ));
+    call_next(tail_code, 1, ctx)
+}
 unsafe fn read_operation_handler_push_stack(
     stack: &mut Stack,
     data: &[u8],
@@ -1147,85 +1183,53 @@ pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     })
 }
 pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_u32();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_u32(memarg, offset, v));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        WriteOperation::Write4(ctx.stack.pop_u8_array::<4>())
+    })
 }
 pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_u64();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i64_store: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_u64(memarg, offset, v));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        WriteOperation::Write8(ctx.stack.pop_u8_array::<8>())
+    })
 }
 pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_f32();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_f32(memarg, offset, v));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        WriteOperation::Write4(ctx.stack.pop_u8_array::<4>())
+    })
 }
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_f64();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_f64(memarg, offset, v));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        WriteOperation::Write8(ctx.stack.pop_u8_array::<8>())
+    })
 }
 pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_u32();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_u8(memarg, offset, v as u8));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        WriteOperation::Write1([ctx.stack.pop_u32().to_le_bytes()[0]])
+    })
 }
 pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_u32();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i32_store: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_u16(memarg, offset, v as u16));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        let v = ctx.stack.pop_u32().to_le_bytes();
+        WriteOperation::Write2([v[0], v[1]])
+    })
 }
 pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_u64();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i64_store8: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_u8(memarg, offset, v as u8));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        let v = ctx.stack.pop_u64().to_le_bytes();
+        WriteOperation::Write1([v[0]])
+    })
 }
 pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_u64();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i64_store16: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_u16(memarg, offset, v as u16));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        let v = ctx.stack.pop_u64().to_le_bytes();
+        WriteOperation::Write2([v[0], v[1]])
+    })
 }
 pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
-    let v = ctx.stack.pop_u64();
-    let offset = ctx.stack.pop_u32();
-    trace!("op_i64_store32: {:?} offset={} value={v}", memarg, offset);
-    let memory = memory_try!(ctx);
-    vm_try!(memory.write_u32(memarg, offset, v as u32));
-    call_next(tail_code, 1, ctx)
+    store_internal(tail_code, ctx, |ctx| {
+        let v = ctx.stack.pop_u64().to_le_bytes();
+        WriteOperation::Write4([v[0], v[1], v[2], v[3]])
+    })
 }
 pub unsafe fn op_f32_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_f32();
@@ -1830,21 +1834,23 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_data_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    wait_effct!(ctx, ctx.cont);
     let idx = (*tail_code).operand.u32;
     let instance_id = ctx.instance_id();
     ctx.store.data.remove(&(instance_id, idx));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    wait_effct!(ctx, ctx.cont);
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
+    trace!("op_mem_copy src: {src},dst: {dst},len: {len}");
     let memory = memory_try!(ctx);
 
     vm_try!(memory.copy(dst, src, len));
     call_next(tail_code, 0, ctx)
 }
-
 pub unsafe fn op_mem_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();
@@ -1945,10 +1951,13 @@ pub unsafe fn special_block_return(
 
     call_next(tail_code, 1, ctx)
 }
+
 pub unsafe fn special_function_vm_end(
     _tail_code: *const Instr,
-    _ctx: &mut ExecuteContext,
+    ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    wait_effct!(ctx, ctx.cont);
+    ctx.cont = std::ptr::null();
     VMResult::Success(())
 }
 
@@ -2020,6 +2029,7 @@ pub fn run_module_function(
             stack,
             local_reference,
             ready_flag: ReadyFlag::Ready,
+            pending_effects: 0,
         });
         unsafe { scheduler.run_with_ref(gc) };
         let ct = scheduler.completed_tasks.pop().unwrap();

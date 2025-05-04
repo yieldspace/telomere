@@ -439,6 +439,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 local_reference,
                 ready_flag: ReadyFlag::Ready,
                 fp: program.as_ptr(),
+                pending_effects: 0,
             });
             unsafe { scheduler.run_with_ref(gc) };
             vm_try!(scheduler.completed_tasks.pop().unwrap().result)
@@ -462,6 +463,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 stack,
                 local_reference,
                 ready_flag: ReadyFlag::Ready,
+                pending_effects: 0,
             });
 
             unsafe { scheduler.run_with_ref(gc) };
