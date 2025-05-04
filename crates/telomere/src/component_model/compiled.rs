@@ -1,13 +1,13 @@
 use crate::component_model::{
     CoreFunc, CoreGlobalRef, CoreInstance, CoreMemoryRef, CoreModule, CoreTableRef, ExportName,
-    Func, GlobalIdx, InlineComponent, Instance,
+    Func, GlobalIdx, ImportName, InlineComponent, Instance,
 };
 use std::collections::HashMap;
 
 pub enum Relation<T> {
     Defined(T),
     Alias(GlobalIdx<T>),
-    Import(String),
+    Import(ImportName),
     FromCoreExport(GlobalIdx<CoreInstance>, String),
     FromExport(GlobalIdx<Instance>, ExportName),
 }
@@ -21,7 +21,7 @@ impl<T> Relation<T> {
         Relation::Alias(idx)
     }
 
-    pub fn import(name: String) -> Self {
+    pub fn import(name: ImportName) -> Self {
         Relation::Import(name)
     }
 

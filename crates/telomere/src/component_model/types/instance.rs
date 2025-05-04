@@ -1,12 +1,13 @@
 use crate::component_model::{
-    AliasType, ComponentType, CoreModuleType, CoreSort, ExportName, FuncType, Sort, Type,
+    AliasType, ComponentType, CoreModuleType, CoreSort, ExportName, FuncType, ImportName, Sort,
+    Type,
 };
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceType {
-    pub(crate) imports: HashMap<String, ExternDesc>,
+    pub(crate) imports: HashMap<ImportName, ExternDesc>,
     pub(crate) exports: HashMap<ExportName, ExternDesc>,
 }
 
@@ -89,7 +90,7 @@ pub enum InstanceDecl {
 
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
-    pub name: String,
+    pub name: ImportName,
     pub ed: ExternDesc,
 }
 

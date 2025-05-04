@@ -9,7 +9,7 @@ use crate::parser::component_model::{
 pub fn parse_export(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<(ExportName, ComponentExport)> {
-    let (_, name) = parse_export_name_dash(ctx)?;
+    let name = parse_export_name_dash(ctx)?;
     let (_, si) = parse_sort_with_idx(ctx)?;
     let ed = parse_option(ctx, parse_externdesc)?;
     let export = match si {

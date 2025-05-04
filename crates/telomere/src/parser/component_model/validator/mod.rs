@@ -3,7 +3,8 @@ mod store;
 use crate::component_model::{
     ComponentExport, ComponentImport, ComponentType, CoreFunc, CoreGlobalRef, CoreInstance,
     CoreInstanceType, CoreMemoryRef, CoreModule, CoreModuleType, CoreTableRef, CoreType,
-    ExportName, Func, FuncType, GlobalIdx, InlineComponent, Instance, InstanceType, Type,
+    ExportName, Func, FuncType, GlobalIdx, ImportName, InlineComponent, Instance, InstanceType,
+    Type,
 };
 use crate::parser::component_model::validator::store::GlobalStore;
 use crate::parser::component_model::{ComponentParseError, ParseResult};
@@ -51,7 +52,7 @@ impl<'a> Validator<'a> {
         }
     }
 
-    pub(crate) fn add_import(&mut self, name: String, import: ComponentImport) {
+    pub(crate) fn add_import(&mut self, name: ImportName, import: ComponentImport) {
         // todo check name exists
         self.store.imports.insert(name, import);
     }
@@ -61,7 +62,7 @@ impl<'a> Validator<'a> {
         self.store.exports.insert(name, export);
     }
 
-    pub(crate) fn get_imports(&self) -> HashMap<String, ComponentImport> {
+    pub(crate) fn get_imports(&self) -> HashMap<ImportName, ComponentImport> {
         self.store.imports.clone()
     }
 

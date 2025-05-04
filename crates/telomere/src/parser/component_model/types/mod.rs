@@ -6,8 +6,8 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueBound;
 use crate::component_model::{
-    Case, DefValType, ExportDecl, ExternDesc, FuncType, ImportDecl, LabelValType,
-    PrimValType, ResourceType, Type, ValType,
+    Case, DefValType, ExportDecl, ExternDesc, FuncType, ImportDecl, LabelValType, PrimValType,
+    ResourceType, Type, ValType,
 };
 use crate::parser::component_model::name::{parse_export_name_dash, parse_import_name_dash};
 use crate::parser::component_model::{
@@ -257,7 +257,7 @@ fn parse_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ValT
 
 fn parse_import_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ImportDecl> {
     let start_count = ctx.reader.read_count();
-    let (_, name) = parse_import_name_dash(ctx)?;
+    let name = parse_import_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;
     Ok((
         ctx.reader.read_count() - start_count,
@@ -343,7 +343,7 @@ fn parse_valuebound(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Va
 
 fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ExportDecl> {
     let start_count = ctx.reader.read_count();
-    let (_, en) = parse_export_name_dash(ctx)?;
+    let en = parse_export_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;
     Ok((
         ctx.reader.read_count() - start_count,

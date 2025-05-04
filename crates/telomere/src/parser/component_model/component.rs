@@ -2,7 +2,7 @@ use crate::binary::BinaryReader;
 use crate::component_model::section::ComponentSectionType;
 use crate::component_model::{
     ComponentExport, ComponentImport, ComponentType, CoreModule, CoreModuleType, ExternDesc,
-    GlobalIdx, InlineComponent, Relation,
+    GlobalIdx, ImportName, InlineComponent, Relation,
 };
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
@@ -72,8 +72,8 @@ pub fn _parse_component(
                 };
 
                 let (import_types, imports): (
-                    Vec<(String, ExternDesc)>,
-                    Vec<(String, ComponentImport)>,
+                    Vec<(ImportName, ExternDesc)>,
+                    Vec<(ImportName, ComponentImport)>,
                 ) = validator
                     .get_imports()
                     .into_iter()

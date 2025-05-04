@@ -1,10 +1,10 @@
 use crate::binary::BinaryReader;
 use crate::component_model::{
-    ExportName, GlobalIdx, Instance, InstantiateArg, Relation, SortWithIdx,
+    ExportName, GlobalIdx, ImportName, Instance, InstantiateArg, Relation, SortWithIdx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::idx::parse_component_idx;
-use crate::parser::component_model::{parse_export_name, SizedResult};
+use crate::parser::component_model::{parse_export_name, parse_import_name, SizedResult};
 use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError};
 use crate::parser::core::{parse_name, parse_vec};
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ pub fn parse_instance(
             let args = args
                 .into_iter()
                 .map(|InstantiateArg { name, sort }| (name, sort))
-                .collect::<HashMap<String, SortWithIdx>>();
+                .collect::<HashMap<ImportName, SortWithIdx>>();
             let component = ctx.validator.get_component_type(component_idx)?;
             trace!("parsed instance for {:?}", component);
             if args.len() != component.imports.len() {
@@ -33,10 +33,10 @@ pub fn parse_instance(
                 )));
             }
             let mut imports = HashMap::new();
-            for (import_name, ty) in component.imports.iter() {
+            for (import_name, _) in component.imports.iter() {
                 trace!("parse_instance imports for {}", import_name);
                 // todo: check ty and arg type
-                let arg = args.get(import_name).expect("export not found");
+                let arg = args.get(&import_name).expect("export not found");
                 imports.insert(import_name.clone(), arg.clone().try_into()?);
             }
             let value = Instance {
@@ -102,7 +102,7 @@ pub fn parse_instance(
 fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstantiateArg> {
     let start_count = ctx.reader.read_count();
 
-    let (_, name) = parse_name(ctx.reader)?;
+    let name = parse_import_name(ctx)?;
     let (_, sort) = parse_sort_with_idx(ctx)?;
     trace!("parse_instantiate_arg name: {name}");
     Ok((
@@ -116,7 +116,7 @@ fn parse_inlineexport(
 ) -> SizedResult<(ExportName, SortWithIdx)> {
     let start_count = ctx.reader.read_count();
 
-    let (_, name) = parse_export_name(ctx)?;
+    let name = parse_export_name(ctx)?;
     let (_, sort) = parse_sort_with_idx(ctx)?;
     Ok((ctx.reader.read_count() - start_count, (name, sort)))
 }

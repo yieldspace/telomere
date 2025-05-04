@@ -4,8 +4,8 @@ use crate::component_model::{
     ExternDesc, GlobalIdx, Relation, Sort,
 };
 use crate::parser::component_model::{
-    parse_core_instance_idx, parse_export_name, parse_instance_idx,
-    parse_sort, ComponentParseError, ParseContext, ParseResult, SizedResult,
+    parse_core_instance_idx, parse_export_name, parse_instance_idx, parse_sort,
+    ComponentParseError, ParseContext, ParseResult, SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};
 use tracing::trace;
@@ -32,7 +32,7 @@ fn parse_export_alias(
     let instance_global_idx = ctx.validator.get_global_instance(instance_idx)?;
     let instance = ctx.validator.get_instance_type(instance_idx)?;
     trace!("instance: {instance:?}");
-    let (_, name) = parse_export_name(ctx)?;
+    let name = parse_export_name(ctx)?;
     let export = instance.get_export_type(&name)?.clone();
     if export != sort {
         return Err(ComponentParseError::InvalidSignature(format!(

@@ -1,14 +1,12 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentImport, ExternDesc, GlobalIdx, Relation};
+use crate::component_model::{ComponentImport, ExternDesc, GlobalIdx, ImportName, Relation};
 use crate::parser::component_model::name::parse_import_name_dash;
-use crate::parser::component_model::{
-    parse_externdesc, ParseContext, ParseResult,
-};
+use crate::parser::component_model::{parse_externdesc, ParseContext, ParseResult};
 
 pub fn parse_import(
     ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<(String, ComponentImport)> {
-    let (_, name) = parse_import_name_dash(ctx)?;
+) -> ParseResult<(ImportName, ComponentImport)> {
+    let name = parse_import_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;
     let import = match ed {
         ExternDesc::CoreModule(ty) => {
