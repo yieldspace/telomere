@@ -8,11 +8,11 @@ use semver::Version;
 use tracing::trace;
 
 static LABEL: Lazy<Regex> = Lazy::new(|| {
-    Regex::new("(?:[a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(?:-(?:[a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*").unwrap()
+    Regex::new("^(?:[a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(?:-(?:[a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*$").unwrap()
 });
-static WORDS: Lazy<Regex> = Lazy::new(|| Regex::new("[a-z][0-9a-z]*(?:-[a-z][0-9a-z]*)*").unwrap());
+static WORDS: Lazy<Regex> = Lazy::new(|| Regex::new("^[a-z][0-9a-z]*(?:-[a-z][0-9a-z]*)*$").unwrap());
 static INTERFACE_NAME: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?<namespace>[0-9a-z-]+):(?<label>[a-zA-Z0-9-]+)/(?<projection>[a-zA-Z0-9-]+)(|@(?<version>[0-9.><=\-]))$").unwrap()
+    Regex::new(r"^(?<namespace>[a-z][0-9a-z-]*):(?<label>[a-zA-Z][a-zA-Z0-9-]*)/(?<projection>[a-zA-Z][a-zA-Z0-9-]*)(|@(?<version>[0-9.><=\-]+))$").unwrap()
 });
 
 pub fn parse_import_name_dash(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<String> {
@@ -149,5 +149,71 @@ fn parse_words(text: &str) -> Result<String, String> {
         Ok(text.to_string())
     } else {
         Err(format!("Invalid words: {}", text))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use semver::Version;
+    use crate::component_model::{ExportName, InterfaceName, Label, PlainName};
+    use super::parse_export_name_string;
+
+    #[test]
+    fn test_export_name_plain() {
+        let name = "foo";
+        let export_name = parse_export_name_string(name.to_string()).unwrap();
+        assert_eq!(export_name, ExportName::Plain(PlainName::Plain(Label::new(name))));
+    }
+
+    #[test]
+    fn test_export_name_constructor() {
+        let name = "[constructor]foo";
+        let export_name = parse_export_name_string(name.to_string()).unwrap();
+        assert_eq!(
+            export_name,
+            ExportName::Plain(PlainName::Constructor(Label::new("foo".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_export_name_method() {
+        let name = "[method]foo.bar";
+        let export_name = parse_export_name_string(name.to_string()).unwrap();
+        assert_eq!(
+            export_name,
+            ExportName::Plain(PlainName::Method(
+                Label::new("foo".to_string()),
+                Label::new("bar".to_string())
+            ))
+        );
+    }
+
+    #[test]
+    fn test_export_name_static() {
+        let name = "[static]foo.bar";
+        let export_name = parse_export_name_string(name.to_string()).unwrap();
+        assert_eq!(
+            export_name,
+            ExportName::Plain(PlainName::Static(
+                Label::new("foo".to_string()),
+                Label::new("bar".to_string())
+            ))
+        );
+    }
+
+    #[test]
+    fn test_export_name_interface() -> anyhow::Result<()> {
+        let name = "foo:bar/baz@1.0.0";
+        let export_name = parse_export_name_string(name.to_string())?;
+        assert_eq!(
+            export_name,
+            ExportName::Interface(InterfaceName {
+                namespace: "foo".to_string(),
+                label: Label::new("bar".to_string()),
+                projection: Label::new("baz".to_string()),
+                version: Some(Version::parse("1.0.0").unwrap()),
+            })
+        );
+        Ok(())
     }
 }

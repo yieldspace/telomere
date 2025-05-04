@@ -347,6 +347,7 @@ dependencies = [
 name = "telomere"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "num-derive",
  "num-traits",
  "once_cell",
