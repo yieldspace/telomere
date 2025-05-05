@@ -86,7 +86,7 @@ impl<'a> Validator<'a> {
         import: ComponentImport,
     ) -> ParseResult<()> {
         // https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#name-uniqueness
-        if self.store.imports.keys().any(|n| n.strong_eq(&name)) {
+        if self.store.imports.keys().any(|n| n.weak_eq(&name)) {
             return Err(ComponentParseError::RedundantImport);
         }
         if let ParsedImportName::Plain(ref plain) = name.parsed {
@@ -122,7 +122,7 @@ impl<'a> Validator<'a> {
         export: ComponentExport,
     ) -> ParseResult<()> {
         // https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#name-uniqueness
-        if self.store.exports.keys().any(|n| n.strong_eq(&name)) {
+        if self.store.exports.keys().any(|n| n.weak_eq(&name)) {
             return Err(ComponentParseError::RedundantExport);
         }
         if let ParsedExportName::Plain(ref plain) = name.parsed {

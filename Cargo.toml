@@ -28,7 +28,6 @@ keywords = ["webassembly", "runtime"]
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }
 regex = "1.11.1"
-#regex-automata = {version = "0.4.9", default-features = false, features = ["dfa-search", "dfa-build", "syntax"]}
 
 [profile.release]
 codegen-units = 16

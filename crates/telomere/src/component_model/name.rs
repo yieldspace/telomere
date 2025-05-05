@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 
 pub trait StrongUnique<T> {
-    fn strong_eq(&self, other: &T) -> bool;
+    fn weak_eq(&self, other: &T) -> bool;
 }
 
 #[derive(Debug, Clone)]
@@ -42,16 +42,16 @@ pub enum ParsedExportName {
 }
 
 impl StrongUnique<Self> for ExportName {
-    fn strong_eq(&self, other: &Self) -> bool {
-        self.parsed.strong_eq(&other.parsed)
+    fn weak_eq(&self, other: &Self) -> bool {
+        self.parsed.weak_eq(&other.parsed)
     }
 }
 
 impl StrongUnique<Self> for ParsedExportName {
-    fn strong_eq(&self, other: &Self) -> bool {
+    fn weak_eq(&self, other: &Self) -> bool {
         match self {
             ParsedExportName::Plain(name) => match other {
-                ParsedExportName::Plain(o) => name.strong_eq(o),
+                ParsedExportName::Plain(o) => name.weak_eq(o),
                 _ => false,
             },
             ParsedExportName::Interface(inter) => match other {
@@ -78,8 +78,8 @@ impl ImportName {
 }
 
 impl StrongUnique<Self> for ImportName {
-    fn strong_eq(&self, other: &Self) -> bool {
-        self.parsed.strong_eq(&other.parsed)
+    fn weak_eq(&self, other: &Self) -> bool {
+        self.parsed.weak_eq(&other.parsed)
     }
 }
 
@@ -107,19 +107,19 @@ pub enum ParsedImportName {
 }
 
 impl StrongUnique<Self> for ParsedImportName {
-    fn strong_eq(&self, other: &Self) -> bool {
+    fn weak_eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ParsedImportName::Plain(name), ParsedImportName::Plain(other)) => {
-                name.strong_eq(other)
+                name.weak_eq(other)
             }
             (ParsedImportName::Interface(lhs), ParsedImportName::Interface(rhs)) => {
                 lhs.flat() == rhs.flat()
             }
             (ParsedImportName::Dependency(lhs), ParsedImportName::Dependency(rhs)) => {
-                lhs.strong_eq(rhs)
+                lhs.weak_eq(rhs)
             }
-            (ParsedImportName::Url(lhs), ParsedImportName::Url(rhs)) => lhs.strong_eq(rhs),
-            (ParsedImportName::Hash(lhs), ParsedImportName::Hash(rhs)) => lhs.strong_eq(rhs),
+            (ParsedImportName::Url(lhs), ParsedImportName::Url(rhs)) => lhs.weak_eq(rhs),
+            (ParsedImportName::Hash(lhs), ParsedImportName::Hash(rhs)) => lhs.weak_eq(rhs),
             _ => false,
         }
     }
@@ -194,7 +194,7 @@ impl PlainName {
 
 impl StrongUnique<Self> for PlainName {
     /// 二つのPlainNameが「強く一意」の判定上で等しいかを判定します．
-    fn strong_eq(&self, other: &Self) -> bool {
+    fn weak_eq(&self, other: &Self) -> bool {
         match self {
             PlainName::Plain(plain) => match other {
                 PlainName::Plain(_) => self.flat() == other.flat(),
@@ -272,10 +272,10 @@ pub enum Dependency {
 }
 
 impl StrongUnique<Self> for Dependency {
-    fn strong_eq(&self, other: &Self) -> bool {
+    fn weak_eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Dependency::Unlocked(lhs), Dependency::Unlocked(rhs)) => lhs.strong_eq(rhs),
-            (Dependency::Locked(lhs), Dependency::Locked(rhs)) => lhs.strong_eq(rhs),
+            (Dependency::Unlocked(lhs), Dependency::Unlocked(rhs)) => lhs.weak_eq(rhs),
+            (Dependency::Locked(lhs), Dependency::Locked(rhs)) => lhs.weak_eq(rhs),
             _ => false,
         }
     }
@@ -288,7 +288,7 @@ pub struct UnlockedDependency {
 }
 
 impl StrongUnique<Self> for UnlockedDependency {
-    fn strong_eq(&self, other: &Self) -> bool {
+    fn weak_eq(&self, other: &Self) -> bool {
         self.package == other.package && self.version_range == other.version_range
     }
 }
@@ -301,7 +301,7 @@ pub struct LockedDependency {
 }
 
 impl StrongUnique<Self> for LockedDependency {
-    fn strong_eq(&self, other: &Self) -> bool {
+    fn weak_eq(&self, other: &Self) -> bool {
         self.package == other.package
             && self.version == other.version
             && self.hash_name == other.hash_name
@@ -331,7 +331,7 @@ pub struct UrlName {
 }
 
 impl StrongUnique<Self> for UrlName {
-    fn strong_eq(&self, other: &Self) -> bool {
+    fn weak_eq(&self, other: &Self) -> bool {
         self.url == other.url && self.hash_name == other.hash_name
     }
 }
@@ -342,7 +342,7 @@ pub struct HashName {
 }
 
 impl StrongUnique<Self> for HashName {
-    fn strong_eq(&self, other: &Self) -> bool {
+    fn weak_eq(&self, other: &Self) -> bool {
         self.integrity == other.integrity
     }
 }
@@ -369,26 +369,26 @@ mod tests {
 
     #[test]
     fn test_plain_name_strong_eq() {
-        assert!(plain("foo").strong_eq(&plain("foo")));
-        assert!(!plain("foo").strong_eq(&plain("bar")));
-        assert!(constructor("foo").strong_eq(&constructor("foo")));
-        assert!(!constructor("foo").strong_eq(&constructor("bar")));
-        assert!(method("foo", "bar").strong_eq(&method("foo", "bar")));
-        assert!(!method("foo", "bar").strong_eq(&method("foo", "baz")));
-        assert!(!method("foo", "bar").strong_eq(&method("baz", "bar")));
-        assert!(static_("foo", "bar").strong_eq(&static_("foo", "bar")));
-        assert!(!static_("foo", "bar").strong_eq(&static_("foo", "baz")));
+        assert!(plain("foo").weak_eq(&plain("foo")));
+        assert!(!plain("foo").weak_eq(&plain("bar")));
+        assert!(constructor("foo").weak_eq(&constructor("foo")));
+        assert!(!constructor("foo").weak_eq(&constructor("bar")));
+        assert!(method("foo", "bar").weak_eq(&method("foo", "bar")));
+        assert!(!method("foo", "bar").weak_eq(&method("foo", "baz")));
+        assert!(!method("foo", "bar").weak_eq(&method("baz", "bar")));
+        assert!(static_("foo", "bar").weak_eq(&static_("foo", "bar")));
+        assert!(!static_("foo", "bar").weak_eq(&static_("foo", "baz")));
 
-        assert!(!plain("foo").strong_eq(&constructor("foo")));
-        assert!(!plain("foo").strong_eq(&method("foo", "bar")));
-        assert!(!plain("foo").strong_eq(&static_("foo", "bar")));
+        assert!(!plain("foo").weak_eq(&constructor("foo")));
+        assert!(!plain("foo").weak_eq(&method("foo", "bar")));
+        assert!(!plain("foo").weak_eq(&static_("foo", "bar")));
 
-        assert!(!constructor("foo").strong_eq(&plain("foo")));
-        assert!(plain("foo").strong_eq(&method("foo", "foo")));
-        assert!(plain("foo").strong_eq(&static_("foo", "foo")));
+        assert!(!constructor("foo").weak_eq(&plain("foo")));
+        assert!(plain("foo").weak_eq(&method("foo", "foo")));
+        assert!(plain("foo").weak_eq(&static_("foo", "foo")));
 
-        assert!(!method("foo", "bar").strong_eq(&plain("foo")));
-        assert!(!method("foo", "bar").strong_eq(&constructor("foo")));
-        assert!(method("foo", "bar").strong_eq(&static_("foo", "bar")));
+        assert!(!method("foo", "bar").weak_eq(&plain("foo")));
+        assert!(!method("foo", "bar").weak_eq(&constructor("foo")));
+        assert!(method("foo", "bar").weak_eq(&static_("foo", "bar")));
     }
 }
