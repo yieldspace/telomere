@@ -23,3 +23,8 @@ fn component_import() {
 fn component_variant() {
     run_test_file("variant");
 }
+
+#[test]
+fn component_valtype() {
+    run_test_file("valtype");
+}

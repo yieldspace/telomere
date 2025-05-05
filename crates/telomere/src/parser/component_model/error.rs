@@ -49,7 +49,7 @@ pub enum ComponentParseError {
     InvalidExportType(String, CoreModuleExportType, CoreSort),
     #[error("Unsupported: {0}")]
     Unsupported(String),
-    #[error("Type Mismatch: {0}")]
+    #[error("{0}")]
     TypeMismatch(String),
     #[error("Invalid label: {0}")]
     InvalidLabel(String),
@@ -69,6 +69,20 @@ pub enum ComponentParseError {
     RedundantEnumVariantName,
     #[error("enum has variants at least one")]
     EmptyEnum,
+    #[error("flags variant name is redundant defined")]
+    RedundantFlagsVariantName,
+    #[error("flags has names at least one")]
+    EmptyFlags,
+    #[error("flags variant name is too many")]
+    TooManyFlagNames,
+    #[error("variant has cases at least one")]
+    EmptyVariant,
+    #[error("variant case name is redundant defined")]
+    RedundantVariantCaseName,
+    #[error("record has fields at least one")]
+    EmptyRecord,
+    #[error("record field name is redundant defined")]
+    RedundantRecordFieldName,
 }
 
 impl ComponentParseError {

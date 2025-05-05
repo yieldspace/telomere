@@ -80,11 +80,33 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
             Type::DefVal(Box::from(DefValType::Primitive(may_prim_val_type.unwrap())))
         }
         DEFVALTYPE_RECORD => {
-            let (_, fields) = parse_vec(ctx, |v| v.reader, parse_label_valtype)?;
+            let mut name_set = HashSet::new();
+            let mut fields = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let (_, field) = parse_label_valtype(ctx)?;
+                if !name_set.insert(field.label.flat()) {
+                    return Err(ComponentParseError::RedundantRecordFieldName);
+                }
+                fields.push(field);
+            }
+            if fields.is_empty() {
+                return Err(ComponentParseError::EmptyRecord);
+            }
             Type::DefVal(Box::from(DefValType::Record(fields)))
         }
         DEFVALTYPE_VARIANT => {
-            let (_, cases) = parse_vec(ctx, |v| v.reader, parse_case)?;
+            let mut name_set = HashSet::new();
+            let mut cases = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let (_, case) = parse_case(ctx)?;
+                if !name_set.insert(case.label.flat()) {
+                    return Err(ComponentParseError::RedundantVariantCaseName);
+                }
+                cases.push(case);
+            }
+            if cases.is_empty() {
+                return Err(ComponentParseError::EmptyVariant);
+            }
             Type::DefVal(Box::from(DefValType::Variant(cases)))
         }
         DEFVALTYPE_LIST => {
@@ -105,15 +127,19 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
             Type::DefVal(Box::from(DefValType::Tuple(types)))
         }
         DEFVALTYPE_FLAGS => {
+            let mut name_set = HashSet::new();
             let mut labels = vec![];
             for _ in parse_vec_range(ctx)? {
                 let label = parse_label_dash(ctx)?;
+                if !name_set.insert(label.flat()) {
+                    return Err(ComponentParseError::RedundantFlagsVariantName);
+                }
                 labels.push(label);
             }
-            if labels.is_empty() || labels.len() > 32 {
-                return Err(ComponentParseError::InvalidSignature(
-                    "Flags type must have 1-32 labels".to_string(),
-                ));
+            if labels.is_empty() {
+                return Err(ComponentParseError::EmptyFlags);
+            } else if labels.len() > 32 {
+                return Err(ComponentParseError::TooManyFlagNames);
             }
             Type::DefVal(Box::from(DefValType::Flags(labels)))
         }
@@ -241,7 +267,6 @@ fn parse_case<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Case> {
 }
 
 fn parse_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ValType> {
-    let start_count = ctx.reader.read_count();
     let (_, value) = parse_i32(ctx.reader)?;
     if is_type_opcode(value) {
         Ok(ValType::Primitive(PrimValType::from_i32(value).unwrap()))
@@ -250,8 +275,8 @@ fn parse_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ValT
             .validator
             .get_type(ctx.validator.validate_type_idx(value as u32)?)?;
         let Type::DefVal(ty) = ty else {
-            return Err(ComponentParseError::InvalidSignature(
-                "ValType must have primitive type or DefValType".to_string(),
+            return Err(ComponentParseError::TypeMismatch(
+                "the typeidx of valtype must refer to defvaltype".to_string(),
             ));
         };
         Ok(ValType::Type(ty))
