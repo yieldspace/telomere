@@ -433,4 +433,7 @@ fn simd_boolean() {
 fn simd_conversions() {
     run_test_file("simd_conversions");
 }
-
+#[test]
+fn simd_f32x4_arith() {
+    run_test_file("simd_f32x4_arith");
+}

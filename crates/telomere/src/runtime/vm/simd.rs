@@ -550,8 +550,8 @@ macro_rules! define_binary_simd_operation {
         define_simd_operation!(handle_binary_op,$op,[$($target),*],$expr);
     };
 }
-define_unary_simd_operation!(add, [i8x16, i32x4, i64x2], |a, b| a + b);
-define_unary_simd_operation!(sub, [i8x16, i32x4], |a, b| a - b);
+define_unary_simd_operation!(add, [i8x16, i32x4, i64x2, f32x4], |a, b| a + b);
+define_unary_simd_operation!(sub, [i8x16, i32x4, f32x4], |a, b| a - b);
 define_unary_simd_operation!(mul, [f32x4, i32x4], |a, b| a * b);
 define_unary_simd_operation!(div, [f32x4], |a, b| a / b);
 define_unary_simd_operation!(swizzle, [i8x16], |a, b| a.swizzle(b));
@@ -560,3 +560,10 @@ define_unary_simd_operation!(max, [i8x16, u8x16, f32x4], |a, b| a.max(b)); // FI
 define_unary_simd_operation!(pmin, [f32x4], |a, b| a.max(b));
 define_unary_simd_operation!(pmax, [f32x4], |a, b| a.max(b));
 define_binary_simd_operation!(abs, [f32x4, i32x4], |a| a.abs());
+pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let v: f32x4 = ctx.stack.pop();
+    let [a, b, c, d] = v.to_array();
+    vm_try!(ctx.stack.push(f32x4::from([-a, -b, -c, -d])));
+    call_next(tail_code, 0, ctx)
+}
+define_binary_simd_operation!(sqrt, [f32x4], |a| a.sqrt());
