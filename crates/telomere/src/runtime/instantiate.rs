@@ -290,8 +290,15 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 })
             }
             FunctionBody::Host(fp) => {
+                let align = align_of::<HostFunction>();
+                let align64 = align == 8;
+                let header = if align64{
+                    Header::new(ObjectType::Raw, word_size::<usize>()).align64().initialized()
+                }else{
+                    Header::new(ObjectType::Raw, word_size::<usize>()).initialized()
+                };
                 let body =
-                    gc.allocate(Header::new(ObjectType::Raw, word_size::<usize>()).initialized());
+                    gc.allocate(header);
                 let ptr = unsafe { gc.get_value_mut::<usize>(body, 0) };
                 unsafe { std::ptr::write(ptr, fp as usize) };
                 gc.new_func(&FunctionInstanceData {
