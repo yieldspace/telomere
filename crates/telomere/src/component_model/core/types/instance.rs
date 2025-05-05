@@ -16,7 +16,7 @@ impl CoreInstanceType {
         self.exports
             .get(name)
             .cloned()
-            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
+            .ok_or_else(|| ComponentParseError::CoreExportNotFound(name.clone()))
     }
 }
 

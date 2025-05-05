@@ -1,14 +1,12 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentImport, ExternDesc, GlobalIdx, Relation};
-use crate::parser::component_model::{
-    parse_externdesc, ComponentParseError, ParseContext, ParseResult, SizedResult,
-};
-use crate::parser::core::parse_name;
+use crate::component_model::{ComponentImport, ExternDesc, GlobalIdx, ImportName, Relation};
+use crate::parser::component_model::name::parse_import_name_dash;
+use crate::parser::component_model::{parse_externdesc, ParseContext, ParseResult};
 
 pub fn parse_import(
     ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<(String, ComponentImport)> {
-    let (_, name) = parse_import_name_dash(ctx)?;
+) -> ParseResult<(ImportName, ComponentImport)> {
+    let name = parse_import_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;
     let import = match ed {
         ExternDesc::CoreModule(ty) => {
@@ -65,11 +63,4 @@ pub fn parse_import(
         }
     };
     Ok((name, import))
-}
-
-pub fn parse_import_name_dash(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<String> {
-    ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "import name")?;
-    // todo: check name
-    let (len, name) = parse_name(ctx.reader)?;
-    Ok((len + 1, name))
 }

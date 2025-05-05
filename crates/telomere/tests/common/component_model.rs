@@ -23,6 +23,36 @@ pub fn run_component_wast(text: &str) {
                 }
                 println!("Parsed component: {name:?}");
             }
+            WastDirective::AssertInvalid {
+                span,
+                mut module,
+                message,
+            } => {
+                tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
+                if let Ok(source) = module.encode() {
+                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+                    let mut instrs = Vec::new();
+                    let validator = Validator::new();
+                    let mut state = telomere::component_model::CompiledState::new();
+                    let mut ctx =
+                        ParseContext::new(&mut reader, &mut instrs, validator, &mut state);
+                    let res = telomere::parser::component_model::parse_component(&mut ctx);
+
+                    match res {
+                        Err(err) => {
+                            assert_eq!(
+                                err.to_string(),
+                                message,
+                                "{} != {}, message validation failed@{:?}",
+                                err.to_string(),
+                                message,
+                                span.linecol_in(text)
+                            );
+                        }
+                        Ok(_) => panic!("Expected panic but succeed@{:?}", span.linecol_in(text)),
+                    }
+                }
+            }
             _ => unimplemented!(),
         }
     }

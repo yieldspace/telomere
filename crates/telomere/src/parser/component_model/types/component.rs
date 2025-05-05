@@ -2,14 +2,15 @@ use crate::binary::BinaryReader;
 use crate::component_model::{ComponentDecl, ComponentType, ExternDesc, InstanceDecl};
 use crate::parser::component_model::types::parse_import_decl;
 use crate::parser::component_model::{
-    parse_vec_range, ParseContext, SizedResult, Validator, _parse_instance_decl,
+    parse_vec_range, ComponentParseError, ParseContext, SizedResult, Validator,
+    _parse_instance_decl,
 };
 
 pub fn parse_component_type(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<ComponentType> {
     let start_count = ctx.reader.read_count();
-    let new_validator = Validator::new_child(&mut ctx.validator);
+    let new_validator = Validator::new_child(&ctx.validator);
     let mut instrs = Vec::new();
     let state = &mut ctx.state;
     let mut new_ctx = ParseContext::new(ctx.reader, &mut instrs, new_validator, state);
@@ -35,6 +36,12 @@ pub fn parse_component_type(
                 #[cfg(feature = "component-gated-feature-value-imports-exports")]
                 ExternDesc::Value(_) => {}
                 ExternDesc::Type(ty) => {
+                    if ty.is_resource_type() {
+                        return Err(ComponentParseError::InvalidType(
+                            "Resource Type cannot use in component type or instance type"
+                                .to_string(),
+                        ));
+                    }
                     new_ctx.validator.add_type(ty.clone())?;
                     component_type
                         .imports

@@ -7,7 +7,7 @@ pub struct GlobalIdx<T>(usize, PhantomData<T>);
 
 impl<T> Clone for GlobalIdx<T> {
     fn clone(&self) -> Self {
-        Self(self.0, PhantomData)
+        *self
     }
 }
 

@@ -2,7 +2,7 @@ use crate::binary::BinaryReader;
 use crate::component_model::section::ComponentSectionType;
 use crate::component_model::{
     ComponentExport, ComponentImport, ComponentType, CoreModule, CoreModuleType, ExternDesc,
-    GlobalIdx, InlineComponent, Relation,
+    GlobalIdx, ImportName, InlineComponent, Relation,
 };
 use crate::parser::component_model::canon::parse_canon;
 use crate::parser::component_model::context::ParseContext;
@@ -59,7 +59,7 @@ pub fn _parse_component(
             ComponentSectionType::CoreType => todo!(),
             ComponentSectionType::Component => {
                 let mut sized_reader = ctx.reader.take(section_size as usize);
-                let validator = Validator::new_child(&mut ctx.validator);
+                let validator = Validator::new_child(&ctx.validator);
                 let mut instrs = Vec::new();
                 let state = &mut ctx.state;
                 // 呼び出し結果を一旦保持し、`child_ctx` をスコープ外に出してから `?` を適用することで
@@ -72,8 +72,8 @@ pub fn _parse_component(
                 };
 
                 let (import_types, imports): (
-                    Vec<(String, ExternDesc)>,
-                    Vec<(String, ComponentImport)>,
+                    Vec<(ImportName, ExternDesc)>,
+                    Vec<(ImportName, ComponentImport)>,
                 ) = validator
                     .get_imports()
                     .into_iter()
@@ -220,7 +220,7 @@ fn parse_import_section(
     // Import parsing logic
     for _ in parse_vec_range(ctx)? {
         let (name, import) = parse_import(ctx)?;
-        ctx.validator.add_import(name, import);
+        ctx.validator.add_import(name, import)?;
     }
     Ok(())
 }
@@ -253,7 +253,7 @@ fn parse_export_section(
                 ctx.validator.register_global_instance(local, idx)?;
             }
         }
-        ctx.validator.add_export(name, export);
+        ctx.validator.add_export(name, export)?;
     }
     Ok(())
 }

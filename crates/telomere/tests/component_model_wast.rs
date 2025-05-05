@@ -13,3 +13,18 @@ fn run_test_file(name: &str) {
 fn component_basic() {
     run_test_file("basic");
 }
+
+#[test]
+fn component_import() {
+    run_test_file("import");
+}
+
+#[test]
+fn component_variant() {
+    run_test_file("variant");
+}
+
+#[test]
+fn component_valtype() {
+    run_test_file("valtype");
+}

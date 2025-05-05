@@ -33,6 +33,8 @@ pub enum ComponentParseError {
     InvalidSignature(String),
     #[error("export `{0:?}` not found")]
     ExportNotFound(String),
+    #[error("core export `{0:?}` not found")]
+    CoreExportNotFound(String),
     #[error("Sort with idx `{0:?}` is invalid (expected {1})")]
     InvalidSortWithIdx(SortWithIdx, String),
     #[error("Sort `{0:?}` is invalid (expected {1})")]
@@ -45,6 +47,40 @@ pub enum ComponentParseError {
     InvalidExportType(String, CoreModuleExportType, CoreSort),
     #[error("Unsupported: {0}")]
     Unsupported(String),
+    #[error("{0}")]
+    TypeMismatch(String),
+    #[error("Invalid label: {0}")]
+    InvalidLabel(String),
+    #[error("Invalid import name: {0}")]
+    InvalidImportName(String),
+    #[error("Invalid export name: {0}")]
+    InvalidExportName(String),
+    #[error("import is redundant defined")]
+    RedundantImport,
+    #[error("Annotated function can use only for func import and export")]
+    InvalidAnnotatedFn,
+    #[error("Annotated function must have their resource type import or export")]
+    NotFoundPreDefinedResource,
+    #[error("export is redundant defined")]
+    RedundantExport,
+    #[error("enum variant name is redundant defined")]
+    RedundantEnumVariantName,
+    #[error("enum has variants at least one")]
+    EmptyEnum,
+    #[error("flags variant name is redundant defined")]
+    RedundantFlagsVariantName,
+    #[error("flags has names at least one")]
+    EmptyFlags,
+    #[error("flags variant name is too many")]
+    TooManyFlagNames,
+    #[error("variant has cases at least one")]
+    EmptyVariant,
+    #[error("variant case name is redundant defined")]
+    RedundantVariantCaseName,
+    #[error("record has fields at least one")]
+    EmptyRecord,
+    #[error("record field name is redundant defined")]
+    RedundantRecordFieldName,
 }
 
 impl ComponentParseError {

@@ -6,20 +6,20 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component_model::ValueBound;
 use crate::component_model::{
-    Case, DefValType, ExportDecl, ExternDesc, FuncType, ImportDecl, Label, LabelValType,
-    PrimValType, ResourceType, Type, ValType,
+    Case, DefValType, ExportDecl, ExternDesc, FuncType, ImportDecl, LabelValType, PrimValType,
+    ResourceType, Type, ValType,
 };
-use crate::parser::component_model::export::parse_export_name_dash;
-use crate::parser::component_model::import::parse_import_name_dash;
+use crate::parser::component_model::name::{parse_export_name_dash, parse_import_name_dash};
 use crate::parser::component_model::{
-    parse_core_type_idx, parse_func_idx, parse_option, parse_type_idx, ComponentParseError,
-    ParseContext, ParseResult, SizedResult,
+    parse_core_type_idx, parse_func_idx, parse_label_dash, parse_option, parse_type_idx,
+    parse_vec_range, ComponentParseError, ParseContext, ParseResult, SizedResult,
 };
-use crate::parser::core::{parse_i32, parse_name, parse_u32, parse_vec};
+use crate::parser::core::{parse_i32, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
 pub use component::*;
 pub use instance::*;
 use num_traits::FromPrimitive;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static RESOURCE_HANDLE: AtomicUsize = AtomicUsize::new(0);
@@ -80,11 +80,33 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
             Type::DefVal(Box::from(DefValType::Primitive(may_prim_val_type.unwrap())))
         }
         DEFVALTYPE_RECORD => {
-            let (_, fields) = parse_vec(ctx, |v| v.reader, parse_label_valtype)?;
+            let mut name_set = HashSet::new();
+            let mut fields = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let (_, field) = parse_label_valtype(ctx)?;
+                if !name_set.insert(field.label.flat()) {
+                    return Err(ComponentParseError::RedundantRecordFieldName);
+                }
+                fields.push(field);
+            }
+            if fields.is_empty() {
+                return Err(ComponentParseError::EmptyRecord);
+            }
             Type::DefVal(Box::from(DefValType::Record(fields)))
         }
         DEFVALTYPE_VARIANT => {
-            let (_, cases) = parse_vec(ctx, |v| v.reader, parse_case)?;
+            let mut name_set = HashSet::new();
+            let mut cases = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let (_, case) = parse_case(ctx)?;
+                if !name_set.insert(case.label.flat()) {
+                    return Err(ComponentParseError::RedundantVariantCaseName);
+                }
+                cases.push(case);
+            }
+            if cases.is_empty() {
+                return Err(ComponentParseError::EmptyVariant);
+            }
             Type::DefVal(Box::from(DefValType::Variant(cases)))
         }
         DEFVALTYPE_LIST => {
@@ -105,20 +127,34 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
             Type::DefVal(Box::from(DefValType::Tuple(types)))
         }
         DEFVALTYPE_FLAGS => {
-            let (_, labels) = parse_vec(ctx, |v| v.reader, parse_label_dash)?;
-            if labels.is_empty() || labels.len() > 32 {
-                return Err(ComponentParseError::InvalidSignature(
-                    "Flags type must have 1-32 labels".to_string(),
-                ));
+            let mut name_set = HashSet::new();
+            let mut labels = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let label = parse_label_dash(ctx)?;
+                if !name_set.insert(label.flat()) {
+                    return Err(ComponentParseError::RedundantFlagsVariantName);
+                }
+                labels.push(label);
+            }
+            if labels.is_empty() {
+                return Err(ComponentParseError::EmptyFlags);
+            } else if labels.len() > 32 {
+                return Err(ComponentParseError::TooManyFlagNames);
             }
             Type::DefVal(Box::from(DefValType::Flags(labels)))
         }
         DEFVALTYPE_ENUM => {
-            let (_, labels) = parse_vec(ctx, |v| v.reader, parse_label_dash)?;
+            let mut name_set = HashSet::new();
+            let mut labels = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let label = parse_label_dash(ctx)?;
+                if !name_set.insert(label.flat()) {
+                    return Err(ComponentParseError::RedundantEnumVariantName);
+                }
+                labels.push(label);
+            }
             if labels.is_empty() {
-                return Err(ComponentParseError::InvalidSignature(
-                    "Enum type cannot be empty".to_string(),
-                ));
+                return Err(ComponentParseError::EmptyEnum);
             }
             Type::DefVal(Box::from(DefValType::Enum(labels)))
         }
@@ -161,10 +197,9 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
         INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?.1),
         RESOURCE_TYPE => {
             if let Some(idx) = parse_option(ctx, parse_func_idx)? {
-                Type::Resource(ResourceType::Resource(
-                    Some(ctx.validator.get_func_type(idx)?),
-                    None,
-                ))
+                let ty = ctx.validator.get_func_type(idx)?;
+                ty.assert_type(vec![ValType::Primitive(PrimValType::S32)], None)?;
+                Type::Resource(ResourceType::Resource(Some(ty), None))
             } else {
                 Type::Resource(ResourceType::Resource(None, None))
             }
@@ -183,7 +218,6 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
         }
         _ => unreachable!(),
     };
-    // let idx = ctx.validator.add_type(Binding::Real(ty))?;
 
     Ok((ctx.reader.read_count() - start_count, ty))
 }
@@ -216,7 +250,7 @@ pub fn parse_resultlist<R: BinaryReader>(
 
 fn parse_label_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<LabelValType> {
     let start_count = ctx.reader.read_count();
-    let (_, l) = parse_label_dash(ctx)?;
+    let l = parse_label_dash(ctx)?;
     let ty = LabelValType {
         label: l,
         t: parse_valtype(ctx)?,
@@ -226,32 +260,32 @@ fn parse_label_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResul
 
 fn parse_case<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Case> {
     let start_count = ctx.reader.read_count();
-    let (_, l) = parse_label_dash(ctx)?;
+    let l = parse_label_dash(ctx)?;
     let t = parse_option(ctx, parse_valtype)?;
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "case")?;
     Ok((ctx.reader.read_count() - start_count, Case { label: l, t }))
 }
 
 fn parse_valtype<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ValType> {
-    let start_count = ctx.reader.read_count();
     let (_, value) = parse_i32(ctx.reader)?;
     if is_type_opcode(value) {
         Ok(ValType::Primitive(PrimValType::from_i32(value).unwrap()))
     } else {
-        Ok(ValType::Type(ctx.validator.get_type(
-            ctx.validator.validate_type_idx(value as u32)?,
-        )?))
+        let ty = ctx
+            .validator
+            .get_type(ctx.validator.validate_type_idx(value as u32)?)?;
+        let Type::DefVal(ty) = ty else {
+            return Err(ComponentParseError::TypeMismatch(
+                "the typeidx of valtype must refer to defvaltype".to_string(),
+            ));
+        };
+        Ok(ValType::Type(ty))
     }
-}
-
-fn parse_label_dash<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Label> {
-    let (len, label) = parse_name(ctx.reader)?;
-    Ok((len, Label { label }))
 }
 
 fn parse_import_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ImportDecl> {
     let start_count = ctx.reader.read_count();
-    let (_, name) = parse_import_name_dash(ctx)?;
+    let name = parse_import_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;
     Ok((
         ctx.reader.read_count() - start_count,
@@ -260,7 +294,6 @@ fn parse_import_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<
 }
 
 pub fn parse_externdesc<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ExternDesc> {
-    let start_count = ctx.reader.read_count();
     let desc = match ctx.reader.read_exact_one()? {
         0x00 => {
             ComponentParseError::assert_magic(
@@ -311,7 +344,7 @@ fn parse_typebound<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Ty
         }
         0x01 => {
             let resource_id = RESOURCE_HANDLE.fetch_add(1, Ordering::Relaxed);
-            Type::UniqueResource(resource_id)
+            Type::Resource(ResourceType::Resource(None, Some(resource_id)))
         }
         _ => todo!(),
     };
@@ -337,7 +370,7 @@ fn parse_valuebound(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Va
 
 fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<ExportDecl> {
     let start_count = ctx.reader.read_count();
-    let (_, en) = parse_export_name_dash(ctx)?;
+    let en = parse_export_name_dash(ctx)?;
     let ed = parse_externdesc(ctx)?;
     Ok((
         ctx.reader.read_count() - start_count,

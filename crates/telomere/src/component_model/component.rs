@@ -1,6 +1,6 @@
 use crate::component_model::{
-    ComponentType, CoreModule, CoreModuleType, Func, FuncType, GlobalIdx, Instance, InstanceType,
-    Type,
+    ComponentType, CoreModule, CoreModuleType, ExportName, Func, FuncType, GlobalIdx, ImportName,
+    Instance, InstanceType, Type,
 };
 use crate::runtime::component_model::instantiate::InstantiateInstr;
 use std::collections::HashMap;
@@ -8,8 +8,8 @@ use std::collections::HashMap;
 #[derive(Clone)]
 pub struct InlineComponent {
     pub(crate) instrs: Vec<InstantiateInstr>,
-    pub(crate) imports: HashMap<String, ComponentImport>,
-    pub(crate) exports: HashMap<String, ComponentExport>,
+    pub(crate) imports: HashMap<ImportName, ComponentImport>,
+    pub(crate) exports: HashMap<ExportName, ComponentExport>,
 }
 #[derive(Debug, Clone)]
 pub enum ComponentImport {
@@ -22,6 +22,20 @@ pub enum ComponentImport {
     Instance(InstanceType, GlobalIdx<Instance>),
 }
 
+impl ComponentImport {
+    pub fn is_func(&self) -> bool {
+        matches!(self, ComponentImport::Func(_, _))
+    }
+
+    pub fn is_resource_type(&self) -> bool {
+        if let Self::Type(ty) = self {
+            ty.is_resource_type()
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ComponentExport {
     CoreModule(CoreModuleType, GlobalIdx<CoreModule>),
@@ -31,4 +45,18 @@ pub enum ComponentExport {
     Type(Type),
     Component(ComponentType, GlobalIdx<InlineComponent>),
     Instance(InstanceType, GlobalIdx<Instance>),
+}
+
+impl ComponentExport {
+    pub fn is_func(&self) -> bool {
+        matches!(self, ComponentExport::Func(_, _))
+    }
+
+    pub fn is_resource_type(&self) -> bool {
+        if let Self::Type(ty) = self {
+            ty.is_resource_type()
+        } else {
+            false
+        }
+    }
 }

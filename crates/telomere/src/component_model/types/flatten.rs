@@ -22,7 +22,7 @@ fn join_flat_type(l: CoreValType, r: CoreValType) -> CoreValType {
     }
 }
 
-fn discriminant_type(cases: &Vec<Case>) -> PrimValType {
+fn discriminant_type(cases: &[Case]) -> PrimValType {
     assert!(!cases.is_empty() && cases.len() < (1 << 32));
     match cases.len().ilog2().div_ceil(8) {
         0 | 1 => PrimValType::U8,

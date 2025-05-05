@@ -1,12 +1,14 @@
-use crate::component_model::{ExternDesc, GlobalIdx, InlineComponent, InstanceType, SortWithIdx};
+use crate::component_model::{
+    ExportName, ExternDesc, GlobalIdx, ImportName, InlineComponent, InstanceType, SortWithIdx,
+};
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Instance {
     pub(crate) component_idx: Option<GlobalIdx<InlineComponent>>,
-    pub(crate) imports: HashMap<String, ExternDesc>,
-    pub(crate) exports: HashMap<String, ExternDesc>,
+    pub(crate) imports: HashMap<ImportName, ExternDesc>,
+    pub(crate) exports: HashMap<ExportName, ExternDesc>,
 }
 
 impl Instance {
@@ -19,17 +21,17 @@ impl Instance {
 }
 
 impl Instance {
-    pub fn get_export(&self, name: &String) -> Result<Option<ExternDesc>, ComponentParseError> {
+    pub fn get_export(&self, name: &ExportName) -> Result<Option<ExternDesc>, ComponentParseError> {
         self.exports
             .get(name)
             .cloned()
             .map(Some)
-            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
+            .ok_or_else(|| ComponentParseError::ExportNotFound(name.original.clone()))
     }
 }
 
 #[derive(Debug)]
 pub struct InstantiateArg {
-    pub name: String,
+    pub name: ImportName,
     pub sort: SortWithIdx,
 }
