@@ -2812,7 +2812,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         f32x4_lt,
                         f32x4_gt,
                         f32x4_le,
-                        f32x4_ge
+                        f32x4_ge,
+                        f32x4_ceil,
+                        f32x4_floor,
+                        f32x4_trunc,
+                        f32x4_nearest
                     );
                     (1 + len + len2, false)
                 }

@@ -602,6 +602,27 @@ define_unary_simd_operation!(pmax, [f32x4], |a, b| {
     f32x4::from(result)
 });
 define_binary_simd_operation!(abs, [f32x4, i32x4], |a| a.abs());
+define_binary_simd_operation!(ceil, [f32x4], |a| a.ceil());
+define_binary_simd_operation!(floor, [f32x4], |a| a.floor());
+define_binary_simd_operation!(trunc, [f32x4], |a| {
+    let arr = a.to_array();
+    f32x4::from([
+        arr[0].trunc(),
+        arr[1].trunc(),
+        arr[2].trunc(),
+        arr[3].trunc(),
+    ])
+});
+define_binary_simd_operation!(nearest, [f32x4], |a| {
+    let arr = a.to_array();
+    f32x4::from([
+        arr[0].round_ties_even(),
+        arr[1].round_ties_even(),
+        arr[2].round_ties_even(),
+        arr[3].round_ties_even(),
+    ])
+});
+
 pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v: f32x4 = ctx.stack.pop();
     let [a, b, c, d] = v.to_array();

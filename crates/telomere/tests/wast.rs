@@ -446,3 +446,8 @@ fn simd_f32x4_cmp() {
 fn simd_f32x4_pmin_pmax() {
     run_test_file("simd_f32x4_pmin_pmax");
 }
+
+#[test]
+fn simd_f32x4_rounding() {
+    run_test_file("simd_f32x4_rounding");
+}
