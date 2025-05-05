@@ -65,6 +65,10 @@ pub enum ComponentParseError {
     NotFoundPreDefinedResource,
     #[error("export is redundant defined")]
     RedundantExport,
+    #[error("enum variant name is redundant defined")]
+    RedundantEnumVariantName,
+    #[error("enum has variants at least one")]
+    EmptyEnum,
 }
 
 impl ComponentParseError {

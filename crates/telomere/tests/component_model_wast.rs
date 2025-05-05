@@ -18,3 +18,8 @@ fn component_basic() {
 fn component_import() {
     run_test_file("import");
 }
+
+#[test]
+fn component_variant() {
+    run_test_file("variant");
+}

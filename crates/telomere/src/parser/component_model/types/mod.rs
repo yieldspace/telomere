@@ -19,6 +19,7 @@ use crate::parser::leb128::compile_i32;
 pub use component::*;
 pub use instance::*;
 use num_traits::FromPrimitive;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static RESOURCE_HANDLE: AtomicUsize = AtomicUsize::new(0);
@@ -117,15 +118,17 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
             Type::DefVal(Box::from(DefValType::Flags(labels)))
         }
         DEFVALTYPE_ENUM => {
+            let mut name_set = HashSet::new();
             let mut labels = vec![];
             for _ in parse_vec_range(ctx)? {
                 let label = parse_label_dash(ctx)?;
+                if !name_set.insert(label.flat()) {
+                    return Err(ComponentParseError::RedundantEnumVariantName);
+                }
                 labels.push(label);
             }
             if labels.is_empty() {
-                return Err(ComponentParseError::InvalidSignature(
-                    "Enum type cannot be empty".to_string(),
-                ));
+                return Err(ComponentParseError::EmptyEnum);
             }
             Type::DefVal(Box::from(DefValType::Enum(labels)))
         }
