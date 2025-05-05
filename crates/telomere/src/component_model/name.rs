@@ -109,9 +109,7 @@ pub enum ParsedImportName {
 impl StrongUnique<Self> for ParsedImportName {
     fn weak_eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (ParsedImportName::Plain(name), ParsedImportName::Plain(other)) => {
-                name.weak_eq(other)
-            }
+            (ParsedImportName::Plain(name), ParsedImportName::Plain(other)) => name.weak_eq(other),
             (ParsedImportName::Interface(lhs), ParsedImportName::Interface(rhs)) => {
                 lhs.flat() == rhs.flat()
             }

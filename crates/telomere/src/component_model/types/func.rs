@@ -31,12 +31,9 @@ impl FuncType {
         }
         match (&self.result, result) {
             (None, None) => Ok(()),
-            (Some(act), Some(exp)) if **act != exp => {
-                Err(ComponentParseError::TypeMismatch(format!(
-                    "result type mismatch: expected {:?}, found {:?}",
-                    act, exp
-                )))
-            }
+            (Some(act), Some(exp)) if **act != exp => Err(ComponentParseError::TypeMismatch(
+                format!("result type mismatch: expected {:?}, found {:?}", act, exp),
+            )),
             _ => Ok(()),
         }
     }
