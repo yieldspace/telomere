@@ -433,3 +433,4 @@ fn simd_boolean() {
 fn simd_conversions() {
     run_test_file("simd_conversions");
 }
+

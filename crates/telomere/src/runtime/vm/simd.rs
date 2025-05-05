@@ -2,6 +2,7 @@ use crate::{
     common::stack::LaneType,
     runtime::{memory_effect::WriteOperation, vm::load_internal},
 };
+use telomere_macros::define_simd_operation;
 #[allow(unused_imports)]
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u32x4, u8x16};
 use wide::{u16x8, u64x2};
@@ -523,13 +524,6 @@ where
     call_next(tail_code, 0, ctx)
 }
 
-macro_rules! impl_unary_op {
-    ([$(($name:ident, $target: ty)),*],$closure: expr) => {
-        $(pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            handle_unary_op::<$target>(tail_code, ctx, $closure)
-        })*
-    };
-}
 #[inline]
 unsafe fn handle_binary_op<T>(
     tail_code: *const Instr,
@@ -545,11 +539,24 @@ where
     vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
-macro_rules! impl_binary_op {
-    ([$(($name:ident, $target: ty)),*], $closure: expr) => {
-        $(pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            handle_binary_op::<$target>(tail_code, ctx, $closure)
-        })*
+
+macro_rules! define_unary_simd_operation {
+    ($op: ident,[$($target: ident),*],$expr: expr) => {
+        define_simd_operation!(handle_unary_op,$op,[$($target),*],$expr);
     };
 }
-include!("simd_generated.rs");
+macro_rules! define_binary_simd_operation {
+    ($op: ident,[$($target: ident),*],$expr: expr) => {
+        define_simd_operation!(handle_binary_op,$op,[$($target),*],$expr);
+    };
+}
+define_unary_simd_operation!(add, [i8x16, i32x4, i64x2], |a, b| a + b);
+define_unary_simd_operation!(sub, [i8x16, i32x4], |a, b| a - b);
+define_unary_simd_operation!(mul, [f32x4, i32x4], |a, b| a * b);
+define_unary_simd_operation!(div, [f32x4], |a, b| a / b);
+define_unary_simd_operation!(swizzle, [i8x16], |a, b| a.swizzle(b));
+define_unary_simd_operation!(min, [i8x16, u8x16, f32x4], |a, b| a.min(b)); // FIXME: nan behaviour
+define_unary_simd_operation!(max, [i8x16, u8x16, f32x4], |a, b| a.max(b)); // FIXME: nan behaviour
+define_unary_simd_operation!(pmin, [f32x4], |a, b| a.max(b));
+define_unary_simd_operation!(pmax, [f32x4], |a, b| a.max(b));
+define_binary_simd_operation!(abs, [f32x4, i32x4], |a| a.abs());
