@@ -25,7 +25,7 @@ pub fn parse_import_name_dash(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<ImportName> {
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "import name")?;
-    Ok(parse_import_name(ctx)?)
+    parse_import_name(ctx)
 }
 
 pub fn parse_export_name_dash(
@@ -33,7 +33,7 @@ pub fn parse_export_name_dash(
 ) -> ParseResult<ExportName> {
     trace!("parse_export_name_dash");
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x00], "export name")?;
-    Ok(parse_export_name(ctx)?)
+    parse_export_name(ctx)
 }
 
 pub fn parse_export_name(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<ExportName> {
@@ -62,7 +62,7 @@ pub fn parse_export_name(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResu
 
 pub fn parse_import_name(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<ImportName> {
     trace!("parse_import_name");
-    let (len, name) = parse_name(ctx.reader)?;
+    let (_, name) = parse_name(ctx.reader)?;
 
     if let Some(parsed) = parse_plain_name_string(name.as_str())? {
         return Ok(ImportName {
@@ -169,7 +169,7 @@ fn parse_plain_name_string(text: &str) -> ParseResult<Option<PlainName>> {
         // async static
         [b'[', b'a', b's', b'y', b'n', b'c', b' ', b's', b't', b'a', b't', b'i', b'c', b']', ..] => {
         }
-        _ if LABEL.is_match(&text) => Ok(Some(PlainName::Plain(Label::new(text)))),
+        _ if LABEL.is_match(text) => Ok(Some(PlainName::Plain(Label::new(text)))),
         _ => Ok(None),
     }
 }

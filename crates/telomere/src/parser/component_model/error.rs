@@ -1,4 +1,4 @@
-use crate::component_model::{CoreModuleExportType, CoreSort, ExportName, Sort, SortWithIdx};
+use crate::component_model::{CoreModuleExportType, CoreSort, Sort, SortWithIdx};
 use crate::WasmParserError;
 use thiserror::Error;
 

@@ -10,7 +10,7 @@ pub fn parse_component_type(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> SizedResult<ComponentType> {
     let start_count = ctx.reader.read_count();
-    let new_validator = Validator::new_child(&mut ctx.validator);
+    let new_validator = Validator::new_child(&ctx.validator);
     let mut instrs = Vec::new();
     let state = &mut ctx.state;
     let mut new_ctx = ParseContext::new(ctx.reader, &mut instrs, new_validator, state);

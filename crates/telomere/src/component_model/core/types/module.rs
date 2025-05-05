@@ -121,12 +121,12 @@ impl TryFrom<CoreInstanceInlineExportType> for CoreModuleExportType {
 
 impl PartialEq<CoreSort> for CoreModuleExportType {
     fn eq(&self, other: &CoreSort) -> bool {
-        match (self, other) {
-            (CoreModuleExportType::Memory(_), CoreSort::Memory) => true,
-            (CoreModuleExportType::Table(_), CoreSort::Table) => true,
-            (CoreModuleExportType::Func(_), CoreSort::Func) => true,
-            (CoreModuleExportType::Global(_), CoreSort::Global) => true,
-            _ => false,
-        }
+        matches!(
+            (self, other),
+            (CoreModuleExportType::Memory(_), CoreSort::Memory)
+                | (CoreModuleExportType::Table(_), CoreSort::Table)
+                | (CoreModuleExportType::Func(_), CoreSort::Func)
+                | (CoreModuleExportType::Global(_), CoreSort::Global)
+        )
     }
 }

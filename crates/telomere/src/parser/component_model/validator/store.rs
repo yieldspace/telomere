@@ -29,55 +29,14 @@ pub struct LocalStore {
 
 #[derive(Default)]
 pub struct GlobalStore {
-    pub core_modules: StoreHashMap<LocalIdx, GlobalIdx<CoreModule>>,
-    pub core_instances: StoreHashMap<LocalIdx, GlobalIdx<CoreInstance>>,
-    pub core_funcs: StoreHashMap<LocalIdx, GlobalIdx<CoreFunc>>,
-    pub components: StoreHashMap<LocalIdx, GlobalIdx<InlineComponent>>,
-    pub instances: StoreHashMap<LocalIdx, GlobalIdx<Instance>>,
-    pub core_memories: StoreHashMap<LocalIdx, GlobalIdx<CoreMemoryRef>>,
-    pub core_tables: StoreHashMap<LocalIdx, GlobalIdx<CoreTableRef>>,
-    pub core_globals: StoreHashMap<LocalIdx, GlobalIdx<CoreGlobalRef>>,
-    pub core_types: StoreHashMap<LocalIdx, GlobalIdx<CoreType>>,
-    pub funcs: StoreHashMap<LocalIdx, GlobalIdx<Func>>,
-}
-
-pub struct StoreHashMap<K, V>
-where
-    K: Hash + Eq + Clone,
-    V: Hash + Eq + Clone,
-{
-    map: HashMap<K, V>,
-    rev_map: HashMap<V, K>,
-}
-
-impl<K, V> Default for StoreHashMap<K, V>
-where
-    K: Hash + Eq + Clone,
-    V: Hash + Eq + Clone,
-{
-    fn default() -> Self {
-        Self {
-            map: HashMap::default(),
-            rev_map: HashMap::default(),
-        }
-    }
-}
-
-impl<K, V> StoreHashMap<K, V>
-where
-    K: Hash + Eq + Clone,
-    V: Hash + Eq + Clone,
-{
-    pub fn get(&self, key: &K) -> Option<&V> {
-        self.map.get(key)
-    }
-
-    pub fn get_global(&self, value: &V) -> Option<&K> {
-        self.rev_map.get(value)
-    }
-
-    pub fn insert(&mut self, key: K, value: V) {
-        self.map.insert(key.clone(), value.clone());
-        self.rev_map.insert(value, key);
-    }
+    pub core_modules: HashMap<LocalIdx, GlobalIdx<CoreModule>>,
+    pub core_instances: HashMap<LocalIdx, GlobalIdx<CoreInstance>>,
+    pub core_funcs: HashMap<LocalIdx, GlobalIdx<CoreFunc>>,
+    pub components: HashMap<LocalIdx, GlobalIdx<InlineComponent>>,
+    pub instances: HashMap<LocalIdx, GlobalIdx<Instance>>,
+    pub core_memories: HashMap<LocalIdx, GlobalIdx<CoreMemoryRef>>,
+    pub core_tables: HashMap<LocalIdx, GlobalIdx<CoreTableRef>>,
+    pub core_globals: HashMap<LocalIdx, GlobalIdx<CoreGlobalRef>>,
+    pub core_types: HashMap<LocalIdx, GlobalIdx<CoreType>>,
+    pub funcs: HashMap<LocalIdx, GlobalIdx<Func>>,
 }

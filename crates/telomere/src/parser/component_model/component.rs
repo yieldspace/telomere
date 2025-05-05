@@ -59,7 +59,7 @@ pub fn _parse_component(
             ComponentSectionType::CoreType => todo!(),
             ComponentSectionType::Component => {
                 let mut sized_reader = ctx.reader.take(section_size as usize);
-                let validator = Validator::new_child(&mut ctx.validator);
+                let validator = Validator::new_child(&ctx.validator);
                 let mut instrs = Vec::new();
                 let state = &mut ctx.state;
                 // 呼び出し結果を一旦保持し、`child_ctx` をスコープ外に出してから `?` を適用することで

@@ -52,10 +52,10 @@ pub unsafe fn instantiate_core_type(
 }
 
 pub unsafe fn instantiate_import_core_module(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
+    _tail_code: *const InstantiateInstr,
+    _ctx: &mut InstantiateContext,
 ) -> InstantiateResult<()> {
-    let idx = (*tail_code).operand.core_module_idx;
+    // let idx = (*tail_code).operand.core_module_idx;
     // let module = ctx.component.get_core_module(idx);
     // assert!(module.value.is_none());
     // if let Some(CoreModuleReference::Imported(name)) = &module.reference {

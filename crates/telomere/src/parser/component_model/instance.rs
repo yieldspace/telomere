@@ -36,7 +36,7 @@ pub fn parse_instance(
             for (import_name, _) in component.imports.iter() {
                 trace!("parse_instance imports for {}", import_name);
                 // todo: check ty and arg type
-                let arg = args.get(&import_name).expect("export not found");
+                let arg = args.get(import_name).expect("export not found");
                 imports.insert(import_name.clone(), arg.clone().try_into()?);
             }
             let value = Instance {
