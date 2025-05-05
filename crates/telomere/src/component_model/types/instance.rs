@@ -25,7 +25,7 @@ impl InstanceType {
     ) -> Result<&ExternDesc, ComponentParseError> {
         self.exports
             .get(name)
-            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
+            .ok_or_else(|| ComponentParseError::ExportNotFound(name.original.clone()))
     }
 }
 

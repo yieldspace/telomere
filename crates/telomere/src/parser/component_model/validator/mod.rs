@@ -8,7 +8,6 @@ use crate::component_model::{
 };
 use crate::parser::component_model::validator::store::GlobalStore;
 use crate::parser::component_model::{ComponentParseError, ParseResult};
-use crate::WasmParserError;
 use std::collections::HashMap;
 pub use store::LocalStore;
 use tracing::trace;
@@ -90,8 +89,8 @@ impl<'a> Validator<'a> {
         if self.store.imports.keys().any(|n| n.strong_eq(&name)) {
             return Err(ComponentParseError::RedundantImport);
         }
-        match name.parsed {
-            ParsedImportName::Plain(ref plain) => match plain {
+        if let ParsedImportName::Plain(ref plain) = name.parsed {
+            match plain {
                 PlainName::Constructor(label) => {
                     if !import.is_func() {
                         return Err(ComponentParseError::InvalidAnnotatedFn);
@@ -111,8 +110,7 @@ impl<'a> Validator<'a> {
                     self.check_pre_defined_resource(label)?;
                 }
                 _ => {}
-            },
-            _ => {}
+            }
         };
         self.store.imports.insert(name, import);
         Ok(())
@@ -127,8 +125,8 @@ impl<'a> Validator<'a> {
         if self.store.exports.keys().any(|n| n.strong_eq(&name)) {
             return Err(ComponentParseError::RedundantExport);
         }
-        match name.parsed {
-            ParsedExportName::Plain(ref plain) => match plain {
+        if let ParsedExportName::Plain(ref plain) = name.parsed {
+            match plain {
                 PlainName::Constructor(label) => {
                     if !export.is_func() {
                         return Err(ComponentParseError::InvalidAnnotatedFn);
@@ -148,8 +146,7 @@ impl<'a> Validator<'a> {
                     self.check_pre_defined_resource(label)?;
                 }
                 _ => {}
-            },
-            _ => {}
+            }
         };
         self.store.exports.insert(name, export);
         Ok(())

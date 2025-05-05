@@ -253,7 +253,7 @@ fn parse_export_section(
                 ctx.validator.register_global_instance(local, idx)?;
             }
         }
-        ctx.validator.add_export(name, export);
+        ctx.validator.add_export(name, export)?;
     }
     Ok(())
 }

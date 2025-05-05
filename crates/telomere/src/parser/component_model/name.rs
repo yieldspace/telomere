@@ -250,30 +250,28 @@ fn parse_version_range(text: &str) -> Result<VersionRange, String> {
         Lazy::new(|| Regex::new(r"^\{>=(?P<lower>[0-9.]+) <(?P<upper>[0-9.]+)}$").unwrap());
     if text == "*" {
         Ok(VersionRange::Any)
+    } else if let Some(captures) = VER_LOWER.captures(text) {
+        let version = captures.name("version").unwrap().as_str();
+        Ok(VersionRange::Ranged {
+            lower: Some(Version::parse(version).map_err(|x| x.to_string())?),
+            upper: None,
+        })
+    } else if let Some(captures) = VER_UPPER.captures(text) {
+        let version = captures.name("version").unwrap().as_str();
+        Ok(VersionRange::Ranged {
+            upper: Some(Version::parse(version).map_err(|x| x.to_string())?),
+            lower: None,
+        })
     } else {
-        if let Some(captures) = VER_LOWER.captures(text) {
-            let version = captures.name("version").unwrap().as_str();
-            Ok(VersionRange::Ranged {
-                lower: Some(Version::parse(version).map_err(|x| x.to_string())?),
-                upper: None,
-            })
-        } else if let Some(captures) = VER_UPPER.captures(text) {
-            let version = captures.name("version").unwrap().as_str();
-            Ok(VersionRange::Ranged {
-                upper: Some(Version::parse(version).map_err(|x| x.to_string())?),
-                lower: None,
-            })
-        } else {
-            let ranged = VER_RANGE
-                .captures(text)
-                .ok_or(format!("Invalid version: {}", text))?;
-            let lower = ranged.name("lower").unwrap().as_str();
-            let upper = ranged.name("upper").unwrap().as_str();
-            Ok(VersionRange::Ranged {
-                lower: Some(Version::parse(lower).map_err(|x| x.to_string())?),
-                upper: Some(Version::parse(upper).map_err(|x| x.to_string())?),
-            })
-        }
+        let ranged = VER_RANGE
+            .captures(text)
+            .ok_or(format!("Invalid version: {}", text))?;
+        let lower = ranged.name("lower").unwrap().as_str();
+        let upper = ranged.name("upper").unwrap().as_str();
+        Ok(VersionRange::Ranged {
+            lower: Some(Version::parse(lower).map_err(|x| x.to_string())?),
+            upper: Some(Version::parse(upper).map_err(|x| x.to_string())?),
+        })
     }
 }
 

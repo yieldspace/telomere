@@ -294,7 +294,6 @@ fn parse_import_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<
 }
 
 pub fn parse_externdesc<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ExternDesc> {
-    let start_count = ctx.reader.read_count();
     let desc = match ctx.reader.read_exact_one()? {
         0x00 => {
             ComponentParseError::assert_magic(

@@ -1,6 +1,4 @@
-use crate::component_model::{
-    CoreModuleExportType, CoreSort, ExportName, ImportName, Sort, SortWithIdx,
-};
+use crate::component_model::{CoreModuleExportType, CoreSort, ExportName, Sort, SortWithIdx};
 use crate::WasmParserError;
 use thiserror::Error;
 
@@ -34,7 +32,7 @@ pub enum ComponentParseError {
     #[error("invalid signature: {0:?}")]
     InvalidSignature(String),
     #[error("export `{0:?}` not found")]
-    ExportNotFound(ExportName),
+    ExportNotFound(String),
     #[error("core export `{0:?}` not found")]
     CoreExportNotFound(String),
     #[error("Sort with idx `{0:?}` is invalid (expected {1})")]

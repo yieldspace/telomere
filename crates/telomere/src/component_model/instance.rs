@@ -26,7 +26,7 @@ impl Instance {
             .get(name)
             .cloned()
             .map(Some)
-            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
+            .ok_or_else(|| ComponentParseError::ExportNotFound(name.original.clone()))
     }
 }
 
