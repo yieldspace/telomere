@@ -9,7 +9,7 @@ use crate::parser::component_model::{
 pub fn parse_instance_type<R: BinaryReader>(
     parent_ctx: &mut ParseContext<R>,
 ) -> SizedResult<InstanceType> {
-    let new_validator = Validator::new_child(&mut parent_ctx.validator);
+    let new_validator = Validator::new_child(&parent_ctx.validator);
     let state = &mut parent_ctx.state;
     let mut new_ctx = ParseContext::new(parent_ctx.reader, parent_ctx.instrs, new_validator, state);
     let start_count = new_ctx.reader.read_count();

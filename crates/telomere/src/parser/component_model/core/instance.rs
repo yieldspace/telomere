@@ -102,9 +102,9 @@ pub fn parse_core_instance_inline_export(
     CoreInstanceInlineExportType,
     CoreInstanceInlineExport,
 )> {
-    let (name_len, name) = parse_name(ctx.reader)?;
-    let (sort_len, sort) = parse_core_sort(ctx)?;
-    let (idx_len, idx) = parse_u32(ctx.reader)?;
+    let (_, name) = parse_name(ctx.reader)?;
+    let (_, sort) = parse_core_sort(ctx)?;
+    let (_, idx) = parse_u32(ctx.reader)?;
     match sort {
         CoreSort::Func => {
             let idx = ctx.validator.validate_core_func_idx(idx)?;
