@@ -3,7 +3,8 @@ use crate::component_model::{AliasType, ExportDecl, ExternDesc, InstanceDecl, In
 use crate::parser::component_model::types::alias::parse_alias_type;
 use crate::parser::component_model::types::parse_export_decl;
 use crate::parser::component_model::{
-    parse_core_type, parse_type, parse_vec_range, ParseContext, SizedResult, Validator,
+    parse_core_type, parse_type, parse_vec_range, ComponentParseError, ParseContext, SizedResult,
+    Validator,
 };
 
 pub fn parse_instance_type<R: BinaryReader>(
@@ -19,20 +20,21 @@ pub fn parse_instance_type<R: BinaryReader>(
         match decl {
             InstanceDecl::CoreModuleType(ty) => {
                 new_ctx.validator.add_core_module_type(ty.clone())?;
-                // inst_type.core_types.push(CoreType::ModuleType(ty));
             }
             InstanceDecl::Type(ty) => {
+                if ty.is_resource_type() {
+                    return Err(ComponentParseError::InvalidType(
+                        "resource type cannot use in instance type".to_string(),
+                    ));
+                }
                 new_ctx.validator.add_type(ty.clone())?;
-                // inst_type.types.push(ty);
             }
             InstanceDecl::Alias(ty) => match ty {
                 AliasType::Type(ty) => {
                     new_ctx.validator.add_type(ty.clone())?;
-                    // inst_type.types.push(ty);
                 }
                 AliasType::Instance(ty) => {
                     new_ctx.validator.add_instance_type(ty.clone())?;
-                    // inst_type.instances.push(ty)
                 }
             },
             InstanceDecl::ExportDecl(ExportDecl { name, ed }) => match ed {
