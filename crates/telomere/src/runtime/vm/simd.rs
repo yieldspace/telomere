@@ -567,3 +567,15 @@ pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     call_next(tail_code, 0, ctx)
 }
 define_binary_simd_operation!(sqrt, [f32x4], |a| a.sqrt());
+use wide::CmpEq;
+use wide::CmpNe;
+use wide::CmpLt;
+use wide::CmpGt;
+use wide::CmpLe;
+use wide::CmpGe;
+define_unary_simd_operation!(eq, [f32x4], |a, b| a.cmp_eq(b));
+define_unary_simd_operation!(ne, [f32x4], |a, b| a.cmp_ne(b));
+define_unary_simd_operation!(lt, [f32x4], |a, b| a.cmp_lt(b));
+define_unary_simd_operation!(gt, [f32x4], |a, b| a.cmp_gt(b));
+define_unary_simd_operation!(le, [f32x4], |a, b| a.cmp_le(b));
+define_unary_simd_operation!(ge, [f32x4], |a, b| a.cmp_ge(b));

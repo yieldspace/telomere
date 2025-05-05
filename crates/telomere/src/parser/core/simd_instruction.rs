@@ -267,7 +267,12 @@ pub(crate) mod i8x16_eq {
         Ok(0)
     }
 }
-
+unary_op_simd_parser!(f32x4_eq, 65);
+unary_op_simd_parser!(f32x4_ne, 66);
+unary_op_simd_parser!(f32x4_lt, 67);
+unary_op_simd_parser!(f32x4_gt, 68);
+unary_op_simd_parser!(f32x4_le, 69);
+unary_op_simd_parser!(f32x4_ge, 70);
 binary_op_simd_parser!(v128_not, 77);
 unary_op_simd_parser!(v128_and, 78);
 unary_op_simd_parser!(v128_andnot, 79);

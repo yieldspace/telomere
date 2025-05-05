@@ -437,3 +437,7 @@ fn simd_conversions() {
 fn simd_f32x4_arith() {
     run_test_file("simd_f32x4_arith");
 }
+#[test]
+fn simd_f32x4_cmp() {
+    run_test_file("simd_f32x4_cmp");
+}
