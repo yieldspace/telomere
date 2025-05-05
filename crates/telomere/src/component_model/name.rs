@@ -193,27 +193,27 @@ impl PlainName {
 }
 
 impl StrongUnique<Self> for PlainName {
-    /// 二つのPlainNameが「強く独立」の判定上で等しいかを判定します．
+    /// 二つのPlainNameが「強く一意」の判定上で等しいかを判定します．
     fn strong_eq(&self, other: &Self) -> bool {
         match self {
             PlainName::Plain(plain) => match other {
                 PlainName::Plain(_) => self.flat() == other.flat(),
                 PlainName::Constructor(_) => false,
                 // If one name is l and the other name is [*]l.l (for the same label l and any annotation * with a dotted l.l name), they are not strongly-unique.
-                PlainName::Method(x, y) => plain.flat() == x.flat() && y.flat() == other.flat(),
-                PlainName::Static(x, y) => plain.flat() == x.flat() && y.flat() == other.flat(),
+                PlainName::Method(x, y) => plain.flat() == x.flat() && plain.flat() == y.flat(),
+                PlainName::Static(x, y) => plain.flat() == x.flat() && plain.flat() == y.flat(),
             },
-            PlainName::Constructor(_) => match other {
+            PlainName::Constructor(x) => match other {
                 PlainName::Plain(_) => false,
-                PlainName::Constructor(_) => self.flat() == other.flat(),
+                PlainName::Constructor(y) => x.flat() == y.flat(),
                 PlainName::Method(_, _) => false,
                 PlainName::Static(_, _) => false,
             },
             PlainName::Method(lhs, rhs) | PlainName::Static(lhs, rhs) => match other {
                 PlainName::Plain(p) => p.flat() == lhs.flat() && p.flat() == rhs.flat(),
                 PlainName::Constructor(_) => false,
-                PlainName::Method(_, _) => self.flat() == other.flat(),
-                PlainName::Static(_, _) => self.flat() == other.flat(),
+                PlainName::Method(x, y) => lhs.flat() == x.flat() && y.flat() == rhs.flat(),
+                PlainName::Static(x, y) => lhs.flat() == x.flat() && y.flat() == rhs.flat(),
             },
         }
     }
@@ -344,5 +344,51 @@ pub struct HashName {
 impl StrongUnique<Self> for HashName {
     fn strong_eq(&self, other: &Self) -> bool {
         self.integrity == other.integrity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plain(label: &str) -> PlainName {
+        PlainName::Plain(Label::new(label))
+    }
+
+    fn constructor(label: &str) -> PlainName {
+        PlainName::Constructor(Label::new(label))
+    }
+
+    fn method(label: &str, method: &str) -> PlainName {
+        PlainName::Method(Label::new(label), Label::new(method))
+    }
+
+    fn static_(label: &str, method: &str) -> PlainName {
+        PlainName::Static(Label::new(label), Label::new(method))
+    }
+
+    #[test]
+    fn test_plain_name_strong_eq() {
+        assert!(plain("foo").strong_eq(&plain("foo")));
+        assert!(!plain("foo").strong_eq(&plain("bar")));
+        assert!(constructor("foo").strong_eq(&constructor("foo")));
+        assert!(!constructor("foo").strong_eq(&constructor("bar")));
+        assert!(method("foo", "bar").strong_eq(&method("foo", "bar")));
+        assert!(!method("foo", "bar").strong_eq(&method("foo", "baz")));
+        assert!(!method("foo", "bar").strong_eq(&method("baz", "bar")));
+        assert!(static_("foo", "bar").strong_eq(&static_("foo", "bar")));
+        assert!(!static_("foo", "bar").strong_eq(&static_("foo", "baz")));
+
+        assert!(!plain("foo").strong_eq(&constructor("foo")));
+        assert!(!plain("foo").strong_eq(&method("foo", "bar")));
+        assert!(!plain("foo").strong_eq(&static_("foo", "bar")));
+
+        assert!(!constructor("foo").strong_eq(&plain("foo")));
+        assert!(plain("foo").strong_eq(&method("foo", "foo")));
+        assert!(plain("foo").strong_eq(&static_("foo", "foo")));
+
+        assert!(!method("foo", "bar").strong_eq(&plain("foo")));
+        assert!(!method("foo", "bar").strong_eq(&constructor("foo")));
+        assert!(method("foo", "bar").strong_eq(&static_("foo", "bar")));
     }
 }
