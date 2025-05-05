@@ -7,12 +7,15 @@ use crate::{
             FunctionInstanceData, GcRef, GcRootHandle, Header, InstanceData, MemoryPool, ObjectType,
         },
         word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
-        ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
-        GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle,
-        Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TypeIdx,
+        ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, GlobalIdx,
+        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Instr,
+        Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TypeIdx,
         TypeSection, PAGE_SIZE_MAX,
     },
-    runtime::vm,
+    runtime::{
+        scheduler::{ReadyFlag, Scheduler, Task},
+        vm::{self, special_start_host_function_call},
+    },
     Instance, Module, Registry, Stack, Store, VMResult,
 };
 
@@ -144,8 +147,8 @@ pub fn instantiate_native_module(
 pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceHandle> {
     let instance_id = store.new_instance_id();
     let gc = store.gc.clone();
-    let mut gc = gc.borrow_mut();
-    let gc = &mut gc;
+    let mut gc_holder = gc.borrow_mut();
+    let gc = &mut gc_holder;
     // -> addr
     let mut memory: Option<GcRef> = None;
     let mut globals = vec![];
@@ -413,7 +416,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
             gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
-
+        let mut scheduler = Scheduler::new(store);
         let funcinst = unsafe { gc.get_func(funcaddr) };
         if funcinst.is_host_func() {
             let fp = funcinst.host_code_pointer(gc);
@@ -428,14 +431,26 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 &vm::VM_END
             ));
 
-            let mut ctx = ExecuteContext {
-                stack: &mut stack,
-                store,
+            let program = &[
+                Instr {
+                    op: special_start_host_function_call,
+                },
+                Instr {
+                    operand: crate::common::Operand {
+                        start_host_function: fp,
+                    },
+                },
+            ];
+            scheduler.push(Task {
+                task_id: 0,
+                stack,
                 local_reference,
-                gc,
-            };
-            let return_addr = vm_try!(fp(&mut ctx));
-            vm_try!(unsafe { vm::call_next(return_addr, 0, &mut ctx) });
+                ready_flag: ReadyFlag::Ready,
+                fp: program.as_ptr(),
+                pending_effects: 0,
+            });
+            unsafe { scheduler.run_with_ref(gc) };
+            vm_try!(scheduler.completed_tasks.pop().unwrap().result)
         } else {
             let (locals, offset) = funcinst.locals_and_code_offset(gc);
             let local_reference = vm_try!(stack.function_call(
@@ -449,13 +464,18 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 &vm::VM_END
             ));
             let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, offset) };
-            let mut ctx = ExecuteContext {
-                stack: &mut stack,
-                store,
+
+            scheduler.push(Task {
+                fp: ptr,
+                task_id: 0,
+                stack,
                 local_reference,
-                gc,
-            };
-            vm_try!(unsafe { vm::call_next(ptr, 0, &mut ctx) });
+                ready_flag: ReadyFlag::Ready,
+                pending_effects: 0,
+            });
+
+            unsafe { scheduler.run_with_ref(gc) };
+            vm_try!(scheduler.completed_tasks.pop().unwrap().result)
         }
     } else {
         unsafe {

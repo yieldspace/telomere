@@ -47,7 +47,7 @@ pub fn parse_instance_type<R: BinaryReader>(
                 #[cfg(feature = "component-gated-feature-value-imports-exports")]
                 ExternDesc::Value(_) => {}
                 ExternDesc::Type(ty) => {
-                    new_ctx.validator.add_type(ty.clone().into())?;
+                    new_ctx.validator.add_type(ty.clone())?;
                     inst_type.exports.insert(name, ExternDesc::Type(ty));
                 }
                 ExternDesc::Component(ty) => {

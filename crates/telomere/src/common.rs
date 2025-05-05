@@ -24,6 +24,7 @@ pub use gc::GcRef;
 
 pub use store::{Store, StoreState};
 
+use crate::runtime::scheduler::EffectSupplier;
 use crate::WasmParserError;
 pub mod custom_section;
 
@@ -357,6 +358,7 @@ pub union Operand {
     pub block_return: BlockReturn,
     pub loop_param: LoopParam,
     pub encoded: [u8; 8],
+    pub start_host_function: HostFunction,
 }
 
 pub type Op = unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>;
@@ -405,6 +407,9 @@ pub struct ExecuteContext<'a> {
     pub local_reference: LocalReference,
     pub store: &'a mut Store,
     pub gc: &'a mut MemoryPool,
+    pub effect: EffectSupplier<'a>,
+    pub cont: *const Instr,
+    pub task_id: u32,
 }
 impl ExecuteContext<'_> {
     pub fn func(&self) -> &FunctionInstanceData {
@@ -434,13 +439,11 @@ impl ExecuteContext<'_> {
     pub fn local_reference(&self) -> LocalReference {
         self.local_reference
     }
+    pub fn memory_addr(&self) -> Option<GcRef> {
+        self.instance().mems.as_slice(self.gc).first().copied()
+    }
     pub fn memory(&mut self) -> Option<&mut Memory> {
-        self.instance()
-            .mems
-            .as_slice(self.gc)
-            .first()
-            .copied()
-            .map(|v| unsafe { self.gc.get_memory(v) })
+        self.memory_addr().map(|v| unsafe { self.gc.get_memory(v) })
     }
 }
 

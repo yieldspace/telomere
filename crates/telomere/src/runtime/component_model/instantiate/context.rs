@@ -62,6 +62,12 @@ pub struct ResolvedImportMap {
     pub core_modules: HashMap<GlobalIdx<CoreModule>, Module>,
 }
 
+impl Default for ResolvedImportMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResolvedImportMap {
     pub fn new() -> Self {
         Self {

@@ -27,3 +27,5 @@ keywords = ["webassembly", "runtime"]
 
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }
+[profile.release]
+codegen-units = 16

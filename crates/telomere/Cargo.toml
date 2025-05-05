@@ -6,8 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 keywords.workspace = true
 
-[profile.release]
-codegen-units = 16
+
 
 [dependencies]
 wide = { version = "0.7.32", optional = true }

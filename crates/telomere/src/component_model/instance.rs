@@ -23,7 +23,7 @@ impl Instance {
         self.exports
             .get(name)
             .cloned()
-            .map(|x| Some(x))
+            .map(Some)
             .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
     }
 }

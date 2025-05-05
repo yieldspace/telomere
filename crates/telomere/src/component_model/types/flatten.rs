@@ -23,7 +23,7 @@ fn join_flat_type(l: CoreValType, r: CoreValType) -> CoreValType {
 }
 
 fn discriminant_type(cases: &Vec<Case>) -> PrimValType {
-    assert!(0 < cases.len() && cases.len() < (1 << 32));
+    assert!(!cases.is_empty() && cases.len() < (1 << 32));
     match cases.len().ilog2().div_ceil(8) {
         0 | 1 => PrimValType::U8,
         2 => PrimValType::U16,
@@ -50,9 +50,8 @@ impl Flattenable for DefValType {
         match self {
             DefValType::Primitive(prim) => prim.flat(opt, flat_type),
             DefValType::Record(labels) => labels
-                .into_iter()
-                .map(|x| x.flat(opt, flat_type))
-                .flatten()
+                .iter()
+                .flat_map(|x| x.flat(opt, flat_type))
                 .collect::<Vec<_>>(),
             DefValType::Variant(cases) => {
                 let mut flat: Vec<CoreValType> = vec![];
@@ -63,7 +62,7 @@ impl Flattenable for DefValType {
                             .enumerate()
                             .for_each(|(i, x)| {
                                 if i < flat.len() {
-                                    let nth = flat.get(i).unwrap().clone();
+                                    let nth = *flat.get(i).unwrap();
                                     flat[i] = join_flat_type(nth, x);
                                 } else {
                                     flat.push(x);
@@ -84,11 +83,7 @@ impl Flattenable for DefValType {
                     vec![CoreValType::I32, CoreValType::I32]
                 }
             }
-            DefValType::Tuple(items) => items
-                .iter()
-                .map(|x| x.flat(opt, flat_type))
-                .flatten()
-                .collect(),
+            DefValType::Tuple(items) => items.iter().flat_map(|x| x.flat(opt, flat_type)).collect(),
             DefValType::Flags(_) => vec![CoreValType::I32],
             DefValType::Enum(labels) => DefValType::Variant(
                 labels
@@ -156,8 +151,7 @@ impl FuncType {
         let mut flat_params = self
             .params
             .iter()
-            .map(|param| param.flat(opt, flat_type))
-            .flatten()
+            .flat_map(|param| param.flat(opt, flat_type))
             .collect::<Vec<_>>();
         let mut flat_results = self
             .result

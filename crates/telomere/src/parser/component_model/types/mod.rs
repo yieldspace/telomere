@@ -154,7 +154,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
             let (_, rs) = parse_resultlist(ctx)?;
             Type::Func(FuncType {
                 params: ps,
-                result: rs.map(|x| Box::from(x)),
+                result: rs.map(Box::from),
             })
         }
         COMPONENT_TYPE => Type::Component(parse_component_type(ctx)?.1),
@@ -306,8 +306,8 @@ fn parse_typebound<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Ty
     let bound = match ctx.reader.read_exact_one()? {
         0x00 => {
             let idx = parse_type_idx(ctx)?;
-            let ty = ctx.validator.get_type(idx)?;
-            ty
+
+            ctx.validator.get_type(idx)?
         }
         0x01 => {
             let resource_id = RESOURCE_HANDLE.fetch_add(1, Ordering::Relaxed);

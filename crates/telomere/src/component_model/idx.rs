@@ -35,6 +35,12 @@ impl<T> Eq for GlobalIdx<T> {}
 
 static GLOBAL_IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+impl<T> Default for GlobalIdx<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> GlobalIdx<T> {
     pub fn new() -> Self {
         Self(

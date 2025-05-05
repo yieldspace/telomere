@@ -20,6 +20,12 @@ pub struct Validator<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LocalIdx(u32);
 
+impl<'a> Default for Validator<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> Validator<'a> {
     pub fn new() -> Self {
         Self {

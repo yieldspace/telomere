@@ -15,7 +15,7 @@ pub fn parse_import(
             let idx = ctx.validator.add_core_module_type(ty.clone())?;
             let global_idx = GlobalIdx::new();
             ctx.state
-                .register_core_module(global_idx.clone(), Relation::Import(name.clone()));
+                .register_core_module(global_idx, Relation::Import(name.clone()));
             ctx.validator.register_global_core_module(idx, global_idx)?;
             // let global_idx = ctx.validator.get_global_core_module(idx)?;
             // ctx.push_instr(InstantiateInstr {
@@ -27,7 +27,7 @@ pub fn parse_import(
             let idx = ctx.validator.add_func_type(ty.clone())?;
             let global_idx = GlobalIdx::new();
             ctx.state
-                .register_func(global_idx.clone(), Relation::Import(name.clone()));
+                .register_func(global_idx, Relation::Import(name.clone()));
             ctx.validator.register_global_func(idx, global_idx)?;
             ComponentImport::Func(ty, global_idx)
         }
@@ -51,7 +51,7 @@ pub fn parse_import(
             let idx = ctx.validator.add_component_type(ty.clone())?;
             let global_idx = GlobalIdx::new();
             ctx.state
-                .register_component(global_idx.clone(), Relation::Import(name.clone()));
+                .register_component(global_idx, Relation::Import(name.clone()));
             ctx.validator.register_global_component(idx, global_idx)?;
             ComponentImport::Component(ty, global_idx)
         }
@@ -59,7 +59,7 @@ pub fn parse_import(
             let idx = ctx.validator.add_instance_type(ty.clone())?;
             let global_idx = GlobalIdx::new();
             ctx.state
-                .register_instance(global_idx.clone(), Relation::Import(name.clone()));
+                .register_instance(global_idx, Relation::Import(name.clone()));
             ctx.validator.register_global_instance(idx, global_idx)?;
             ComponentImport::Instance(ty, global_idx)
         }
