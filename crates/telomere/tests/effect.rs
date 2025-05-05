@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use common::run_wast;
-use tracing::Level;
 
 mod common;
 fn run_test_file(name: &str) {

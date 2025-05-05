@@ -24,6 +24,7 @@ pub enum WriteOperation {
     Write2([u8; 2]),
     Write4([u8; 4]),
     Write8([u8; 8]),
+    Write16([u8; 16]),
 }
 impl WriteOperation {
     pub fn get(&self) -> &[u8] {
@@ -32,6 +33,7 @@ impl WriteOperation {
             Self::Write2(d) => d,
             Self::Write4(d) => d,
             Self::Write8(d) => d,
+            Self::Write16(d) => d,
         }
     }
 }

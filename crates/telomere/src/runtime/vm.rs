@@ -1,6 +1,7 @@
+#[macro_use]
+pub(crate) mod traps;
 #[cfg(feature = "simd")]
 pub(crate) mod simd;
-pub(crate) mod traps;
 use std::ops::BitXor;
 
 use crate::{

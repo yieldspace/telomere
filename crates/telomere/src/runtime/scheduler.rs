@@ -57,6 +57,7 @@ fn write_operation_size(op: &WriteOperation) -> usize {
         WriteOperation::Write2(_) => 2,
         WriteOperation::Write4(_) => 4,
         WriteOperation::Write8(_) => 8,
+        WriteOperation::Write16(_) => 16,
     }
 }
 impl EffectSupplier<'_> {
