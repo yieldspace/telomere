@@ -45,7 +45,7 @@ fn parse_export_alias(
             let idx = ctx.validator.add_core_module_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_module(
-                global_idx.clone(),
+                global_idx,
                 Relation::FromExport(instance_global_idx, name),
             );
             ctx.validator.register_global_core_module(idx, global_idx)?;
@@ -55,7 +55,7 @@ fn parse_export_alias(
             let idx = ctx.validator.add_func_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_func(
-                global_idx.clone(),
+                global_idx,
                 Relation::FromExport(instance_global_idx, name),
             );
             ctx.validator.register_global_func(idx, global_idx)?;
@@ -71,7 +71,7 @@ fn parse_export_alias(
             let idx = ctx.validator.add_component_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_component(
-                global_idx.clone(),
+                global_idx,
                 Relation::FromExport(instance_global_idx, name),
             );
             ctx.validator.register_global_component(idx, global_idx)?;
@@ -81,7 +81,7 @@ fn parse_export_alias(
             let idx = ctx.validator.add_instance_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_instance(
-                global_idx.clone(),
+                global_idx,
                 Relation::FromExport(instance_global_idx, name),
             );
             ctx.validator.register_global_instance(idx, global_idx)?;
@@ -109,7 +109,7 @@ fn parse_core_export(
             let idx = ctx.validator.add_core_memory_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_memory(
-                global_idx.clone(),
+                global_idx,
                 CoreMemoryRef(core_inst_global_idx, name),
             );
             ctx.validator.register_global_core_memory(idx, global_idx)?;
@@ -119,7 +119,7 @@ fn parse_core_export(
             let idx = ctx.validator.add_core_table_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state
-                .register_core_table(global_idx.clone(), CoreTableRef(core_inst_global_idx, name));
+                .register_core_table(global_idx, CoreTableRef(core_inst_global_idx, name));
             ctx.validator.register_global_core_table(idx, global_idx)?;
             Ok(AliasIdx::CoreTable)
         }
@@ -127,7 +127,7 @@ fn parse_core_export(
             let idx = ctx.validator.add_core_func_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_func(
-                global_idx.clone(),
+                global_idx,
                 Relation::FromCoreExport(core_inst_global_idx, name),
             );
             ctx.validator.register_global_core_func(idx, global_idx)?;
@@ -137,7 +137,7 @@ fn parse_core_export(
             let idx = ctx.validator.add_core_global_type(ty)?;
             let global_idx = GlobalIdx::new();
             ctx.state.register_core_global(
-                global_idx.clone(),
+                global_idx,
                 CoreGlobalRef(core_inst_global_idx, name),
             );
             ctx.validator.register_global_core_global(idx, global_idx)?;
@@ -170,8 +170,8 @@ fn parse_outer_export(
             let ty = {
                 let outer = ctx.validator.get_outer(ct);
                 let super_idx = outer.validate_core_type_idx(idx)?;
-                let super_type = outer.get_type(super_idx)?;
-                super_type
+                
+                outer.get_type(super_idx)?
             };
             if ty.is_resource_type() {
                 return Err(ComponentParseError::InvalidSignature(

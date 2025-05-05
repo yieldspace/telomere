@@ -96,7 +96,7 @@ impl EffectSupplier<'_> {
         let size = write_operation_size(&operation);
         let start = vm_try!(compute_offset(memarg, offset));
         let end = vm_try!(VMResult::from_option(
-            start.checked_add(size as usize),
+            start.checked_add(size),
             || VMResult::MemoryIndexOutOfRange
         ));
         vm_try!(VMResult::from_option(
@@ -146,7 +146,7 @@ impl<'a> Scheduler<'a> {
             } => {
                 let data = unsafe {
                     gc.get_memory(addr)
-                        .get(range.start as usize..range.end as usize)
+                        .get(range.start..range.end)
                 };
                 if let Some(data) = data {
                     task.fp = handler(&mut task.stack, data, task.fp);
@@ -168,7 +168,7 @@ impl<'a> Scheduler<'a> {
             } => {
                 let dst = unsafe {
                     gc.get_memory(addr)
-                        .get_mut(range.start as usize..range.end as usize)
+                        .get_mut(range.start..range.end)
                 };
                 if let Some(dst) = dst {
                     dst.copy_from_slice(operation.get());
@@ -215,12 +215,12 @@ impl<'a> Scheduler<'a> {
                     cont: fp,
                     task_id,
                 };
-                let res = unsafe { ((*fp).op)(fp.offset(1) as *const Instr, &mut ec) };
+                let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
                 let cont = ec.cont;
                 let local_reference = ec.local_reference;
                 match res {
                     VMResult::Success(()) => {
-                        if cont != std::ptr::null() {
+                        if cont.is_null() {
                             let new_task = Task {
                                 local_reference,
                                 fp: cont,

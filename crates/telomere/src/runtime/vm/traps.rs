@@ -64,7 +64,7 @@ macro_rules! trap_func {
     ($data: expr) => {
         match $data {
             VMResult::Success(v) => v,
-            other => return crate::runtime::vm::traps::trap_func(other),
+            other => return $crate::runtime::vm::traps::trap_func(other),
         }
     };
 }

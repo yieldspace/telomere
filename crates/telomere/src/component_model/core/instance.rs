@@ -1,7 +1,6 @@
 use crate::component_model::{
-    CoreInstanceInlineExport, CoreModule, CoreModuleExportType, CoreModuleType, GlobalIdx, Instance,
+    CoreInstanceInlineExport, CoreModule, GlobalIdx, Instance,
 };
-use crate::parser::component_model::{ComponentParseError, ParseResult};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

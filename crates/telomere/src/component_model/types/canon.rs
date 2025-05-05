@@ -1,4 +1,3 @@
-use crate::common::ResultType;
 use crate::component_model::flatten::FlatType;
 use crate::component_model::types::flatten::Flattenable;
 use crate::component_model::{CanonicalOptions, CoreFuncType, FuncType, ResourceType};

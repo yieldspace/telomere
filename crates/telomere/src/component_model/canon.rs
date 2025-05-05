@@ -1,7 +1,5 @@
-use crate::common::{ResultType as CoreResultType, ResultType, ValType as CoreValType};
-use crate::component_model::types::flatten::Flattenable;
 use crate::component_model::{
-    CoreFunc, CoreFuncType, CoreMemoryRef, FuncType, GlobalIdx, ResourceType,
+    CoreFunc, CoreMemoryRef, GlobalIdx,
 };
 #[cfg(feature = "component-gated-feature-async")]
 use crate::component_model::{CoreTableIdx, ValType};

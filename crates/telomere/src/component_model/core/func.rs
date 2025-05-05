@@ -1,5 +1,5 @@
 use crate::component_model::{
-    CanonOpt, CanonicalOptions, CoreFuncRef, Func, GlobalIdx, ResourceType,
+    CanonicalOptions, CoreFuncRef, Func, GlobalIdx, ResourceType,
 };
 
 #[derive(Debug, Clone)]

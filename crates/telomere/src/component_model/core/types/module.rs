@@ -43,7 +43,7 @@ impl CoreModuleType {
             match desc {
                 ExportDesc::Func(idx) => {
                     let func_type_idx = module.functions.get(idx.0 as usize).unwrap();
-                    let ty = module.fts.get(func_type_idx.clone()).unwrap();
+                    let ty = module.fts.get(*func_type_idx).unwrap();
                     slf.exports
                         .insert(name.clone(), CoreModuleExportType::Func(ty.clone()));
                 }
@@ -51,19 +51,19 @@ impl CoreModuleType {
                     let table_type = module.tables.get(idx.0 as usize).unwrap();
                     slf.exports.insert(
                         name.clone(),
-                        CoreModuleExportType::Table(table_type.clone()),
+                        CoreModuleExportType::Table(*table_type),
                     );
                 }
                 ExportDesc::Mem(idx) => {
                     let mem_type = module.mems.get(idx.0 as usize).unwrap();
                     slf.exports
-                        .insert(name.clone(), CoreModuleExportType::Memory(mem_type.clone()));
+                        .insert(name.clone(), CoreModuleExportType::Memory(*mem_type));
                 }
                 ExportDesc::Global(idx) => {
                     let global_type = module.globals.get(idx.0 as usize).unwrap();
                     slf.exports.insert(
                         name.clone(),
-                        CoreModuleExportType::Global(global_type.clone()),
+                        CoreModuleExportType::Global(*global_type),
                     );
                 }
             }
