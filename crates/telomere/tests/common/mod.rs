@@ -261,7 +261,11 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                                 )
                                             }
                                             NanPattern::ArithmeticNan
-                                            | NanPattern::CanonicalNan => assert!(b.is_nan()),
+                                            | NanPattern::CanonicalNan => assert!(
+                                                b.is_nan(),
+                                                "expected: NaN, actual: {b} @ {:?}",
+                                                span.linecol_in(text)
+                                            ),
                                         }
                                     }
                                 }
