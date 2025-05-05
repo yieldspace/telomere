@@ -31,7 +31,7 @@ impl FuncType {
         }
         match (&self.result, result) {
             (None, None) => Ok(()),
-            (Some(act), Some(exp)) if &*act.clone() != &exp => {
+            (Some(act), Some(exp)) if **act != exp => {
                 Err(ComponentParseError::TypeMismatch(format!(
                     "result type mismatch: expected {:?}, found {:?}",
                     act, exp
