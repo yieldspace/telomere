@@ -4,18 +4,21 @@ use crate::{
     common::{GcRef, Instr},
     Stack,
 };
-
+#[derive(Debug)]
 pub enum Target {
     Memory(GcRef, Range<usize>),
 }
+#[derive(Debug)]
 pub enum AtomicFlag {
     NonAtomic,
 }
 pub type ReadOperationHandler = unsafe fn(&mut Stack, &[u8], *const Instr) -> *const Instr;
+#[derive(Debug)]
 pub enum Operation {
     Read(ReadOperationHandler),
     Write(WriteOperation),
 }
+#[derive(Debug)]
 pub enum WriteOperation {
     Write1([u8; 1]),
     Write2([u8; 2]),
@@ -34,6 +37,7 @@ impl WriteOperation {
         }
     }
 }
+#[derive(Debug)]
 pub struct Effect {
     pub task_id: u32,
     pub target: Target,
