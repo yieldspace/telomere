@@ -17,11 +17,12 @@ fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
     )
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReadyFlag {
     Ready,
     NonReady,
 }
+#[derive(Debug)]
 pub(crate) struct Task {
     pub task_id: u32,
     pub stack: Stack,
@@ -30,6 +31,7 @@ pub(crate) struct Task {
     pub ready_flag: ReadyFlag,
     pub fp: *const Instr,
 }
+#[derive(Debug)]
 pub(crate) struct CompletedTask {
     pub stack: Stack,
     pub result: VMResult<()>,
@@ -69,6 +71,7 @@ impl EffectSupplier<'_> {
         size: u32,
         handler: ReadOperationHandler,
     ) -> VMResult<()> {
+        trace!("push_non_atomic_memory_read_effect");
         let start = vm_try!(compute_offset(memarg, offset));
         let end = vm_try!(VMResult::from_option(
             start.checked_add(size as usize),
@@ -92,6 +95,7 @@ impl EffectSupplier<'_> {
         gc: &mut MemoryPool,
         operation: WriteOperation,
     ) -> VMResult<()> {
+        trace!("push_non_atomic_memory_write_effect");
         let size = write_operation_size(&operation);
         let start = vm_try!(compute_offset(memarg, offset));
         let end = vm_try!(VMResult::from_option(start.checked_add(size), || {
@@ -129,6 +133,7 @@ impl<'a> Scheduler<'a> {
         self.tasks.push_back(task);
     }
     unsafe fn handle_effect(&mut self, gc: &mut MemoryPool, effect: Effect) {
+        trace!("{:?}", self.tasks);
         let task = self
             .tasks
             .iter_mut()
@@ -211,7 +216,8 @@ impl<'a> Scheduler<'a> {
                 let local_reference = ec.local_reference;
                 match res {
                     VMResult::Success(()) => {
-                        if cont.is_null() {
+                        if !cont.is_null() {
+                            trace!("continue task: {}", ec.task_id);
                             let new_task = Task {
                                 local_reference,
                                 fp: cont,
@@ -222,16 +228,20 @@ impl<'a> Scheduler<'a> {
                             };
                             self.tasks.push_back(new_task);
                         } else {
+                            trace!("complte task: {}", ec.task_id);
                             self.completed_tasks.push(CompletedTask {
                                 stack,
                                 result: VMResult::Success(()),
                             })
                         }
                     }
-                    other => self.completed_tasks.push(CompletedTask {
-                        stack,
-                        result: other,
-                    }),
+                    other => {
+                        trace!("trap task: {}", ec.task_id);
+                        self.completed_tasks.push(CompletedTask {
+                            stack,
+                            result: other,
+                        })
+                    }
                 }
             }
             self.processing_effect(gc);

@@ -19,7 +19,7 @@ use super::memory_effect::{ReadOperationHandler, WriteOperation};
 macro_rules! wait_effct {
     ($ctx: expr, $cont: expr) => {
         if $ctx.effect.get_pending_count() != 0 {
-            trace!("waiting effect");
+            trace!("waiting effect: {:?}", $cont);
             $ctx.cont = $cont;
             return VMResult::Success(());
         }
