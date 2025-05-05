@@ -441,3 +441,8 @@ fn simd_f32x4_arith() {
 fn simd_f32x4_cmp() {
     run_test_file("simd_f32x4_cmp");
 }
+
+#[test]
+fn simd_f32x4_pmin_pmax() {
+    run_test_file("simd_f32x4_pmin_pmax");
+}

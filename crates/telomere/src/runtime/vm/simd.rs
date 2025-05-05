@@ -557,8 +557,50 @@ define_unary_simd_operation!(div, [f32x4], |a, b| a / b);
 define_unary_simd_operation!(swizzle, [i8x16], |a, b| a.swizzle(b));
 define_unary_simd_operation!(min, [i8x16, u8x16, f32x4], |a, b| a.min(b)); // FIXME: nan behaviour
 define_unary_simd_operation!(max, [i8x16, u8x16, f32x4], |a, b| a.max(b)); // FIXME: nan behaviour
-define_unary_simd_operation!(pmin, [f32x4], |a, b| a.max(b));
-define_unary_simd_operation!(pmax, [f32x4], |a, b| a.max(b));
+define_unary_simd_operation!(pmin, [f32x4], |a, b| {
+    let a_arr = a.to_array();
+    let b_arr = b.to_array();
+    let mut result = [0.0f32; 4];
+
+    for i in 0..4 {
+        let (va, vb) = (a_arr[i], b_arr[i]);
+        match (va.is_nan(), vb.is_nan()) {
+            (true, _) => result[i] = va, 
+            (_, true) => result[i] = va, 
+            (false, false) => {
+                if va == vb && va == 0.0 {
+                    result[i] = va; 
+                } else {
+                    result[i] = va.min(vb);
+                }
+            }
+        }
+    }
+
+    f32x4::from(result)
+});
+define_unary_simd_operation!(pmax, [f32x4], |a, b| {
+    let a_arr = a.to_array();
+    let b_arr = b.to_array();
+    let mut result = [0.0f32; 4];
+
+    for i in 0..4 {
+        let (va, vb) = (a_arr[i], b_arr[i]);
+        match (va.is_nan(), vb.is_nan()) {
+            (true, _) => result[i] = va,
+            (_, true) => result[i] = va, 
+            (false, false) => {
+                if va == vb && va == 0.0 {
+                    result[i] = va;
+                } else {
+                    result[i] = va.max(vb);
+                }
+            }
+        }
+    }
+
+    f32x4::from(result)
+});
 define_binary_simd_operation!(abs, [f32x4, i32x4], |a| a.abs());
 pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v: f32x4 = ctx.stack.pop();
@@ -568,11 +610,11 @@ pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 }
 define_binary_simd_operation!(sqrt, [f32x4], |a| a.sqrt());
 use wide::CmpEq;
-use wide::CmpNe;
-use wide::CmpLt;
+use wide::CmpGe;
 use wide::CmpGt;
 use wide::CmpLe;
-use wide::CmpGe;
+use wide::CmpLt;
+use wide::CmpNe;
 define_unary_simd_operation!(eq, [f32x4], |a, b| a.cmp_eq(b));
 define_unary_simd_operation!(ne, [f32x4], |a, b| a.cmp_ne(b));
 define_unary_simd_operation!(lt, [f32x4], |a, b| a.cmp_lt(b));
