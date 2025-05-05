@@ -7,7 +7,6 @@ use crate::{
 
 pub enum Target {
     Memory(GcRef, Range<usize>),
-
 }
 pub enum AtomicFlag {
     NonAtomic,

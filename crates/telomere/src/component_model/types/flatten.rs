@@ -83,10 +83,7 @@ impl Flattenable for DefValType {
                     vec![CoreValType::I32, CoreValType::I32]
                 }
             }
-            DefValType::Tuple(items) => items
-                .iter()
-                .flat_map(|x| x.flat(opt, flat_type))
-                .collect(),
+            DefValType::Tuple(items) => items.iter().flat_map(|x| x.flat(opt, flat_type)).collect(),
             DefValType::Flags(_) => vec![CoreValType::I32],
             DefValType::Enum(labels) => DefValType::Variant(
                 labels

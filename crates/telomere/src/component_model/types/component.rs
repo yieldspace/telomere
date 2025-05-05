@@ -1,6 +1,4 @@
-use crate::component_model::{
-    ExternDesc, ImportDecl, InstanceDecl,
-};
+use crate::component_model::{ExternDesc, ImportDecl, InstanceDecl};
 use crate::parser::component_model::ComponentParseError;
 use std::collections::HashMap;
 

@@ -51,10 +51,8 @@ pub fn _parse_component(
                 let ty = CoreModuleType::from_module(&module);
                 let idx = ctx.validator.add_core_module_type(ty)?;
                 let global_idx = GlobalIdx::new();
-                ctx.state.register_core_module(
-                    global_idx,
-                    Relation::Defined(CoreModule::new(module)),
-                );
+                ctx.state
+                    .register_core_module(global_idx, Relation::Defined(CoreModule::new(module)));
                 ctx.validator.register_global_core_module(idx, global_idx)?
             }
             ComponentSectionType::CoreInstance => parse_core_instance_section(ctx)?,

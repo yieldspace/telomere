@@ -49,10 +49,8 @@ impl CoreModuleType {
                 }
                 ExportDesc::Table(idx) => {
                     let table_type = module.tables.get(idx.0 as usize).unwrap();
-                    slf.exports.insert(
-                        name.clone(),
-                        CoreModuleExportType::Table(*table_type),
-                    );
+                    slf.exports
+                        .insert(name.clone(), CoreModuleExportType::Table(*table_type));
                 }
                 ExportDesc::Mem(idx) => {
                     let mem_type = module.mems.get(idx.0 as usize).unwrap();
@@ -61,10 +59,8 @@ impl CoreModuleType {
                 }
                 ExportDesc::Global(idx) => {
                     let global_type = module.globals.get(idx.0 as usize).unwrap();
-                    slf.exports.insert(
-                        name.clone(),
-                        CoreModuleExportType::Global(*global_type),
-                    );
+                    slf.exports
+                        .insert(name.clone(), CoreModuleExportType::Global(*global_type));
                 }
             }
         }

@@ -306,7 +306,7 @@ fn parse_typebound<R: BinaryReader>(ctx: &mut ParseContext<R>) -> SizedResult<Ty
     let bound = match ctx.reader.read_exact_one()? {
         0x00 => {
             let idx = parse_type_idx(ctx)?;
-            
+
             ctx.validator.get_type(idx)?
         }
         0x01 => {

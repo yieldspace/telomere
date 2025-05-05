@@ -1,6 +1,4 @@
-use crate::component_model::{
-    CoreInstanceInlineExport, CoreModule, GlobalIdx, Instance,
-};
+use crate::component_model::{CoreInstanceInlineExport, CoreModule, GlobalIdx, Instance};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

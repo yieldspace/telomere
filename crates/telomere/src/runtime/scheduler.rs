@@ -94,10 +94,9 @@ impl EffectSupplier<'_> {
     ) -> VMResult<()> {
         let size = write_operation_size(&operation);
         let start = vm_try!(compute_offset(memarg, offset));
-        let end = vm_try!(VMResult::from_option(
-            start.checked_add(size),
-            || VMResult::MemoryIndexOutOfRange
-        ));
+        let end = vm_try!(VMResult::from_option(start.checked_add(size), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
         vm_try!(VMResult::from_option(
             unsafe { gc.get_memory(addr).get_mut(start as usize..end as usize) },
             || VMResult::MemoryIndexOutOfRange
@@ -143,10 +142,7 @@ impl<'a> Scheduler<'a> {
                 atomic: AtomicFlag::NonAtomic,
                 operation: Operation::Read(handler),
             } => {
-                let data = unsafe {
-                    gc.get_memory(addr)
-                        .get(range.start..range.end)
-                };
+                let data = unsafe { gc.get_memory(addr).get(range.start..range.end) };
                 if let Some(data) = data {
                     task.fp = handler(&mut task.stack, data, task.fp);
                 } else {
@@ -165,10 +161,7 @@ impl<'a> Scheduler<'a> {
                 atomic: AtomicFlag::NonAtomic,
                 operation: Operation::Write(operation),
             } => {
-                let dst = unsafe {
-                    gc.get_memory(addr)
-                        .get_mut(range.start..range.end)
-                };
+                let dst = unsafe { gc.get_memory(addr).get_mut(range.start..range.end) };
                 if let Some(dst) = dst {
                     dst.copy_from_slice(operation.get());
                 } else {
