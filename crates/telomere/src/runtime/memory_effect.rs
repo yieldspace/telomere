@@ -7,11 +7,9 @@ use crate::{
 
 pub enum Target {
     Memory(GcRef, Range<usize>),
-    Table(GcRef, u32),
-    Global(GcRef),
+
 }
 pub enum AtomicFlag {
-    Atomic,
     NonAtomic,
 }
 pub type ReadOperationHandler = unsafe fn(&mut Stack, &[u8], *const Instr) -> *const Instr;

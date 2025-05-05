@@ -31,7 +31,6 @@ pub(crate) struct Task {
     pub fp: *const Instr,
 }
 pub(crate) struct CompletedTask {
-    pub task_id: u32,
     pub stack: Stack,
     pub result: VMResult<()>,
 }
@@ -181,7 +180,6 @@ impl<'a> Scheduler<'a> {
                     self.ready_count += 1;
                 }
             }
-            _ => todo!(),
         }
     }
     pub unsafe fn run_with_ref(&mut self, gc: &mut MemoryPool) {
@@ -232,14 +230,12 @@ impl<'a> Scheduler<'a> {
                             self.tasks.push_back(new_task);
                         } else {
                             self.completed_tasks.push(CompletedTask {
-                                task_id,
                                 stack,
                                 result: VMResult::Success(()),
                             })
                         }
                     }
                     other => self.completed_tasks.push(CompletedTask {
-                        task_id,
                         stack,
                         result: other,
                     }),
