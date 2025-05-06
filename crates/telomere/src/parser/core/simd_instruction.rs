@@ -46,6 +46,22 @@ macro_rules! binary_op_simd_parser {
     };
 }
 
+macro_rules! shift_instruction_parser {
+    ($name: ident,$code: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                ctx.checker
+                    .op(&[ValType::V128, ValType::I32], &[ValType::V128])?;
+                ctx.instrs.push_instr1(vm::simd::$name);
+                Ok(0)
+            }
+        }
+    };
+}
 pub(crate) mod v128_load {
     use super::prelude::*;
 
@@ -267,7 +283,12 @@ pub(crate) mod i8x16_eq {
         Ok(0)
     }
 }
-
+unary_op_simd_parser!(f32x4_eq, 65);
+unary_op_simd_parser!(f32x4_ne, 66);
+unary_op_simd_parser!(f32x4_lt, 67);
+unary_op_simd_parser!(f32x4_gt, 68);
+unary_op_simd_parser!(f32x4_le, 69);
+unary_op_simd_parser!(f32x4_ge, 70);
 binary_op_simd_parser!(v128_not, 77);
 unary_op_simd_parser!(v128_and, 78);
 unary_op_simd_parser!(v128_andnot, 79);
@@ -326,27 +347,12 @@ pub(crate) mod i8x16_bitmask {
         Ok(0)
     }
 }
-
 unary_op_simd_parser!(i8x16_narrow_i16x8_s, 101);
 unary_op_simd_parser!(i8x16_narrow_i16x8_u, 102);
-
-macro_rules! shift_instruction_parser {
-    ($name: ident,$code: expr) => {
-        pub(crate) mod $name {
-            use super::prelude::*;
-            pub(crate) const CODE: u32 = $code;
-            pub(crate) fn parse<R: BinaryReader>(
-                ctx: &mut SimdParserContext<R>,
-            ) -> Result<usize, WasmParserError> {
-                ctx.checker
-                    .op(&[ValType::V128, ValType::I32], &[ValType::V128])?;
-                ctx.instrs.push_instr1(vm::simd::$name);
-                Ok(0)
-            }
-        }
-    };
-}
-
+binary_op_simd_parser!(f32x4_ceil, 103);
+binary_op_simd_parser!(f32x4_floor, 104);
+binary_op_simd_parser!(f32x4_trunc, 105);
+binary_op_simd_parser!(f32x4_nearest, 106);
 shift_instruction_parser!(i8x16_shl, 107);
 shift_instruction_parser!(i8x16_shr, 108);
 shift_instruction_parser!(u8x16_shr, 109);
@@ -391,6 +397,8 @@ binary_op_simd_parser!(i16x8_extend_high_i8x16_u, 138);
 shift_instruction_parser!(i16x8_shl, 139);
 shift_instruction_parser!(i16x8_shr, 140);
 shift_instruction_parser!(u16x8_shr, 141);
+
+binary_op_simd_parser!(i32x4_abs, 160);
 
 pub(crate) mod i32x4_all_true {
     use super::prelude::*;
@@ -457,7 +465,11 @@ shift_instruction_parser!(u64x2_shr, 205);
 unary_op_simd_parser!(i64x2_add, 206);
 
 binary_op_simd_parser!(f32x4_abs, 224);
-binary_op_simd_parser!(i32x4_abs, 160);
+binary_op_simd_parser!(f32x4_neg, 225);
+binary_op_simd_parser!(f32x4_sqrt, 227);
+
+unary_op_simd_parser!(f32x4_add, 228);
+unary_op_simd_parser!(f32x4_sub, 229);
 unary_op_simd_parser!(f32x4_mul, 230);
 unary_op_simd_parser!(f32x4_div, 231);
 unary_op_simd_parser!(f32x4_min, 232);

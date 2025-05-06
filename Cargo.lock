@@ -351,11 +351,9 @@ dependencies = [
  "num-derive",
  "num-traits",
  "once_cell",
- "proc-macro2",
- "quote",
  "regex",
  "semver",
- "syn",
+ "telomere-macros",
  "thiserror",
  "tracing",
  "tracing-subscriber",
@@ -371,6 +369,15 @@ dependencies = [
  "anyhow",
  "clap",
  "telomere",
+]
+
+[[package]]
+name = "telomere-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

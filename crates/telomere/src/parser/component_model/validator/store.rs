@@ -6,7 +6,6 @@ use crate::component_model::{
 };
 use crate::parser::component_model::validator::LocalIdx;
 use std::collections::HashMap;
-use std::hash::Hash;
 
 #[derive(Default)]
 pub struct LocalStore {
