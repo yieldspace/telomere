@@ -1,60 +1,30 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentExport, CoreSortWithIdx, ExportName, SortWithIdx};
+use crate::component_model::{ComponentExport, ExternDesc, Sort};
 use crate::parser::component_model::name::parse_export_name_dash;
-use crate::parser::component_model::{
-    parse_externdesc, parse_option, parse_sort_with_idx, ComponentParseError, ParseContext,
-    ParseResult,
-};
+use crate::parser::component_model::sort::parse_sort_with_idx;
+use crate::parser::component_model::types::parse_externdesc;
+use crate::parser::component_model::{parse_option, ParseContext, ParseResult};
 
-pub fn parse_export(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<(ExportName, ComponentExport)> {
+pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     let name = parse_export_name_dash(ctx)?;
-    let (_, si) = parse_sort_with_idx(ctx)?;
+    let si = parse_sort_with_idx(ctx)?;
     let ed = parse_option(ctx, parse_externdesc)?;
-    let export = match si {
-        SortWithIdx::Core(CoreSortWithIdx::Module(idx, ty)) => {
-            let ty = if let Some(ed) = ed {
-                // todo: check ed is super type of ty
-                ed.try_into()?
-            } else {
-                ty
-            };
-            ComponentExport::CoreModule(ty, idx)
+    match si {
+        Sort::Component(idx, tid) => {
+            ctx.validator.with_scope(|scope| {
+                let (pid, ty) = scope
+                    .add_export_type(name, ed.unwrap_or_else(|| ExternDesc::Component(tid)))?;
+                scope.add_export(pid, ComponentExport::Component(idx))
+            })?;
+            Ok(())
         }
-        SortWithIdx::Func(idx, ty) => {
-            let ty = if let Some(ed) = ed {
-                // todo: check ed is super type of ty
-                ed.try_into()?
-            } else {
-                ty
-            };
-            ComponentExport::Func(ty, idx)
+        Sort::Instance(idx, tid) => {
+            ctx.validator.with_scope(|scope| {
+                let (pid, ty) =
+                    scope.add_export_type(name, ed.unwrap_or_else(|| ExternDesc::Instance(tid)))?;
+                scope.add_export(pid, ComponentExport::Instance(idx))
+            })?;
+            Ok(())
         }
-        SortWithIdx::Type(ty) => ComponentExport::Type(ty),
-        SortWithIdx::Component(idx, ty) => {
-            let ty = if let Some(ed) = ed {
-                // todo: check ed is super type of ty
-                ed.try_into()?
-            } else {
-                ty
-            };
-            ComponentExport::Component(ty, idx)
-        }
-        SortWithIdx::Instance(idx, ty) => {
-            let ty = if let Some(ed) = ed {
-                // todo: check ed is super type of ty
-                ed.try_into()?
-            } else {
-                ty
-            };
-            ComponentExport::Instance(ty, idx)
-        }
-        _ => {
-            return Err(ComponentParseError::InvalidSignature(format!(
-                "Invalid core type for export: {si:?}"
-            )));
-        }
-    };
-    Ok((name, export))
+    }
 }

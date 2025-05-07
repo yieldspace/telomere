@@ -1,9 +1,9 @@
-/// `ComponentSectionType` represents the different types of sections in a component.
+/// `ComponentSection` represents the different types of sections in a component.
 ///
 /// Each variant is associated with a specific `u8` value that identifies the section type.
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]
-pub enum ComponentSectionType {
+pub enum ComponentSection {
     /// Custom section type.
     Custom = 0x00,
     /// Core module section type.

@@ -62,6 +62,20 @@ impl StrongUnique<Self> for ParsedExportName {
     }
 }
 
+impl ParsedExportName {
+    pub fn is_plain(&self) -> bool {
+        matches!(self, ParsedExportName::Plain(_))
+    }
+
+    pub fn is_plain_annotated(&self) -> bool {
+        if let ParsedExportName::Plain(name) = self {
+            !matches!(name, PlainName::Plain(_))
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ImportName {
     pub original: String,

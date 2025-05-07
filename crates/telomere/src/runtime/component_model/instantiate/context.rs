@@ -1,5 +1,5 @@
 use crate::common::InstanceHandle;
-use crate::component_model::{CoreModule, GlobalIdx, Instance};
+use crate::component_model::GlobalIdx;
 use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
 use crate::{Module, Registry, Store};
 use std::collections::HashMap;
@@ -44,8 +44,8 @@ impl<'a> InstantiateContext<'a> {
 }
 
 pub enum InstantiatedInstanceExport {
-    Module(GlobalIdx<CoreModule>),
-    Instance(GlobalIdx<Instance>),
+    // Module(GlobalIdx<CoreModule>),
+    // Instance(GlobalIdx<Instance>),
 }
 
 pub struct InstantiatedInstance {
@@ -59,7 +59,7 @@ pub enum ResolvedImportKey {
 }
 
 pub struct ResolvedImportMap {
-    pub core_modules: HashMap<GlobalIdx<CoreModule>, Module>,
+    // pub core_modules: HashMap<GlobalIdx<CoreModule>, Module>,
 }
 
 impl Default for ResolvedImportMap {
@@ -71,12 +71,12 @@ impl Default for ResolvedImportMap {
 impl ResolvedImportMap {
     pub fn new() -> Self {
         Self {
-            core_modules: Default::default(),
+            // core_modules: Default::default(),
         }
     }
 }
 
 pub enum ResolvedImport {
-    CoreModule(GlobalIdx<CoreModule>),
-    Instance(GlobalIdx<Instance>),
+    // CoreModule(GlobalIdx<CoreModule>),
+    // Instance(GlobalIdx<Instance>),
 }

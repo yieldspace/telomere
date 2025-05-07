@@ -1,44 +1,25 @@
-use crate::component_model::{ExportName, ExternDesc, ImportDecl, ImportName, InstanceDecl};
-use crate::parser::component_model::ComponentParseError;
+use crate::component_model::types::TypeId;
+use crate::component_model::PlaceholderId;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentType {
-    pub(crate) imports: HashMap<ImportName, ExternDesc>,
-    pub(crate) exports: HashMap<ExportName, ExternDesc>,
+    pub imports: HashMap<PlaceholderId, ComponentImportType>,
+    pub exports: HashMap<PlaceholderId, ComponentExportType>,
 }
 
-impl Default for ComponentType {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComponentExportType {
+    Component(TypeId),
+    Instance(TypeId),
+    Type(TypeId),
+    Sub(TypeId),
 }
 
-impl ComponentType {
-    pub fn new() -> Self {
-        Self {
-            imports: HashMap::new(),
-            exports: HashMap::new(),
-        }
-    }
-}
-
-impl TryFrom<ExternDesc> for ComponentType {
-    type Error = ComponentParseError;
-
-    fn try_from(value: ExternDesc) -> Result<Self, Self::Error> {
-        if let ExternDesc::Component(component_type) = value {
-            Ok(component_type)
-        } else {
-            Err(ComponentParseError::InvalidType(
-                "ComponentType".to_string(),
-            ))
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ComponentDecl {
-    Import(ImportDecl),
-    Instance(InstanceDecl),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComponentImportType {
+    Component(TypeId),
+    Instance(TypeId),
+    Type(TypeId),
+    Sub(TypeId),
 }

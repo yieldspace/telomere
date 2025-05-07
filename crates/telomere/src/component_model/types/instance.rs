@@ -1,101 +1,36 @@
-use crate::component_model::{
-    AliasType, ComponentType, CoreModuleType, CoreSort, ExportName, FuncType, ImportName, Sort,
-    Type,
-};
-use crate::parser::component_model::ComponentParseError;
+use crate::component_model::types::TypeId;
+use crate::component_model::{ExportName, PlaceholderId};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceType {
-    pub(crate) imports: HashMap<ImportName, ExternDesc>,
-    pub(crate) exports: HashMap<ExportName, ExternDesc>,
+    exports: HashMap<PlaceholderId, InstanceExportType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceExportType {
+    Component(TypeId),
+    Instance(TypeId),
+    Type(TypeId),
+    Sub(TypeId),
 }
 
 impl InstanceType {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            imports: Default::default(),
-            exports: Default::default(),
+            exports: HashMap::new(),
         }
     }
 
-    pub(crate) fn get_export_type(
-        &self,
-        name: &ExportName,
-    ) -> Result<&ExternDesc, ComponentParseError> {
+    pub fn get_export(&self, name: &ExportName) -> Option<(&PlaceholderId, &InstanceExportType)> {
+        let hash = {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            name.hash(&mut hasher);
+            hasher.finish()
+        };
         self.exports
-            .get(name)
-            .ok_or_else(|| ComponentParseError::ExportNotFound(name.original.clone()))
+            .iter()
+            .find(|(pid, data)| pid.name_hash() == hash)
     }
-}
-
-impl TryFrom<ExternDesc> for InstanceType {
-    type Error = ComponentParseError;
-
-    fn try_from(value: ExternDesc) -> Result<Self, Self::Error> {
-        if let ExternDesc::Instance(instance_type) = value {
-            Ok(instance_type)
-        } else {
-            Err(ComponentParseError::InvalidType("InstanceType".to_string()))
-        }
-    }
-}
-
-impl PartialEq<Sort> for ExternDesc {
-    fn eq(&self, other: &Sort) -> bool {
-        match other {
-            Sort::Core(CoreSort::Module) => matches!(self, ExternDesc::CoreModule(_)),
-            Sort::Func => matches!(self, ExternDesc::Func(_)),
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            Sort::Value => matches!(self, ExternDesc::Value(_)),
-            Sort::Type => matches!(self, ExternDesc::Type(_)),
-            Sort::Component => matches!(self, ExternDesc::Component(_)),
-            Sort::Instance => matches!(self, ExternDesc::Instance(_)),
-            _ => false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExternDesc {
-    CoreModule(CoreModuleType),
-    Func(FuncType),
-    #[cfg(feature = "component-gated-feature-value-imports-exports")]
-    Value(ValueBound),
-    Type(Type),
-    Component(ComponentType),
-    Instance(InstanceType),
-}
-
-#[derive(Debug, Clone)]
-pub enum TypeBound {
-    Eq(Type),
-    Sub,
-}
-
-#[derive(Debug, Clone)]
-#[cfg(feature = "component-gated-feature-value-imports-exports")]
-pub enum ValueBound {
-    Eq(usize),
-    Type(ValType),
-}
-
-#[derive(Debug, Clone)]
-pub enum InstanceDecl {
-    CoreModuleType(CoreModuleType),
-    Type(Type),
-    Alias(AliasType),
-    ExportDecl(ExportDecl),
-}
-
-#[derive(Debug, Clone)]
-pub struct ImportDecl {
-    pub name: ImportName,
-    pub ed: ExternDesc,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExportDecl {
-    pub name: ExportName,
-    pub ed: ExternDesc,
 }
