@@ -1965,7 +1965,7 @@ pub unsafe fn special_function_vm_end(
 pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
-pub fn run_module_function(
+pub async fn run_module_function(
     instance: &InstanceHandle,
     store: &mut Store,
     name: &str,
@@ -2032,7 +2032,7 @@ pub fn run_module_function(
             ready_flag: ReadyFlag::Ready,
             pending_effects: 0,
         });
-        unsafe { scheduler.run_with_ref(gc) };
+        unsafe { scheduler.run_with_ref(gc).await };
         let ct = scheduler.completed_tasks.pop().unwrap();
         vm_try!(ct.result);
         let mut stack = ct.stack;

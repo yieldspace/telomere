@@ -23,9 +23,7 @@ fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
         || VMResult::MemoryIndexOutOfRange,
     )
 }
-async fn example_func(task_id: u32, fp: *const Instr) -> AsyncResult {
-    AsyncResult { task_id, fp }
-}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReadyFlag {
     Ready,
@@ -46,7 +44,7 @@ pub(crate) struct CompletedTask {
     pub stack: Stack,
     pub result: VMResult<()>,
 }
-struct AsyncResult {
+pub(crate) struct AsyncResult {
     pub task_id: u32,
     pub fp: *const Instr,
 }
@@ -261,14 +259,20 @@ impl<'a> Scheduler<'a> {
     }
     #[cfg(feature = "async-runtime")]
     unsafe fn handle_async_effect_call(&mut self, effect: super::memory_effect::AsyncEffect) {
+        use crate::runtime::memory_effect::AsyncEffectOperation;
+
+        use super::memory_effect::AsyncEffect;
+        let AsyncEffect { task_id, operation } = effect;
         let task = self
             .tasks
             .iter_mut()
             .find(|v| v.task_id == effect.task_id)
             .unwrap();
-
-        self.async_tasks
-            .push(Box::pin(example_func(task.task_id, task.fp)));
+        match operation {
+            AsyncEffectOperation::Call(sup) => {
+                self.async_tasks.push(sup(task_id, task.fp));
+            }
+        }
     }
     fn handle_async_return(&mut self, ret: AsyncResult) {
         let task = self
@@ -389,11 +393,14 @@ mod tests {
         Stack, Store, VMResult,
     };
 
-    use super::{ReadyFlag, Scheduler, Task};
+    use super::{AsyncResult, ReadyFlag, Scheduler, Task};
     fn async_end(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
         ctx.cont = std::ptr::null();
         trace!("ok");
         VMResult::Success(())
+    }
+    async fn example_func(task_id: u32, fp: *const Instr) -> AsyncResult {
+        AsyncResult { task_id, fp }
     }
     #[tokio::test]
     async fn test_async() {
@@ -419,7 +426,7 @@ mod tests {
         scheduler
             .effects
             .push_back(Effect::AsyncEffect(AsyncEffect {
-                operation: AsyncEffectOperation::Call,
+                operation: AsyncEffectOperation::Call(|a, b| Box::pin(example_func(a, b))),
                 task_id: 0,
             }));
         scheduler.notify.wake();

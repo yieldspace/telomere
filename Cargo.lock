@@ -625,6 +625,7 @@ dependencies = [
  "anyhow",
  "clap",
  "telomere",
+ "tokio",
 ]
 
 [[package]]

@@ -15,8 +15,8 @@ fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     VMResult::Success(return_addr)
 }
 
-#[test]
-fn test_print() {
+#[tokio::test]
+async fn test_print() {
     let mut store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
@@ -27,7 +27,8 @@ fn test_print() {
     "#,
         &mut store,
         &registry,
-    );
+    )
+    .await;
     registry.register("host", host.clone());
     link_host_function_with_function_idx(&host, 0, print, &mut store);
     let wast = r#"
@@ -37,7 +38,7 @@ fn test_print() {
     )
     (invoke "wasm_print")
     "#;
-    run_wast_with(wast, &mut store, &mut registry);
+    run_wast_with(wast, &mut store, &mut registry).await;
     #[allow(static_mut_refs)]
     unsafe {
         assert_eq!(PRINT_CALL, vec![()]);
@@ -85,8 +86,8 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     }
 }
 
-#[test]
-fn test_tail_call_wasm() {
+#[tokio::test]
+async fn test_tail_call_wasm() {
     let mut store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
@@ -98,7 +99,8 @@ fn test_tail_call_wasm() {
     "#,
         &mut store,
         &registry,
-    );
+    )
+    .await;
     registry.register("host", host.clone());
     link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
     let wast = r#"
@@ -108,7 +110,7 @@ fn test_tail_call_wasm() {
     )
     (assert_return (invoke "tail_call" (i32.const 2)) (i32.const 65))
     "#;
-    run_wast_with(wast, &mut store, &mut registry);
+    run_wast_with(wast, &mut store, &mut registry).await;
 }
 
 fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
@@ -121,8 +123,8 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
-#[test]
-pub fn test_tail_call_native() {
+#[tokio::test]
+pub async fn test_tail_call_native() {
     let mut store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
@@ -134,7 +136,8 @@ pub fn test_tail_call_native() {
     "#,
         &mut store,
         &registry,
-    );
+    )
+    .await;
     registry.register("host", host.clone());
     link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
     link_host_function_with_function_idx(&host, 1, plus60, &mut store);
@@ -146,5 +149,5 @@ pub fn test_tail_call_native() {
     )
     (assert_return (invoke "tail_call" (i32.const 2)) (i32.const 102))
     "#;
-    run_wast_with(wast, &mut store, &mut registry);
+    run_wast_with(wast, &mut store, &mut registry).await;
 }

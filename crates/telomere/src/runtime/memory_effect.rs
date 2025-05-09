@@ -1,9 +1,11 @@
-use std::ops::Range;
+use std::{future::Future, ops::Range, pin::Pin};
 
 use crate::{
     common::{GcRef, Instr},
-    Stack, VMResult,
+    Stack,
 };
+
+use super::scheduler::AsyncResult;
 #[derive(Debug)]
 pub enum Target {
     Memory(GcRef, Range<usize>),
@@ -47,8 +49,7 @@ pub struct MemoryEffect {
 #[cfg(feature = "async-runtime")]
 #[derive(Debug)]
 pub enum AsyncEffectOperation {
-    Call,
-    Return,
+    Call(fn(u32, *const Instr) -> Pin<Box<dyn Future<Output = AsyncResult>>>),
 }
 #[cfg(feature = "async-runtime")]
 #[derive(Debug)]

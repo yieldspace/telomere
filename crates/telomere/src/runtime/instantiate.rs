@@ -136,15 +136,19 @@ fn convert_native_module_to_module(m: NativeModule) -> Module {
         name: None,
     }
 }
-pub fn instantiate_native_module(
+pub async fn instantiate_native_module(
     m: NativeModule,
     store: &mut Store,
     registry: &Registry,
 ) -> VMResult<InstanceHandle> {
-    instantiate(convert_native_module_to_module(m), store, registry)
+    instantiate(convert_native_module_to_module(m), store, registry).await
 }
 
-pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResult<InstanceHandle> {
+pub async fn instantiate(
+    m: Module,
+    store: &mut Store,
+    registry: &Registry,
+) -> VMResult<InstanceHandle> {
     let instance_id = store.new_instance_id();
     let gc = store.gc.clone();
     let mut gc_holder = gc.borrow_mut();
@@ -449,7 +453,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 fp: program.as_ptr(),
                 pending_effects: 0,
             });
-            unsafe { scheduler.run_with_ref(gc) };
+            unsafe { scheduler.run_with_ref(gc).await };
             vm_try!(scheduler.completed_tasks.pop().unwrap().result)
         } else {
             let (locals, offset) = funcinst.locals_and_code_offset(gc);
@@ -474,7 +478,7 @@ pub fn instantiate(m: Module, store: &mut Store, registry: &Registry) -> VMResul
                 pending_effects: 0,
             });
 
-            unsafe { scheduler.run_with_ref(gc) };
+            unsafe { scheduler.run_with_ref(gc).await };
             vm_try!(scheduler.completed_tasks.pop().unwrap().result)
         }
     } else {

@@ -10,7 +10,8 @@ mod cli;
 /// # Returns
 ///
 /// * `anyhow::Result<()>` - Returns `Ok(())` if the program executes successfully, or an error otherwise.
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     // Parse command-line arguments using the `Cli` struct.
     let args = Cli::parse();
 
@@ -37,7 +38,9 @@ fn main() -> anyhow::Result<()> {
     let registry = telomere::Registry::new();
 
     // Instantiate the WebAssembly module with the store and registry.
-    let instance = telomere::instantiate(module, &mut store, &registry).unwrap();
+    let instance = telomere::instantiate(module, &mut store, &registry)
+        .await
+        .unwrap();
 
     // Prepare the arguments for the WebAssembly function as `WasmValue`s.
     let wasm_args = telomere::ResultValue::new(
@@ -48,7 +51,9 @@ fn main() -> anyhow::Result<()> {
     );
 
     // Run the specified WebAssembly function with the provided arguments.
-    let ret = telomere::run_module_function(&instance, &mut store, &args.func, &wasm_args).unwrap();
+    let ret = telomere::run_module_function(&instance, &mut store, &args.func, &wasm_args)
+        .await
+        .unwrap();
 
     // Convert the return values from the WebAssembly function to strings.
     let ret = ret
