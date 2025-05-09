@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use crate::{
     common::{GcRef, Instr},
-    Stack,
+    Stack, VMResult,
 };
 #[derive(Debug)]
 pub enum Target {
@@ -38,9 +38,37 @@ impl WriteOperation {
     }
 }
 #[derive(Debug)]
-pub struct Effect {
+pub struct MemoryEffect {
     pub task_id: u32,
     pub target: Target,
     pub atomic: AtomicFlag,
     pub operation: Operation,
+}
+#[cfg(feature = "async-runtime")]
+#[derive(Debug)]
+pub enum AsyncEffectOperation {
+    Call,
+    Return,
+}
+#[cfg(feature = "async-runtime")]
+#[derive(Debug)]
+pub struct AsyncEffect {
+    pub task_id: u32,
+    pub operation: AsyncEffectOperation,
+}
+
+#[derive(Debug)]
+pub enum Effect {
+    MemoryEffect(MemoryEffect),
+    #[cfg(feature = "async-runtime")]
+    AsyncEffect(AsyncEffect),
+}
+impl Effect {
+    pub fn task_id(&self) -> u32 {
+        match self {
+            #[cfg(feature = "async-runtime")]
+            Effect::AsyncEffect(eff) => eff.task_id,
+            Effect::MemoryEffect(eff) => eff.task_id,
+        }
+    }
 }
