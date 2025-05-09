@@ -60,7 +60,7 @@ impl Notify {
             waker: Waker::noop().clone(),
         }
     }
-    fn wake(self: &Self) {
+    fn wake(&self) {
         trace!("wake");
 
         self.ready.store(true, std::sync::atomic::Ordering::Release);
@@ -88,12 +88,12 @@ impl Future for NotificationReceiver<'_> {
         {
             Ok(true) => {
                 trace!("ready");
-                return Poll::Ready(());
+                Poll::Ready(())
             }
             Err(false) => {
                 trace!("pending");
                 self.notify.waker.clone_from(cx.waker());
-                return Poll::Pending;
+                Poll::Pending
             }
             _ => unreachable!(),
         }
@@ -287,7 +287,7 @@ impl<'a> Scheduler<'a> {
         task.fp = ret.fp;
     }
     #[cfg(feature = "async-runtime")]
-    async unsafe fn await_executation(&mut self) {
+    async fn await_executation(&mut self) {
         use futures::{select_biased, StreamExt};
         trace!("await_executation");
         loop {
@@ -301,9 +301,14 @@ impl<'a> Scheduler<'a> {
             }
         }
     }
-    pub async unsafe fn run_with_ref(&mut self, gc: &mut MemoryPool) {
+
+    pub async fn run(&mut self) {
+        let gc = self.store.gc.clone();
+
         while !self.tasks.is_empty() {
             self.await_executation().await;
+            let mut gc = gc.borrow_mut();
+            let gc = &mut gc;
             while self.ready_count != 0 {
                 trace!("task ready count: {:?}", self.ready_count);
 
@@ -321,6 +326,7 @@ impl<'a> Scheduler<'a> {
                     mut pending_effects,
                     ..
                 } = task;
+
                 let mut ec = ExecuteContext {
                     gc,
                     local_reference,
@@ -366,18 +372,18 @@ impl<'a> Scheduler<'a> {
                     }
                 }
             }
-            self.processing_effect(gc).await;
+            self.processing_effect(gc);
         }
     }
-    async unsafe fn processing_effect(&mut self, gc: &mut MemoryPool) {
+    fn processing_effect(&mut self, gc: &mut MemoryPool) {
         while let Some(effect) = self.effects.pop_front() {
             match effect {
                 Effect::MemoryEffect(effect) => {
-                    self.handle_memory_effect(gc, effect);
+                    unsafe { self.handle_memory_effect(gc, effect) };
                 }
                 #[cfg(feature = "async-runtime")]
                 Effect::AsyncEffect(effect) => {
-                    self.handle_async_effect_call(effect);
+                    unsafe { self.handle_async_effect_call(effect) };
                 }
             }
         }
@@ -385,8 +391,6 @@ impl<'a> Scheduler<'a> {
 }
 #[cfg(test)]
 mod tests {
-    use tracing::Level;
-
     use crate::{
         common::{ExecuteContext, Instr, LocalReference},
         runtime::memory_effect::{AsyncEffect, AsyncEffectOperation, Effect},
@@ -404,32 +408,28 @@ mod tests {
     }
     #[tokio::test]
     async fn test_async() {
-        tracing_subscriber::fmt()
-            .with_max_level(Level::TRACE)
-            .init();
-        trace!("???");
         let mut store = Store::new();
-        let gc = store.gc.clone();
         let mut scheduler = Scheduler::new(&mut store);
-        let mut gc = gc.borrow_mut();
-        scheduler.push(Task {
-            task_id: 0,
-            stack: Stack::new(256),
-            local_reference: LocalReference {
-                local_size: 0,
-                local_top: 0,
-            },
-            pending_effects: 1,
-            ready_flag: ReadyFlag::NonReady,
-            fp: &Instr { op: async_end },
-        });
-        scheduler
-            .effects
-            .push_back(Effect::AsyncEffect(AsyncEffect {
-                operation: AsyncEffectOperation::Call(|a, b| Box::pin(example_func(a, b))),
+        {
+            scheduler.push(Task {
                 task_id: 0,
-            }));
-        scheduler.notify.wake();
-        unsafe { scheduler.run_with_ref(&mut gc).await };
+                stack: Stack::new(256),
+                local_reference: LocalReference {
+                    local_size: 0,
+                    local_top: 0,
+                },
+                pending_effects: 1,
+                ready_flag: ReadyFlag::NonReady,
+                fp: &Instr { op: async_end },
+            });
+            scheduler
+                .effects
+                .push_back(Effect::AsyncEffect(AsyncEffect {
+                    operation: AsyncEffectOperation::Call(|a, b| Box::pin(example_func(a, b))),
+                    task_id: 0,
+                }));
+            scheduler.notify.wake();
+        }
+        scheduler.run().await;
     }
 }

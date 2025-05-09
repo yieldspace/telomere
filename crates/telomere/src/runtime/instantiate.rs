@@ -143,7 +143,8 @@ pub async fn instantiate_native_module(
 ) -> VMResult<InstanceHandle> {
     instantiate(convert_native_module_to_module(m), store, registry).await
 }
-
+// FIXME: Organizing the scope of gc holder so that clippy can understand it will make the code more complicated.
+#[allow(clippy::await_holding_refcell_ref)]
 pub async fn instantiate(
     m: Module,
     store: &mut Store,
@@ -453,8 +454,6 @@ pub async fn instantiate(
                 fp: program.as_ptr(),
                 pending_effects: 0,
             });
-            unsafe { scheduler.run_with_ref(gc).await };
-            vm_try!(scheduler.completed_tasks.pop().unwrap().result)
         } else {
             let (locals, offset) = funcinst.locals_and_code_offset(gc);
             let local_reference = vm_try!(stack.function_call(
@@ -477,21 +476,18 @@ pub async fn instantiate(
                 ready_flag: ReadyFlag::Ready,
                 pending_effects: 0,
             });
-
-            unsafe { scheduler.run_with_ref(gc).await };
-            vm_try!(scheduler.completed_tasks.pop().unwrap().result)
         }
+        drop(gc_holder);
+        scheduler.run().await;
+        vm_try!(scheduler.completed_tasks.pop().unwrap().result)
     } else {
         unsafe {
             gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
+        drop(gc_holder);
     }
-    let addr = InstanceHandle(Rc::new(GcRootHandle::new_with_ref(
-        inst_addr,
-        gc,
-        store.gc.clone(),
-    )));
+    let addr = InstanceHandle(Rc::new(GcRootHandle::new(inst_addr, store.gc.clone())));
     VMResult::Success(addr)
 }
 // TODO:
