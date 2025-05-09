@@ -1,224 +1,225 @@
 use std::path::PathBuf;
 mod common;
 use common::run_wast;
+use tokio::test;
 
-fn run_test_file(name: &str) {
+async fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     d.push("tests/wasm-testsuite");
     d.push(format!("{name}.wast"));
     let wast = std::fs::read_to_string(d).unwrap();
-    run_wast(&wast);
+    run_wast(&wast).await;
 }
 
 #[test]
-fn int_literals() {
-    run_test_file("int_literals");
+async fn int_literals() {
+    run_test_file("int_literals").await;
 }
 #[test]
-fn block() {
-    run_test_file("block");
+async fn block() {
+    run_test_file("block").await;
 }
 #[test]
-fn call() {
-    run_test_file("call");
-}
-
-#[test]
-fn memory_grow() {
-    run_test_file("memory_grow");
+async fn call() {
+    run_test_file("call").await;
 }
 
 #[test]
-fn call_indirect() {
-    run_test_file("call_indirect");
-}
-#[test]
-fn loop_() {
-    run_test_file("loop");
+async fn memory_grow() {
+    run_test_file("memory_grow").await;
 }
 
 #[test]
-fn br_if() {
-    run_test_file("br_if");
+async fn call_indirect() {
+    run_test_file("call_indirect").await;
+}
+#[test]
+async fn loop_() {
+    run_test_file("loop").await;
 }
 
 #[test]
-fn const_() {
-    run_test_file("const");
+async fn br_if() {
+    run_test_file("br_if").await;
 }
 
 #[test]
-fn nop() {
-    run_test_file("nop");
+async fn const_() {
+    run_test_file("const").await;
 }
 
 #[test]
-fn func() {
-    run_test_file("func");
+async fn nop() {
+    run_test_file("nop").await;
 }
 
 #[test]
-fn br_table() {
-    run_test_file("br_table");
+async fn func() {
+    run_test_file("func").await;
 }
 
 #[test]
-fn memory() {
-    run_test_file("memory");
+async fn br_table() {
+    run_test_file("br_table").await;
 }
 
 #[test]
-fn if_() {
-    run_test_file("if");
-}
-#[test]
-fn address() {
-    run_test_file("address");
-}
-#[test]
-fn align() {
-    run_test_file("align");
-}
-#[test]
-fn memory_copy() {
-    run_test_file("memory_copy");
-}
-#[test]
-fn memory_fill() {
-    run_test_file("memory_fill");
-}
-#[test]
-fn memory_trap() {
-    run_test_file("memory_trap");
+async fn memory() {
+    run_test_file("memory").await;
 }
 
 #[test]
-fn memory_redundancy() {
-    run_test_file("memory_redundancy");
+async fn if_() {
+    run_test_file("if").await;
+}
+#[test]
+async fn address() {
+    run_test_file("address").await;
+}
+#[test]
+async fn align() {
+    run_test_file("align").await;
+}
+#[test]
+async fn memory_copy() {
+    run_test_file("memory_copy").await;
+}
+#[test]
+async fn memory_fill() {
+    run_test_file("memory_fill").await;
+}
+#[test]
+async fn memory_trap() {
+    run_test_file("memory_trap").await;
 }
 
 #[test]
-fn memory_size() {
-    run_test_file("memory_size");
-}
-#[test]
-fn memory_init() {
-    run_test_file("memory_init");
-}
-#[test]
-fn imports() {
-    run_test_file("imports");
+async fn memory_redundancy() {
+    run_test_file("memory_redundancy").await;
 }
 
 #[test]
-fn comments() {
-    run_test_file("comments");
+async fn memory_size() {
+    run_test_file("memory_size").await;
 }
 #[test]
-fn conversions() {
-    run_test_file("conversions");
-}
-
-#[test]
-fn custom() {
-    run_test_file("custom");
+async fn memory_init() {
+    run_test_file("memory_init").await;
 }
 #[test]
-fn data() {
-    run_test_file("data");
+async fn imports() {
+    run_test_file("imports").await;
 }
 
 #[test]
-fn bulk() {
-    run_test_file("bulk");
+async fn comments() {
+    run_test_file("comments").await;
+}
+#[test]
+async fn conversions() {
+    run_test_file("conversions").await;
 }
 
 #[test]
-fn elem() {
-    run_test_file("elem");
+async fn custom() {
+    run_test_file("custom").await;
+}
+#[test]
+async fn data() {
+    run_test_file("data").await;
 }
 
 #[test]
-fn endianness() {
-    run_test_file("endianness");
-}
-#[test]
-fn exports() {
-    run_test_file("exports");
-}
-#[test]
-fn f32() {
-    run_test_file("f32");
-}
-#[test]
-fn f32_bitwise() {
-    run_test_file("f32_bitwise");
-}
-#[test]
-fn f32_cmp() {
-    run_test_file("f32_cmp");
-}
-#[test]
-fn f64() {
-    run_test_file("f64");
-}
-#[test]
-fn f64_bitwise() {
-    run_test_file("f64_bitwise");
-}
-#[test]
-fn f64_cmp() {
-    run_test_file("f64_cmp");
-}
-#[test]
-fn fac() {
-    run_test_file("fac");
+async fn bulk() {
+    run_test_file("bulk").await;
 }
 
 #[test]
-fn float_exprs() {
-    run_test_file("float_exprs");
+async fn elem() {
+    run_test_file("elem").await;
+}
+
+#[test]
+async fn endianness() {
+    run_test_file("endianness").await;
 }
 #[test]
-fn float_literals() {
-    run_test_file("float_literals");
+async fn exports() {
+    run_test_file("exports").await;
 }
 #[test]
-fn float_memory() {
-    run_test_file("float_memory");
+async fn f32() {
+    run_test_file("f32").await;
 }
 #[test]
-fn float_misc() {
-    run_test_file("float_misc");
+async fn f32_bitwise() {
+    run_test_file("f32_bitwise").await;
 }
 #[test]
-fn forward() {
-    run_test_file("forward");
+async fn f32_cmp() {
+    run_test_file("f32_cmp").await;
 }
 #[test]
-fn func_ptrs() {
-    run_test_file("func_ptrs");
+async fn f64() {
+    run_test_file("f64").await;
 }
 #[test]
-fn global() {
-    run_test_file("global");
+async fn f64_bitwise() {
+    run_test_file("f64_bitwise").await;
 }
 #[test]
-fn i32() {
-    run_test_file("i32");
+async fn f64_cmp() {
+    run_test_file("f64_cmp").await;
 }
 #[test]
-fn i64() {
-    run_test_file("i64");
+async fn fac() {
+    run_test_file("fac").await;
+}
+
+#[test]
+async fn float_exprs() {
+    run_test_file("float_exprs").await;
 }
 #[test]
-fn inline_module() {
-    run_test_file("inline-module");
+async fn float_literals() {
+    run_test_file("float_literals").await;
 }
 #[test]
-fn int_exprs() {
-    run_test_file("int_exprs");
+async fn float_memory() {
+    run_test_file("float_memory").await;
+}
+#[test]
+async fn float_misc() {
+    run_test_file("float_misc").await;
+}
+#[test]
+async fn forward() {
+    run_test_file("forward").await;
+}
+#[test]
+async fn func_ptrs() {
+    run_test_file("func_ptrs").await;
+}
+#[test]
+async fn global() {
+    run_test_file("global").await;
+}
+#[test]
+async fn i32() {
+    run_test_file("i32").await;
+}
+#[test]
+async fn i64() {
+    run_test_file("i64").await;
+}
+#[test]
+async fn inline_module() {
+    run_test_file("inline-module").await;
+}
+#[test]
+async fn int_exprs() {
+    run_test_file("int_exprs").await;
 }
 /*
 TODO: library bug?
@@ -227,30 +228,30 @@ fn labels() {
     run_test_file("labels");
 }*/
 #[test]
-fn left_to_right() {
-    run_test_file("left-to-right");
+async fn left_to_right() {
+    run_test_file("left-to-right").await;
 }
 
 #[test]
-fn linking() {
-    run_test_file("linking");
+async fn linking() {
+    run_test_file("linking").await;
 }
 
 #[test]
-fn load() {
-    run_test_file("load");
+async fn load() {
+    run_test_file("load").await;
 }
 #[test]
-fn local_get() {
-    run_test_file("local_get");
+async fn local_get() {
+    run_test_file("local_get").await;
 }
 #[test]
-fn local_set() {
-    run_test_file("local_set");
+async fn local_set() {
+    run_test_file("local_set").await;
 }
 #[test]
-fn local_tee() {
-    run_test_file("local_tee");
+async fn local_tee() {
+    run_test_file("local_tee").await;
 }
 /*
 library limitation
@@ -260,198 +261,198 @@ fn names() {
 }
 */
 #[test]
-fn obsolete_keywords() {
-    run_test_file("obsolete-keywords");
+async fn obsolete_keywords() {
+    run_test_file("obsolete-keywords").await;
 }
 #[test]
-fn ref_func() {
-    run_test_file("ref_func");
+async fn ref_func() {
+    run_test_file("ref_func").await;
 }
 #[test]
-fn ref_is_null() {
-    run_test_file("ref_is_null");
+async fn ref_is_null() {
+    run_test_file("ref_is_null").await;
 }
 #[test]
-fn ref_null() {
-    run_test_file("ref_null");
+async fn ref_null() {
+    run_test_file("ref_null").await;
 }
 #[test]
-fn return_() {
-    run_test_file("return");
+async fn return_() {
+    run_test_file("return").await;
 }
 #[test]
-fn select() {
-    run_test_file("select");
+async fn select() {
+    run_test_file("select").await;
 }
 #[test]
-fn skip_stack_guard_page() {
-    run_test_file("skip-stack-guard-page");
+async fn skip_stack_guard_page() {
+    run_test_file("skip-stack-guard-page").await;
 }
 #[test]
-fn stack() {
-    run_test_file("stack");
+async fn stack() {
+    run_test_file("stack").await;
 }
 #[test]
-fn start() {
-    run_test_file("start");
+async fn start() {
+    run_test_file("start").await;
 }
 #[test]
-fn store() {
-    run_test_file("store");
+async fn store() {
+    run_test_file("store").await;
 }
 #[test]
-fn switch() {
-    run_test_file("switch");
+async fn switch() {
+    run_test_file("switch").await;
 }
 #[test]
-fn token() {
-    run_test_file("token");
+async fn token() {
+    run_test_file("token").await;
 }
 #[test]
-fn traps() {
-    run_test_file("traps");
+async fn traps() {
+    run_test_file("traps").await;
 }
 #[test]
-fn type_() {
-    run_test_file("type");
+async fn type_() {
+    run_test_file("type").await;
 }
 #[test]
-fn unreachable() {
-    run_test_file("unreachable");
-}
-
-#[test]
-fn unreached_invalid() {
-    run_test_file("unreached-invalid");
+async fn unreachable() {
+    run_test_file("unreachable").await;
 }
 
 #[test]
-fn unreached_valid() {
-    run_test_file("unreached-valid");
-}
-#[test]
-fn unwind() {
-    run_test_file("unwind");
-}
-#[test]
-fn table() {
-    run_test_file("table");
-}
-#[test]
-fn table_copy() {
-    run_test_file("table_copy");
-}
-#[test]
-fn table_get() {
-    run_test_file("table_get");
-}
-#[test]
-fn table_set() {
-    run_test_file("table_set");
+async fn unreached_invalid() {
+    run_test_file("unreached-invalid").await;
 }
 
 #[test]
-fn table_sub() {
-    run_test_file("table-sub");
+async fn unreached_valid() {
+    run_test_file("unreached-valid").await;
+}
+#[test]
+async fn unwind() {
+    run_test_file("unwind").await;
+}
+#[test]
+async fn table() {
+    run_test_file("table").await;
+}
+#[test]
+async fn table_copy() {
+    run_test_file("table_copy").await;
+}
+#[test]
+async fn table_get() {
+    run_test_file("table_get").await;
+}
+#[test]
+async fn table_set() {
+    run_test_file("table_set").await;
 }
 
 #[test]
-fn table_init() {
-    run_test_file("table_init");
-}
-#[test]
-fn table_grow() {
-    run_test_file("table_grow");
-}
-#[test]
-fn table_size() {
-    run_test_file("table_size");
+async fn table_sub() {
+    run_test_file("table-sub").await;
 }
 
 #[test]
-fn table_fill() {
-    run_test_file("table_fill");
+async fn table_init() {
+    run_test_file("table_init").await;
 }
 #[test]
-fn binary() {
-    run_test_file("binary");
+async fn table_grow() {
+    run_test_file("table_grow").await;
 }
 #[test]
-fn binary_leb128() {
-    run_test_file("binary-leb128");
-}
-
-#[test]
-fn utf8_custom_section_id() {
-    run_test_file("utf8-custom-section-id");
+async fn table_size() {
+    run_test_file("table_size").await;
 }
 
 #[test]
-fn utf8_import_field() {
-    run_test_file("utf8-import-field");
+async fn table_fill() {
+    run_test_file("table_fill").await;
+}
+#[test]
+async fn binary() {
+    run_test_file("binary").await;
+}
+#[test]
+async fn binary_leb128() {
+    run_test_file("binary-leb128").await;
 }
 
 #[test]
-fn utf8_import_module() {
-    run_test_file("utf8-import-module");
+async fn utf8_custom_section_id() {
+    run_test_file("utf8-custom-section-id").await;
 }
 
 #[test]
-fn utf8_invalid_encoding() {
-    run_test_file("utf8-invalid-encoding");
-}
-#[test]
-fn simd_load() {
-    run_test_file("simd_load");
-}
-#[test]
-fn simd_const() {
-    run_test_file("simd_const");
-}
-#[test]
-fn simd_address() {
-    run_test_file("simd_address");
+async fn utf8_import_field() {
+    run_test_file("utf8-import-field").await;
 }
 
 #[test]
-fn simd_align() {
-    run_test_file("simd_align");
-}
-#[test]
-fn simd_bit_shift() {
-    run_test_file("simd_bit_shift");
-}
-#[test]
-fn simd_bitwise() {
-    run_test_file("simd_bitwise");
-}
-#[test]
-fn simd_boolean() {
-    run_test_file("simd_boolean");
-}
-#[test]
-fn simd_conversions() {
-    run_test_file("simd_conversions");
-}
-#[test]
-fn simd_f32x4_arith() {
-    run_test_file("simd_f32x4_arith");
-}
-#[test]
-fn simd_f32x4_cmp() {
-    run_test_file("simd_f32x4_cmp");
+async fn utf8_import_module() {
+    run_test_file("utf8-import-module").await;
 }
 
 #[test]
-fn simd_f32x4_pmin_pmax() {
-    run_test_file("simd_f32x4_pmin_pmax");
+async fn utf8_invalid_encoding() {
+    run_test_file("utf8-invalid-encoding").await;
+}
+#[test]
+async fn simd_load() {
+    run_test_file("simd_load").await;
+}
+#[test]
+async fn simd_const() {
+    run_test_file("simd_const").await;
+}
+#[test]
+async fn simd_address() {
+    run_test_file("simd_address").await;
 }
 
 #[test]
-fn simd_f32x4_rounding() {
-    run_test_file("simd_f32x4_rounding");
+async fn simd_align() {
+    run_test_file("simd_align").await;
 }
 #[test]
-fn simd_f32x4() {
-    run_test_file("simd_f32x4");
+async fn simd_bit_shift() {
+    run_test_file("simd_bit_shift").await;
+}
+#[test]
+async fn simd_bitwise() {
+    run_test_file("simd_bitwise").await;
+}
+#[test]
+async fn simd_boolean() {
+    run_test_file("simd_boolean").await;
+}
+#[test]
+async fn simd_conversions() {
+    run_test_file("simd_conversions").await;
+}
+#[test]
+async fn simd_f32x4_arith() {
+    run_test_file("simd_f32x4_arith").await;
+}
+#[test]
+async fn simd_f32x4_cmp() {
+    run_test_file("simd_f32x4_cmp").await;
+}
+
+#[test]
+async fn simd_f32x4_pmin_pmax() {
+    run_test_file("simd_f32x4_pmin_pmax").await;
+}
+
+#[test]
+async fn simd_f32x4_rounding() {
+    run_test_file("simd_f32x4_rounding").await;
+}
+#[test]
+async fn simd_f32x4() {
+    run_test_file("simd_f32x4").await;
 }

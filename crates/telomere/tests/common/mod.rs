@@ -11,7 +11,7 @@ use wast::{
     Wast, WastArg, WastRet, Wat,
 };
 
-pub fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceHandle {
+pub async fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceHandle {
     let buf = ParseBuffer::new(wat).unwrap();
     let mut wat = wast::parser::parse::<Wat>(&buf).unwrap();
     let source = wat.encode().unwrap();
@@ -21,7 +21,7 @@ pub fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> Ins
 
     let m = parser.parse_module().unwrap();
 
-    instantiate(m, store, registry).unwrap()
+    instantiate(m, store, registry).await.unwrap()
 }
 fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
     args.iter()
@@ -73,18 +73,18 @@ const SPECTEST_WAT: &str = r#"
     (func (export "print_f64_f64") (param f64 f64))
 )
 "#;
-fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceHandle {
-    instantiate_wat(SPECTEST_WAT, store, registry)
+async fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceHandle {
+    instantiate_wat(SPECTEST_WAT, store, registry).await
 }
 #[allow(dead_code)]
-pub fn run_wast(text: &str) {
+pub async fn run_wast(text: &str) {
     let mut store = Store::new();
     let mut registry = Registry::new();
-    let st = init_spectest(&mut store, &registry);
+    let st = init_spectest(&mut store, &registry).await;
     registry.register("spectest", st);
-    run_wast_with(text, &mut store, &mut registry);
+    run_wast_with(text, &mut store, &mut registry).await;
 }
-pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
+pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
     let mut instance: Option<InstanceHandle> = None;
@@ -105,7 +105,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     }
                 };
                 tracing::trace!("{:?}", m.elems);
-                let inst = instantiate(m, store, registry).unwrap();
+                let inst = instantiate(m, store, registry).await.unwrap();
                 if let Some(name) = name {
                     registry.register(name.name(), inst.clone());
                 }
@@ -131,6 +131,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
                         )
+                        .await
                         .unwrap()
                     } else {
                         telomere::run_module_function(
@@ -139,6 +140,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
                         )
+                        .await
                         .unwrap()
                     };
 
@@ -249,7 +251,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                         f32::from_le_bytes(b_c),
                                         f32::from_le_bytes(b_d),
                                     ];
-                                    for (a, b) in x.into_iter().zip(actuals.into_iter()) {
+                                    for (a, b) in x.iter().zip(actuals.into_iter()) {
                                         match a {
                                             NanPattern::Value(a) => {
                                                 assert_eq!(
@@ -277,7 +279,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                                     b_b.copy_from_slice(&b[8..16]);
                                     let actuals =
                                         [f64::from_le_bytes(b_a), f64::from_le_bytes(b_b)];
-                                    for (a, b) in x.into_iter().zip(actuals.into_iter()) {
+                                    for (a, b) in x.iter().zip(actuals.into_iter()) {
                                         match a {
                                             NanPattern::Value(a) => {
                                                 assert_eq!(
@@ -396,7 +398,8 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     store,
                     call.name,
                     &ResultValue::new(convert_args(&call.args)),
-                );
+                )
+                .await;
                 assert!(result.is_err());
             }
             WastDirective::AssertTrap {
@@ -419,7 +422,8 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                             store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
-                        );
+                        )
+                        .await;
                         assert!(result.is_err(), "{:?}", span.linecol_in(text))
                     } else {
                         let result = telomere::run_module_function(
@@ -427,7 +431,8 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                             store,
                             v.name,
                             &ResultValue::new(convert_args(&v.args)),
-                        );
+                        )
+                        .await;
                         assert!(result.is_err(), "{:?}", span.linecol_in(text))
                     }
                 }
@@ -437,7 +442,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     let mut parser = telomere::WasmParser::new(&mut reader);
                     let m = parser.parse_module().unwrap();
                     assert!(
-                        instantiate(m, store, registry).is_err(),
+                        instantiate(m, store, registry).await.is_err(),
                         "{:?}",
                         span.linecol_in(text)
                     )
@@ -457,7 +462,8 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
                     store,
                     invoke.name,
                     &ResultValue::new(convert_args(&invoke.args)),
-                );
+                )
+                .await;
                 match result {
                     VMResult::Success(_) => {} // ok
                     other => panic!("{:?}", other),
@@ -484,7 +490,7 @@ pub fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
 
                     // TODO: test error message
                     assert!(
-                        instantiate(module, store, registry).is_err(),
+                        instantiate(module, store, registry).await.is_err(),
                         "{:?}",
                         span.linecol_in(text)
                     )

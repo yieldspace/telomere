@@ -1965,95 +1965,100 @@ pub unsafe fn special_function_vm_end(
 pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
-pub fn run_module_function(
+pub async fn run_module_function(
     instance: &InstanceHandle,
     store: &mut Store,
     name: &str,
     args: &ResultValue,
 ) -> VMResult<ResultValue> {
     let gc = store.gc.clone();
-    let mut gc_holder = gc.borrow_mut();
-    let gc = &mut gc_holder;
-    let InstanceData {
-        module_addr, funcs, ..
-    } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(gc)) };
-    let module_inst = unsafe { gc.get_module(module_addr) };
-    trace!("{:?}", module_inst.exports);
-    if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
-        let code_addr = funcs.as_slice(gc)[idx.0 as usize];
-        let funcinst = unsafe { gc.get_func(code_addr) };
-        let mut stack = Stack::new(128 * 1024);
-        let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
-        let ft = module_inst
-            .function_types
-            .get(tidx.0 as usize)
-            .unwrap()
-            .clone();
+    let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
-        let mut param_size = 0usize;
-        for t in ft.0.iter() {
-            param_size += t.stack_size().usize();
-        }
+    let ft = {
+        let mut gc_holder = gc.borrow_mut();
+        let gc = &mut gc_holder;
+        let InstanceData {
+            module_addr, funcs, ..
+        } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(gc)) };
+        let module_inst = unsafe { gc.get_module(module_addr) };
+        trace!("{:?}", module_inst.exports);
+        let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
+            let code_addr = funcs.as_slice(gc)[idx.0 as usize];
+            let funcinst = unsafe { gc.get_func(code_addr) };
+            let mut stack = Stack::new(128 * 1024);
+            let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
+            let ft = module_inst
+                .function_types
+                .get(tidx.0 as usize)
+                .unwrap()
+                .clone();
 
-        let (locals_data, code_offset) = funcinst.locals_and_code_offset(gc);
-        let local_size = locals_data.byte_size();
-        for arg in args.iter() {
-            vm_try!(match arg {
-                WasmValue::I32(i32) => stack.push_i32(*i32),
-                WasmValue::I64(i64) => stack.push_i64(*i64),
-                WasmValue::F32(v) => stack.push_f32(*v),
-                WasmValue::F64(v) => stack.push_f64(*v),
-                WasmValue::V128(v) => stack.push_u128(*v),
-                WasmValue::ExternRef(v) => stack.push_u32(*v),
-                WasmValue::FuncRef(v) => stack.push_u32(*v),
+            let mut param_size = 0usize;
+            for t in ft.0.iter() {
+                param_size += t.stack_size().usize();
+            }
+
+            let (locals_data, code_offset) = funcinst.locals_and_code_offset(gc);
+            let local_size = locals_data.byte_size();
+            for arg in args.iter() {
+                vm_try!(match arg {
+                    WasmValue::I32(i32) => stack.push_i32(*i32),
+                    WasmValue::I64(i64) => stack.push_i64(*i64),
+                    WasmValue::F32(v) => stack.push_f32(*v),
+                    WasmValue::F64(v) => stack.push_f64(*v),
+                    WasmValue::V128(v) => stack.push_u128(*v),
+                    WasmValue::ExternRef(v) => stack.push_u32(*v),
+                    WasmValue::FuncRef(v) => stack.push_u32(*v),
+                });
+            }
+
+            tracing::trace!("run_module_function: {name} {local_size}");
+            let local_reference = vm_try!(stack.function_call(
+                param_size,
+                local_size,
+                code_addr,
+                LocalReference {
+                    local_size: 0,
+                    local_top: 0
+                },
+                &VM_END as *const Instr
+            ));
+
+            let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
+
+            scheduler.push(Task {
+                fp: ptr,
+                task_id: 0,
+                stack,
+                local_reference,
+                ready_flag: ReadyFlag::Ready,
+                pending_effects: 0,
             });
-        }
+            ft
+        } else {
+            unimplemented!()
+        };
+        ft
+    };
+    scheduler.run().await;
+    let ct = scheduler.completed_tasks.pop().unwrap();
+    vm_try!(ct.result);
+    let mut stack = ct.stack;
 
-        tracing::trace!("run_module_function: {name} {local_size}");
-        let local_reference = vm_try!(stack.function_call(
-            param_size,
-            local_size,
-            code_addr,
-            LocalReference {
-                local_size: 0,
-                local_top: 0
-            },
-            &VM_END as *const Instr
-        ));
-
-        let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
-
-        let mut scheduler = Scheduler::new(store);
-        scheduler.push(Task {
-            fp: ptr,
-            task_id: 0,
-            stack,
-            local_reference,
-            ready_flag: ReadyFlag::Ready,
-            pending_effects: 0,
-        });
-        unsafe { scheduler.run_with_ref(gc) };
-        let ct = scheduler.completed_tasks.pop().unwrap();
-        vm_try!(ct.result);
-        let mut stack = ct.stack;
-
-        let mut result =
-            ft.1.stack_pop_iter()
-                .map(|t| match t {
-                    ValType::I32 => WasmValue::I32(stack.pop_i32()),
-                    ValType::I64 => WasmValue::I64(stack.pop_i64()),
-                    ValType::F32 => WasmValue::F32(stack.pop_f32()),
-                    ValType::F64 => WasmValue::F64(stack.pop_f64()),
-                    ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
-                    ValType::ExternRef => WasmValue::ExternRef(stack.pop_u32()),
-                    ValType::V128 => WasmValue::V128(stack.pop_u128()),
-                })
-                .collect::<Vec<_>>();
-        result.reverse();
-        VMResult::Success(ResultValue(result))
-    } else {
-        unimplemented!()
-    }
+    let mut result =
+        ft.1.stack_pop_iter()
+            .map(|t| match t {
+                ValType::I32 => WasmValue::I32(stack.pop_i32()),
+                ValType::I64 => WasmValue::I64(stack.pop_i64()),
+                ValType::F32 => WasmValue::F32(stack.pop_f32()),
+                ValType::F64 => WasmValue::F64(stack.pop_f64()),
+                ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
+                ValType::ExternRef => WasmValue::ExternRef(stack.pop_u32()),
+                ValType::V128 => WasmValue::V128(stack.pop_u128()),
+            })
+            .collect::<Vec<_>>();
+    result.reverse();
+    VMResult::Success(ResultValue(result))
 }
 pub fn get_global(instance: &InstanceHandle, store: &mut Store, name: &str) -> VMResult<WasmValue> {
     let gc = store.gc.borrow();

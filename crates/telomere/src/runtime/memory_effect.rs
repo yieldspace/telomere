@@ -1,9 +1,11 @@
-use std::ops::Range;
+use std::{future::Future, ops::Range, pin::Pin};
 
 use crate::{
     common::{GcRef, Instr},
     Stack,
 };
+
+use super::scheduler::AsyncResult;
 #[derive(Debug)]
 pub enum Target {
     Memory(GcRef, Range<usize>),
@@ -38,9 +40,33 @@ impl WriteOperation {
     }
 }
 #[derive(Debug)]
-pub struct Effect {
+pub struct MemoryEffect {
     pub task_id: u32,
     pub target: Target,
     pub atomic: AtomicFlag,
     pub operation: Operation,
+}
+pub type AsyncEffectOperationCallSignature =
+    fn(u32, *const Instr) -> Pin<Box<dyn Future<Output = AsyncResult>>>;
+#[cfg(feature = "async-runtime")]
+#[derive(Debug)]
+pub enum AsyncEffectOperation {
+    // TODO:
+    #[allow(unused)]
+    Call(AsyncEffectOperationCallSignature),
+}
+#[cfg(feature = "async-runtime")]
+#[derive(Debug)]
+pub struct AsyncEffect {
+    pub task_id: u32,
+    pub operation: AsyncEffectOperation,
+}
+
+#[derive(Debug)]
+pub enum Effect {
+    MemoryEffect(MemoryEffect),
+    #[cfg(feature = "async-runtime")]
+    // TODO:
+    #[allow(unused)]
+    AsyncEffect(AsyncEffect),
 }
