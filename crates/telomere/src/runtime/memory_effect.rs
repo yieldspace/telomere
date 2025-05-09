@@ -46,7 +46,8 @@ pub struct MemoryEffect {
     pub atomic: AtomicFlag,
     pub operation: Operation,
 }
-pub type AsyncEffectOperationCallSignature = fn(u32, *const Instr) -> Pin<Box<dyn Future<Output = AsyncResult>>>;
+pub type AsyncEffectOperationCallSignature =
+    fn(u32, *const Instr) -> Pin<Box<dyn Future<Output = AsyncResult>>>;
 #[cfg(feature = "async-runtime")]
 #[derive(Debug)]
 pub enum AsyncEffectOperation {

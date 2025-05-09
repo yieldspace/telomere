@@ -251,7 +251,7 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                                         f32::from_le_bytes(b_c),
                                         f32::from_le_bytes(b_d),
                                     ];
-                                    for (a, b) in x.into_iter().zip(actuals.into_iter()) {
+                                    for (a, b) in x.iter().zip(actuals.into_iter()) {
                                         match a {
                                             NanPattern::Value(a) => {
                                                 assert_eq!(
@@ -279,7 +279,7 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                                     b_b.copy_from_slice(&b[8..16]);
                                     let actuals =
                                         [f64::from_le_bytes(b_a), f64::from_le_bytes(b_b)];
-                                    for (a, b) in x.into_iter().zip(actuals.into_iter()) {
+                                    for (a, b) in x.iter().zip(actuals.into_iter()) {
                                         match a {
                                             NanPattern::Value(a) => {
                                                 assert_eq!(

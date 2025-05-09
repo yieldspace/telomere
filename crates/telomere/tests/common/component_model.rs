@@ -44,7 +44,7 @@ pub fn run_component_wast(text: &str) {
                                 err.to_string(),
                                 message,
                                 "{} != {}, message validation failed@{:?}",
-                                err.to_string(),
+                                err,
                                 message,
                                 span.linecol_in(text)
                             );
