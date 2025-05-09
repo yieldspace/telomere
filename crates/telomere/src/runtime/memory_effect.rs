@@ -64,14 +64,7 @@ pub struct AsyncEffect {
 pub enum Effect {
     MemoryEffect(MemoryEffect),
     #[cfg(feature = "async-runtime")]
+    // TODO:
+    #[allow(unused)]
     AsyncEffect(AsyncEffect),
-}
-impl Effect {
-    pub fn task_id(&self) -> u32 {
-        match self {
-            #[cfg(feature = "async-runtime")]
-            Effect::AsyncEffect(eff) => eff.task_id,
-            Effect::MemoryEffect(eff) => eff.task_id,
-        }
-    }
 }
