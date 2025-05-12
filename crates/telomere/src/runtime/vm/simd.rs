@@ -550,7 +550,7 @@ macro_rules! define_binary_simd_operation {
         define_simd_operation!(handle_binary_op,$op,[$($target),*],$expr);
     };
 }
-define_unary_simd_operation!(add, [f32x4, f64x2,i8x16, i32x4, i64x2], |a, b| a + b);
+define_unary_simd_operation!(add, [f32x4, f64x2, i8x16, i32x4, i64x2], |a, b| a + b);
 define_unary_simd_operation!(sub, [f32x4, f64x2, i8x16, i32x4], |a, b| a - b);
 define_unary_simd_operation!(mul, [f32x4, f64x2, i32x4], |a, b| a * b);
 define_unary_simd_operation!(div, [f32x4, f64x2], |a, b| a / b);
@@ -593,7 +593,7 @@ define_unary_simd_operation!(min, [f64x2], |a, b| {
             f64::NAN
         } else if x == y {
             if x == 0.0 && y == 0.0 {
-                if x.to_bits() == 0x8000_0000_0000_0000|| y.to_bits() == 0x8000_0000_0000_0000 {
+                if x.to_bits() == 0x8000_0000_0000_0000 || y.to_bits() == 0x8000_0000_0000_0000 {
                     -0.0
                 } else {
                     0.0
@@ -608,7 +608,6 @@ define_unary_simd_operation!(min, [f64x2], |a, b| {
 
     f64x2::from(result)
 });
-
 
 define_unary_simd_operation!(max, [i8x16, u8x16], |a, b| a.max(b));
 define_unary_simd_operation!(max, [f32x4], |a, b| {
@@ -767,10 +766,7 @@ define_binary_simd_operation!(trunc, [f32x4], |a| {
 });
 define_binary_simd_operation!(trunc, [f64x2], |a| {
     let arr = a.to_array();
-    f64x2::from([
-        arr[0].trunc(),
-        arr[1].trunc()
-    ])
+    f64x2::from([arr[0].trunc(), arr[1].trunc()])
 });
 define_binary_simd_operation!(nearest, [f32x4], |a| {
     let arr = a.to_array();
@@ -783,10 +779,7 @@ define_binary_simd_operation!(nearest, [f32x4], |a| {
 });
 define_binary_simd_operation!(nearest, [f64x2], |a| {
     let arr = a.to_array();
-    f64x2::from([
-        arr[0].round_ties_even(),
-        arr[1].round_ties_even()
-    ])
+    f64x2::from([arr[0].round_ties_even(), arr[1].round_ties_even()])
 });
 pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v: f32x4 = ctx.stack.pop();
