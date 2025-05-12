@@ -273,7 +273,7 @@ impl Stack {
         self.top = reference.local_top;
         vm_try!(self.add_top(param_size));
         vm_try!(self.add_top(local_size));
-        
+
         let info = CallStackInfo {
             return_addr,
             code_addr,
