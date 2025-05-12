@@ -9,9 +9,11 @@ use crate::component_model::{
 use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use tracing::trace;
 use union_find::UnionFind;
+use crate::component_model::types::placeholder::{ResolveContext, TypeKind};
 
 pub struct LocalTypeIndex<T>
 where
@@ -77,17 +79,47 @@ impl<'a> ScopeGuard<'a> {
     }
 
     pub fn make_instance_type(&self) -> InstanceType {
-        todo!()
+        InstanceType::new(self.export_types.iter().map(|(k, v)| (k.clone(), v.clone().into())).collect())
     }
 
     pub fn merge_type(&mut self, mapping: HashMap<TypeId, TyRef>) {
+        trace!("merge types: {:?}", mapping);
         self.type_mapping.extend(mapping);
     }
 
     pub fn add_type(&mut self, ty: Type) -> TypeId {
         let id = TypeId::new();
+        trace!("add type id: {:?}", id);
         self.type_mapping.insert(id, TyRef::Const(ty));
         id
+    }
+
+    /// typeのplaceholderを補完し，新しい型を作成します．
+    ///
+    /// 補完したあと，現在のscope idのdepthよりも下のplaceholderが残っていた場合はエラーになります．
+    pub fn complement_placeholder_type(&mut self, id: TypeId, placeholders: HashMap<PlaceholderId, TypeId>) -> ParseResult<(TypeId, Type)> {
+        let mut ty = self.get_type(id)?.clone();
+        {
+            let mut ctx = ResolveContext::new(self, placeholders);
+            ty.resolve(&mut ctx)?;
+        }
+        let current_gid = self.components.get_global_idx(id)?;
+        let new_id = self.add_type(ty.clone());
+        self.components.bind(new_id, current_gid)?;
+        Ok((new_id, ty))
+    }
+
+    pub fn assert_type_eq_or_super(&mut self, slf: TypeId, other: TypeId) -> ParseResult<()> {
+        trace!("assert type eq or super: {:?} {:?}", slf, other);
+        let slf = self.get_type(slf)?.clone();
+        let other = self.get_type(other)?.clone();
+        if !slf.is_eq_or_super_type_of(&other) {
+            return Err(ComponentParseError::TypeMismatch(format!(
+                "type mismatch: {:?} is not a super type of {:?}",
+                slf, other
+            )));
+        }
+        Ok(())
     }
 
     /// gets the type id of the given type.
@@ -101,15 +133,22 @@ impl<'a> ScopeGuard<'a> {
             .ok_or(ComponentParseError::TypeNotFound(id))
             .and_then(|ty| match ty {
                 TyRef::Const(ty) => Ok(ty),
-                TyRef::Defer(_) => Err(ComponentParseError::TypeNotFound(id)),
+                TyRef::Defer(_, ty) => Ok(ty),
             })
     }
 
-    pub fn add_placeholder_type(&mut self, pid: PlaceholderId, inner_id: TypeId) -> TypeId {
-        trace!("add placeholder type: {:?}", pid);
+    pub fn get_tyref(&mut self, id: TypeId) -> ParseResult<&TyRef> {
+        trace!("get type ref: {:?} on {:?}", id, self.type_mapping.keys());
+        let id = self.uf.find(&id);
+        self.type_mapping
+            .get(&id)
+            .ok_or(ComponentParseError::TypeNotFound(id))
+    }
+
+    pub fn add_placeholder_type(&mut self, pid: PlaceholderId, ty: Type) -> TypeId {
         let id = TypeId::new();
-        self.type_mapping.insert(id, TyRef::Defer(pid));
-        self.uf.union(inner_id, id);
+        trace!("add placeholder type: {:?} to {:?}", pid, id);
+        self.type_mapping.insert(id, TyRef::defer(pid, ty));
         id
     }
 
@@ -143,17 +182,17 @@ impl<'a> ScopeGuard<'a> {
             ExternDesc::Instance(id) => {
                 let new_id = TypeId::new();
                 self.uf.union(id, new_id);
-                self.instances.register(id);
+                self.instances.register(new_id);
                 (ComponentImportType::Instance(new_id), new_id)
             }
             ExternDesc::Eq(id) => {
-                let id = self.add_placeholder_type(pid.clone(), id);
-                self.types.register(id);
-                (ComponentImportType::Type(id), id)
+                let new_id = TypeId::new();
+                self.uf.union(id, new_id);
+                self.types.register(new_id);
+                (ComponentImportType::Type(new_id), new_id)
             }
             ExternDesc::Sub => {
-                let inner = self.add_type(Type::Resource(ResourceId::new()));
-                let id = self.add_placeholder_type(pid.clone(), inner);
+                let id = self.add_placeholder_type(pid.clone(), Type::Resource(ResourceId::new()));
                 self.types.register(id);
                 (ComponentImportType::Sub(id), id)
             }
@@ -267,7 +306,7 @@ where
 {
     pub fn register(&mut self, id: TypeId) -> LocalIdx<T> {
         let idx = self.values.len();
-        trace!("register id: {:?}", id);
+        trace!("register local id: {:?}, type id: {:?}", idx, id);
         self.values.push(id);
         LocalIdx::new(idx as u32)
     }
@@ -284,6 +323,12 @@ where
         self.globals.insert(gid, data);
         self.global_map.insert(id, gid);
         (lid, gid)
+    }
+
+    pub fn bind(&mut self, id: TypeId, gid: GlobalIdx<T>) -> ParseResult<()> {
+        trace!("bind id: {:?}", id);
+        self.global_map.insert(id, gid);
+        Ok(())
     }
 
     pub fn get(&self, idx: LocalIdx<T>) -> ParseResult<TypeId> {

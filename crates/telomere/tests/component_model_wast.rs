@@ -38,3 +38,8 @@ fn component_resource() {
 fn component_instance_type() {
     run_test_file("instancetype");
 }
+
+#[test]
+fn component_instance() {
+    run_test_file("instance");
+}

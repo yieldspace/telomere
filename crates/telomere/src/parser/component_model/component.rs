@@ -9,6 +9,7 @@ use crate::parser::component_model::{
     parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,
     ComponentParseError, ParseContext, Validator,
 };
+use crate::parser::component_model::instance::parse_instance;
 use crate::parser::core::parse_u32;
 
 pub fn parse_component(
@@ -68,6 +69,11 @@ pub fn _parse_component(
             ComponentSection::Import => {
                 for _ in parse_vec_range(ctx)? {
                     parse_import(ctx)?;
+                }
+            }
+            ComponentSection::Instance => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_instance(ctx)?;
                 }
             }
             _ => todo!(),

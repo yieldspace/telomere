@@ -114,7 +114,7 @@ pub fn parse_label_dash(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
 }
 
 fn parse_plain_name_string(text: &str) -> ParseResult<Option<PlainName>> {
-    trace!("parse_export_name_string: {}", text);
+    trace!("parse_plain_name_string: {}", text);
     match text.as_bytes() {
         #[cfg(feature = "component-gated-feature-async")]
         // async

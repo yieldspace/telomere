@@ -11,6 +11,7 @@ mod reference;
 mod sort;
 mod ty;
 mod val;
+pub mod placeholder;
 
 pub use component::*;
 pub use component_decl::*;

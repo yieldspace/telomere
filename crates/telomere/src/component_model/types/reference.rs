@@ -1,9 +1,10 @@
 use crate::component_model::types::{Type, TypeId};
-use crate::component_model::PlaceholderId;
+use crate::component_model::{PlaceholderId, ResourceId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TyRef<T = Type> {
-    Defer(PlaceholderId),
+    DeferType(PlaceholderId, ResourceId),
+    DeferResource(PlaceholderId, TypeId),
     Const(T),
 }
 
@@ -12,12 +13,12 @@ impl<T> TyRef<T> {
         Self::Const(ty)
     }
 
-    pub fn defer(id: PlaceholderId, ty: T) -> Self {
-        Self::Defer(id)
+    pub fn defer(id: PlaceholderId, ty: TypeId) -> Self {
+        Self::Defer(id, ty)
     }
 
     pub fn is_deferred(&self) -> bool {
-        matches!(self, Self::Defer(_))
+        matches!(self, Self::Defer(_, _))
     }
 
     // /// deferであっても型を取得します
