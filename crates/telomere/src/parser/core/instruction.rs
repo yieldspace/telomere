@@ -2870,7 +2870,28 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         f32x4_ceil,
                         f32x4_floor,
                         f32x4_trunc,
-                        f32x4_nearest
+                        f32x4_nearest,
+                        f64x2_add,
+                        f64x2_sub,
+                        f64x2_mul,
+                        f64x2_div,
+                        f64x2_neg,
+                        f64x2_abs,
+                        f64x2_sqrt,
+                        f64x2_min,
+                        f64x2_max,
+                        f64x2_pmin,
+                        f64x2_pmax,
+                        f64x2_ceil,
+                        f64x2_floor,
+                        f64x2_trunc,
+                        f64x2_nearest,
+                        f64x2_eq,
+                        f64x2_ne,
+                        f64x2_lt,
+                        f64x2_gt,
+                        f64x2_le,
+                        f64x2_ge
                     );
                     (1 + len + len2, false)
                 }

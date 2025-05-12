@@ -466,3 +466,23 @@ async fn simd_f32x4_rounding() {
 async fn simd_f32x4() {
     run_test_file("simd_f32x4").await;
 }
+#[test]
+async fn simd_f64x2_arith() {
+    run_test_file("simd_f64x2_arith").await;
+}
+#[test]
+async fn simd_f64x2_cmp() {
+    run_test_file("simd_f64x2_cmp").await;
+}
+#[test]
+async fn simd_f64x2_pmin_pmax() {
+    run_test_file("simd_f64x2_pmin_pmax").await;
+}
+#[test]
+async fn simd_f64x2_rounding() {
+    run_test_file("simd_f64x2_rounding").await;
+}
+#[test]
+async fn simd_f64x2() {
+    run_test_file("simd_f64x2").await;
+}
