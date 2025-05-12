@@ -289,6 +289,12 @@ unary_op_simd_parser!(f32x4_lt, 67);
 unary_op_simd_parser!(f32x4_gt, 68);
 unary_op_simd_parser!(f32x4_le, 69);
 unary_op_simd_parser!(f32x4_ge, 70);
+unary_op_simd_parser!(f64x2_eq, 71);
+unary_op_simd_parser!(f64x2_ne, 72);
+unary_op_simd_parser!(f64x2_lt, 73);
+unary_op_simd_parser!(f64x2_gt, 74);
+unary_op_simd_parser!(f64x2_le, 75);
+unary_op_simd_parser!(f64x2_ge, 76);
 binary_op_simd_parser!(v128_not, 77);
 unary_op_simd_parser!(v128_and, 78);
 unary_op_simd_parser!(v128_andnot, 79);
@@ -358,10 +364,13 @@ shift_instruction_parser!(i8x16_shr, 108);
 shift_instruction_parser!(u8x16_shr, 109);
 unary_op_simd_parser!(i8x16_add, 110);
 unary_op_simd_parser!(i8x16_sub, 113);
+binary_op_simd_parser!(f64x2_ceil, 116);
+binary_op_simd_parser!(f64x2_floor, 117);
 unary_op_simd_parser!(i8x16_min, 118);
 unary_op_simd_parser!(u8x16_min, 119);
 unary_op_simd_parser!(i8x16_max, 120);
 unary_op_simd_parser!(u8x16_max, 121);
+binary_op_simd_parser!(f64x2_trunc, 122);
 
 pub(crate) mod i16x8_all_true {
     use super::prelude::*;
@@ -397,7 +406,7 @@ binary_op_simd_parser!(i16x8_extend_high_i8x16_u, 138);
 shift_instruction_parser!(i16x8_shl, 139);
 shift_instruction_parser!(i16x8_shr, 140);
 shift_instruction_parser!(u16x8_shr, 141);
-
+binary_op_simd_parser!(f64x2_nearest, 148);
 binary_op_simd_parser!(i32x4_abs, 160);
 
 pub(crate) mod i32x4_all_true {
@@ -467,7 +476,6 @@ unary_op_simd_parser!(i64x2_add, 206);
 binary_op_simd_parser!(f32x4_abs, 224);
 binary_op_simd_parser!(f32x4_neg, 225);
 binary_op_simd_parser!(f32x4_sqrt, 227);
-
 unary_op_simd_parser!(f32x4_add, 228);
 unary_op_simd_parser!(f32x4_sub, 229);
 unary_op_simd_parser!(f32x4_mul, 230);
@@ -476,6 +484,18 @@ unary_op_simd_parser!(f32x4_min, 232);
 unary_op_simd_parser!(f32x4_max, 233);
 unary_op_simd_parser!(f32x4_pmin, 234);
 unary_op_simd_parser!(f32x4_pmax, 235);
+
+binary_op_simd_parser!(f64x2_abs, 236);
+binary_op_simd_parser!(f64x2_neg, 237);
+binary_op_simd_parser!(f64x2_sqrt, 239);
+unary_op_simd_parser!(f64x2_add, 240);
+unary_op_simd_parser!(f64x2_sub, 241);
+unary_op_simd_parser!(f64x2_mul, 242);
+unary_op_simd_parser!(f64x2_div, 243);
+unary_op_simd_parser!(f64x2_min, 244);
+unary_op_simd_parser!(f64x2_max, 245);
+unary_op_simd_parser!(f64x2_pmin, 246);
+unary_op_simd_parser!(f64x2_pmax, 247);
 
 binary_op_simd_parser!(i32x4_trunc_sat_f32x4_s, 248);
 binary_op_simd_parser!(f32x4_convert_i32x4_s, 250);
