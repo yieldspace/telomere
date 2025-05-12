@@ -22,6 +22,8 @@ mod name;
 mod sort;
 mod types;
 mod validator;
+mod instance;
+pub use validator::ScopeGuard;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;
 pub type ParseResult<T> = std::result::Result<T, ComponentParseError>;

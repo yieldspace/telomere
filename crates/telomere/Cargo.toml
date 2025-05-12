@@ -26,11 +26,12 @@ tokio = { workspace = true, optional = true }
 tracing-subscriber = { version = "0.3.19" }
 wast = { version = "229.0.0", features = ["component-model"] }
 wat = "1.228.0"
-anyhow = "1.0.98"
+anyhow = { version = "1.0.98", features = ["backtrace"] }
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 [[bench]]
 name = "telomere_bench"
 harness = false
+
 
 [features]
 default = ["interpreter", "simd", "async-runtime"]

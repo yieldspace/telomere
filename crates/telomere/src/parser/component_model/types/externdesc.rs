@@ -1,7 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::Type;
+use crate::component_model::types::{ComponentType, Type};
 use crate::component_model::{ExternDesc, ResourceId};
-use crate::parser::component_model::parse_type_local_idx;
+use crate::parser::component_model::{parse_instance_local_idx, parse_type_local_idx, ComponentParseError};
 use crate::parser::component_model::types::valtype::parse_valtype;
 use crate::parser::component_model::{ParseContext, ParseResult};
 use crate::parser::core::parse_u32;
@@ -21,9 +21,24 @@ pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
         0x04 => {
             let idx = parse_type_local_idx(ctx)?;
             let id = ctx.validator.scope().types.get(idx)?;
+            if !ctx.validator.scope_mut().get_type(id)?.is_component_type() {
+                return Err(ComponentParseError::InvalidType(
+                    "expected component type".to_string(),
+                ));
+            }
             ExternDesc::Component(id)
         }
-        _ => todo!(),
+        0x05 => {
+            let idx = parse_type_local_idx(ctx)?;
+            let id = ctx.validator.scope().types.get(idx)?;
+            if !ctx.validator.scope_mut().get_type(id)?.is_instance_type() {
+                return Err(ComponentParseError::InvalidType(
+                    "expected instance type".to_string(),
+                ));
+            }
+            ExternDesc::Instance(id)
+        }
+        x => todo!("{}", x),
     };
     Ok(desc)
 }

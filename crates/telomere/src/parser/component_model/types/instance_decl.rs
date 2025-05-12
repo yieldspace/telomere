@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::InstanceDecl;
+use crate::component_model::types::{InstanceDecl, Type};
 use crate::parser::component_model::types::alias::parse_alias_type;
 use crate::parser::component_model::types::{parse_export_decl, parse_type};
 use crate::parser::component_model::{ParseContext, ParseResult};
@@ -12,12 +12,11 @@ pub fn _parse_instance_decl(
     ctx: &mut ParseContext<impl BinaryReader>,
     byte: Option<u8>,
 ) -> ParseResult<()> {
-    let start_count = ctx.reader.read_count();
     let b = match byte {
         Some(b) => b,
         None => ctx.reader.read_exact_one()?,
     };
-    let d = match b {
+    match b {
         0x00 => {
             // let (_, t) = parse_core_type(ctx)?;
             // InstanceDecl::CoreModuleType(t.try_into()?)
@@ -29,6 +28,32 @@ pub fn _parse_instance_decl(
                 let id = scope.add_type(t);
                 scope.types.register(id);
             })
+            // match t {
+            //     Type::DefVal(_) => {
+            //         ctx.validator.with_scope(|scope| {
+            //             let id = scope.add_type(t);
+            //             scope.types.register(id);
+            //         })                    
+            //     }
+            //     Type::Component(_) => {
+            //         ctx.validator.with_scope(|scope| {
+            //             let id = scope.add_type(t);
+            //             scope.components.register(id);
+            //         })
+            //     }
+            //     Type::Instance(_) => {
+            //         ctx.validator.with_scope(|scope| {
+            //             let id = scope.add_type(t);
+            //             scope.instances.register(id);
+            //         })
+            //     }
+            //     Type::Resource(_) => {
+            //         ctx.validator.with_scope(|scope| {
+            //             let id = scope.add_type(t);
+            //             scope.types.register(id);
+            //         })
+            //     }
+            // }
         }
         0x02 => {
             parse_alias_type(ctx)?;

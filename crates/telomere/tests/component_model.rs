@@ -4,25 +4,34 @@ use telomere::parser::component_model::{
 use tracing::Level;
 
 #[test]
-fn test_basic_component() -> Result<(), ComponentParseError> {
+fn test_basic_component() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
         .init();
 
     let component = r#"
-       (component
-            (type (;0;)
-                (component
-                    (export (;0;) "add" (type (sub resource)))
-                )
-            )
-            (import "docs:adder/add@0.1.0" (component (;0;) (type 0)))
-            (component
-            )
-            (export "foo" (component 0))
-       )
+(component
+    (component
+        (type (instance
+            (type (instance))
+            (export "exit" (instance (;0;) (type 0)))
+        ))
+        (import "wasi-type" (type (eq 0)))
+        (import "wasi:io/error@0.2.0" (instance (;2;) (type 1)))
+    )
+    (type (instance
+        (type (instance))
+        (export "exit2" (instance (;0;) (type 0)))
+        (export "exit" (instance (;0;) (type 0)))
+    ))
+    (import "wasi:io/error@0.2.0" (instance (;2;) (type 0)))
+    (instance (instantiate 0 
+        (with "wasi-type" (type 0))
+        (with "wasi:io/error@0.2.0" (instance 0))
+    ))
+)
     "#;
-    let binary = wat::parse_str(component).unwrap();
+    let binary = wat::parse_str(component)?;
     // let binary = wat::parse_str(std::fs::read_to_string("foo.wat").unwrap()).unwrap();
     // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);

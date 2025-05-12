@@ -10,6 +10,14 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
     let si = parse_sort_with_idx(ctx)?;
     let ed = parse_option(ctx, parse_externdesc)?;
     match si {
+        Sort::Type(idx) => {
+            ctx.validator.with_scope(|scope| {
+                let (pid, ty) = scope
+                    .add_export_type(name, ed.unwrap_or_else(|| ExternDesc::Eq(idx)))?;
+                scope.add_export(pid, ComponentExport::Type(idx))
+            })?;
+            Ok(())
+        }
         Sort::Component(idx, tid) => {
             ctx.validator.with_scope(|scope| {
                 let (pid, ty) = scope
