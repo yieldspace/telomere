@@ -673,6 +673,60 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 
                 (1 + len + len2, false)
             }
+            0x12 => {
+                trace!("parse_op_return_call");
+                let (len, idx) = self.parse_u32()?;
+                let typeidx = self
+                    .functions
+                    .get(idx as usize)
+                    .ok_or(WasmParserError::InvalidFuncIdx(FuncIdx(idx)))?;
+                let ty = self
+                    .types
+                    .get(*typeidx)
+                    .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
+                checker.op_func_type(ty)?;
+                checker.op(&self.functype.1 .0, &[])?;
+                checker.unreachable();
+
+                instrs.push(Instr {
+                    op: vm::op_return_call,
+                });
+                instrs.push(Instr {
+                    operand: Operand { u32: idx },
+                });
+
+                (1 + len, false)
+            }
+            0x13 => {
+                trace!("parse_op_return_call_indirect");
+                let (len, typeidx) = self.parse_u32()?;
+                let (len2, tableidx) = self.parse_u32()?;
+                if self.tables.len() <= tableidx as usize {
+                    Err(WasmParserError::InvalidTableIndex(tableidx))?;
+                }
+                if self.tables[tableidx as usize].reftype != RefType::FuncRef {
+                    Err(WasmParserError::InvalidTableType(tableidx))?;
+                }
+                checker.op(&[ValType::I32], &[])?;
+                let ty = self
+                    .types
+                    .get(TypeIdx(typeidx))
+                    .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(typeidx)))?;
+                checker.op_func_type(ty)?;
+                checker.op(&self.functype.1 .0, &[])?;
+                checker.unreachable();
+                instrs.push(Instr {
+                    op: vm::op_return_call_indirect,
+                });
+                instrs.push(Instr {
+                    operand: Operand { u32: tableidx },
+                });
+                instrs.push(Instr {
+                    operand: Operand { u32: typeidx },
+                });
+
+                (1 + len + len2, false)
+            }
             0x1A => {
                 trace!("parse_op_drop");
                 let x = checker.pop()?;

@@ -401,6 +401,16 @@ async fn utf8_import_module() {
 async fn utf8_invalid_encoding() {
     run_test_file("utf8-invalid-encoding").await;
 }
+
+#[test]
+async fn proposals_return_call() {
+    run_test_file("proposals/tail-call/return_call").await;
+}
+#[test]
+async fn proposals_return_call_indirect() {
+    run_test_file("proposals/tail-call/return_call_indirect").await;
+}
+
 #[test]
 async fn simd_load() {
     run_test_file("simd_load").await;

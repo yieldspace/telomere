@@ -663,6 +663,7 @@ pub(crate) unsafe fn internal_op_call(
     return_addr: *const Instr,
     funcaddr: GcRef,
     ctx: &mut ExecuteContext,
+    is_return_call: bool,
 ) -> VMResult<*const Instr> {
     let funcinst = ctx.func_by_addr(funcaddr);
     let instance_addr = funcinst.instance_addr;
@@ -681,25 +682,43 @@ pub(crate) unsafe fn internal_op_call(
     }
     if funcinst.is_host_func() {
         let fp = funcinst.host_code_pointer(ctx.gc);
-        ctx.local_reference = vm_try!(ctx.stack.function_call(
-            param_size,
-            0,
-            funcaddr,
-            ctx.local_reference,
-            return_addr
-        ));
+        if is_return_call {
+            ctx.local_reference = vm_try!(ctx.stack.function_return_call(
+                &ctx.local_reference,
+                param_size,
+                0,
+                funcaddr
+            ));
+        } else {
+            ctx.local_reference = vm_try!(ctx.stack.function_call(
+                param_size,
+                0,
+                funcaddr,
+                ctx.local_reference,
+                return_addr
+            ));
+        }
         let return_addr = vm_try!(fp(ctx));
         VMResult::Success(return_addr)
     } else {
         let (locals, code_offset) = funcinst.locals_and_code_offset(ctx.gc);
         let addr = funcinst.body;
-        ctx.local_reference = vm_try!(ctx.stack.function_call(
-            param_size,
-            locals.byte_size(),
-            funcaddr,
-            ctx.local_reference,
-            return_addr
-        ));
+        if is_return_call {
+            ctx.local_reference = vm_try!(ctx.stack.function_return_call(
+                &ctx.local_reference,
+                param_size,
+                locals.byte_size(),
+                funcaddr
+            ));
+        } else {
+            ctx.local_reference = vm_try!(ctx.stack.function_call(
+                param_size,
+                locals.byte_size(),
+                funcaddr,
+                ctx.local_reference,
+                return_addr
+            ));
+        }
 
         VMResult::Success(ctx.gc.get_value::<Instr>(addr, code_offset))
     }
@@ -708,14 +727,20 @@ pub(crate) unsafe fn internal_op_call(
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let funcidx = (*tail_code).operand.u32;
     let funcaddr = ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx));
+    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false));
     call_next(ptr, 0, ctx)
 }
-
+pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let funcidx = (*tail_code).operand.u32;
+    let funcaddr = ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize];
+    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true));
+    call_next(ptr, 0, ctx)
+}
 #[inline(never)]
 unsafe fn internal_op_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
+    is_return_call: bool,
 ) -> VMResult<*const Instr> {
     let i = ctx.stack.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
@@ -747,11 +772,23 @@ unsafe fn internal_op_call_indirect(
     if actual_ft != expected_ft {
         return VMResult::CallIndirectInvalidType;
     }
-    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, ctx));
+    let ptr = vm_try!(internal_op_call(
+        tail_code.offset(2),
+        func_addr,
+        ctx,
+        is_return_call
+    ));
     VMResult::Success(ptr)
 }
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let ptr = vm_try!(internal_op_call_indirect(tail_code, ctx));
+    let ptr = vm_try!(internal_op_call_indirect(tail_code, ctx, false));
+    call_next(ptr, 0, ctx)
+}
+pub unsafe fn op_return_call_indirect(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let ptr = vm_try!(internal_op_call_indirect(tail_code, ctx, true));
     call_next(ptr, 0, ctx)
 }
 pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
