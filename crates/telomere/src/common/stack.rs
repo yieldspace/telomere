@@ -195,6 +195,9 @@ impl Stack {
                 .cast::<CallStackInfo>()
         }) as _
     }
+    pub fn code_addr(&self, reference: &LocalReference) -> GcRef {
+        self.call_stack_info(reference).code_addr
+    }
     pub fn function_call(
         &mut self,
         param_size: usize,
@@ -228,9 +231,6 @@ impl Stack {
             local_size: (param_size + local_size + std::mem::size_of_val(&d)) as u32,
         })
     }
-    pub fn code_addr(&self, reference: &LocalReference) -> GcRef {
-        self.call_stack_info(reference).code_addr
-    }
     pub fn function_return(
         &mut self,
         reference: &LocalReference,
@@ -253,6 +253,44 @@ impl Stack {
             },
             return_addr,
         )
+    }
+    pub fn function_return_call(
+        &mut self,
+        reference: &LocalReference,
+        param_size: usize,
+        local_size: usize,
+        code_addr: GcRef,
+    ) -> VMResult<LocalReference> {
+        tracing::trace!("function_return_call: {reference:?}");
+        let CallStackInfo {
+            return_addr,
+            prev_local_reference_top,
+            prev_local_reference_size,
+            ..
+        } = *self.call_stack_info(reference);
+        self.memory
+            .copy_within(self.top - param_size..self.top, reference.local_top);
+        self.top = reference.local_top;
+        vm_try!(self.add_top(param_size));
+        vm_try!(self.add_top(local_size));
+
+        let info = CallStackInfo {
+            return_addr,
+            code_addr,
+            prev_local_reference_top,
+            prev_local_reference_size,
+        };
+        let d = unsafe {
+            std::mem::transmute::<CallStackInfo, [u8; std::mem::size_of::<CallStackInfo>()]>(info)
+        };
+
+        vm_try!(self.get_memory(std::mem::size_of_val(&d))).copy_from_slice(&d);
+        vm_try!(self.add_top(std::mem::size_of_val(&d)));
+
+        VMResult::Success(LocalReference {
+            local_top: reference.local_top,
+            local_size: (param_size + local_size + std::mem::size_of_val(&d)) as u32,
+        })
     }
     pub fn block_return(
         &mut self,
