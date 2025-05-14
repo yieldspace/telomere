@@ -1,5 +1,4 @@
-use crate::component_model::types::TypeId;
-use crate::component_model::{ImportName, ScopeId};
+use crate::component_model::{ImportName, ScopeId, TypeId};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
