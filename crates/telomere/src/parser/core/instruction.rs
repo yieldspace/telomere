@@ -2781,7 +2781,6 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         v128_const,
                         i8x16_swizzle,
                         i8x16_extract_lane_s,
-                        i8x16_eq,
                         v128_not,
                         v128_and,
                         v128_andnot,
