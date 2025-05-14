@@ -283,7 +283,6 @@ unary_op_simd_parser!(u8x16_le, 42);
 unary_op_simd_parser!(i8x16_ge, 43);
 unary_op_simd_parser!(u8x16_ge, 44);
 
-
 unary_op_simd_parser!(f32x4_eq, 65);
 unary_op_simd_parser!(f32x4_ne, 66);
 unary_op_simd_parser!(f32x4_lt, 67);
@@ -330,9 +329,9 @@ pub(crate) mod v128_any_true {
 
 binary_op_simd_parser!(f32x4_demote_f64x2_zero, 94);
 binary_op_simd_parser!(f64x2_promote_low_f32x4, 95);
-binary_op_simd_parser!(i8x16_abs,96);
-binary_op_simd_parser!(i8x16_neg,97);
-binary_op_simd_parser!(u8x16_popcnt,98);
+binary_op_simd_parser!(i8x16_abs, 96);
+binary_op_simd_parser!(i8x16_neg, 97);
+binary_op_simd_parser!(u8x16_popcnt, 98);
 pub(crate) mod i8x16_all_true {
     use super::prelude::*;
     pub(crate) const CODE: u32 = 99;
