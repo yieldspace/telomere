@@ -3,18 +3,18 @@ use crate::component_model::types::Type;
 use crate::component_model::{ComponentSection, Relation};
 use crate::parser::component_model::export::parse_export;
 use crate::parser::component_model::import::parse_import;
+use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::types::parse_type;
-use crate::parser::component_model::validator::ValidatorState;
+use crate::parser::component_model::validator::ParseState;
 use crate::parser::component_model::{
     parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,
     ComponentParseError, ParseContext, Validator,
 };
-use crate::parser::component_model::instance::parse_instance;
 use crate::parser::core::parse_u32;
 
 pub fn parse_component(
     reader: &mut impl BinaryReader,
-    state: &mut ValidatorState,
+    state: &mut ParseState,
     validator: &mut Validator,
 ) -> Result<(), ComponentParseError> {
     let mut ctx = ParseContext::new(reader, state, validator);
@@ -36,30 +36,27 @@ pub fn _parse_component(
             ComponentSection::Type => {
                 for _ in parse_vec_range(ctx)? {
                     let ty = parse_type(ctx)?;
-                    ctx.validator.with_scope(|scope| {
-                        let id = scope.add_type(ty);
-                        scope.types.register(id);
-                    });
+                    let id = ctx.validator.new_type(ty);
+                    // todo(type) register local
                 }
             }
             ComponentSection::Component => {
-                ctx.validator.new_scope();
+                ctx.state.push_scope();
+                ctx.validator.push_scope();
                 {
                     let mut sized_reader = ctx.reader.take(section_size as usize);
                     let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
                     _parse_component(&mut ctx)?;
                 }
-                // todo ここでcomponent登録
-                let component = ctx.validator.scope().make_component();
-                let ty = ctx.validator.scope().make_component_type();
-                ctx.validator.merge_types_into_parent();
-                ctx.validator.merge_globals_into_parent();
+                // todo(type) ここでcomponent登録
+                let component = ctx.state.scope().make_component();
                 ctx.validator.pop_scope();
-                let scope = ctx.validator.scope_mut();
-                let id = scope.add_type(Type::Component(ty));
-                scope
-                    .components
-                    .register_with_data(id, Relation::Defined(component));
+                ctx.state.pop_scope();
+                let idx = ctx
+                    .state
+                    .component_store
+                    .register(Relation::Defined(component));
+                ctx.state.scope_mut().components.register(idx);
             }
             ComponentSection::Export => {
                 for _ in parse_vec_range(ctx)? {

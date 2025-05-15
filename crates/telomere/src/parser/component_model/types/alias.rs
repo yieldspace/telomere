@@ -14,55 +14,12 @@ pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResul
     match ctx.reader.read_exact_one()? {
         0x00 => {
             let idx = parse_instance_local_idx(ctx)?;
-            let instance_type_id = ctx.validator.scope().instances.get(idx)?;
-            let instance_type: InstanceType = ctx
-                .validator
-                .scope_mut()
-                .get_type(instance_type_id)?
-                .clone()
-                .try_into()
-                .map_err(ComponentParseError::TypeMismatch)?;
-            let name = parse_export_name(ctx)?;
-            let (pid, ty) =
-                instance_type
-                    .get_export(&name)
-                    .ok_or(ComponentParseError::ExportNotFound(
-                        name.original.to_string(),
-                    ))?;
-            match (sort, ty) {
-                (SortType::Instance, InstanceExportType::Instance(id)) => {
-                    ctx.validator.scope_mut().instances.register(*id);
-                }
-                (SortType::Type, InstanceExportType::Type(id)) => {
-                    ctx.validator.scope_mut().types.register(*id);
-                }
-                (SortType::Type, InstanceExportType::Sub(id)) => {
-                    ctx.validator.scope_mut().types.register(*id);
-                }
-                _ => panic!(),
-            }
+            todo!();
         }
         0x02 => {
             let (_, ct) = parse_u32(ctx.reader)?;
             let (_, idx) = parse_u32(ctx.reader)?;
             let outer_scope = ctx.validator.outer_scope(ct);
-            // match sort {
-            //     SortType::Type => {
-            //         let idx = outer_scope.types.get(LocalIdx::new(idx))?;
-            //         let ty = outer_validator.get_type(idx)?;
-            //         AliasType::Type(ty)
-            //     }
-            //     SortType::Instance => {
-            //         let idx = outer_validator.validate_instance_idx(idx)?;
-            //         let ty = outer_validator.get_instance_type(idx)?;
-            //         AliasType::Instance(ty)
-            //     }
-            //     _ => {
-            //         return Err(ComponentParseError::InvalidSignature(format!(
-            //             "Invalid alias type for instance decl: {sort:?}"
-            //         )));
-            //     }
-            // }
             todo!()
         }
         _ => {

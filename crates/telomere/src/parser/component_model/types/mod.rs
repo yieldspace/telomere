@@ -9,7 +9,7 @@ mod interface;
 mod valtype;
 
 use crate::binary::BinaryReader;
-use crate::component_model::types::{DefValType, PrimValType, Type};
+use crate::component_model::types::{PrimValType, Type};
 use crate::parser::component_model::types::instance::parse_instance_type;
 use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
 use crate::parser::core::parse_i32;

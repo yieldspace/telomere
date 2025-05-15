@@ -1,10 +1,10 @@
 use crate::component_model::idx::GlobalIdx;
-use crate::component_model::types::TypeId;
-use crate::component_model::{Component, Instance};
+use crate::component_model::{Component, Func, Instance, TypeId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sort {
     Component(GlobalIdx<Component>, TypeId),
     Instance(GlobalIdx<Instance>, TypeId),
+    Func(GlobalIdx<Func>, TypeId),
     Type(TypeId),
 }

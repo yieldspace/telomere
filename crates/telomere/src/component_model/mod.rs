@@ -1,4 +1,5 @@
 mod component;
+mod func;
 mod id;
 mod idx;
 mod instance;
@@ -10,6 +11,7 @@ mod sort;
 pub mod types;
 
 pub use component::*;
+pub use func::*;
 pub use id::*;
 pub use idx::*;
 pub use instance::*;

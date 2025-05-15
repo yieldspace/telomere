@@ -1,4 +1,4 @@
-use crate::component_model::types::export_decl::ExportDecl;
+use crate::component_model::types::ExportDecl;
 use crate::component_model::types::{Type, TypeId};
 
 pub enum InstanceDecl {

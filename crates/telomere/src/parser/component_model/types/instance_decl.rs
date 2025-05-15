@@ -24,36 +24,8 @@ pub fn _parse_instance_decl(
         }
         0x01 => {
             let t = parse_type(ctx)?;
-            ctx.validator.with_scope(|scope| {
-                let id = scope.add_type(t);
-                scope.types.register(id);
-            })
-            // match t {
-            //     Type::DefVal(_) => {
-            //         ctx.validator.with_scope(|scope| {
-            //             let id = scope.add_type(t);
-            //             scope.types.register(id);
-            //         })                    
-            //     }
-            //     Type::Component(_) => {
-            //         ctx.validator.with_scope(|scope| {
-            //             let id = scope.add_type(t);
-            //             scope.components.register(id);
-            //         })
-            //     }
-            //     Type::Instance(_) => {
-            //         ctx.validator.with_scope(|scope| {
-            //             let id = scope.add_type(t);
-            //             scope.instances.register(id);
-            //         })
-            //     }
-            //     Type::Resource(_) => {
-            //         ctx.validator.with_scope(|scope| {
-            //             let id = scope.add_type(t);
-            //             scope.types.register(id);
-            //         })
-            //     }
-            // }
+            let id = ctx.validator.new_type(t);
+            ctx.validator.scope_mut().type_indexes.add(id);
         }
         0x02 => {
             parse_alias_type(ctx)?;

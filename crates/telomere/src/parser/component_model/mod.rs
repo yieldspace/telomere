@@ -10,7 +10,7 @@ pub use context::ParseContext;
 pub use core::*;
 pub use error::ComponentParseError;
 pub use idx::*;
-pub use validator::{Validator, ValidatorState};
+pub use validator::{ParseState, Validator};
 
 mod component;
 mod context;
@@ -18,11 +18,11 @@ mod error;
 mod export;
 mod idx;
 mod import;
+mod instance;
 mod name;
 mod sort;
 mod types;
 mod validator;
-mod instance;
 pub use validator::ScopeGuard;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;

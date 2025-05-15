@@ -50,6 +50,12 @@ impl<T> LocalIdx<T> {
     }
 }
 
+impl<T> From<usize> for LocalIdx<T> {
+    fn from(value: usize) -> Self {
+        Self::new(value as u32)
+    }
+}
+
 static GLOBAL_IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 impl<T> Default for GlobalIdx<T> {
