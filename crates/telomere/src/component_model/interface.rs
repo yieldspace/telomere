@@ -18,16 +18,16 @@ pub enum PlaceholderType {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PlaceholderId(ScopeId, u64, PlaceholderType);
+pub struct PlaceholderId(u64);
 
 impl PlaceholderId {
-    pub fn new(scope_id: ScopeId, name: &impl Hash, ty: PlaceholderType) -> Self {
+    pub fn new(name: &impl Hash) -> Self {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         name.hash(&mut hasher);
-        Self(scope_id, hasher.finish(), ty)
+        Self(hasher.finish())
     }
 
     pub fn name_hash(&self) -> u64 {
-        self.1
+        self.0
     }
 }

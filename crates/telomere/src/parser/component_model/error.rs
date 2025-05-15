@@ -1,5 +1,5 @@
-use crate::component_model::types::{Type, TypeId};
-use crate::component_model::LocalIdx;
+use crate::component_model::types::Type;
+use crate::component_model::{LocalIdx, TypeId};
 use crate::WasmParserError;
 use thiserror::Error;
 

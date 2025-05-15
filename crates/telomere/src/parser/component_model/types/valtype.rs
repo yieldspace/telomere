@@ -14,9 +14,9 @@ pub fn parse_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<V
         let tid = ctx
             .validator
             .scope()
-            .types
+            .type_indexes
             .get(LocalIdx::new(value as u32))?;
-        let ty = ctx.validator.scope_mut().get_type(tid)?;
+        let ty = ctx.validator.get_type(tid)?;
         let Type::DefVal(_) = ty else {
             return Err(ComponentParseError::TypeMismatch(
                 "the typeidx of valtype must refer to defvaltype".to_string(),

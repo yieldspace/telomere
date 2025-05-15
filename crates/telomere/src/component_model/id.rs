@@ -1,6 +1,6 @@
+use crate::component_model::{ExportName, ImportName};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use crate::component_model::{ExportName, ImportName};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ScopeId(u32, u32);
@@ -17,11 +17,11 @@ impl ScopeId {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ResourceId(usize);
+pub struct ResourceId(u32);
 
 impl ResourceId {
     pub fn new() -> Self {
-        static RESOURCE_HANDLE: AtomicUsize = AtomicUsize::new(0);
+        static RESOURCE_HANDLE: AtomicU32 = AtomicU32::new(0);
         Self(RESOURCE_HANDLE.fetch_add(1, Ordering::Relaxed))
     }
 }

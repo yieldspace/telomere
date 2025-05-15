@@ -1,6 +1,4 @@
-use telomere::parser::component_model::{
-    ComponentParseError, ParseContext, Validator, ValidatorState,
-};
+use telomere::parser::component_model::{ComponentParseError, ParseContext, ParseState, Validator};
 use tracing::Level;
 
 #[test]
@@ -36,13 +34,13 @@ fn test_basic_component() -> anyhow::Result<()> {
     // std::fs::write("test.wasm", &binary).unwrap();
     let mut reader = telomere::IoReadBinaryReader::from(&binary[..]);
     // let mut instrs = Vec::new();
-    let mut state = ValidatorState::new();
+    let state_arena = typed_arena::Arena::new();
+    let mut state = ParseState::new(&state_arena);
     let arena = typed_arena::Arena::new();
     let mut validator = Validator::new(&arena);
     telomere::parser::component_model::parse_component(&mut reader, &mut state, &mut validator)?;
     let mut store = telomere::Store::new();
     let linker = telomere::runtime::component_model::Linker::new();
-    println!("{:?}", validator.scope().make_component_type());
     // let instance =
     //     telomere::runtime::component_model::instantiate(&mut instrs, &mut store, &linker).unwrap();
     // println!("{:?}", instance);

@@ -1,7 +1,6 @@
 use crate::component_model::sort::Sort;
-use crate::component_model::{GlobalIdx, ImportName, Instance, PlaceholderId};
+use crate::component_model::{ExportName, GlobalIdx, ImportName, Instance, PlaceholderId, TypeId};
 use std::collections::{HashMap, HashSet};
-use crate::component_model::types::TypeId;
 
 #[derive(Debug, Clone)]
 pub struct Component {
@@ -11,13 +10,17 @@ pub struct Component {
 
 #[derive(Debug, Clone)]
 pub enum ComponentImport {
-    Component(GlobalIdx<Component>),
-    Instance(GlobalIdx<Instance>),
+    Component,
+    Instance,
+    Func,
+    Resource,
 }
 
 #[derive(Debug, Clone)]
 pub enum ComponentExport {
-    Component(GlobalIdx<Component>),
-    Instance(GlobalIdx<Instance>),
-    Type(TypeId),
+    Component,
+    Instance,
+    Func,
+    Type,
+    Resource,
 }

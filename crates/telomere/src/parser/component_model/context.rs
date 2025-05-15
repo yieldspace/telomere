@@ -1,32 +1,26 @@
 use crate::binary::BinaryReader;
-use crate::parser::component_model::validator::{ScopeGuard, ValidatorState};
+use crate::parser::component_model::validator::{ParseState, ScopeGuard};
 use crate::parser::component_model::Validator;
 use std::cell::RefMut;
 use std::fmt::{Debug, Formatter};
 
-pub struct ParseContext<'a, 'b, R>
+pub struct ParseContext<'a, 'b, 'c, R>
 where
     R: BinaryReader,
 {
     pub reader: &'a mut R,
-    pub state: &'a mut ValidatorState,
-    pub validator: &'a mut Validator<'b>,
+    pub state: &'a mut ParseState<'b>,
+    pub validator: &'a mut Validator<'c>,
 }
 
-impl<R: BinaryReader> Debug for ParseContext<'_, '_, R> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ParseContext<{:x}>", self.reader.read_count())
-    }
-}
-
-impl<'a, 'b, R> ParseContext<'a, 'b, R>
+impl<'a, 'b, 'c, R> ParseContext<'a, 'b, 'c, R>
 where
     R: BinaryReader,
 {
     pub fn new(
         reader: &'a mut R,
-        state: &'a mut ValidatorState,
-        validator: &'a mut Validator<'b>,
+        state: &'a mut ParseState<'b>,
+        validator: &'a mut Validator<'c>,
     ) -> Self {
         Self {
             reader,

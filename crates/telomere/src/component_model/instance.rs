@@ -1,5 +1,5 @@
+use crate::component_model::{Component, Func, GlobalIdx, PlaceholderId};
 use std::collections::HashMap;
-use crate::component_model::{Component, GlobalIdx, PlaceholderId};
 
 #[derive(Debug, Clone)]
 pub struct Instance {
@@ -11,12 +11,10 @@ pub struct Instance {
 #[derive(Debug, Clone)]
 pub enum InstanceImport {
     // CoreModule,
-    // Func,
+    Func(GlobalIdx<Func>),
     Component(GlobalIdx<Component>),
     Instance(GlobalIdx<Instance>),
 }
 
 #[derive(Debug, Clone)]
-pub struct InstanceExport {
-
-}
+pub struct InstanceExport {}

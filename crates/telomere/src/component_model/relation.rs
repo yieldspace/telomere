@@ -1,10 +1,10 @@
-use crate::component_model::{GlobalIdx, PlaceholderId};
+use crate::component_model::{GlobalIdx, Instance, PlaceholderId};
 
 #[derive(Clone, Debug)]
 pub enum Relation<T> {
     Defined(T),
     Import(PlaceholderId),
-    FromExport(GlobalIdx<T>, PlaceholderId),
+    FromExport(GlobalIdx<Instance>, PlaceholderId),
 }
 
 impl<T> Relation<T> {
@@ -16,7 +16,7 @@ impl<T> Relation<T> {
         Relation::Import(placeholder)
     }
 
-    pub fn new_from_export(global_idx: GlobalIdx<T>, placeholder: PlaceholderId) -> Self {
+    pub fn new_from_export(global_idx: GlobalIdx<Instance>, placeholder: PlaceholderId) -> Self {
         Relation::FromExport(global_idx, placeholder)
     }
 }
