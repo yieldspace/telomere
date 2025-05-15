@@ -3,16 +3,26 @@ mod component;
 /// This module contains the parsing logic for various types in the component model.
 /// ParseResult<()>を返す関数はすべて型情報をその関数内で更新しています
 mod externdesc;
+mod func;
 mod instance;
 mod instance_decl;
 mod interface;
 mod valtype;
+mod variant;
 
 use crate::binary::BinaryReader;
-use crate::component_model::types::{PrimValType, Type};
+use crate::component_model::types::{
+    Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType,
+};
+use crate::component_model::{Label, ResourceId};
+use crate::parser::component_model::name::parse_label_dash;
 use crate::parser::component_model::types::instance::parse_instance_type;
-use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
-use crate::parser::core::parse_i32;
+use crate::parser::component_model::types::valtype::{parse_label_valtype, parse_valtype};
+use crate::parser::component_model::{
+    parse_func_local_idx, parse_option, parse_type_local_idx, parse_vec_range, ComponentParseError,
+    ParseContext, ParseResult, SizedResult,
+};
+use crate::parser::core::{parse_i32, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
 pub use alias::*;
 pub use component::*;
@@ -20,7 +30,9 @@ pub use externdesc::*;
 pub use instance_decl::*;
 pub use interface::*;
 use num_traits::FromPrimitive;
+use std::collections::HashSet;
 use tracing::trace;
+pub use variant::*;
 
 /// Macro to define a constant type with a given value and name.
 ///
@@ -76,12 +88,166 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
     let may_prim_val_type = PrimValType::from_i32(opcode);
     let ty = match opcode {
         _ if may_prim_val_type.is_some() => {
-            // Type::DefVal(Box::from(DefValType::Primitive(may_prim_val_type.unwrap())))
-            todo!()
+            Type::DefVal(DefValType::Primitive(may_prim_val_type.unwrap()))
+        }
+        DEFVALTYPE_RECORD => {
+            let mut name_set = HashSet::new();
+            let mut fields = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let (_, field) = parse_label_valtype(ctx)?;
+                if !name_set.insert(field.label.flat()) {
+                    return Err(ComponentParseError::RedundantRecordFieldName);
+                }
+                fields.push(field);
+            }
+            if fields.is_empty() {
+                return Err(ComponentParseError::EmptyRecord);
+            }
+            Type::DefVal(DefValType::Record(fields))
+        }
+        DEFVALTYPE_VARIANT => {
+            let mut name_set = HashSet::new();
+            let mut cases = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let case = parse_case(ctx)?;
+                if !name_set.insert(case.label.flat()) {
+                    return Err(ComponentParseError::RedundantVariantCaseName);
+                }
+                cases.push(case);
+            }
+            if cases.is_empty() {
+                return Err(ComponentParseError::EmptyVariant);
+            }
+            Type::DefVal(DefValType::Variant(cases))
+        }
+        DEFVALTYPE_LIST => {
+            let valtype = parse_valtype(ctx)?;
+            Type::DefVal(DefValType::List(valtype, None))
+        }
+        DEFVALTYPE_LIST_WITH_LEN => {
+            let valtype = parse_valtype(ctx)?;
+            let (_, len) = parse_u32(ctx.reader)?;
+            Type::DefVal(DefValType::List(valtype, Some(len as usize)))
+        }
+        DEFVALTYPE_TUPLE => {
+            let (_, types) = parse_vec(
+                ctx,
+                |v| v.reader,
+                |ctx| SizedResult::Ok((0, parse_valtype(ctx)?)),
+            )?;
+            Type::DefVal(DefValType::Record(
+                types
+                    .into_iter()
+                    .enumerate()
+                    .map(|(nth, t)| LabelValType::new(Label::new(nth.to_string()), t))
+                    .collect(),
+            ))
+        }
+        DEFVALTYPE_FLAGS => {
+            let mut name_set = HashSet::new();
+            let mut labels = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let label = parse_label_dash(ctx)?;
+                if !name_set.insert(label.flat()) {
+                    return Err(ComponentParseError::RedundantFlagsVariantName);
+                }
+                labels.push(LabelValType::new(
+                    label,
+                    ValType::Primitive(PrimValType::Bool),
+                ));
+            }
+            if labels.is_empty() {
+                return Err(ComponentParseError::EmptyFlags);
+            } else if labels.len() > 32 {
+                return Err(ComponentParseError::TooManyFlagNames);
+            }
+            Type::DefVal(DefValType::Record(labels))
+        }
+        DEFVALTYPE_ENUM => {
+            let mut name_set = HashSet::new();
+            let mut labels = vec![];
+            for _ in parse_vec_range(ctx)? {
+                let label = parse_label_dash(ctx)?;
+                if !name_set.insert(label.flat()) {
+                    return Err(ComponentParseError::RedundantEnumVariantName);
+                }
+                labels.push(Case::new(label, None));
+            }
+            if labels.is_empty() {
+                return Err(ComponentParseError::EmptyEnum);
+            }
+            Type::DefVal(DefValType::Variant(labels))
+        }
+        DEFVALTYPE_OPTION => {
+            let t = parse_valtype(ctx)?;
+            Type::DefVal(DefValType::Variant(vec![
+                Case::new(Label::new("none".to_string()), None),
+                Case::new(Label::new("some".to_string()), Some(t)),
+            ]))
+        }
+        DEFVALTYPE_RESULT => {
+            let t = parse_option(ctx, parse_valtype)?;
+            let u = parse_option(ctx, parse_valtype)?;
+            Type::DefVal(DefValType::Variant(vec![
+                Case::new(Label::new("ok".to_string()), t),
+                Case::new(Label::new("err".to_string()), u),
+            ]))
+        }
+        DEFVALTYPE_OWN => {
+            let idx = parse_type_local_idx(ctx)?;
+            Type::DefVal(DefValType::Own(
+                ctx.validator.scope().type_indexes.get(idx)?,
+            ))
+        }
+        DEFVALTYPE_BORROW => {
+            let idx = parse_type_local_idx(ctx)?;
+            Type::DefVal(DefValType::Borrow(
+                ctx.validator.scope().type_indexes.get(idx)?,
+            ))
+        }
+        FUNC_TYPE => {
+            let (_, ps) = parse_vec(ctx, |v| v.reader, parse_label_valtype)?;
+            let rs = {
+                match ctx.reader.read_exact_one()? {
+                    0x00 => {
+                        let t = parse_valtype(ctx)?;
+                        Some(t)
+                    }
+                    0x01 => match ctx.reader.read_exact_one()? {
+                        0x00 => None,
+                        x => {
+                            return Err(ComponentParseError::InvalidSignature(format!(
+                                "Invalid function result type: {x}"
+                            )));
+                        }
+                    },
+                    x => {
+                        return Err(ComponentParseError::InvalidSignature(format!(
+                            "Invalid function result type: {x}"
+                        )));
+                    }
+                }
+            };
+            Type::Func(FuncType {
+                params: ps,
+                result: rs,
+            })
         }
         COMPONENT_TYPE => Type::Component(parse_component_type(ctx)?),
         INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?),
-
+        RESOURCE_TYPE => {
+            if let Some(idx) = parse_option(ctx, parse_func_local_idx)? {
+                let ty = ctx.validator.scope().func_indexes.get(idx)?;
+                // todo(type) assert type
+                // ty.assert_type(vec![ValType::Primitive(PrimValType::S32)], None)?;
+                Type::Resource(ResourceId::new(), Some(ty))
+            } else {
+                Type::Resource(ResourceId::new(), None)
+            }
+        }
+        RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
+            todo!()
+        }
         _ => unreachable!(),
     };
 

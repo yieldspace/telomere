@@ -13,7 +13,7 @@ use typed_arena::Arena;
 
 pub struct Validator<'a> {
     arena: &'a Arena<ScopeGuard>,
-    pub(crate) scopes: Vec<&'a mut ScopeGuard>,
+    scopes: Vec<&'a mut ScopeGuard>,
     types: HashMap<TypeId, Type>,
 }
 
