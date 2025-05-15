@@ -502,3 +502,31 @@ async fn simd_i8x16_cmp() {
 async fn simd_i8x16_sat_arith() {
     run_test_file("simd_i8x16_sat_arith").await;
 }
+#[test]
+async fn simd_i16x8_arith() {
+    run_test_file("simd_i16x8_arith").await;
+}
+#[test]
+async fn simd_i16x8_arith2() {
+    run_test_file("simd_i16x8_arith2").await;
+}
+#[test]
+async fn simd_i16x8_cmp() {
+    run_test_file("simd_i16x8_cmp").await;
+}
+#[test]
+async fn simd_i16x8_extadd_pairwise_i8x16() {
+    run_test_file("simd_i16x8_extadd_pairwise_i8x16").await;
+}
+#[test]
+async fn simd_i16x8_q15mulr_sat_s() {
+    run_test_file("simd_i16x8_q15mulr_sat_s").await;
+}
+#[test]
+async fn simd_i16x8_extmul_i8x16() {
+    run_test_file("simd_i16x8_extmul_i8x16").await;
+}
+#[test]
+async fn simd_i16x8_sat_arith() {
+    run_test_file("simd_i16x8_sat_arith").await;
+}
