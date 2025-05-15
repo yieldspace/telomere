@@ -13,3 +13,9 @@ pub struct LabelValType {
     pub label: Label,
     pub ty: ValType,
 }
+
+impl LabelValType {
+    pub fn new(label: Label, ty: ValType) -> Self {
+        Self { label, ty }
+    }
+}

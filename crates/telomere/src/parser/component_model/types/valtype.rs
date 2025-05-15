@@ -1,8 +1,9 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{PrimValType, Type, ValType};
+use crate::component_model::types::{LabelValType, PrimValType, Type, ValType};
 use crate::component_model::LocalIdx;
+use crate::parser::component_model::name::parse_label_dash;
 use crate::parser::component_model::types::is_type_opcode;
-use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
+use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult, SizedResult};
 use crate::parser::core::parse_i32;
 use num_traits::FromPrimitive;
 
@@ -24,4 +25,14 @@ pub fn parse_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<V
         };
         Ok(ValType::Type(tid))
     }
+}
+
+pub fn parse_label_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<LabelValType> {
+    let start_count = ctx.reader.read_count();
+    let l = parse_label_dash(ctx)?;
+    let ty = LabelValType {
+        label: l,
+        ty: parse_valtype(ctx)?,
+    };
+    Ok((ctx.reader.read_count() - start_count, ty))
 }

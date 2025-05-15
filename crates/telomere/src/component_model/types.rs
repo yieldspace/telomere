@@ -26,7 +26,7 @@ pub enum Type {
     DefVal(DefValType),
     Generic(Generic),
     Func(FuncType),
-    Resource(ResourceId),
+    Resource(ResourceId, Option<TypeId>),
     Component(ComponentType),
     Instance(InstanceType),
 }
@@ -36,7 +36,7 @@ impl Type {
         matches!(self, Type::Generic(_))
     }
     pub fn is_resource(&self) -> bool {
-        matches!(self, Type::Resource(_))
+        matches!(self, Type::Resource(_, _))
     }
     pub fn is_component(&self) -> bool {
         matches!(self, Type::Component(_))

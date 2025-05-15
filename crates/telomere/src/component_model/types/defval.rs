@@ -8,15 +8,18 @@ pub enum DefValType {
     Record(Vec<LabelValType>),
     Variant(Vec<Case>),
     List(ValType, Option<usize>),
-    Tuple(Vec<ValType>),
-    Option(ValType),
-    Result(Option<ValType>, Option<ValType>),
     Own(TypeId),
     Borrow(TypeId),
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct Case {
-    label: Label,
-    ty: ValType,
+    pub label: Label,
+    pub ty: Option<ValType>,
+}
+
+impl Case {
+    pub fn new(label: Label, ty: Option<ValType>) -> Self {
+        Self { label, ty }
+    }
 }
