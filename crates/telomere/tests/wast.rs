@@ -486,3 +486,19 @@ async fn simd_f64x2_rounding() {
 async fn simd_f64x2() {
     run_test_file("simd_f64x2").await;
 }
+#[test]
+async fn simd_i8x16_arith() {
+    run_test_file("simd_i8x16_arith").await;
+}
+#[test]
+async fn simd_i8x16_arith2() {
+    run_test_file("simd_i8x16_arith2").await;
+}
+#[test]
+async fn simd_i8x16_cmp() {
+    run_test_file("simd_i8x16_cmp").await;
+}
+#[test]
+async fn simd_i8x16_sat_arith() {
+    run_test_file("simd_i8x16_sat_arith").await;
+}

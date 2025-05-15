@@ -272,17 +272,17 @@ pub(crate) mod i8x16_extract_lane_s {
         Ok(len)
     }
 }
-pub(crate) mod i8x16_eq {
-    use super::prelude::*;
-    pub(crate) const CODE: u32 = 35;
-    pub(crate) fn parse<R: BinaryReader>(
-        ctx: &mut SimdParserContext<R>,
-    ) -> Result<usize, WasmParserError> {
-        ctx.checker.unary_op(ValType::V128)?;
-        ctx.instrs.push_instr1(vm::simd::op_i8x16_eq);
-        Ok(0)
-    }
-}
+unary_op_simd_parser!(i8x16_eq, 35);
+unary_op_simd_parser!(i8x16_ne, 36);
+unary_op_simd_parser!(i8x16_lt, 37);
+unary_op_simd_parser!(u8x16_lt, 38);
+unary_op_simd_parser!(i8x16_gt, 39);
+unary_op_simd_parser!(u8x16_gt, 40);
+unary_op_simd_parser!(i8x16_le, 41);
+unary_op_simd_parser!(u8x16_le, 42);
+unary_op_simd_parser!(i8x16_ge, 43);
+unary_op_simd_parser!(u8x16_ge, 44);
+
 unary_op_simd_parser!(f32x4_eq, 65);
 unary_op_simd_parser!(f32x4_ne, 66);
 unary_op_simd_parser!(f32x4_lt, 67);
@@ -328,9 +328,10 @@ pub(crate) mod v128_any_true {
 }
 
 binary_op_simd_parser!(f32x4_demote_f64x2_zero, 94);
-
 binary_op_simd_parser!(f64x2_promote_low_f32x4, 95);
-
+binary_op_simd_parser!(i8x16_abs, 96);
+binary_op_simd_parser!(i8x16_neg, 97);
+binary_op_simd_parser!(u8x16_popcnt, 98);
 pub(crate) mod i8x16_all_true {
     use super::prelude::*;
     pub(crate) const CODE: u32 = 99;
@@ -362,8 +363,13 @@ binary_op_simd_parser!(f32x4_nearest, 106);
 shift_instruction_parser!(i8x16_shl, 107);
 shift_instruction_parser!(i8x16_shr, 108);
 shift_instruction_parser!(u8x16_shr, 109);
+
 unary_op_simd_parser!(i8x16_add, 110);
+unary_op_simd_parser!(i8x16_add_sat, 111);
+unary_op_simd_parser!(u8x16_add_sat, 112);
 unary_op_simd_parser!(i8x16_sub, 113);
+unary_op_simd_parser!(i8x16_sub_sat, 114);
+unary_op_simd_parser!(u8x16_sub_sat, 115);
 binary_op_simd_parser!(f64x2_ceil, 116);
 binary_op_simd_parser!(f64x2_floor, 117);
 unary_op_simd_parser!(i8x16_min, 118);
@@ -371,6 +377,7 @@ unary_op_simd_parser!(u8x16_min, 119);
 unary_op_simd_parser!(i8x16_max, 120);
 unary_op_simd_parser!(u8x16_max, 121);
 binary_op_simd_parser!(f64x2_trunc, 122);
+unary_op_simd_parser!(u8x16_avgr, 123);
 
 pub(crate) mod i16x8_all_true {
     use super::prelude::*;

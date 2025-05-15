@@ -550,8 +550,28 @@ macro_rules! define_binary_simd_operation {
         define_simd_operation!(handle_binary_op,$op,[$($target),*],$expr);
     };
 }
+define_unary_simd_operation!(avgr, [u8x16], |a, b| {
+    let mut res = [0u8; 16];
+    let a = a.to_array();
+    let b = b.to_array();
+    for i in 0..16 {
+        res[i] = ((a[i] as u16 + b[i] as u16 + 1) / 2) as u8;
+    }
+    res.into()
+});
+define_binary_simd_operation!(popcnt, [u8x16], |a| {
+    let mut res = [0u8; 16];
+    let a = a.to_array();
+    for i in 0..16 {
+        res[i] = a[i].count_ones() as u8;
+    }
+    res.into()
+});
+
 define_unary_simd_operation!(add, [f32x4, f64x2, i8x16, i32x4, i64x2], |a, b| a + b);
+define_unary_simd_operation!(add_sat, [i8x16, u8x16], |a, b| a.saturating_add(b));
 define_unary_simd_operation!(sub, [f32x4, f64x2, i8x16, i32x4], |a, b| a - b);
+define_unary_simd_operation!(sub_sat, [i8x16, u8x16], |a, b| a.saturating_sub(b));
 define_unary_simd_operation!(mul, [f32x4, f64x2, i32x4], |a, b| a * b);
 define_unary_simd_operation!(div, [f32x4, f64x2], |a, b| a / b);
 define_unary_simd_operation!(swizzle, [i8x16], |a, b| a.swizzle(b));
@@ -752,7 +772,7 @@ define_unary_simd_operation!(pmax, [f64x2], |a, b| {
     f64x2::from(result)
 });
 
-define_binary_simd_operation!(abs, [f64x2, f32x4, i32x4], |a| a.abs());
+define_binary_simd_operation!(abs, [f64x2, f32x4, i32x4, i8x16], |a| a.abs());
 define_binary_simd_operation!(ceil, [f64x2, f32x4], |a| a.ceil());
 define_binary_simd_operation!(floor, [f64x2, f32x4], |a| a.floor());
 define_binary_simd_operation!(trunc, [f32x4], |a| {
@@ -793,16 +813,53 @@ pub unsafe fn f64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     vm_try!(ctx.stack.push(f64x2::from([-a, -b])));
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn i8x16_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    use std::ops::BitXor;
+    let a: i8x16 = ctx.stack.pop();
+
+    vm_try!(ctx.stack.push(a.bitxor(-i8x16::ONE) + i8x16::ONE));
+    call_next(tail_code, 0, ctx)
+}
+
 define_binary_simd_operation!(sqrt, [f64x2, f32x4], |a| a.sqrt());
+use std::ops::Not;
 use wide::CmpEq;
 use wide::CmpGe;
 use wide::CmpGt;
 use wide::CmpLe;
 use wide::CmpLt;
 use wide::CmpNe;
-define_unary_simd_operation!(eq, [f32x4, f64x2], |a, b| a.cmp_eq(b));
+macro_rules! define_simd_cmp_operation {
+    ($op_name: ident,[$($ty: ident),*],$op: expr) => {
+        $(define_simd_operation!(handle_unary_op, $op_name, [$ty], |a, b| {
+            let mut res = [0; $ty::LANE_SIZE];
+            let a: [<$ty as LaneType>::BaseType; $ty::LANE_SIZE] = a.to_array();
+            let b: [<$ty as LaneType>::BaseType; $ty::LANE_SIZE] = b.to_array();
+
+            for i in 0..$ty::LANE_SIZE {
+                let a: <$ty as LaneType>::BaseType = a[i];
+                let b: <$ty as LaneType>::BaseType = b[i];
+
+                res[i] = if ($op)(a, b) {
+                    !(0 as <$ty as LaneType>::BaseType)
+                } else {
+                    0 as <$ty as LaneType>::BaseType
+                };
+            }
+            res.into()
+        });)*
+    };
+}
+
+define_unary_simd_operation!(eq, [f32x4, f64x2, i8x16], |a, b| a.cmp_eq(b));
 define_unary_simd_operation!(ne, [f32x4, f64x2], |a, b| a.cmp_ne(b));
+define_unary_simd_operation!(ne, [i8x16], |a, b| a.cmp_eq(b).not());
 define_unary_simd_operation!(lt, [f32x4, f64x2], |a, b| a.cmp_lt(b));
+define_simd_cmp_operation!(lt, [i8x16, u8x16], |a, b| a < b);
+
 define_unary_simd_operation!(gt, [f32x4, f64x2], |a, b| a.cmp_gt(b));
+define_simd_cmp_operation!(gt, [i8x16, u8x16], |a, b| a > b);
 define_unary_simd_operation!(le, [f32x4, f64x2], |a, b| a.cmp_le(b));
+define_simd_cmp_operation!(le, [i8x16, u8x16], |a, b| a <= b);
 define_unary_simd_operation!(ge, [f32x4, f64x2], |a, b| a.cmp_ge(b));
+define_simd_cmp_operation!(ge, [i8x16, u8x16], |a, b| a >= b);

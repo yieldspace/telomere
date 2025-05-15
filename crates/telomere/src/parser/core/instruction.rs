@@ -2781,7 +2781,6 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         v128_const,
                         i8x16_swizzle,
                         i8x16_extract_lane_s,
-                        i8x16_eq,
                         v128_not,
                         v128_and,
                         v128_andnot,
@@ -2891,7 +2890,25 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         f64x2_lt,
                         f64x2_gt,
                         f64x2_le,
-                        f64x2_ge
+                        f64x2_ge,
+                        i8x16_add_sat,
+                        u8x16_add_sat,
+                        i8x16_sub_sat,
+                        u8x16_sub_sat,
+                        i8x16_neg,
+                        u8x16_avgr,
+                        i8x16_abs,
+                        u8x16_popcnt,
+                        i8x16_eq,
+                        i8x16_ne,
+                        i8x16_lt,
+                        u8x16_lt,
+                        i8x16_gt,
+                        u8x16_gt,
+                        i8x16_le,
+                        u8x16_le,
+                        i8x16_ge,
+                        u8x16_ge
                     );
                     (1 + len + len2, false)
                 }
