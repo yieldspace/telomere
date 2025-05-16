@@ -1,7 +1,7 @@
 mod scope;
 mod state;
 
-use crate::component_model::types::Type;
+use crate::component_model::types::{ComponentExportType, ComponentType, InstanceType, Type};
 use crate::component_model::{Component, GlobalIdx, Instance, LocalIdx, TypeId};
 use crate::parser::component_model::ParseResult;
 pub use scope::ScopeGuard;
@@ -10,6 +10,8 @@ use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use tracing::trace;
 use typed_arena::Arena;
+
+use super::ComponentParseError;
 
 pub struct Validator<'a> {
     arena: &'a Arena<ScopeGuard>,
@@ -53,12 +55,6 @@ impl<'a> Validator<'a> {
         self.scopes.last_mut().unwrap()
     }
 
-    #[inline]
-    pub fn with_scope<T>(&mut self, f: impl FnOnce(&mut ScopeGuard) -> T) -> T {
-        let scope = self.scope_mut();
-        f(scope)
-    }
-
     pub fn new_type(&mut self, ty: Type) -> TypeId {
         let id = TypeId::new();
         self.types.insert(id, ty);
@@ -68,4 +64,25 @@ impl<'a> Validator<'a> {
     pub fn get_type(&self, id: TypeId) -> ParseResult<&Type> {
         Ok(self.types.get(&id).unwrap())
     }
+
+    pub fn get_component_type(&self, id: TypeId) -> ParseResult<&ComponentType> {
+        if let Type::Component(component_ty) = self.get_type(id)? {
+            Ok(component_ty)
+        } else {
+            Err(ComponentParseError::TypeMismatch(
+                "Type ID does not refer to any component".to_owned(),
+            ))?
+        }
+    }
+
+    pub fn get_instance_type(&self, id: TypeId) -> ParseResult<&InstanceType> {
+        if let Type::Instance(ty) = self.get_type(id)? {
+            Ok(ty)
+        } else {
+            Err(ComponentParseError::TypeMismatch(
+                "Type ID does not refer to any instance".to_owned(),
+            ))?
+        }
+    }
+
 }

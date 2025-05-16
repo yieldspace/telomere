@@ -237,12 +237,12 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
         INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?),
         RESOURCE_TYPE => {
             if let Some(idx) = parse_option(ctx, parse_func_local_idx)? {
-                let ty = ctx.validator.scope().func_indexes.get(idx)?;
+                let _ty = ctx.validator.scope().func_indexes.get(idx)?;
                 // todo(type) assert type
                 // ty.assert_type(vec![ValType::Primitive(PrimValType::S32)], None)?;
-                Type::Resource(ResourceId::new(), Some(ty))
+                Type::Resource(ResourceId::new())
             } else {
-                Type::Resource(ResourceId::new(), None)
+                Type::Resource(ResourceId::new())
             }
         }
         RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
