@@ -26,27 +26,7 @@ impl ResourceId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ImportId(u64);
 
-impl ImportId {
-    pub fn new(name: &ImportName) -> Self {
-        let mut hasher = DefaultHasher::new();
-        name.hash(&mut hasher);
-        Self(hasher.finish())
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ExportId(u64);
-
-impl ExportId {
-    pub fn new(name: &ExportName) -> Self {
-        let mut hasher = DefaultHasher::new();
-        name.hash(&mut hasher);
-        Self(hasher.finish())
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TypeId(usize);

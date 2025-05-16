@@ -9,24 +9,25 @@ fn test_basic_component() -> anyhow::Result<()> {
 
     let component = r#"
 (component
-    (component
-        (type (instance
-            (type (instance))
-            (export "exit" (instance (;0;) (type 0)))
-        ))
-        (import "wasi-type" (type (eq 0)))
-        (import "wasi:io/error@0.2.0" (instance (;2;) (type 1)))
+  (import "Libc" (core module $Libc ...))
+  (core instance $libc (instantiate $Libc))
+  (type $R (resource (rep i32) (dtor (func $libc "free"))))
+  (core func $R_new (param i32) (result i32)
+    (canon resource.new $R)
+  )
+  (core module $Main
+    (import "canon" "R_new" (func $R_new (param i32) (result i32)))
+    (func (export "make_R") (param ...) (result i32)
+      (return (call $R_new ...))
     )
-    (type (instance
-        (type (instance))
-        (export "exit2" (instance (;0;) (type 0)))
-        (export "exit" (instance (;0;) (type 0)))
-    ))
-    (import "wasi:io/error@0.2.0" (instance (;2;) (type 0)))
-    (instance (instantiate 0 
-        (with "wasi-type" (type 0))
-        (with "wasi:io/error@0.2.0" (instance 0))
-    ))
+  )
+  (core instance $main (instantiate $Main
+    (with "canon" (instance (export "R_new" (func $R_new))))
+  ))
+  (export $R' "r" (type $R))
+  (func (export "make-r") (param ...) (result (own $R))
+    (canon lift (core func $main "make_R"))
+  )
 )
     "#;
     let binary = wat::parse_str(component)?;

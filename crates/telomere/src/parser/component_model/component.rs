@@ -37,7 +37,7 @@ pub fn _parse_component(
                 for _ in parse_vec_range(ctx)? {
                     let ty = parse_type(ctx)?;
                     let id = ctx.validator.new_type(ty);
-                    // todo(type) register local
+                    ctx.validator.scope_mut().type_indexes.add(id);
                 }
             }
             ComponentSection::Component => {
@@ -48,10 +48,12 @@ pub fn _parse_component(
                     let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
                     _parse_component(&mut ctx)?;
                 }
-                // todo(type) ここでcomponent登録
+                let scope = ctx.validator.scope();
                 let component = ctx.state.scope().make_component();
+                
                 ctx.validator.pop_scope();
                 ctx.state.pop_scope();
+                // todo(type) ここでcomponent登録
                 let idx = ctx
                     .state
                     .component_store

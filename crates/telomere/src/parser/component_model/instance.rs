@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{ComponentType, Type};
+use crate::component_model::types::{ComponentExportType, ComponentType, Type};
 use crate::component_model::{ImportName, Instance, InstanceImport, PlaceholderId, Relation, Sort};
 use crate::parser::component_model::name::parse_import_name;
 use crate::parser::component_model::sort::parse_sort_with_idx;
@@ -7,7 +7,7 @@ use crate::parser::component_model::{
     parse_component_local_idx, ComponentParseError, ParseContext, ParseResult, SizedResult,
 };
 use crate::parser::core::parse_vec;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::trace;
 
@@ -25,6 +25,17 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
     trace!("parse instantiate");
     let component_lid = parse_component_local_idx(ctx)?;
     let (_, args) = parse_vec(ctx, |c| c.reader, parse_instantiate_arg)?;
+    if args
+        .iter()
+        .map(|v| &v.0.original)
+        .collect::<HashSet<_>>()
+        .len()
+        != args.len()
+    {
+        Err(ComponentParseError::TypeMismatch(
+            "Duplicated target export name".to_owned(),
+        ))?
+    }
     let component_gid = ctx.state.scope().components.get(component_lid)?;
     let instance = Instance {
         component_idx: Some(component_gid),
@@ -48,6 +59,26 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
         .instance_store
         .register(Relation::Defined(instance));
     ctx.state.scope_mut().instances.register(instance_gid);
+    let component_tid = ctx
+        .validator
+        .scope_mut()
+        .component_indexes
+        .get(component_lid)?;
+    let component_ty = ctx.validator.get_component_type(component_tid)?;
+
+    for (name, sort) in &args {
+        let component_def = component_ty.exports.get(&name.original).ok_or_else(|| {
+            ComponentParseError::TypeMismatch(
+                "The component does not have an export with that name".to_owned(),
+            )
+        })?;
+        let b = ctx.validator.get_type(sort.type_id())?;
+
+        match (b, component_def) {
+            (Type::Resource(_), ComponentExportType::NewResource(_)) => (), // TODO: handle new resource type id
+            (a, b) => a.assert_subtype_of(&b.cv_type(ctx.validator)?, ctx.validator)?,
+        }
+    }
     // todo check type and generics, create new instance type
 
     Ok(())
