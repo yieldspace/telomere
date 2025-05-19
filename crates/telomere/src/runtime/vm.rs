@@ -16,7 +16,7 @@ use crate::{
 };
 
 use super::memory_effect::{ReadOperationHandler, WriteOperation};
-macro_rules! wait_effct {
+macro_rules! wait_effect {
     ($ctx: expr, $cont: expr) => {
         if $ctx.effect.get_pending_count() != 0 {
             trace!("waiting effect: {:?}", $cont);
@@ -1872,14 +1872,14 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_data_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    wait_effct!(ctx, ctx.cont);
+    wait_effect!(ctx, ctx.cont);
     let idx = (*tail_code).operand.u32;
     let instance_id = ctx.instance_id();
     ctx.store.data.remove(&(instance_id, idx));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    wait_effct!(ctx, ctx.cont);
+    wait_effect!(ctx, ctx.cont);
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
@@ -1994,7 +1994,7 @@ pub unsafe fn special_function_vm_end(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    wait_effct!(ctx, ctx.cont);
+    wait_effect!(ctx, ctx.cont);
     ctx.cont = std::ptr::null();
     VMResult::Success(())
 }
