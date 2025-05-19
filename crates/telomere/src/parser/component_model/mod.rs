@@ -23,6 +23,8 @@ mod name;
 mod sort;
 mod types;
 mod validator;
+mod alias;
+
 pub use validator::ScopeGuard;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;
