@@ -41,7 +41,7 @@ pub enum ComponentParseError {
     InvalidSort(Sort, String),
     #[error("Index `{0:?}` is not found in {1}")]
     InvalidIdx(usize, String),
-    #[error("Expected {0} Type")]
+    #[error("{0}")]
     InvalidType(String),
     #[error("Invalid core export `{0}` type: {1:?} != {2:?}")]
     InvalidExportType(String, CoreModuleExportType, CoreSort),

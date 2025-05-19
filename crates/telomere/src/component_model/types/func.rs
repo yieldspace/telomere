@@ -13,27 +13,25 @@ impl FuncType {
         Self { params, result }
     }
 
-    pub fn assert_type(&self, params: Vec<ValType>, result: Option<ValType>) -> ParseResult<()> {
+    pub fn assert_type(
+        &self,
+        params: Vec<ValType>,
+        result: Option<ValType>,
+        message: impl Into<String>,
+    ) -> ParseResult<()> {
         if self.params.len() != params.len() {
-            return Err(ComponentParseError::TypeMismatch(format!(
-                "params length mismatch: expected {}, found {}",
-                self.params.len(),
-                params.len()
-            )));
+            return Err(ComponentParseError::TypeMismatch(message.into()));
         }
-        for (i, (act, exp)) in self.params.iter().zip(params.iter()).enumerate() {
+        for (_, (act, exp)) in self.params.iter().zip(params.iter()).enumerate() {
             if &act.t != exp {
-                return Err(ComponentParseError::TypeMismatch(format!(
-                    "param type mismatch at index {}: expected {:?}, found {:?}",
-                    i, exp, act.t
-                )));
+                return Err(ComponentParseError::TypeMismatch(message.into()));
             }
         }
         match (&self.result, result) {
             (None, None) => Ok(()),
-            (Some(act), Some(exp)) if **act != exp => Err(ComponentParseError::TypeMismatch(
-                format!("result type mismatch: expected {:?}, found {:?}", act, exp),
-            )),
+            (Some(act), Some(exp)) if **act != exp => {
+                Err(ComponentParseError::TypeMismatch(message.into()))
+            }
             _ => Ok(()),
         }
     }

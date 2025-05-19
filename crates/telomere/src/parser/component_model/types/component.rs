@@ -38,8 +38,7 @@ pub fn parse_component_type(
                 ExternDesc::Type(ty) => {
                     if ty.is_resource_type() {
                         return Err(ComponentParseError::InvalidType(
-                            "Resource Type cannot use in component type or instance type"
-                                .to_string(),
+                            "resource type cannot use in component type".to_string(),
                         ));
                     }
                     new_ctx.validator.add_type(ty.clone())?;

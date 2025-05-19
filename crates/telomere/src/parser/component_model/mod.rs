@@ -127,7 +127,10 @@ where
             let t = f(ctx)?;
             Ok(Some(t))
         }
-        x => Err(ComponentParseError::WrongMagic(x, "option".to_string())),
+        x => {
+            println!("{x}");
+            Err(ComponentParseError::WrongMagic(x, "option".to_string()))
+        }
     }
 }
 

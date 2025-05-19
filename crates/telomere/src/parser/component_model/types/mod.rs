@@ -21,6 +21,7 @@ pub use instance::*;
 use num_traits::FromPrimitive;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tracing::trace;
 
 static RESOURCE_HANDLE: AtomicUsize = AtomicUsize::new(0);
 
@@ -55,8 +56,8 @@ const_type!([0x65], DEFVALTYPE_FUTURE);
 const_type!([0x40], FUNC_TYPE);
 const_type!([0x41], COMPONENT_TYPE);
 const_type!([0x42], INSTANCE_TYPE);
-const_type!([0x3f, 0x7f], RESOURCE_TYPE);
-const_type!([0x3e, 0x7f], RESOURCE_TYPE_WITH_ASYNC_CALLBACK);
+const_type!([0x3f], RESOURCE_TYPE);
+const_type!([0x3e], RESOURCE_TYPE_WITH_ASYNC_CALLBACK);
 
 /// Checks if the given opcode is a type opcode.
 ///
@@ -72,6 +73,7 @@ fn is_type_opcode(opcode: i32) -> bool {
 
 pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type> {
     let start_count = ctx.reader.read_count();
+    trace!("parse type");
     let (_, opcode) = parse_i32(ctx.reader)?;
 
     let may_prim_val_type = PrimValType::from_i32(opcode);
@@ -169,11 +171,23 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
         }
         DEFVALTYPE_OWN => {
             let idx = parse_type_idx(ctx)?;
-            Type::DefVal(Box::from(DefValType::Own(ctx.validator.get_type(idx)?)))
+            let ty = ctx.validator.get_type(idx)?;
+            if !ty.is_resource_type() {
+                return Err(ComponentParseError::TypeMismatch(
+                    "own type must have a resource type".to_string(),
+                ));
+            }
+            Type::DefVal(Box::from(DefValType::Own(ty)))
         }
         DEFVALTYPE_BORROW => {
             let idx = parse_type_idx(ctx)?;
-            Type::DefVal(Box::from(DefValType::Borrow(ctx.validator.get_type(idx)?)))
+            let ty = ctx.validator.get_type(idx)?;
+            if !ty.is_resource_type() {
+                return Err(ComponentParseError::TypeMismatch(
+                    "borrow type must have a resource type".to_string(),
+                ));
+            }
+            Type::DefVal(Box::from(DefValType::Borrow(ty)))
         }
         #[cfg(feature = "component-gated-feature-async")]
         DEFVALTYPE_STREAM => {
@@ -196,19 +210,30 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<Type
         COMPONENT_TYPE => Type::Component(parse_component_type(ctx)?.1),
         INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?.1),
         RESOURCE_TYPE => {
+            assert_eq!(ctx.reader.read_exact_one()?, 0x7f);
             if let Some(idx) = parse_option(ctx, parse_func_idx)? {
                 let ty = ctx.validator.get_func_type(idx)?;
-                ty.assert_type(vec![ValType::Primitive(PrimValType::S32)], None)?;
+                ty.assert_type(
+                    vec![ValType::Primitive(PrimValType::S32)],
+                    None,
+                    "resource destructor function type is not correct",
+                )?;
                 Type::Resource(ResourceType::Resource(Some(ty), None))
             } else {
                 Type::Resource(ResourceType::Resource(None, None))
             }
         }
         RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
+            assert_eq!(ctx.reader.read_exact_one()?, 0x7f);
             let func = {
                 let idx = parse_func_idx(ctx)?;
                 ctx.validator.get_func_type(idx)?
             };
+            func.assert_type(
+                vec![ValType::Primitive(PrimValType::S32)],
+                None,
+                "resource destructor function type is not correct",
+            )?;
             let cb = if let Some(idx) = parse_option(ctx, parse_func_idx)? {
                 Some(ctx.validator.get_func_type(idx)?)
             } else {

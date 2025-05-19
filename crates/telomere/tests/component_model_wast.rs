@@ -28,3 +28,13 @@ fn component_variant() {
 fn component_valtype() {
     run_test_file("valtype");
 }
+
+#[test]
+fn component_resource() {
+    run_test_file("resource");
+}
+
+#[test]
+fn component_instance_type() {
+    run_test_file("instancetype");
+}
