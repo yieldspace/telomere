@@ -1,5 +1,7 @@
 use std::{
-    fs, hint::black_box, time::{Duration, Instant}
+    fs,
+    hint::black_box,
+    time::{Duration, Instant},
 };
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
