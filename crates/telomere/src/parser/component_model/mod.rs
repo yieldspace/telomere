@@ -4,29 +4,20 @@ use crate::WasmParserError;
 use std::ops::Range;
 use tracing::trace;
 
-pub use crate::component_model::section::*;
-pub use alias::*;
+use crate::component_model::ComponentSection;
 pub use component::parse_component;
 pub use context::ParseContext;
 pub use core::*;
 pub use error::ComponentParseError;
 pub use idx::*;
-pub use instance::*;
-pub use name::*;
-pub use sort::*;
-pub use types::*;
-pub use validator::{LocalStore, Validator};
+pub use validator::{Validator, ValidatorState};
 
-mod alias;
-mod canon;
 mod component;
 mod context;
-mod core;
 mod error;
 mod export;
 mod idx;
 mod import;
-mod instance;
 mod name;
 mod sort;
 mod types;
@@ -68,23 +59,23 @@ pub fn parse_layer<R: BinaryReader>(reader: &mut R) -> Result<(), ComponentParse
 
 pub fn parse_section_type<R: BinaryReader>(
     reader: &mut R,
-) -> Result<Option<ComponentSectionType>, ComponentParseError> {
+) -> Result<Option<ComponentSection>, ComponentParseError> {
     if let Some(kind) = reader.read_one()? {
         match kind {
-            0x00 => Ok(Some(ComponentSectionType::Custom)),
-            0x01 => Ok(Some(ComponentSectionType::CoreModule)),
-            0x02 => Ok(Some(ComponentSectionType::CoreInstance)),
-            0x03 => Ok(Some(ComponentSectionType::CoreType)),
-            0x04 => Ok(Some(ComponentSectionType::Component)),
-            0x05 => Ok(Some(ComponentSectionType::Instance)),
-            0x06 => Ok(Some(ComponentSectionType::Alias)),
-            0x07 => Ok(Some(ComponentSectionType::Type)),
-            0x08 => Ok(Some(ComponentSectionType::Canon)),
-            0x09 => Ok(Some(ComponentSectionType::Start)),
-            0x0a => Ok(Some(ComponentSectionType::Import)),
-            0x0b => Ok(Some(ComponentSectionType::Export)),
+            0x00 => Ok(Some(ComponentSection::Custom)),
+            0x01 => Ok(Some(ComponentSection::CoreModule)),
+            0x02 => Ok(Some(ComponentSection::CoreInstance)),
+            0x03 => Ok(Some(ComponentSection::CoreType)),
+            0x04 => Ok(Some(ComponentSection::Component)),
+            0x05 => Ok(Some(ComponentSection::Instance)),
+            0x06 => Ok(Some(ComponentSection::Alias)),
+            0x07 => Ok(Some(ComponentSection::Type)),
+            0x08 => Ok(Some(ComponentSection::Canon)),
+            0x09 => Ok(Some(ComponentSection::Start)),
+            0x0a => Ok(Some(ComponentSection::Import)),
+            0x0b => Ok(Some(ComponentSection::Export)),
             #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            0x0c => Ok(Some(ComponentSectionType::Value)),
+            0x0c => Ok(Some(ComponentSection::Value)),
             _ => Err(ComponentParseError::InvalidSectionType(kind)),
         }
     } else {

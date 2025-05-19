@@ -16,6 +16,8 @@ num-traits = "0.2.19"
 regex.workspace = true
 once_cell = "1.21.3"
 semver = "1.0.26"
+union-find.workspace = true
+typed-arena = "2.0.2"
 telomere-macros.workspace = true
 futures = { version = "0.3.31", optional = true }
 tokio = { workspace = true, optional = true }

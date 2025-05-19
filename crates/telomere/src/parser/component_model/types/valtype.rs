@@ -1,0 +1,27 @@
+use crate::binary::BinaryReader;
+use crate::component_model::types::{PrimValType, Type, ValType};
+use crate::component_model::LocalIdx;
+use crate::parser::component_model::types::is_type_opcode;
+use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
+use crate::parser::core::parse_i32;
+use num_traits::FromPrimitive;
+
+pub fn parse_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<ValType> {
+    let (_, value) = parse_i32(ctx.reader)?;
+    if is_type_opcode(value) {
+        Ok(ValType::Primitive(PrimValType::from_i32(value).unwrap()))
+    } else {
+        let tid = ctx
+            .validator
+            .scope()
+            .types
+            .get(LocalIdx::new(value as u32))?;
+        let ty = ctx.validator.scope_mut().get_type(tid)?;
+        let Type::DefVal(_) = ty else {
+            return Err(ComponentParseError::TypeMismatch(
+                "the typeidx of valtype must refer to defvaltype".to_string(),
+            ));
+        };
+        Ok(ValType::Type(tid))
+    }
+}

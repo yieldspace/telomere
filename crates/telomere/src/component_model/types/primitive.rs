@@ -1,7 +1,7 @@
 use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
 
-#[derive(Debug, FromPrimitive, Clone, PartialEq)]
+#[derive(Debug, FromPrimitive, Clone, Hash, PartialEq, Eq)]
 #[repr(i32)]
 pub enum PrimValType {
     Bool = compile_i32([0x7f]),

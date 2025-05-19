@@ -1,26 +1,14 @@
-use crate::component_model::{Case, Label, LabelValType, PrimValType, Type};
+use crate::component_model::types::{PrimValType, TypeId};
+use crate::component_model::Label;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub enum ValType {
-    Type(Box<DefValType>),
+    Type(TypeId),
     Primitive(PrimValType),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum DefValType {
-    Primitive(PrimValType),
-    Record(Vec<LabelValType>),
-    Variant(Vec<Case>),
-    List(ValType, Option<usize>),
-    Tuple(Vec<ValType>),
-    Flags(Vec<Label>),
-    Enum(Vec<Label>),
-    Option(ValType),
-    Result(Option<ValType>, Option<ValType>),
-    Own(Type),
-    Borrow(Type),
-    #[cfg(feature = "component-gated-feature-async")]
-    Stream(Option<ValType>),
-    #[cfg(feature = "component-gated-feature-async")]
-    Future(Option<ValType>),
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+pub struct LabelValType {
+    label: Label,
+    ty: ValType,
 }
