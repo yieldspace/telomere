@@ -3,9 +3,7 @@ use crate::{
     runtime::{memory_effect::WriteOperation, vm::load_internal},
 };
 use telomere_macros::define_simd_operation;
-#[allow(unused_imports)]
-use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u32x4, u8x16};
-use wide::{u16x8, u64x2};
+use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::{
     common::{stack::StackOperation, ExecuteContext, Instr},

@@ -26,7 +26,7 @@ macro_rules! wait_effct {
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ResultValue(Vec<WasmValue>);
 impl ResultValue {
     pub fn new(args: Vec<WasmValue>) -> Self {

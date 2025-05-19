@@ -369,7 +369,7 @@ pub union Instr {
 }
 unsafe impl Send for Instr {}
 unsafe impl Sync for Instr {}
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WasmValue {
     I32(i32),
     I64(i64),
