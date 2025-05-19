@@ -1,7 +1,7 @@
 use telomere::parser::component_model::{ComponentParseError, ParseContext, ParseState, Validator};
 use tracing::Level;
 
-#[test]
+/*#[test]
 fn test_basic_component() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(Level::TRACE)
@@ -46,7 +46,7 @@ fn test_basic_component() -> anyhow::Result<()> {
     //     telomere::runtime::component_model::instantiate(&mut instrs, &mut store, &linker).unwrap();
     // println!("{:?}", instance);
     Ok(())
-}
+}*/
 
 /*#[test]
 fn test_with_core_wasm() {

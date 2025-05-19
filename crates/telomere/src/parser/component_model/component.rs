@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::Type;
+use crate::component_model::types::{ComponentType, Type};
 use crate::component_model::{ComponentSection, Relation};
 use crate::parser::component_model::export::parse_export;
 use crate::parser::component_model::import::parse_import;
@@ -18,13 +18,16 @@ pub fn parse_component(
     validator: &mut Validator,
 ) -> Result<(), ComponentParseError> {
     let mut ctx = ParseContext::new(reader, state, validator);
+    ctx.validator.push_scope();
     _parse_component(&mut ctx)?;
+    ctx.validator.pop_scope();
     Ok(())
 }
 
 pub fn _parse_component(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
+    tracing::trace!("_parse_component");
     parse_magic(ctx.reader)?;
     parse_version(ctx.reader)?;
     parse_layer(ctx.reader)?;
@@ -50,10 +53,13 @@ pub fn _parse_component(
                 }
                 let scope = ctx.validator.scope();
                 let component = ctx.state.scope().make_component();
-                
+
                 ctx.validator.pop_scope();
                 ctx.state.pop_scope();
-                // todo(type) ここでcomponent登録
+                ctx.validator.new_type(Type::Component(ComponentType{
+                    exports: component.exports, // TODO:
+                    imports: component.imports // TODO:
+                }));
                 let idx = ctx
                     .state
                     .component_store
@@ -75,7 +81,7 @@ pub fn _parse_component(
                     parse_instance(ctx)?;
                 }
             }
-            _ => todo!(),
+            v => todo!("unimplemented: {:?}", v),
         }
     }
     Ok(())

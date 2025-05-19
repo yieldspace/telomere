@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+
+use tracing::Level;
 mod common;
 fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -41,5 +43,6 @@ fn component_instance_type() {
 
 #[test]
 fn component_instance() {
+    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("instance");
 }

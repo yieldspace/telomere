@@ -1,4 +1,5 @@
 use crate::component_model::{ExportName, ImportName};
+use crate::parser::component_model::{ComponentParseError, ParseResult};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
@@ -26,8 +27,6 @@ impl ResourceId {
     }
 }
 
-
-
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TypeId(usize);
 
@@ -35,5 +34,14 @@ impl TypeId {
     pub fn new() -> Self {
         static TYPE_ID: AtomicUsize = AtomicUsize::new(0);
         Self(TYPE_ID.fetch_add(1, Ordering::Relaxed))
+    }
+    pub fn assert_subtype_of(self, parent: TypeId) -> ParseResult<()> {
+        if self == parent {
+            Ok(())
+        } else {
+            Err(ComponentParseError::TypeMismatch(
+                "type id mismatch".to_owned(),
+            ))
+        }
     }
 }

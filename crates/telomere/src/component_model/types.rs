@@ -81,8 +81,10 @@ impl Type {
                     ))
                 }
             }
-            (Type::Component(a), Type::Component(b)) => {
-            }
+            (Type::Component(a), Type::Component(b)) => a.assert_subtype_of(b, validator),
+            _ => Err(ComponentParseError::TypeMismatch(
+                "resource kind mismatch".to_owned(),
+            )),
         }
     }
 }
@@ -106,15 +108,73 @@ impl Generic {
 #[derive(Clone)]
 pub enum GenericBound {
     Eq(TypeId),
-    Sub(ResourceId),
+    Sub,
 }
-
+impl GenericBound {
+    pub fn assert_subtype_of(
+        &self,
+        parent: &GenericBound,
+        validator: &Validator,
+    ) -> ParseResult<()> {
+        match (self, parent) {
+            (GenericBound::Eq(a), GenericBound::Eq(b)) => a.assert_subtype_of(*b)?,
+            (GenericBound::Eq(type_id), GenericBound::Sub) => {
+                if !validator.get_type(*type_id)?.is_resource() {
+                    Err(ComponentParseError::TypeMismatch(
+                        "expected any resource".to_owned(),
+                    ))?
+                }
+            }
+            (GenericBound::Sub, GenericBound::Eq(_type_id)) => {
+                Err(ComponentParseError::TypeMismatch(
+                    "sub resource cannot assign to except sub resource".to_owned(),
+                ))?
+            }
+            (GenericBound::Sub, GenericBound::Sub) => {
+                // ok
+            }
+        };
+        Ok(())
+    }
+}
 #[derive(Clone)]
 pub struct ComponentType {
     pub imports: HashMap<String, Generic>,
     pub exports: HashMap<String, ComponentExportType>,
 }
-
+impl ComponentType {
+    pub fn assert_subtype_of(
+        &self,
+        parent: &ComponentType,
+        validator: &Validator,
+    ) -> ParseResult<()> {
+        if self.imports.len() > parent.imports.len() {
+            Err(ComponentParseError::TypeMismatch(
+                "import count mismatch".to_owned(),
+            ))?
+        }
+        for (child_entry_name, child_ty) in &self.imports {
+            let parent_ty = parent.imports.get(child_entry_name).ok_or_else(|| {
+                ComponentParseError::TypeMismatch("import name mismatch".to_owned())
+            })?;
+            child_ty
+                .bound
+                .assert_subtype_of(&parent_ty.bound, validator)?
+        }
+        if parent.exports.len() > self.exports.len()  {
+            Err(ComponentParseError::TypeMismatch(
+                "export count mismatch".to_owned(),
+            ))?
+        }
+        for (parent_entry_name, expected_ty) in &parent.exports {
+            let actual_ty = self.exports.get(parent_entry_name).ok_or_else(|| {
+                ComponentParseError::TypeMismatch("import name mismatch".to_owned())
+            })?;
+            expected_ty.cv_type(validator)?.assert_subtype_of(&actual_ty.cv_type(validator)?, validator)?;
+        }
+        Ok(())
+    }
+}
 #[derive(Clone)]
 pub enum ComponentExportType {
     Component(TypeId),
@@ -140,7 +200,6 @@ impl ComponentExportType {
             ),
         }
     }
-
 }
 #[derive(Clone)]
 pub struct InstanceType {
