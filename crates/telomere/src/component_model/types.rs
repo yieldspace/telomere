@@ -163,7 +163,7 @@ impl ComponentType {
                 .bound
                 .assert_subtype_of(&parent_ty.bound, validator)?
         }
-        if parent.exports.len() > self.exports.len()  {
+        if parent.exports.len() > self.exports.len() {
             Err(ComponentParseError::TypeMismatch(
                 "export count mismatch".to_owned(),
             ))?
@@ -172,7 +172,9 @@ impl ComponentType {
             let actual_ty = self.exports.get(parent_entry_name).ok_or_else(|| {
                 ComponentParseError::TypeMismatch("import name mismatch".to_owned())
             })?;
-            expected_ty.cv_type(validator)?.assert_subtype_of(&actual_ty.cv_type(validator)?, validator)?;
+            expected_ty
+                .cv_type(validator)?
+                .assert_subtype_of(&actual_ty.cv_type(validator)?, validator)?;
         }
         Ok(())
     }

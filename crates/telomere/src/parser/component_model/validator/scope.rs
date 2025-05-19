@@ -43,7 +43,10 @@ impl ScopeGuard {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn make_component(&self) -> ComponentType{
-        ComponentType { imports: HashMap::new() , exports: HashMap::new() } // TODO: 
+    pub fn make_component(&self) -> ComponentType {
+        ComponentType {
+            imports: HashMap::new(),
+            exports: HashMap::new(),
+        } // TODO:
     }
 }

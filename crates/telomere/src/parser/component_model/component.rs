@@ -70,8 +70,11 @@ pub fn _parse_component(
                 ctx.state.pop_scope();
 
                 let component_type_id = ctx.validator.new_type(Type::Component(component_ty));
-                ctx.validator.scope_mut().component_indexes.add(component_type_id);
-                
+                ctx.validator
+                    .scope_mut()
+                    .component_indexes
+                    .add(component_type_id);
+
                 let idx = ctx
                     .state
                     .component_store
