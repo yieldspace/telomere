@@ -7,7 +7,6 @@ authors.workspace = true
 keywords.workspace = true
 
 
-
 [dependencies]
 wide = { version = "0.7.32", optional = true }
 thiserror = "2.0.11"
@@ -18,21 +17,21 @@ regex.workspace = true
 once_cell = "1.21.3"
 semver = "1.0.26"
 telomere-macros.workspace = true
-futures ={ version = "0.3.31",optional = true }
+futures = { version = "0.3.31", optional = true }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.19" }
-wast = {version = "229.0.0", features = ["component-model"]}
+wast = { version = "229.0.0", features = ["component-model"] }
 wat = "1.228.0"
 anyhow = "1.0.98"
-criterion = { version = "0.3", features = ["async_tokio"]}
+criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 [[bench]]
 name = "telomere_bench"
 harness = false
 
 [features]
-default = ["interpreter", "simd","async-runtime"]
+default = ["interpreter", "simd", "async-runtime"]
 interpreter = []
 simd = ["wide"]
 async-runtime = ["tokio", "futures"]

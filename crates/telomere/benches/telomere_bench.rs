@@ -1,9 +1,8 @@
 use std::{
-    fs,
-    time::{Duration, Instant},
+    fs, hint::black_box, time::{Duration, Instant}
 };
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use telomere::{ResultValue, WasmValue};
 use tokio::runtime::Runtime;
 
@@ -15,8 +14,9 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let mut parser = telomere::WasmParser::new(&mut reader);
     let module = parser.parse_module().unwrap();
     let rt = Runtime::new().unwrap();
-
-    c.bench_function("fib", |b| {
+    let mut group = c.benchmark_group("criterion_benchmark");
+    group.sampling_mode(SamplingMode::Flat);
+    group.bench_function("fib", |b| {
         b.to_async(&rt).iter_custom(|iters| {
             let module = module.clone();
             async move {
@@ -48,6 +48,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             }
         })
     });
+    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);
