@@ -50,7 +50,7 @@ pub fn _parse_component(
                 }
                 let scope = ctx.validator.scope();
                 let component = ctx.state.scope().make_component();
-                
+
                 ctx.validator.pop_scope();
                 ctx.state.pop_scope();
                 // todo(type) ここでcomponent登録

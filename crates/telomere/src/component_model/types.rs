@@ -81,8 +81,7 @@ impl Type {
                     ))
                 }
             }
-            (Type::Component(a), Type::Component(b)) => {
-            }
+            (Type::Component(a), Type::Component(b)) => {}
         }
     }
 }
@@ -140,7 +139,6 @@ impl ComponentExportType {
             ),
         }
     }
-
 }
 #[derive(Clone)]
 pub struct InstanceType {
