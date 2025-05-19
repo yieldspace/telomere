@@ -1,6 +1,7 @@
-use crate::component_model::types::Type;
+use crate::component_model::types::{ComponentType, Type};
 use crate::component_model::{Component, Func, GlobalIdx, Instance, LocalIdx, TypeId};
 use crate::parser::component_model::ParseResult;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 pub struct TypeStore<T> {
@@ -41,5 +42,8 @@ impl<T> TypeStore<T> {
 impl ScopeGuard {
     pub fn new() -> Self {
         Self::default()
+    }
+    pub fn make_component(&self) -> ComponentType{
+        ComponentType { imports: HashMap::new() , exports: HashMap::new() } // TODO: 
     }
 }

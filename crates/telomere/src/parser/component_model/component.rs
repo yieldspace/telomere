@@ -51,15 +51,15 @@ pub fn _parse_component(
                     let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
                     _parse_component(&mut ctx)?;
                 }
-                let scope = ctx.validator.scope();
+                let component_ty = ctx.validator.scope().make_component();
                 let component = ctx.state.scope().make_component();
 
                 ctx.validator.pop_scope();
                 ctx.state.pop_scope();
-                ctx.validator.new_type(Type::Component(ComponentType{
-                    exports: component.exports, // TODO:
-                    imports: component.imports // TODO:
-                }));
+
+                let component_type_id = ctx.validator.new_type(Type::Component(component_ty));
+                ctx.validator.scope_mut().component_indexes.add(component_type_id);
+                
                 let idx = ctx
                     .state
                     .component_store
