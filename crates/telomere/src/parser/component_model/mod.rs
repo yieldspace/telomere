@@ -12,8 +12,10 @@ pub use error::ComponentParseError;
 pub use idx::*;
 pub use validator::{ParseState, Validator};
 
+mod alias;
 mod component;
 mod context;
+mod core;
 mod error;
 mod export;
 mod idx;
@@ -23,7 +25,6 @@ mod name;
 mod sort;
 mod types;
 mod validator;
-mod alias;
 
 pub use validator::ScopeGuard;
 

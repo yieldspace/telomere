@@ -46,3 +46,8 @@ fn component_instance() {
     tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("instance");
 }
+
+#[test]
+fn component_core() {
+    run_test_file("core");
+}

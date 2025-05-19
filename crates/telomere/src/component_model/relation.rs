@@ -1,4 +1,12 @@
-use crate::component_model::{GlobalIdx, Instance, PlaceholderId};
+use crate::component_model::{CoreInstance, GlobalIdx, Instance, PlaceholderId};
+
+pub enum CoreRelation<T> {
+    Defined(T),
+    ImportModule(PlaceholderId),
+    /// Only core module
+    FromExport(GlobalIdx<Instance>, PlaceholderId),
+    FromCoreExport(GlobalIdx<CoreInstance>, PlaceholderId),
+}
 
 #[derive(Clone, Debug)]
 pub enum Relation<T> {

@@ -1,20 +1,22 @@
-use component_model::LocalIdx;
-use component_model::types::CoreType;
 use crate::binary::BinaryReader;
-use crate::component_model::Instance;
+use crate::component_model::{CoreInstance, CoreModule, Instance, LocalIdx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::ParseResult;
 use crate::parser::core::parse_u32;
 
-// pub fn parse_core_module_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx> {
-//     let (_, idx) = parse_u32(ctx.reader)?;
-//     ctx.validator.validate_core_module_idx(idx)
-// }
+pub fn parse_core_module_local_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> ParseResult<LocalIdx<CoreModule>> {
+    let (_, idx) = parse_u32(ctx.reader)?;
+    Ok(LocalIdx::new(idx))
+}
 
-// pub fn parse_core_instance_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx<Instance>> {
-//     let (_, idx) = parse_u32(ctx.reader)?;
-//     ctx.validator.validate_core_instance_idx(idx)
-// }
+pub fn parse_core_instance_local_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> ParseResult<LocalIdx<CoreInstance>> {
+    let (_, idx) = parse_u32(ctx.reader)?;
+    Ok(LocalIdx::new(idx))
+}
 
 // pub fn parse_core_func_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<LocalIdx> {
 //     let (_, idx) = parse_u32(ctx.reader)?;
