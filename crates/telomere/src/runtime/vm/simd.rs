@@ -184,18 +184,7 @@ pub unsafe fn op_i8x16_extract_lane_s(
     vm_try!(ctx.stack.push_i32(value));
     call_next(tail_code, 1, ctx)
 }
-pub unsafe fn op_i8x16_eq(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let b = ctx.stack.pop_u128();
-    let a = ctx.stack.pop_u128();
-    let a_bytes = a.to_le_bytes();
-    let b_bytes = b.to_le_bytes();
-    let mut result = [0u8; 16];
-    for i in 0..16 {
-        result[i] = ((a_bytes[i] == b_bytes[i]) as u8) * 0xFF;
-    }
-    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
-    call_next(tail_code, 0, ctx)
-}
+
 pub unsafe fn v128_not(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     vm_try!(ctx.stack.push_u128(!b));
@@ -559,6 +548,16 @@ define_unary_simd_operation!(avgr, [u8x16], |a, b| {
     }
     res.into()
 });
+
+define_unary_simd_operation!(avgr, [u16x8], |a, b| {
+    let mut res = [0u16; 8];
+    let a = a.to_array();
+    let b = b.to_array();
+    for i in 0..8 {
+        res[i] = ((a[i] as u32 + b[i] as u32 + 1) / 2) as u16;
+    }
+    res.into()
+});
 define_binary_simd_operation!(popcnt, [u8x16], |a| {
     let mut res = [0u8; 16];
     let a = a.to_array();
@@ -568,14 +567,17 @@ define_binary_simd_operation!(popcnt, [u8x16], |a| {
     res.into()
 });
 
-define_unary_simd_operation!(add, [f32x4, f64x2, i8x16, i32x4, i64x2], |a, b| a + b);
-define_unary_simd_operation!(add_sat, [i8x16, u8x16], |a, b| a.saturating_add(b));
-define_unary_simd_operation!(sub, [f32x4, f64x2, i8x16, i32x4], |a, b| a - b);
-define_unary_simd_operation!(sub_sat, [i8x16, u8x16], |a, b| a.saturating_sub(b));
-define_unary_simd_operation!(mul, [f32x4, f64x2, i32x4], |a, b| a * b);
+define_unary_simd_operation!(add, [f32x4, f64x2, i8x16, i16x8, i32x4, i64x2], |a, b| a
+    + b);
+define_unary_simd_operation!(add_sat, [i8x16, u8x16, i16x8, u16x8], |a, b| a
+    .saturating_add(b));
+define_unary_simd_operation!(sub, [f32x4, f64x2, i8x16, i16x8, i32x4], |a, b| a - b);
+define_unary_simd_operation!(sub_sat, [i8x16, u8x16, i16x8, u16x8], |a, b| a
+    .saturating_sub(b));
+define_unary_simd_operation!(mul, [f32x4, f64x2, i16x8, i32x4], |a, b| a * b);
 define_unary_simd_operation!(div, [f32x4, f64x2], |a, b| a / b);
 define_unary_simd_operation!(swizzle, [i8x16], |a, b| a.swizzle(b));
-define_unary_simd_operation!(min, [i8x16, u8x16], |a, b| a.min(b));
+define_unary_simd_operation!(min, [i8x16, u8x16, i16x8, u16x8], |a, b| a.min(b));
 define_unary_simd_operation!(min, [f32x4], |a, b| {
     let aa = a.to_array();
     let bb = b.to_array();
@@ -629,7 +631,7 @@ define_unary_simd_operation!(min, [f64x2], |a, b| {
     f64x2::from(result)
 });
 
-define_unary_simd_operation!(max, [i8x16, u8x16], |a, b| a.max(b));
+define_unary_simd_operation!(max, [i8x16, u8x16, i16x8, u16x8], |a, b| a.max(b));
 define_unary_simd_operation!(max, [f32x4], |a, b| {
     let aa = a.to_array();
     let bb = b.to_array();
@@ -772,7 +774,7 @@ define_unary_simd_operation!(pmax, [f64x2], |a, b| {
     f64x2::from(result)
 });
 
-define_binary_simd_operation!(abs, [f64x2, f32x4, i32x4, i8x16], |a| a.abs());
+define_binary_simd_operation!(abs, [f64x2, f32x4, i32x4, i8x16, i16x8], |a| a.abs());
 define_binary_simd_operation!(ceil, [f64x2, f32x4], |a| a.ceil());
 define_binary_simd_operation!(floor, [f64x2, f32x4], |a| a.floor());
 define_binary_simd_operation!(trunc, [f32x4], |a| {
@@ -820,7 +822,13 @@ pub unsafe fn i8x16_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     vm_try!(ctx.stack.push(a.bitxor(-i8x16::ONE) + i8x16::ONE));
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn i16x8_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    use std::ops::BitXor;
+    let a: i16x8 = ctx.stack.pop();
 
+    vm_try!(ctx.stack.push(a.bitxor(-i16x8::ONE) + i16x8::ONE));
+    call_next(tail_code, 0, ctx)
+}
 define_binary_simd_operation!(sqrt, [f64x2, f32x4], |a| a.sqrt());
 use std::ops::Not;
 use wide::CmpEq;
@@ -851,15 +859,95 @@ macro_rules! define_simd_cmp_operation {
     };
 }
 
-define_unary_simd_operation!(eq, [f32x4, f64x2, i8x16], |a, b| a.cmp_eq(b));
+define_unary_simd_operation!(eq, [f32x4, f64x2, i8x16, i16x8], |a, b| a.cmp_eq(b));
 define_unary_simd_operation!(ne, [f32x4, f64x2], |a, b| a.cmp_ne(b));
-define_unary_simd_operation!(ne, [i8x16], |a, b| a.cmp_eq(b).not());
+define_unary_simd_operation!(ne, [i8x16, i16x8], |a, b| a.cmp_eq(b).not());
 define_unary_simd_operation!(lt, [f32x4, f64x2], |a, b| a.cmp_lt(b));
-define_simd_cmp_operation!(lt, [i8x16, u8x16], |a, b| a < b);
+define_simd_cmp_operation!(lt, [i8x16, u8x16, i16x8, u16x8], |a, b| a < b);
 
 define_unary_simd_operation!(gt, [f32x4, f64x2], |a, b| a.cmp_gt(b));
-define_simd_cmp_operation!(gt, [i8x16, u8x16], |a, b| a > b);
+define_simd_cmp_operation!(gt, [i8x16, u8x16, i16x8, u16x8], |a, b| a > b);
 define_unary_simd_operation!(le, [f32x4, f64x2], |a, b| a.cmp_le(b));
-define_simd_cmp_operation!(le, [i8x16, u8x16], |a, b| a <= b);
+define_simd_cmp_operation!(le, [i8x16, u8x16, i16x8, u16x8], |a, b| a <= b);
 define_unary_simd_operation!(ge, [f32x4, f64x2], |a, b| a.cmp_ge(b));
-define_simd_cmp_operation!(ge, [i8x16, u8x16], |a, b| a >= b);
+define_simd_cmp_operation!(ge, [i8x16, u8x16, i16x8, u16x8], |a, b| a >= b);
+pub unsafe fn i16x8_extadd_pairwise_i8x16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let mut res = [0i16; 8];
+    let a: i8x16 = ctx.stack.pop();
+    let a = a.to_array();
+    for i in 0..8 {
+        res[i] = a[i * 2] as i16 + a[i * 2 + 1] as i16;
+    }
+    vm_try!(ctx.stack.push(i16x8::from(res)));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn u16x8_extadd_pairwise_i8x16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let mut res = [0u16; 8];
+    let a: u8x16 = ctx.stack.pop();
+    let a = a.to_array();
+    for i in 0..8 {
+        res[i] = a[i * 2] as u16 + a[i * 2 + 1] as u16;
+    }
+    vm_try!(ctx.stack.push(u16x8::from(res)));
+    call_next(tail_code, 0, ctx)
+}
+define_unary_simd_operation!(q15mulr_sat_s, [i16x8], |a, b| a.mul_scale_round(b));
+fn extend_low_i8x16_to_i16x8(input: i8x16) -> i16x8 {
+    let arr = input.to_array();
+    let mut extended = [0i16; 8];
+    for i in 0..8 {
+        extended[i] = arr[i] as i16;
+    }
+    i16x8::from(extended)
+}
+fn extend_high_i8x16_to_i16x8(input: i8x16) -> i16x8 {
+    let arr = input.to_array();
+    let mut extended = [0i16; 8];
+    for i in 0..8 {
+        extended[i] = arr[i + 8] as i16;
+    }
+    i16x8::from(extended)
+}
+pub unsafe fn i16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a: i8x16 = ctx.stack.pop();
+    let b: i8x16 = ctx.stack.pop();
+
+    let a = extend_low_i8x16_to_i16x8(a);
+    let b = extend_low_i8x16_to_i16x8(b);
+    vm_try!(ctx.stack.push(a * b));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn i16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a: i8x16 = ctx.stack.pop();
+    let b: i8x16 = ctx.stack.pop();
+
+    let a = extend_high_i8x16_to_i16x8(a);
+    let b = extend_high_i8x16_to_i16x8(b);
+    vm_try!(ctx.stack.push(a * b));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn u16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a: u8x16 = ctx.stack.pop();
+    let b: u8x16 = ctx.stack.pop();
+
+    let a = u16x8::from_u8x16_low(a);
+    let b = u16x8::from_u8x16_low(b);
+    vm_try!(ctx.stack.push(a * b));
+    call_next(tail_code, 0, ctx)
+}
+pub unsafe fn u16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let a: u8x16 = ctx.stack.pop();
+    let b: u8x16 = ctx.stack.pop();
+
+    let a = u16x8::from_u8x16_high(a);
+    let b = u16x8::from_u8x16_high(b);
+    vm_try!(ctx.stack.push(a * b));
+    call_next(tail_code, 0, ctx)
+}
