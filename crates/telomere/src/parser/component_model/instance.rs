@@ -1,122 +1,120 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{
-    ExportName, GlobalIdx, ImportName, Instance, InstantiateArg, Relation, SortWithIdx,
+use crate::component_model::types::{
+    ComponentExportType, ComponentType, Generic, GenericBound, Type,
 };
-use crate::parser::component_model::context::ParseContext;
-use crate::parser::component_model::idx::parse_component_idx;
-use crate::parser::component_model::{parse_export_name, parse_import_name, SizedResult};
-use crate::parser::component_model::{parse_sort_with_idx, ComponentParseError};
+use crate::component_model::{ImportName, Instance, InstanceImport, PlaceholderId, Relation, Sort};
+use crate::parser::component_model::name::parse_import_name;
+use crate::parser::component_model::sort::parse_sort_with_idx;
+use crate::parser::component_model::{
+    parse_component_local_idx, ComponentParseError, ParseContext, ParseResult, SizedResult,
+};
 use crate::parser::core::parse_vec;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use tracing::trace;
 
-pub fn parse_instance(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<GlobalIdx<Instance>> {
+pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     trace!("parse instance");
-    let start_count = ctx.reader.read_count();
 
     match ctx.reader.read_exact_one()? {
-        0x00 => {
-            let component_idx = parse_component_idx(ctx)?;
-            let (_, args) = parse_vec(ctx, |v| v.reader, parse_instantiate_arg)?;
-            let args = args
-                .into_iter()
-                .map(|InstantiateArg { name, sort }| (name, sort))
-                .collect::<HashMap<ImportName, SortWithIdx>>();
-            let component = ctx.validator.get_component_type(component_idx)?;
-            trace!("parsed instance for {:?}", component);
-            if args.len() != component.imports.len() {
-                return Err(ComponentParseError::InvalidSignature(format!(
-                    "Invalid number of args: {}",
-                    args.len()
-                )));
-            }
-            let mut imports = HashMap::new();
-            for (import_name, _) in component.imports.iter() {
-                trace!("parse_instance imports for {}", import_name);
-                // todo: check ty and arg type
-                let arg = args.get(import_name).expect("export not found");
-                imports.insert(import_name.clone(), arg.clone().try_into()?);
-            }
-            let value = Instance {
-                component_idx: Some(ctx.validator.get_global_component(component_idx)?),
-                imports,
-                exports: component.exports,
-            };
-            let ty = value.as_type();
-            let idx = ctx.validator.add_instance_type(ty)?;
-            let global_idx = GlobalIdx::new();
-            ctx.state
-                .register_instance(global_idx, Relation::Defined(value));
-            ctx.validator.register_global_instance(idx, global_idx)?;
-            // ctx.push_instr(InstantiateInstr {
-            //     op: instantiate_instance_start,
-            // });
-            // ctx.push_instr(InstantiateInstr {
-            //     operand: InstantiateOperand {
-            //         instance_idx: idx.global(),
-            //     },
-            // });
-            // todo: instantiateしている間にやる
-            // let instrs = ctx.validator.get_component(&component_idx).instrs.clone();
-            // ctx.extend_instr(instrs.into_iter());
-            // ctx.push_instr(InstantiateInstr {
-            //     op: instantiate_instance_end,
-            // });
-            Ok((ctx.reader.read_count() - start_count, global_idx))
-        }
-        0x01 => {
-            let (_, exports) = parse_vec(ctx, |v| v.reader, parse_inlineexport)?;
-            let value = Instance {
-                component_idx: None,
-                imports: Default::default(),
-                exports: {
-                    let mut exs = HashMap::new();
-                    for (name, sort) in exports {
-                        exs.insert(name, sort.try_into()?);
-                    }
-                    exs
-                },
-            };
-            let ty = value.as_type();
-            let idx = ctx.validator.add_instance_type(ty)?;
-            let global_idx = GlobalIdx::new();
-            ctx.state
-                .register_instance(global_idx, Relation::Defined(value));
-            ctx.validator.register_global_instance(idx, global_idx)?;
-            // ctx.push_instr(InstantiateInstr {
-            //     op: instantiate_inline_instance,
-            // });
-            // ctx.push_instr(InstantiateInstr {
-            //     operand: InstantiateOperand {
-            //         instance_idx: idx.global(),
-            //     },
-            // });
-            Ok((ctx.reader.read_count() - start_count, global_idx))
-        }
-        _ => unreachable!(),
+        0x00 => parse_instantiate(ctx),
+        0x01 => parse_inlineexport(ctx),
+        _ => panic!(),
     }
 }
 
-fn parse_instantiate_arg(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<InstantiateArg> {
-    let start_count = ctx.reader.read_count();
+fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
+    trace!("parse instantiate");
+    let component_lid = parse_component_local_idx(ctx)?;
+    let (_, args) = parse_vec(ctx, |c| c.reader, parse_instantiate_arg)?;
+    if args
+        .iter()
+        .map(|v| &v.0.original)
+        .collect::<HashSet<_>>()
+        .len()
+        != args.len()
+    {
+        Err(ComponentParseError::TypeMismatch(
+            "Duplicated target import name".to_owned(),
+        ))?
+    }
+    let component_gid = ctx.state.scope().components.get(component_lid)?;
+    let instance = Instance {
+        component_idx: Some(component_gid),
+        imports: args
+            .iter()
+            .filter_map(|(name, sort)| match sort {
+                Sort::Component(idx, _) => {
+                    (PlaceholderId::new(name), InstanceImport::Component(*idx)).into()
+                }
+                Sort::Instance(idx, _) => {
+                    (PlaceholderId::new(name), InstanceImport::Instance(*idx)).into()
+                }
+                Sort::Func(idx, _) => (PlaceholderId::new(name), InstanceImport::Func(*idx)).into(),
+                Sort::Type(_) => None,
+            })
+            .collect(),
+        exports: Default::default(),
+    };
+    let instance_gid = ctx
+        .state
+        .instance_store
+        .register(Relation::Defined(instance));
+    ctx.state.scope_mut().instances.register(instance_gid);
+    let component_tid = ctx
+        .validator
+        .scope_mut()
+        .component_indexes
+        .get(component_lid)?;
+    let component_ty = ctx.validator.get_component_type(component_tid)?;
 
-    let name = parse_import_name(ctx)?;
-    let (_, sort) = parse_sort_with_idx(ctx)?;
-    trace!("parse_instantiate_arg name: {name}");
-    Ok((
-        ctx.reader.read_count() - start_count,
-        InstantiateArg { name, sort },
-    ))
+    for (name, sort) in &args {
+        let component_def = component_ty.imports.get(&name.original).ok_or_else(|| {
+            ComponentParseError::TypeMismatch(
+                "The component does not have an import with that name".to_owned(),
+            )
+        })?;
+        let b = ctx.validator.get_type(sort.type_id())?;
+
+        match (b, component_def) {
+            (
+                Type::Resource(_),
+                Generic {
+                    id: _,
+                    bound: GenericBound::Sub,
+                },
+            ) => (), // TODO: handle new resource type id
+            (
+                a,
+                Generic {
+                    id: _,
+                    bound: GenericBound::Eq(b),
+                },
+            ) => {
+                a.assert_subtype_of(ctx.validator.get_type(*b)?, ctx.validator)?;
+            }
+            _ => Err(ComponentParseError::TypeMismatch(
+                "expected resource".to_owned(),
+            ))?,
+        }
+    }
+    // todo check type and generics, create new instance type
+
+    Ok(())
 }
 
-fn parse_inlineexport(
+fn parse_instantiate_arg(
     ctx: &mut ParseContext<impl BinaryReader>,
-) -> SizedResult<(ExportName, SortWithIdx)> {
+) -> SizedResult<(ImportName, Sort)> {
     let start_count = ctx.reader.read_count();
-
-    let name = parse_export_name(ctx)?;
-    let (_, sort) = parse_sort_with_idx(ctx)?;
+    trace!("parse instantiate arg");
+    let name = parse_import_name(ctx)?;
+    let sort = parse_sort_with_idx(ctx)?;
     Ok((ctx.reader.read_count() - start_count, (name, sort)))
+}
+
+fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
+    trace!("parse inline export");
+    todo!();
+    Ok(())
 }

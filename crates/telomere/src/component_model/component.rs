@@ -1,62 +1,26 @@
-use crate::component_model::{
-    ComponentType, CoreModule, CoreModuleType, ExportName, Func, FuncType, GlobalIdx, ImportName,
-    Instance, InstanceType, Type,
-};
-use crate::runtime::component_model::instantiate::InstantiateInstr;
-use std::collections::HashMap;
+use crate::component_model::sort::Sort;
+use crate::component_model::{ExportName, GlobalIdx, ImportName, Instance, PlaceholderId, TypeId};
+use std::collections::{HashMap, HashSet};
 
-#[derive(Clone)]
-pub struct InlineComponent {
-    pub(crate) instrs: Vec<InstantiateInstr>,
-    pub(crate) imports: HashMap<ImportName, ComponentImport>,
-    pub(crate) exports: HashMap<ExportName, ComponentExport>,
+#[derive(Debug, Clone)]
+pub struct Component {
+    pub(crate) imports: HashMap<PlaceholderId, ComponentImport>,
+    pub(crate) exports: HashMap<PlaceholderId, ComponentExport>,
 }
+
 #[derive(Debug, Clone)]
 pub enum ComponentImport {
-    CoreModule(CoreModuleType, GlobalIdx<CoreModule>),
-    Func(FuncType, GlobalIdx<Func>),
-    #[cfg(feature = "component-gated-feature-value-imports-exports")]
-    Value,
-    Type(Type),
-    Component(ComponentType, GlobalIdx<InlineComponent>),
-    Instance(InstanceType, GlobalIdx<Instance>),
-}
-
-impl ComponentImport {
-    pub fn is_func(&self) -> bool {
-        matches!(self, ComponentImport::Func(_, _))
-    }
-
-    pub fn is_resource_type(&self) -> bool {
-        if let Self::Type(ty) = self {
-            ty.is_resource_type()
-        } else {
-            false
-        }
-    }
+    Component,
+    Instance,
+    Func,
+    Resource,
 }
 
 #[derive(Debug, Clone)]
 pub enum ComponentExport {
-    CoreModule(CoreModuleType, GlobalIdx<CoreModule>),
-    Func(FuncType, GlobalIdx<Func>),
-    #[cfg(feature = "component-gated-feature-value-imports-exports")]
-    Value,
-    Type(Type),
-    Component(ComponentType, GlobalIdx<InlineComponent>),
-    Instance(InstanceType, GlobalIdx<Instance>),
-}
-
-impl ComponentExport {
-    pub fn is_func(&self) -> bool {
-        matches!(self, ComponentExport::Func(_, _))
-    }
-
-    pub fn is_resource_type(&self) -> bool {
-        if let Self::Type(ty) = self {
-            ty.is_resource_type()
-        } else {
-            false
-        }
-    }
+    Component,
+    Instance,
+    Func,
+    Type,
+    Resource,
 }

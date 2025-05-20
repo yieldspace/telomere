@@ -1,66 +1,71 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentImport, ExternDesc, GlobalIdx, ImportName, Relation};
+use crate::component_model::types::{Generic, GenericBound};
+use crate::component_model::{ComponentImport, ExternDesc, PlaceholderId, Relation, StrongUnique};
 use crate::parser::component_model::name::parse_import_name_dash;
-use crate::parser::component_model::{parse_externdesc, ParseContext, ParseResult};
+use crate::parser::component_model::types::parse_externdesc;
+use crate::parser::component_model::{ParseContext, ParseResult};
 
-pub fn parse_import(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<(ImportName, ComponentImport)> {
+use super::ComponentParseError;
+
+pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     let name = parse_import_name_dash(ctx)?;
-    let ed = parse_externdesc(ctx)?;
-    let import = match ed {
-        ExternDesc::CoreModule(ty) => {
-            let idx = ctx.validator.add_core_module_type(ty.clone())?;
-            let global_idx = GlobalIdx::new();
+    let focus = ctx.validator.scope_mut();
+    for existing in &focus.import_names {
+        if existing.weak_eq(&name.parsed) {
+            Err(ComponentParseError::InvalidImportName(
+                "import is redundant defined".to_owned(),
+            ))?;
+        }
+    }
+    focus.import_names.push(name.parsed.clone());
+    let desc = parse_externdesc(ctx)?;
+    match desc {
+        ExternDesc::Component(type_id) => {
+            let global_idx = ctx
+                .state
+                .component_store
+                .register(Relation::Import(PlaceholderId::new(&name)));
+            let focus = ctx.state.scope_mut();
+            focus.add_import(&name, ComponentImport::Component);
+            focus.components.register(global_idx);
+
+            let focus = ctx.validator.scope_mut();
+            focus.component_indexes.add(type_id);
+            focus
+                .imports
+                .insert(name.original, Generic::new(GenericBound::Eq(type_id)));
+        }
+        ExternDesc::Instance(_) => {
+            // todo register type
             ctx.state
-                .register_core_module(global_idx, Relation::Import(name.clone()));
-            ctx.validator.register_global_core_module(idx, global_idx)?;
-            // let global_idx = ctx.validator.get_global_core_module(idx)?;
-            // ctx.push_instr(InstantiateInstr {
-            //     op: instantiate_import_core_module,
-            // });
-            ComponentImport::CoreModule(ty, global_idx)
-        }
-        ExternDesc::Func(ty) => {
-            let idx = ctx.validator.add_func_type(ty.clone())?;
-            let global_idx = GlobalIdx::new();
+                .scope_mut()
+                .add_import(&name, ComponentImport::Instance);
             ctx.state
-                .register_func(global_idx, Relation::Import(name.clone()));
-            ctx.validator.register_global_func(idx, global_idx)?;
-            ComponentImport::Func(ty, global_idx)
+                .instance_store
+                .register(Relation::Import(PlaceholderId::new(&name)));
         }
-        #[cfg(feature = "component-gated-feature-value-imports-exports")]
-        ExternDesc::Value(_) => todo!(),
-        ExternDesc::Type(ty) => {
-            // let idx = match bound {
-            //     TypeBound::Eq(idx) => ctx.validator.add_type(Binding::Real(Type::Referenced(
-            //         Box::new(Type::Eq(idx)),
-            //         Reference::Imported(name.clone()),
-            //     )))?,
-            //     TypeBound::Sub => ctx.validator.add_type(Binding::Real(Type::Referenced(
-            //         Box::new(Type::UniqueResource),
-            //         Reference::Imported(name.clone()),
-            //     )))?,
-            // };
-            ctx.validator.add_type(ty.clone())?;
-            ComponentImport::Type(ty)
+        ExternDesc::Eq(_) => {
+            // todo register type
         }
-        ExternDesc::Component(ty) => {
-            let idx = ctx.validator.add_component_type(ty.clone())?;
-            let global_idx = GlobalIdx::new();
-            ctx.state
-                .register_component(global_idx, Relation::Import(name.clone()));
-            ctx.validator.register_global_component(idx, global_idx)?;
-            ComponentImport::Component(ty, global_idx)
+        ExternDesc::Sub => {
+            // todo register type
         }
-        ExternDesc::Instance(ty) => {
-            let idx = ctx.validator.add_instance_type(ty.clone())?;
-            let global_idx = GlobalIdx::new();
-            ctx.state
-                .register_instance(global_idx, Relation::Import(name.clone()));
-            ctx.validator.register_global_instance(idx, global_idx)?;
-            ComponentImport::Instance(ty, global_idx)
+        ExternDesc::Func(type_id) => {
+            let global_idx = ctx
+                .state
+                .func_store
+                .register(Relation::Import(PlaceholderId::new(&name)));
+
+            let focus = ctx.state.scope_mut();
+            focus.add_import(&name, ComponentImport::Func);
+            focus.funcs.register(global_idx);
+
+            let focus = ctx.validator.scope_mut();
+            focus.func_indexes.add(type_id);
+            focus
+                .imports
+                .insert(name.original, Generic::new(GenericBound::Eq(type_id)));
         }
-    };
-    Ok((name, import))
+    }
+    Ok(())
 }

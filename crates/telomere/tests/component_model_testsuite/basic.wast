@@ -9,11 +9,11 @@
     (component)
 )
 
-(component
-    (core module)
-)
+;;(component
+;;    (core module)
+;;)
 
-(component
-    (core module)
-    (core module)
-)
+;;(component
+;;    (core module)
+;;    (core module)
+;;)

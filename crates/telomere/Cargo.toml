@@ -16,6 +16,8 @@ num-traits = "0.2.19"
 regex.workspace = true
 once_cell = "1.21.3"
 semver = "1.0.26"
+union-find.workspace = true
+typed-arena = "2.0.2"
 telomere-macros.workspace = true
 futures = { version = "0.3.31", optional = true }
 tokio = { workspace = true, optional = true }
@@ -24,11 +26,12 @@ tokio = { workspace = true, optional = true }
 tracing-subscriber = { version = "0.3.19" }
 wast = { version = "229.0.0", features = ["component-model"] }
 wat = "1.228.0"
-anyhow = "1.0.98"
+anyhow = { version = "1.0.98", features = ["backtrace"] }
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 [[bench]]
 name = "telomere_bench"
 harness = false
+
 
 [features]
 default = ["interpreter", "simd", "async-runtime"]

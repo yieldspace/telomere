@@ -19,7 +19,7 @@
         (import "foo" (func (type 0)))
         (import "FOO" (func (type 0)))
     )
-    "import is redundant defined"
+    "Invalid import name: import is redundant defined"
 )
 
 (assert_invalid
@@ -28,7 +28,7 @@
         (import "foo-bar" (func (type 0)))
         (import "foo-BAR" (func (type 0)))
     )
-    "import is redundant defined"
+    "Invalid import name: import is redundant defined"
 )
 
 
@@ -38,7 +38,7 @@
         (import "a" (func (type 0)))
         (import "a" (func (type 0)))
     )
-    "import is redundant defined"
+    "Invalid import name: import is redundant defined"
 )
 
 (component

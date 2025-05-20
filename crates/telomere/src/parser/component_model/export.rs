@@ -1,60 +1,53 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentExport, CoreSortWithIdx, ExportName, SortWithIdx};
+use crate::component_model::{ComponentExport, ExternDesc, Sort, StrongUnique};
 use crate::parser::component_model::name::parse_export_name_dash;
-use crate::parser::component_model::{
-    parse_externdesc, parse_option, parse_sort_with_idx, ComponentParseError, ParseContext,
-    ParseResult,
-};
+use crate::parser::component_model::sort::parse_sort_with_idx;
+use crate::parser::component_model::types::parse_externdesc;
+use crate::parser::component_model::{parse_option, ParseContext, ParseResult};
 
-pub fn parse_export(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<(ExportName, ComponentExport)> {
+use super::ComponentParseError;
+
+pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     let name = parse_export_name_dash(ctx)?;
-    let (_, si) = parse_sort_with_idx(ctx)?;
-    let ed = parse_option(ctx, parse_externdesc)?;
-    let export = match si {
-        SortWithIdx::Core(CoreSortWithIdx::Module(idx, ty)) => {
-            let ty = if let Some(ed) = ed {
-                // todo: check ed is super type of ty
-                ed.try_into()?
-            } else {
-                ty
-            };
-            ComponentExport::CoreModule(ty, idx)
+    let focus = ctx.validator.scope_mut();
+    for existing in &focus.export_names {
+        if existing.weak_eq(&name.parsed) {
+            Err(ComponentParseError::InvalidExportName(
+                "duplicated".to_owned(),
+            ))?;
         }
-        SortWithIdx::Func(idx, ty) => {
-            let ty = if let Some(ed) = ed {
-                // todo: check ed is super type of ty
-                ed.try_into()?
-            } else {
-                ty
-            };
-            ComponentExport::Func(ty, idx)
+    }
+    focus.export_names.push(name.parsed.clone());
+
+    let si = parse_sort_with_idx(ctx)?;
+    let _ed = parse_option(ctx, parse_externdesc)?;
+    match si {
+        Sort::Type(id) => {
+            // todo(type) register type
+            Ok(())
         }
-        SortWithIdx::Type(ty) => ComponentExport::Type(ty),
-        SortWithIdx::Component(idx, ty) => {
-            let ty = if let Some(ed) = ed {
-                // todo: check ed is super type of ty
-                ed.try_into()?
-            } else {
-                ty
-            };
-            ComponentExport::Component(ty, idx)
+        Sort::Component(idx, tid) => {
+            ctx.state
+                .scope_mut()
+                .add_export(&name, ComponentExport::Component);
+            // todo(type) register type
+            Ok(())
         }
-        SortWithIdx::Instance(idx, ty) => {
-            let ty = if let Some(ed) = ed {
-                // todo: check ed is super type of ty
-                ed.try_into()?
-            } else {
-                ty
-            };
-            ComponentExport::Instance(ty, idx)
+        Sort::Instance(idx, tid) => {
+            ctx.state
+                .scope_mut()
+                .add_export(&name, ComponentExport::Instance);
+            ctx.state.scope_mut().instances.register(idx);
+            // todo(type) register type
+            Ok(())
         }
-        _ => {
-            return Err(ComponentParseError::InvalidSignature(format!(
-                "Invalid core type for export: {si:?}"
-            )));
+        Sort::Func(idx, _) => {
+            ctx.state
+                .scope_mut()
+                .add_export(&name, ComponentExport::Func);
+            ctx.state.scope_mut().funcs.register(idx);
+            // todo(type) register type
+            Ok(())
         }
-    };
-    Ok((name, export))
+    }
 }

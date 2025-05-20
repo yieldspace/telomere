@@ -1,4 +1,5 @@
-use crate::component_model::{CoreModuleExportType, CoreSort, Sort, SortWithIdx};
+use crate::component_model::types::{SortType, Type};
+use crate::component_model::{LocalIdx, TypeId};
 use crate::WasmParserError;
 use thiserror::Error;
 
@@ -35,16 +36,16 @@ pub enum ComponentParseError {
     ExportNotFound(String),
     #[error("core export `{0:?}` not found")]
     CoreExportNotFound(String),
-    #[error("Sort with idx `{0:?}` is invalid (expected {1})")]
-    InvalidSortWithIdx(SortWithIdx, String),
-    #[error("Sort `{0:?}` is invalid (expected {1})")]
-    InvalidSort(Sort, String),
+    // #[error("Sort with idx `{0:?}` is invalid (expected {1})")]
+    // InvalidSortWithIdx(SortWithIdx, String),
+    // #[error("Sort `{0:?}` is invalid (expected {1})")]
+    // InvalidSort(Sort, String),
     #[error("Index `{0:?}` is not found in {1}")]
     InvalidIdx(usize, String),
-    #[error("Expected {0} Type")]
+    #[error("{0}")]
     InvalidType(String),
-    #[error("Invalid core export `{0}` type: {1:?} != {2:?}")]
-    InvalidExportType(String, CoreModuleExportType, CoreSort),
+    // #[error("Invalid core export `{0}` type: {1:?} != {2:?}")]
+    // InvalidExportType(String, CoreModuleExportType, CoreSort),
     #[error("Unsupported: {0}")]
     Unsupported(String),
     #[error("{0}")]
@@ -57,6 +58,8 @@ pub enum ComponentParseError {
     InvalidExportName(String),
     #[error("import is redundant defined")]
     RedundantImport,
+    #[error("{0}")]
+    InvalidImport(String),
     #[error("Annotated function can use only for func import and export")]
     InvalidAnnotatedFn,
     #[error("Annotated function must have their resource type import or export")]
@@ -81,6 +84,18 @@ pub enum ComponentParseError {
     EmptyRecord,
     #[error("record field name is redundant defined")]
     RedundantRecordFieldName,
+    #[error("id is invalid")]
+    InvalidId,
+    #[error("type not found {0:?}")]
+    TypeNotFound(TypeId),
+    #[error("type idx not found {0:?}")]
+    TypeIdxNotFound(u32),
+    #[error("type data not found {0:?}")]
+    DataNotFound(TypeId),
+    #[error("sort type is invalid: expected {0:?}, found {1:?}")]
+    InvalidSortType(SortType, SortType),
+    #[error("the sort scope is invalid")]
+    InvalidScope,
 }
 
 impl ComponentParseError {

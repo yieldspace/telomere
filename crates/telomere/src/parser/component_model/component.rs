@@ -1,39 +1,35 @@
 use crate::binary::BinaryReader;
-use crate::component_model::section::ComponentSectionType;
-use crate::component_model::{
-    ComponentExport, ComponentImport, ComponentType, CoreModule, CoreModuleType, ExternDesc,
-    GlobalIdx, ImportName, InlineComponent, Relation,
-};
-use crate::parser::component_model::canon::parse_canon;
-use crate::parser::component_model::context::ParseContext;
-use crate::parser::component_model::core::parse_core_instance;
-use crate::parser::component_model::error::ComponentParseError;
+use crate::component_model::types::{ComponentType, Type};
+use crate::component_model::{ComponentSection, CoreModule, CoreRelation, Relation};
 use crate::parser::component_model::export::parse_export;
 use crate::parser::component_model::import::parse_import;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::types::parse_type;
+use crate::parser::component_model::validator::ParseState;
 use crate::parser::component_model::{
-    parse_alias, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,
-    Validator,
+    parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,
+    ComponentParseError, ParseContext, Validator,
 };
-use crate::parser::core::{parse_u32, parse_vec};
-use crate::runtime::component_model::instantiate::{instantiate_special_end, InstantiateInstr};
+use crate::parser::core::parse_u32;
 use crate::WasmParser;
-use std::collections::HashMap;
 
 pub fn parse_component(
-    ctx: &mut ParseContext<impl BinaryReader>,
+    reader: &mut impl BinaryReader,
+    state: &mut ParseState,
+    validator: &mut Validator,
 ) -> Result<(), ComponentParseError> {
-    _parse_component(ctx)?;
-    ctx.push_instr(InstantiateInstr {
-        op: instantiate_special_end,
-    });
+    tracing::trace!("parse_component_root");
+    let mut ctx = ParseContext::new(reader, state, validator);
+    ctx.validator.push_scope();
+    _parse_component(&mut ctx)?;
+    ctx.validator.pop_scope();
     Ok(())
 }
 
 pub fn _parse_component(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
+    tracing::trace!("_parse_component");
     parse_magic(ctx.reader)?;
     parse_version(ctx.reader)?;
     parse_layer(ctx.reader)?;
@@ -41,105 +37,67 @@ pub fn _parse_component(
     while let Some(st) = parse_section_type(ctx.reader)? {
         let (_, section_size) = parse_u32(ctx.reader)?;
         match st {
-            ComponentSectionType::Custom => {
-                parse_custom_section(ctx.reader, section_size as usize)?
+            ComponentSection::Custom => parse_custom_section(ctx.reader, section_size as usize)?,
+            ComponentSection::Type => {
+                for _ in parse_vec_range(ctx)? {
+                    let ty = parse_type(ctx)?;
+                    let id = ctx.validator.new_type(ty);
+                    ctx.validator.scope_mut().type_indexes.add(id);
+                }
             }
-            ComponentSectionType::CoreModule => {
+            ComponentSection::CoreModule => {
                 let mut sized_reader = ctx.reader.take(section_size as usize);
                 let mut core_module = WasmParser::new(&mut sized_reader);
                 let module = core_module.parse_module()?;
-                let ty = CoreModuleType::from_module(&module);
-                let idx = ctx.validator.add_core_module_type(ty)?;
-                let global_idx = GlobalIdx::new();
-                ctx.state
-                    .register_core_module(global_idx, Relation::Defined(CoreModule::new(module)));
-                ctx.validator.register_global_core_module(idx, global_idx)?
+                let idx = ctx
+                    .state
+                    .core_module_store
+                    .register(CoreRelation::Defined(CoreModule { module }));
+                ctx.state.scope_mut().core_modules.register(idx);
+                // todo(type) core module typeをregisterする
             }
-            ComponentSectionType::CoreInstance => parse_core_instance_section(ctx)?,
-            ComponentSectionType::CoreType => todo!(),
-            ComponentSectionType::Component => {
-                let mut sized_reader = ctx.reader.take(section_size as usize);
-                let validator = Validator::new_child(&ctx.validator);
-                let mut instrs = Vec::new();
-                let state = &mut ctx.state;
-                // 呼び出し結果を一旦保持し、`child_ctx` をスコープ外に出してから `?` を適用することで
-                // `validator` への可変参照を早期に解放し、後続の不変借用と競合しないようにする。
-                let validator = {
-                    let mut ctx =
-                        ParseContext::new(&mut sized_reader, &mut instrs, validator, state);
+            ComponentSection::Component => {
+                ctx.state.push_scope();
+                ctx.validator.push_scope();
+                {
+                    let mut sized_reader = ctx.reader.take(section_size as usize);
+                    let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
                     _parse_component(&mut ctx)?;
-                    ctx.validator
-                };
+                }
+                let component_ty = ctx.validator.scope().make_component();
+                let component = ctx.state.scope().make_component();
 
-                let (import_types, imports): (
-                    Vec<(ImportName, ExternDesc)>,
-                    Vec<(ImportName, ComponentImport)>,
-                ) = validator
-                    .get_imports()
-                    .into_iter()
-                    .map(|(name, import)| match &import {
-                        ComponentImport::CoreModule(ty, _) => (
-                            (name.clone(), ExternDesc::CoreModule(ty.clone())),
-                            (name, import),
-                        ),
-                        ComponentImport::Func(ty, _) => {
-                            ((name.clone(), ExternDesc::Func(ty.clone())), (name, import))
-                        }
-                        ComponentImport::Type(ty) => {
-                            ((name.clone(), ExternDesc::Type(ty.clone())), (name, import))
-                        }
-                        ComponentImport::Component(ty, _) => (
-                            (name.clone(), ExternDesc::Component(ty.clone())),
-                            (name, import),
-                        ),
-                        ComponentImport::Instance(ty, _) => (
-                            (name.clone(), ExternDesc::Instance(ty.clone())),
-                            (name, import),
-                        ),
-                    })
-                    .unzip();
-                let exports = validator.get_exports();
-                let export_types = exports
-                    .iter()
-                    .map(|(name, export)| match export {
-                        ComponentExport::CoreModule(ty, _) => {
-                            (name.clone(), ExternDesc::CoreModule(ty.clone()))
-                        }
-                        ComponentExport::Func(ty, _) => {
-                            (name.clone(), ExternDesc::Func(ty.clone()))
-                        }
-                        ComponentExport::Type(ty) => (name.clone(), ExternDesc::Type(ty.clone())),
-                        ComponentExport::Component(ty, _) => {
-                            (name.clone(), ExternDesc::Component(ty.clone()))
-                        }
-                        ComponentExport::Instance(ty, _) => {
-                            (name.clone(), ExternDesc::Instance(ty.clone()))
-                        }
-                    })
-                    .collect::<HashMap<_, _>>();
-                let mut ty = ComponentType::new();
-                ty.imports = HashMap::from_iter(import_types);
-                ty.exports = export_types;
-                let idx = ctx.validator.add_component_type(ty)?;
-                let component = InlineComponent {
-                    instrs,
-                    imports: HashMap::from_iter(imports),
-                    exports,
-                };
-                let global_idx = GlobalIdx::new();
-                ctx.state
-                    .register_component(global_idx, Relation::Defined(component));
-                ctx.validator.register_global_component(idx, global_idx)?;
+                ctx.validator.pop_scope();
+                ctx.state.pop_scope();
+
+                let component_type_id = ctx.validator.new_type(Type::Component(component_ty));
+                ctx.validator
+                    .scope_mut()
+                    .component_indexes
+                    .add(component_type_id);
+
+                let idx = ctx
+                    .state
+                    .component_store
+                    .register(Relation::Defined(component));
+                ctx.state.scope_mut().components.register(idx);
             }
-            ComponentSectionType::Instance => parse_instance_section(ctx)?,
-            ComponentSectionType::Alias => parse_alias_section(ctx)?,
-            ComponentSectionType::Type => parse_type_section(ctx)?,
-            ComponentSectionType::Canon => parse_canon_section(ctx)?,
-            ComponentSectionType::Start => todo!(),
-            ComponentSectionType::Import => parse_import_section(ctx)?,
-            ComponentSectionType::Export => parse_export_section(ctx)?,
-            #[cfg(feature = "component-gated-feature-value-imports-exports")]
-            ComponentSectionType::Value => todo!(),
+            ComponentSection::Export => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_export(ctx)?;
+                }
+            }
+            ComponentSection::Import => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_import(ctx)?;
+                }
+            }
+            ComponentSection::Instance => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_instance(ctx)?;
+                }
+            }
+            v => todo!("unimplemented: {:?}", v),
         }
     }
     Ok(())
@@ -153,107 +111,6 @@ fn parse_custom_section<R: BinaryReader>(
     // Custom section parsing logic
     for _ in 0..size {
         reader.read_exact_one()?;
-    }
-    Ok(())
-}
-
-#[inline]
-fn parse_core_instance_section(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> Result<(), ComponentParseError> {
-    // Core instance parsing logic
-    for _ in parse_vec_range(ctx)? {
-        let (_, (inst, ty)) = parse_core_instance(ctx)?;
-        let idx = ctx.validator.add_core_instance_type(ty)?;
-        let global_idx = GlobalIdx::new();
-        ctx.state
-            .register_core_instance(global_idx, Relation::Defined(inst));
-        ctx.validator
-            .register_global_core_instance(idx, global_idx)?;
-    }
-    Ok(())
-}
-
-#[inline]
-fn parse_instance_section(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> Result<(), ComponentParseError> {
-    // Core instance parsing logic
-    parse_vec(ctx, |v| v.reader, parse_instance)?;
-    Ok(())
-}
-
-#[inline]
-fn parse_alias_section(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> Result<(), ComponentParseError> {
-    // Alias parsing logic
-    parse_vec(ctx, |v| v.reader, parse_alias)?;
-    Ok(())
-}
-
-#[inline]
-fn parse_type_section(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> Result<(), ComponentParseError> {
-    // Type parsing logic
-    for _ in parse_vec_range(ctx)? {
-        let (_, ty) = parse_type(ctx)?;
-        ctx.validator.add_type(ty)?;
-    }
-    Ok(())
-}
-
-#[inline]
-fn parse_canon_section(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> Result<(), ComponentParseError> {
-    // Canon parsing logic
-    parse_vec(ctx, |v| v.reader, parse_canon)?;
-    Ok(())
-}
-
-#[inline]
-fn parse_import_section(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> Result<(), ComponentParseError> {
-    // Import parsing logic
-    for _ in parse_vec_range(ctx)? {
-        let (name, import) = parse_import(ctx)?;
-        ctx.validator.add_import(name, import)?;
-    }
-    Ok(())
-}
-
-#[inline]
-fn parse_export_section(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> Result<(), ComponentParseError> {
-    // Export parsing logic
-    for _ in parse_vec_range(ctx)? {
-        let (name, export) = parse_export(ctx)?;
-        match export.clone() {
-            ComponentExport::CoreModule(ty, idx) => {
-                let local = ctx.validator.add_core_module_type(ty)?;
-                ctx.validator.register_global_core_module(local, idx)?;
-            }
-            ComponentExport::Func(ty, idx) => {
-                let local = ctx.validator.add_func_type(ty)?;
-                ctx.validator.register_global_func(local, idx)?;
-            }
-            ComponentExport::Type(ty) => {
-                ctx.validator.add_type(ty)?;
-            }
-            ComponentExport::Component(ty, idx) => {
-                let local = ctx.validator.add_component_type(ty)?;
-                ctx.validator.register_global_component(local, idx)?;
-            }
-            ComponentExport::Instance(ty, idx) => {
-                let local = ctx.validator.add_instance_type(ty)?;
-                ctx.validator.register_global_instance(local, idx)?;
-            }
-        }
-        ctx.validator.add_export(name, export)?;
     }
     Ok(())
 }

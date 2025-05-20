@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+
+use tracing::Level;
 mod common;
 fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -16,6 +18,9 @@ fn component_basic() {
 
 #[test]
 fn component_import() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
     run_test_file("import");
 }
 
@@ -27,4 +32,24 @@ fn component_variant() {
 #[test]
 fn component_valtype() {
     run_test_file("valtype");
+}
+
+#[test]
+fn component_resource() {
+    run_test_file("resource");
+}
+
+#[test]
+fn component_instance_type() {
+    run_test_file("instancetype");
+}
+
+#[test]
+fn component_instance() {
+    run_test_file("instance");
+}
+
+#[test]
+fn component_core() {
+    run_test_file("core");
 }
