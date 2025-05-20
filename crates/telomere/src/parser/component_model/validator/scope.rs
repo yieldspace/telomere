@@ -1,6 +1,8 @@
 use crate::common::{ExportDesc, ImportDesc};
 use crate::component_model::types::{ComponentExportType, ComponentType, Generic, Type};
-use crate::component_model::{Component, Func, GlobalIdx, Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId};
+use crate::component_model::{
+    Component, Func, GlobalIdx, Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
+};
 use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;
 use std::marker::PhantomData;

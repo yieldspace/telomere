@@ -1,8 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{Generic, GenericBound};
-use crate::component_model::{
-    ComponentImport, ExternDesc, PlaceholderId, Relation, StrongUnique,
-};
+use crate::component_model::{ComponentImport, ExternDesc, PlaceholderId, Relation, StrongUnique};
 use crate::parser::component_model::name::parse_import_name_dash;
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{ParseContext, ParseResult};

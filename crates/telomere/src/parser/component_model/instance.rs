@@ -91,12 +91,11 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
                     bound: GenericBound::Eq(b),
                 },
             ) => {
-                a.assert_subtype_of(
-                    ctx.validator.get_type(*b)?,
-                    ctx.validator,
-                )?;
+                a.assert_subtype_of(ctx.validator.get_type(*b)?, ctx.validator)?;
             }
-            _ => Err(ComponentParseError::TypeMismatch("expected resource".to_owned()))?,
+            _ => Err(ComponentParseError::TypeMismatch(
+                "expected resource".to_owned(),
+            ))?,
         }
     }
     // todo check type and generics, create new instance type
