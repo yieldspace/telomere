@@ -44,6 +44,5 @@ fn component_instance_type() {
 
 #[test]
 fn component_instance() {
-    tracing_subscriber::fmt().with_max_level(Level::TRACE).init();
     run_test_file("instance");
 }

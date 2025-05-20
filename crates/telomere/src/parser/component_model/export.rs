@@ -1,12 +1,24 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentExport, ExternDesc, Sort};
+use crate::component_model::{ComponentExport, ExternDesc, Sort, StrongUnique};
 use crate::parser::component_model::name::parse_export_name_dash;
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{parse_option, ParseContext, ParseResult};
 
+use super::ComponentParseError;
+
 pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     let name = parse_export_name_dash(ctx)?;
+    let focus = ctx.validator.scope_mut();
+    for existing in &focus.export_names {
+        if existing.weak_eq(&name.parsed) {
+            Err(ComponentParseError::InvalidExportName(
+                "duplicated".to_owned(),
+            ))?;
+        }
+    }
+    focus.export_names.push(name.parsed.clone());
+
     let si = parse_sort_with_idx(ctx)?;
     let _ed = parse_option(ctx, parse_externdesc)?;
     match si {

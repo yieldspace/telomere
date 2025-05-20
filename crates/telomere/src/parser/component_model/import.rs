@@ -1,13 +1,25 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{Generic, GenericBound};
-use crate::component_model::{ComponentImport, ExternDesc, PlaceholderId, Relation};
+use crate::component_model::{
+    ComponentImport, ExternDesc, PlaceholderId, Relation, StrongUnique,
+};
 use crate::parser::component_model::name::parse_import_name_dash;
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{ParseContext, ParseResult};
-use tracing::trace;
+
+use super::ComponentParseError;
 
 pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     let name = parse_import_name_dash(ctx)?;
+    let focus = ctx.validator.scope_mut();
+    for existing in &focus.import_names {
+        if existing.weak_eq(&name.parsed) {
+            Err(ComponentParseError::InvalidImportName(
+                "import is redundant defined".to_owned(),
+            ))?;
+        }
+    }
+    focus.import_names.push(name.parsed.clone());
     let desc = parse_externdesc(ctx)?;
     match desc {
         ExternDesc::Component(type_id) => {
