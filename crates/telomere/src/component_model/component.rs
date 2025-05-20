@@ -1,11 +1,13 @@
 use crate::component_model::sort::Sort;
-use crate::component_model::{ExportName, GlobalIdx, ImportName, Instance, PlaceholderId, TypeId};
+use crate::component_model::{
+    ExportName, ExportNameString, GlobalIdx, ImportName, ImportNameString, Instance, TypeId,
+};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct Component {
-    pub(crate) imports: HashMap<PlaceholderId, ComponentImport>,
-    pub(crate) exports: HashMap<PlaceholderId, ComponentExport>,
+    pub(crate) imports: HashMap<ImportNameString, ComponentImport>,
+    pub(crate) exports: HashMap<ExportNameString, ComponentExport>,
 }
 
 #[derive(Debug, Clone)]

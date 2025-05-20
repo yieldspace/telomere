@@ -2,7 +2,7 @@ use crate::binary::BinaryReader;
 use crate::component_model::types::{
     ComponentType, CoreSortType, FuncType, InstanceType, SortType, Type,
 };
-use crate::component_model::{CoreRelation, LocalIdx, PlaceholderId, Relation};
+use crate::component_model::{CoreRelation, LocalIdx, Relation};
 use crate::parser::component_model::name::parse_export_name;
 use crate::parser::component_model::sort::parse_sort;
 use crate::parser::component_model::{
@@ -44,10 +44,10 @@ fn parse_export_alias(
                 imports: Default::default(),
                 exports: Default::default(),
             })); // todo(type) get type from instance export
-            let gidx = ctx.state.component_store.register(Relation::FromExport(
-                instance_gidx,
-                PlaceholderId::new(&name),
-            ));
+            let gidx = ctx
+                .state
+                .component_store
+                .register(Relation::FromExport(instance_gidx, name.original.clone()));
             ctx.state.scope_mut().components.register(gidx);
             ctx.validator.scope_mut().component_indexes.add(ty);
         }
@@ -56,10 +56,10 @@ fn parse_export_alias(
                 params: vec![],
                 result: None,
             })); // todo(type) get type from instance export
-            let gidx = ctx.state.func_store.register(Relation::FromExport(
-                instance_gidx,
-                PlaceholderId::new(&name),
-            ));
+            let gidx = ctx
+                .state
+                .func_store
+                .register(Relation::FromExport(instance_gidx, name.original.clone()));
             ctx.state.scope_mut().funcs.register(gidx);
             ctx.validator.scope_mut().func_indexes.add(ty);
         }
@@ -71,10 +71,10 @@ fn parse_export_alias(
             let ty = ctx.validator.new_type(Type::Instance(InstanceType {
                 exports: Default::default(),
             })); // todo(type) get type from instance export
-            let gidx = ctx.state.instance_store.register(Relation::FromExport(
-                instance_gidx,
-                PlaceholderId::new(&name),
-            ));
+            let gidx = ctx
+                .state
+                .instance_store
+                .register(Relation::FromExport(instance_gidx, name.original.clone()));
             ctx.state.scope_mut().instances.register(gidx);
             ctx.validator.scope_mut().instance_indexes.add(ty);
         }
@@ -84,7 +84,7 @@ fn parse_export_alias(
                 .core_module_store
                 .register(CoreRelation::FromExport(
                     instance_gidx,
-                    PlaceholderId::new(&name),
+                    name.original.clone(),
                 ));
             ctx.state.scope_mut().core_modules.register(gidx);
             // todo(type) add type
@@ -106,40 +106,28 @@ fn parse_core_export(
             let gidx = ctx
                 .state
                 .core_func_store
-                .register(CoreRelation::FromCoreExport(
-                    core_instance_gidx,
-                    PlaceholderId::new(&name),
-                ));
+                .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_funcs.register(gidx);
         }
         CoreSortType::Table => {
             let gidx = ctx
                 .state
                 .core_table_store
-                .register(CoreRelation::FromCoreExport(
-                    core_instance_gidx,
-                    PlaceholderId::new(&name),
-                ));
+                .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_tables.register(gidx);
         }
         CoreSortType::Memory => {
             let gidx = ctx
                 .state
                 .core_memory_store
-                .register(CoreRelation::FromCoreExport(
-                    core_instance_gidx,
-                    PlaceholderId::new(&name),
-                ));
+                .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_memories.register(gidx);
         }
         CoreSortType::Global => {
             let gidx = ctx
                 .state
                 .core_global_store
-                .register(CoreRelation::FromCoreExport(
-                    core_instance_gidx,
-                    PlaceholderId::new(&name),
-                ));
+                .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_globals.register(gidx);
         }
         CoreSortType::Type => {
@@ -149,20 +137,14 @@ fn parse_core_export(
             let gidx = ctx
                 .state
                 .core_module_store
-                .register(CoreRelation::FromCoreExport(
-                    core_instance_gidx,
-                    PlaceholderId::new(&name),
-                ));
+                .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_modules.register(gidx);
         }
         CoreSortType::Instance => {
             let gidx = ctx
                 .state
                 .core_instance_store
-                .register(CoreRelation::FromCoreExport(
-                    core_instance_gidx,
-                    PlaceholderId::new(&name),
-                ));
+                .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_instances.register(gidx);
         }
     }
