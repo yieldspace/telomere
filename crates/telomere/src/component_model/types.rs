@@ -1,4 +1,5 @@
 mod component_decl;
+mod core;
 mod defval;
 mod export_decl;
 mod func;
@@ -11,13 +12,14 @@ mod val;
 use crate::component_model::{ResourceId, TypeId};
 use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
 pub use component_decl::*;
+pub use core::*;
 pub use defval::*;
 pub use export_decl::*;
 pub use func::*;
 pub use import_decl::*;
 pub use instance_decl::*;
 pub use primitive::*;
-pub use sort::SortType;
+pub use sort::{CoreSortType, SortType};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 pub use val::*;
@@ -164,7 +166,7 @@ impl ComponentType {
                 .bound
                 .assert_subtype_of(&parent_ty.bound, validator)?
         }
-        if parent.exports.len() > self.exports.len()  {
+        if parent.exports.len() > self.exports.len() {
             Err(ComponentParseError::TypeMismatch(
                 "export count mismatch".to_owned(),
             ))?
@@ -173,7 +175,9 @@ impl ComponentType {
             let actual_ty = self.exports.get(parent_entry_name).ok_or_else(|| {
                 ComponentParseError::TypeMismatch("import name mismatch".to_owned())
             })?;
-            expected_ty.cv_type(validator)?.assert_subtype_of(&actual_ty.cv_type(validator)?, validator)?;
+            expected_ty
+                .cv_type(validator)?
+                .assert_subtype_of(&actual_ty.cv_type(validator)?, validator)?;
         }
         Ok(())
     }

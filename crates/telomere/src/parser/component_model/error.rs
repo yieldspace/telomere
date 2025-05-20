@@ -1,4 +1,4 @@
-use crate::component_model::types::Type;
+use crate::component_model::types::{SortType, Type};
 use crate::component_model::{LocalIdx, TypeId};
 use crate::WasmParserError;
 use thiserror::Error;
@@ -92,6 +92,10 @@ pub enum ComponentParseError {
     TypeIdxNotFound(u32),
     #[error("type data not found {0:?}")]
     DataNotFound(TypeId),
+    #[error("sort type is invalid: expected {0:?}, found {1:?}")]
+    InvalidSortType(SortType, SortType),
+    #[error("the sort scope is invalid")]
+    InvalidScope,
 }
 
 impl ComponentParseError {

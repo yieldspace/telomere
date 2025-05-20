@@ -46,3 +46,8 @@ fn component_instance_type() {
 fn component_instance() {
     run_test_file("instance");
 }
+
+#[test]
+fn component_core() {
+    run_test_file("core");
+}

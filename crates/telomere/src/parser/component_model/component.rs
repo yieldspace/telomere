@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{ComponentType, Type};
-use crate::component_model::{ComponentSection, Relation};
+use crate::component_model::{ComponentSection, CoreModule, CoreRelation, Relation};
 use crate::parser::component_model::export::parse_export;
 use crate::parser::component_model::import::parse_import;
 use crate::parser::component_model::instance::parse_instance;
@@ -11,6 +11,7 @@ use crate::parser::component_model::{
     ComponentParseError, ParseContext, Validator,
 };
 use crate::parser::core::parse_u32;
+use crate::WasmParser;
 
 pub fn parse_component(
     reader: &mut impl BinaryReader,
@@ -44,6 +45,17 @@ pub fn _parse_component(
                     ctx.validator.scope_mut().type_indexes.add(id);
                 }
             }
+            ComponentSection::CoreModule => {
+                let mut sized_reader = ctx.reader.take(section_size as usize);
+                let mut core_module = WasmParser::new(&mut sized_reader);
+                let module = core_module.parse_module()?;
+                let idx = ctx
+                    .state
+                    .core_module_store
+                    .register(CoreRelation::Defined(CoreModule { module }));
+                ctx.state.scope_mut().core_modules.register(idx);
+                // todo(type) core module typeをregisterする
+            }
             ComponentSection::Component => {
                 ctx.state.push_scope();
                 ctx.validator.push_scope();
@@ -59,8 +71,11 @@ pub fn _parse_component(
                 ctx.state.pop_scope();
 
                 let component_type_id = ctx.validator.new_type(Type::Component(component_ty));
-                ctx.validator.scope_mut().component_indexes.add(component_type_id);
-                
+                ctx.validator
+                    .scope_mut()
+                    .component_indexes
+                    .add(component_type_id);
+
                 let idx = ctx
                     .state
                     .component_store

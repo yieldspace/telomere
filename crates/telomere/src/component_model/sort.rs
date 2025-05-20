@@ -1,5 +1,10 @@
 use crate::component_model::idx::GlobalIdx;
-use crate::component_model::{Component, Func, Instance, TypeId};
+use crate::component_model::{Component, CoreModule, Func, Instance, TypeId};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CoreSort {
+    Module(GlobalIdx<CoreModule>),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sort {
