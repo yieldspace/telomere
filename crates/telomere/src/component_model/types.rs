@@ -47,6 +47,9 @@ impl Type {
     pub fn is_instance(&self) -> bool {
         matches!(self, Type::Instance(_))
     }
+    pub fn is_func(&self) -> bool {
+        matches!(self, Type::Func(_))
+    }
     pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
         match (self, parent) {
             (Type::DefVal(a), Type::DefVal(b)) => {

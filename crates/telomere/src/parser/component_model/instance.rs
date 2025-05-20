@@ -1,5 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{ComponentExportType, ComponentType, Type};
+use crate::component_model::types::{
+    ComponentExportType, ComponentType, Generic, GenericBound, Type,
+};
 use crate::component_model::{ImportName, Instance, InstanceImport, PlaceholderId, Relation, Sort};
 use crate::parser::component_model::name::parse_import_name;
 use crate::parser::component_model::sort::parse_sort_with_idx;
@@ -33,7 +35,7 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
         != args.len()
     {
         Err(ComponentParseError::TypeMismatch(
-            "Duplicated target export name".to_owned(),
+            "Duplicated target import name".to_owned(),
         ))?
     }
     let component_gid = ctx.state.scope().components.get(component_lid)?;
@@ -67,16 +69,34 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
     let component_ty = ctx.validator.get_component_type(component_tid)?;
 
     for (name, sort) in &args {
-        let component_def = component_ty.exports.get(&name.original).ok_or_else(|| {
+        let component_def = component_ty.imports.get(&name.original).ok_or_else(|| {
             ComponentParseError::TypeMismatch(
-                "The component does not have an export with that name".to_owned(),
+                "The component does not have an import with that name".to_owned(),
             )
         })?;
         let b = ctx.validator.get_type(sort.type_id())?;
 
         match (b, component_def) {
-            (Type::Resource(_), ComponentExportType::NewResource(_)) => (), // TODO: handle new resource type id
-            (a, b) => a.assert_subtype_of(&b.cv_type(ctx.validator)?, ctx.validator)?,
+            (
+                Type::Resource(_),
+                Generic {
+                    id: _,
+                    bound: GenericBound::Sub,
+                },
+            ) => (), // TODO: handle new resource type id
+            (
+                a,
+                Generic {
+                    id: _,
+                    bound: GenericBound::Eq(b),
+                },
+            ) => {
+                a.assert_subtype_of(
+                    ctx.validator.get_type(*b)?,
+                    ctx.validator,
+                )?;
+            }
+            _ => Err(ComponentParseError::TypeMismatch("expected resource".to_owned()))?,
         }
     }
     // todo check type and generics, create new instance type
