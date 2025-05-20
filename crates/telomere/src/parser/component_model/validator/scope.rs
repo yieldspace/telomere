@@ -1,4 +1,5 @@
-use crate::component_model::types::{ComponentType, Type};
+use crate::common::{ExportDesc, ImportDesc};
+use crate::component_model::types::{ComponentExportType, ComponentType, Generic, Type};
 use crate::component_model::{Component, Func, GlobalIdx, Instance, LocalIdx, TypeId};
 use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;
@@ -25,6 +26,8 @@ pub struct ScopeGuard {
     pub component_indexes: TypeStore<Component>,
     pub instance_indexes: TypeStore<Instance>,
     pub func_indexes: TypeStore<Func>,
+    pub imports: HashMap<String, Generic>,
+    pub exports: HashMap<String, ComponentExportType>,
 }
 
 impl<T> TypeStore<T> {
@@ -43,7 +46,10 @@ impl ScopeGuard {
     pub fn new() -> Self {
         Self::default()
     }
-    pub fn make_component(&self) -> ComponentType{
-        ComponentType { imports: HashMap::new() , exports: HashMap::new() } // TODO: 
+    pub fn make_component(&self) -> ComponentType {
+        ComponentType {
+            imports: self.imports.clone(),
+            exports: self.exports.clone(),
+        } // TODO:
     }
 }

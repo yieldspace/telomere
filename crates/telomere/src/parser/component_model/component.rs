@@ -17,6 +17,7 @@ pub fn parse_component(
     state: &mut ParseState,
     validator: &mut Validator,
 ) -> Result<(), ComponentParseError> {
+    tracing::trace!("parse_component_root");
     let mut ctx = ParseContext::new(reader, state, validator);
     ctx.validator.push_scope();
     _parse_component(&mut ctx)?;
