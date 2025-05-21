@@ -13,7 +13,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
     for existing in &focus.export_names {
         if existing.weak_eq(&name.parsed) {
             Err(ComponentParseError::InvalidExportName(
-                "duplicated".to_owned(),
+                "export is redundant defined".to_owned(),
             ))?;
         }
     }
