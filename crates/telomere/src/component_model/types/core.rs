@@ -18,6 +18,7 @@ pub enum CoreModuleExportType {
     Global(CoreGlobalType),
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum CoreModuleImportType {
     Func(CoreFuncType),
     Memory(CoreMemoryType),
@@ -37,7 +38,7 @@ pub enum CoreType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoreModuleType {
-    pub imports: HashMap<String, HashMap<String, crate::common::ImportDesc>>,
+    pub imports: HashMap<String, HashMap<String, CoreModuleImportType>>,
     pub exports: HashMap<String, CoreModuleExportType>,
 }
 
@@ -51,22 +52,28 @@ impl From<CoreModuleType> for CoreInstanceType {
 
 impl From<&Module> for CoreModuleType {
     fn from(value: &Module) -> Self {
-        let mut exports = HashMap::<String, HashMap<String, CoreModuleImportType>>::new();
+        let mut imports = HashMap::<String, HashMap<String, CoreModuleImportType>>::new();
         value.imports.0.iter().for_each(|x| {
             let value = match x.desc {
                 ImportDesc::TypeIdx(ref idx) => {
                     let ty = value.fts.0.get(idx.0 as usize).unwrap();
                     CoreModuleImportType::Func(ty.clone())
                 }
-                ImportDesc::TableType(_) => {}
-                ImportDesc::MemType(_) => {}
-                ImportDesc::GlobalType(_) => {}
+                ImportDesc::TableType(ref ty) => {
+                    CoreModuleImportType::Table(ty.clone())
+                }
+                ImportDesc::MemType(ref ty) => {
+                    CoreModuleImportType::Memory(ty.clone())
+                }
+                ImportDesc::GlobalType(ref ty) => {
+                    CoreModuleImportType::Global(ty.clone())
+                }
             };
-            if let Some(y) = exports.get_mut(&x.module) {
-                y.insert(x.name.clone(), x.desc.clone());
+            if let Some(y) = imports.get_mut(&x.module) {
+                y.insert(x.name.clone(), value);
             } else {
                 let mut map = HashMap::new();
-                map.insert(x.name.clone(), x.desc.clone());
+                map.insert(x.name.clone(), value);
             }
         });
         let exports = value.exs.0.iter().map(|x| (x.0.clone(), {
@@ -90,6 +97,10 @@ impl From<&Module> for CoreModuleType {
                 }
             }
         })).collect::<HashMap<_, _>>();
+        Self {
+            imports,
+            exports
+        }
     }
 }
 

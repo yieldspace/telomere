@@ -7,6 +7,7 @@ use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::validator::ParseState;
 use crate::parser::component_model::{parse_core_instance, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version, ComponentParseError, ParseContext, Validator};
+use crate::parser::component_model::alias::parse_alias;
 use crate::parser::core::parse_u32;
 use crate::WasmParser;
 
@@ -98,6 +99,11 @@ pub fn _parse_component(
             ComponentSection::Instance => {
                 for _ in parse_vec_range(ctx)? {
                     parse_instance(ctx)?;
+                }
+            }
+            ComponentSection::Alias => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_alias(ctx)?;
                 }
             }
             v => todo!("unimplemented: {:?}", v),

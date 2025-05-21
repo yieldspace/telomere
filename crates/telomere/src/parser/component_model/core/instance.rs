@@ -7,7 +7,7 @@ use crate::component_model::{
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::{
-    parse_core_instance_local_idx, parse_core_module_local_idx, parse_core_sort_type,
+    parse_core_instance_local_idx, parse_core_module_local_idx, parse_core_sort,
     parse_vec_range, ParseResult, SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};
@@ -84,7 +84,7 @@ pub fn parse_core_instance_inline_export(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<(String, CoreModuleExportType, CoreInstanceInlineExport)> {
     let (_, name) = parse_name(ctx.reader)?;
-    let sort = parse_core_sort_type(ctx)?;
+    let sort = parse_core_sort(ctx)?;
     let (_, idx) = parse_u32(ctx.reader)?;
     match sort {
         CoreSortType::Func => {
