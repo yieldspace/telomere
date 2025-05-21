@@ -211,6 +211,7 @@ impl InstanceType {
 #[derive(Clone)]
 pub enum InstanceExportType {
     CoreModule(CoreModuleType),
+    Func(TypeId),
     Component(TypeId),
     Instance(TypeId),
     Resource(ResourceId),

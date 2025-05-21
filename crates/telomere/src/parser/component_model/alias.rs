@@ -44,43 +44,41 @@ fn parse_export_alias(
     let export = instance_type.get_export(&name.original)?.clone();
     match sort {
         SortType::Component => {
-            let ty = ctx.validator.new_type(Type::Component(ComponentType {
-                imports: Default::default(),
-                exports: Default::default(),
-            })); // todo(type) get type from instance export
+            let InstanceExportType::Component(id) = export else {
+                return Err(ComponentParseError::InvalidSignature("alias type is mismatch".into()));
+            };
             let gidx = ctx
                 .state
                 .component_store
                 .register(Relation::FromExport(instance_gidx, name.original.clone()));
             ctx.state.scope_mut().components.register(gidx);
-            ctx.validator.scope_mut().component_indexes.add(ty);
+            ctx.validator.scope_mut().component_indexes.add(id);
         }
         SortType::Func => {
-            let ty = ctx.validator.new_type(Type::Func(FuncType {
-                params: vec![],
-                result: None,
-            })); // todo(type) get type from instance export
+            let InstanceExportType::Func(id) = export else {
+                return Err(ComponentParseError::InvalidSignature("alias type is mismatch".into()));
+            };
             let gidx = ctx
                 .state
                 .func_store
                 .register(Relation::FromExport(instance_gidx, name.original.clone()));
             ctx.state.scope_mut().funcs.register(gidx);
-            ctx.validator.scope_mut().func_indexes.add(ty);
+            ctx.validator.scope_mut().func_indexes.add(id);
         }
         SortType::Type => {
             let ty = todo!(); // todo(type) get type from instance export
             ctx.validator.scope_mut().type_indexes.add(ty);
         }
         SortType::Instance => {
-            let ty = ctx.validator.new_type(Type::Instance(InstanceType {
-                exports: Default::default(),
-            })); // todo(type) get type from instance export
+            let InstanceExportType::Instance(id) = export else {
+                return Err(ComponentParseError::InvalidSignature("alias type is mismatch".into()));
+            };
             let gidx = ctx
                 .state
                 .instance_store
                 .register(Relation::FromExport(instance_gidx, name.original.clone()));
             ctx.state.scope_mut().instances.register(gidx);
-            ctx.validator.scope_mut().instance_indexes.add(ty);
+            ctx.validator.scope_mut().instance_indexes.add(id);
         }
         SortType::Core(CoreSortType::Module) => {
             let gidx = ctx

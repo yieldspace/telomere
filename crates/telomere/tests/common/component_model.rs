@@ -30,7 +30,7 @@ pub fn run_component_wast(text: &str) {
             WastDirective::AssertInvalid {
                 span,
                 mut module,
-                message,
+                ..
             } => {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 if let Ok(source) = module.encode() {

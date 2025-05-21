@@ -55,7 +55,7 @@ pub fn _parse_component(
                     .state
                     .core_module_store
                     .register(CoreRelation::Defined(CoreModule { module }));
-                ctx.state.scope_mut().core_modules.register(idx); // todo(type) core module typeをregisterする
+                ctx.state.scope_mut().core_modules.register(idx);
                 ctx.validator.scope_mut().core_modules.add(ty);
             }
             ComponentSection::CoreInstance => {
