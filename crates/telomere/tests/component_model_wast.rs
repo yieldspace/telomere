@@ -18,12 +18,12 @@ fn component_basic() {
 
 #[test]
 fn component_import() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
     run_test_file("import");
 }
-
+#[test]
+fn component_export() {
+    run_test_file("export");
+}
 #[test]
 fn component_variant() {
     run_test_file("variant");
