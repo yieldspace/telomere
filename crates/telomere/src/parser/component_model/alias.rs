@@ -45,7 +45,9 @@ fn parse_export_alias(
     match sort {
         SortType::Component => {
             let InstanceExportType::Component(id) = export else {
-                return Err(ComponentParseError::InvalidSignature("alias type is mismatch".into()));
+                return Err(ComponentParseError::InvalidSignature(
+                    "alias type is mismatch".into(),
+                ));
             };
             let gidx = ctx
                 .state
@@ -56,7 +58,9 @@ fn parse_export_alias(
         }
         SortType::Func => {
             let InstanceExportType::Func(id) = export else {
-                return Err(ComponentParseError::InvalidSignature("alias type is mismatch".into()));
+                return Err(ComponentParseError::InvalidSignature(
+                    "alias type is mismatch".into(),
+                ));
             };
             let gidx = ctx
                 .state
@@ -71,7 +75,9 @@ fn parse_export_alias(
         }
         SortType::Instance => {
             let InstanceExportType::Instance(id) = export else {
-                return Err(ComponentParseError::InvalidSignature("alias type is mismatch".into()));
+                return Err(ComponentParseError::InvalidSignature(
+                    "alias type is mismatch".into(),
+                ));
             };
             let gidx = ctx
                 .state
