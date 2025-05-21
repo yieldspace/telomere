@@ -9,4 +9,5 @@
             (i32.const 42)
         )
     )
+    (core instance (instantiate 0))
 )
