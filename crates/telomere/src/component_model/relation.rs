@@ -1,18 +1,21 @@
-use crate::component_model::{CoreInstance, GlobalIdx, Instance, PlaceholderId};
+use crate::component_model::{CoreInstance, GlobalIdx, Instance};
+
+pub type ImportNameString = String;
+pub type ExportNameString = String;
 
 pub enum CoreRelation<T> {
     Defined(T),
-    ImportModule(PlaceholderId),
+    ImportModule(ImportNameString),
     /// Only core module
-    FromExport(GlobalIdx<Instance>, PlaceholderId),
-    FromCoreExport(GlobalIdx<CoreInstance>, PlaceholderId),
+    FromExport(GlobalIdx<Instance>, ExportNameString),
+    FromCoreExport(GlobalIdx<CoreInstance>, ExportNameString),
 }
 
 #[derive(Clone, Debug)]
 pub enum Relation<T> {
     Defined(T),
-    Import(PlaceholderId),
-    FromExport(GlobalIdx<Instance>, PlaceholderId),
+    Import(ImportNameString),
+    FromExport(GlobalIdx<Instance>, String),
 }
 
 impl<T> Relation<T> {
@@ -20,11 +23,11 @@ impl<T> Relation<T> {
         Relation::Defined(value)
     }
 
-    pub fn new_import(placeholder: PlaceholderId) -> Self {
+    pub fn new_import(placeholder: ImportNameString) -> Self {
         Relation::Import(placeholder)
     }
 
-    pub fn new_from_export(global_idx: GlobalIdx<Instance>, placeholder: PlaceholderId) -> Self {
+    pub fn new_from_export(global_idx: GlobalIdx<Instance>, placeholder: ExportNameString) -> Self {
         Relation::FromExport(global_idx, placeholder)
     }
 }

@@ -2,7 +2,7 @@ use crate::binary::BinaryReader;
 use crate::component_model::types::{
     ComponentExportType, ComponentType, Generic, GenericBound, Type,
 };
-use crate::component_model::{ImportName, Instance, InstanceImport, PlaceholderId, Relation, Sort};
+use crate::component_model::{ImportName, Instance, InstanceImport, Relation, Sort};
 use crate::parser::component_model::name::parse_import_name;
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::{
@@ -45,12 +45,12 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
             .iter()
             .filter_map(|(name, sort)| match sort {
                 Sort::Component(idx, _) => {
-                    (PlaceholderId::new(name), InstanceImport::Component(*idx)).into()
+                    (name.original.clone(), InstanceImport::Component(*idx)).into()
                 }
                 Sort::Instance(idx, _) => {
-                    (PlaceholderId::new(name), InstanceImport::Instance(*idx)).into()
+                    (name.original.clone(), InstanceImport::Instance(*idx)).into()
                 }
-                Sort::Func(idx, _) => (PlaceholderId::new(name), InstanceImport::Func(*idx)).into(),
+                Sort::Func(idx, _) => (name.original.clone(), InstanceImport::Func(*idx)).into(),
                 Sort::Type(_) => None,
             })
             .collect(),

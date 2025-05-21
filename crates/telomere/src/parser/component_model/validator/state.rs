@@ -1,7 +1,6 @@
 use crate::component_model::types::{CoreType, Type};
 use crate::component_model::{
     Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreRelation, CoreTable,
-    PlaceholderId,
 };
 use crate::component_model::{
     ComponentExport, ComponentImport, ExportName, Func, GlobalIdx, ImportName, Instance, LocalIdx,
@@ -32,8 +31,8 @@ pub struct Scope {
     pub core_globals: ValueLocalStore<CoreGlobal>,
     pub core_tables: ValueLocalStore<CoreTable>,
     pub core_types: ValueLocalStore<CoreType>,
-    pub imports: HashMap<PlaceholderId, ComponentImport>,
-    pub exports: HashMap<PlaceholderId, ComponentExport>,
+    pub imports: HashMap<String, ComponentImport>,
+    pub exports: HashMap<String, ComponentExport>,
 }
 
 pub struct ParseState<'a> {
@@ -141,10 +140,10 @@ impl Scope {
     }
 
     pub fn add_export(&mut self, name: &ExportName, export: ComponentExport) {
-        self.exports.insert(PlaceholderId::new(name), export);
+        self.exports.insert(name.original.clone(), export);
     }
 
     pub fn add_import(&mut self, name: &ImportName, import: ComponentImport) {
-        self.imports.insert(PlaceholderId::new(name), import);
+        self.imports.insert(name.original.clone(), import);
     }
 }
