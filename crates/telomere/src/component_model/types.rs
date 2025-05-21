@@ -53,13 +53,8 @@ impl Type {
     pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
         match (self, parent) {
             (Type::DefVal(a), Type::DefVal(b)) => {
-                if a == b {
-                    Ok(())
-                } else {
-                    Err(ComponentParseError::TypeMismatch(
-                        "val type mismatch".to_owned(),
-                    ))
-                }
+                a.assert_subtype_of(b, validator)?;
+                Ok(())
             }
             (Type::Generic(_), _) => {
                 todo!()
@@ -67,16 +62,7 @@ impl Type {
             (_, Type::Generic(_)) => {
                 todo!()
             }
-            (Type::Func(a), Type::Func(b)) => {
-                if a == b {
-                    // TODO:
-                    Ok(())
-                } else {
-                    Err(ComponentParseError::TypeMismatch(
-                        "func type mismatch".to_owned(),
-                    ))
-                }
-            }
+            (Type::Func(a), Type::Func(b)) => a.assert_subtype_of(b, validator),
             (Type::Resource(a), Type::Resource(b)) => {
                 if a == b {
                     Ok(())
@@ -131,6 +117,7 @@ impl GenericBound {
                 }
             }
             (GenericBound::Sub, GenericBound::Eq(_type_id)) => {
+                // FIMXE: sould retrive type_id and validate it?
                 Err(ComponentParseError::TypeMismatch(
                     "sub resource cannot assign to except sub resource".to_owned(),
                 ))?

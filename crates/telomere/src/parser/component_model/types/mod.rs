@@ -229,15 +229,29 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
                 }
             };
             Type::Func(FuncType {
-                params: ps,
+                params: ps.into_iter().map(|v| v.ty).collect(),
                 result: rs,
             })
         }
         COMPONENT_TYPE => Type::Component(parse_component_type(ctx)?),
         INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?),
         RESOURCE_TYPE => {
+            let magic = ctx.reader.read_exact_one()?;
+            if magic != 0x7f {
+                Err(ComponentParseError::WrongMagic(
+                    magic,
+                    "resource".to_string(),
+                ))?
+            }
             if let Some(idx) = parse_option(ctx, parse_func_local_idx)? {
-                let _ty = ctx.validator.scope().func_indexes.get(idx)?;
+                let ty = ctx.validator.scope().func_indexes.get(idx)?;
+                ctx.validator.get_type(ty)?.assert_subtype_of(
+                    &Type::Func(FuncType {
+                        params: vec![ValType::Primitive(PrimValType::S32)],
+                        result: None,
+                    }),
+                    ctx.validator,
+                )?;
                 // todo(type) assert type
                 // ty.assert_type(vec![ValType::Primitive(PrimValType::S32)], None)?;
                 Type::Resource(ResourceId::new())
