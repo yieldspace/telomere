@@ -1,5 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{CoreInstanceType, CoreModuleExportType, CoreSortType, InstanceType};
+use crate::component_model::types::{
+    CoreInstanceType, CoreModuleExportType, CoreSortType, InstanceType,
+};
 use crate::component_model::{
     CoreInstance, CoreInstanceInlineExport, CoreRelation, CoreSort, GlobalIdx, Instance, LocalIdx,
     Relation,
@@ -7,8 +9,8 @@ use crate::component_model::{
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::{
-    parse_core_instance_local_idx, parse_core_module_local_idx, parse_core_sort,
-    parse_vec_range, ParseResult, SizedResult,
+    parse_core_instance_local_idx, parse_core_module_local_idx, parse_core_sort, parse_vec_range,
+    ParseResult, SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};
 use std::collections::HashMap;
@@ -33,20 +35,20 @@ pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
                 CoreInstance::Defined {
                     module_idx: module_gidx,
                     imports,
-                }
+                },
             )
         }
         0x01 => {
             let mut exports = HashMap::new();
             let mut export_types = HashMap::new();
-            for _ in parse_vec_range(ctx)? { 
+            for _ in parse_vec_range(ctx)? {
                 let (name, ty, export) = parse_core_instance_inline_export(ctx)?;
                 exports.insert(name.clone(), export);
                 export_types.insert(name, ty);
             }
             (
                 CoreInstanceType {
-                    exports: export_types
+                    exports: export_types,
                 },
                 CoreInstance::InlineExport { exports },
             )
@@ -69,7 +71,12 @@ pub fn parse_core_instantiate_arg(
     let (_, name) = parse_name(ctx.reader)?;
     ComponentParseError::assert_magic([ctx.reader.read_exact_one()?], [0x12], "instantiate arg")?;
     let instance_idx = parse_core_instance_local_idx(ctx)?;
-    let ty = ctx.validator.scope().core_instances.get(instance_idx)?.clone();
+    let ty = ctx
+        .validator
+        .scope()
+        .core_instances
+        .get(instance_idx)?
+        .clone();
     Ok((
         ctx.reader.read_count() - start_count,
         (
@@ -88,37 +95,72 @@ pub fn parse_core_instance_inline_export(
     let (_, idx) = parse_u32(ctx.reader)?;
     match sort {
         CoreSortType::Func => {
-            let ty = ctx.validator.scope().core_funcs.get(LocalIdx::new(idx))?.clone();
+            let ty = ctx
+                .validator
+                .scope()
+                .core_funcs
+                .get(LocalIdx::new(idx))?
+                .clone();
             let idx = ctx.state.scope().core_funcs.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Func(idx)))
         }
         CoreSortType::Table => {
-            let ty = ctx.validator.scope().core_tables.get(LocalIdx::new(idx))?.clone();
+            let ty = ctx
+                .validator
+                .scope()
+                .core_tables
+                .get(LocalIdx::new(idx))?
+                .clone();
             let idx = ctx.state.scope().core_tables.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Table(idx)))
         }
         CoreSortType::Memory => {
-            let ty = ctx.validator.scope().core_memories.get(LocalIdx::new(idx))?.clone();
+            let ty = ctx
+                .validator
+                .scope()
+                .core_memories
+                .get(LocalIdx::new(idx))?
+                .clone();
             let idx = ctx.state.scope().core_memories.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Memory(idx)))
         }
         CoreSortType::Global => {
-            let ty = ctx.validator.scope().core_globals.get(LocalIdx::new(idx))?.clone();
+            let ty = ctx
+                .validator
+                .scope()
+                .core_globals
+                .get(LocalIdx::new(idx))?
+                .clone();
             let idx = ctx.state.scope().core_globals.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Global(idx)))
         }
         CoreSortType::Type => {
-            let ty = ctx.validator.scope().core_types.get(LocalIdx::new(idx))?.clone();
+            let ty = ctx
+                .validator
+                .scope()
+                .core_types
+                .get(LocalIdx::new(idx))?
+                .clone();
             let idx = ctx.state.scope().core_types.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Type(idx)))
         }
         CoreSortType::Module => {
-            let ty = ctx.validator.scope().core_modules.get(LocalIdx::new(idx))?.clone();
+            let ty = ctx
+                .validator
+                .scope()
+                .core_modules
+                .get(LocalIdx::new(idx))?
+                .clone();
             let idx = ctx.state.scope().core_modules.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Module(idx)))
         }
         CoreSortType::Instance => {
-            let ty = ctx.validator.scope().core_instances.get(LocalIdx::new(idx))?.clone();
+            let ty = ctx
+                .validator
+                .scope()
+                .core_instances
+                .get(LocalIdx::new(idx))?
+                .clone();
             let idx = ctx.state.scope().core_instances.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Instance(idx)))
         }

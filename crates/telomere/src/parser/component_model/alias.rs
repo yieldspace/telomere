@@ -1,5 +1,8 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{ComponentType, CoreModuleExportType, CoreSortType, FuncType, InstanceExportType, InstanceType, SortType, Type};
+use crate::component_model::types::{
+    ComponentType, CoreModuleExportType, CoreSortType, FuncType, InstanceExportType, InstanceType,
+    SortType, Type,
+};
 use crate::component_model::{CoreRelation, LocalIdx, Relation};
 use crate::parser::component_model::name::parse_export_name;
 use crate::parser::component_model::sort::parse_sort;
@@ -91,7 +94,9 @@ fn parse_export_alias(
             if let InstanceExportType::CoreModule(ty) = export {
                 ctx.validator.scope_mut().core_modules.add(ty);
             } else {
-                return Err(ComponentParseError::InvalidSignature("alais type is mismatch".into())); // todo: rewrite
+                return Err(ComponentParseError::InvalidSignature(
+                    "alais type is mismatch".into(),
+                )); // todo: rewrite
             }
         }
         _ => panic!("invalid sort type"),
@@ -105,12 +110,17 @@ fn parse_core_export(
 ) -> ParseResult<()> {
     let core_instance_lidx = parse_core_instance_local_idx(ctx)?;
     let core_instance_gidx = ctx.state.scope().core_instances.get(core_instance_lidx)?;
-    let core_instance_type = ctx.validator.scope().core_instances.get(core_instance_lidx)?;
+    let core_instance_type = ctx
+        .validator
+        .scope()
+        .core_instances
+        .get(core_instance_lidx)?;
     let (_, name) = parse_name(ctx.reader)?;
     let target_export_type = core_instance_type
         .exports
         .get(&name)
-        .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))?.clone();
+        .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))?
+        .clone();
     match sort {
         CoreSortType::Func => {
             let gidx = ctx
@@ -213,7 +223,8 @@ fn parse_outer_export(
                 .validator
                 .outer_scope(ct)
                 .core_modules
-                .get(LocalIdx::new(idx))?.clone();
+                .get(LocalIdx::new(idx))?
+                .clone();
             ctx.validator.scope_mut().core_modules.add(ty);
         }
         SortType::Component => {

@@ -1,14 +1,12 @@
-use std::collections::HashMap;
-pub use crate::common::{
-    MemType as CoreMemoryType,
-    TableType as CoreTableType,
-    FuncType as CoreFuncType,
-    GlobalType as CoreGlobalType,
-};
 use crate::common::{ExportDesc, ImportDesc};
+pub use crate::common::{
+    FuncType as CoreFuncType, GlobalType as CoreGlobalType, MemType as CoreMemoryType,
+    TableType as CoreTableType,
+};
 use crate::component_model::types::CoreSortType;
-use crate::Module;
 use crate::parser::component_model::{ComponentParseError, ParseResult};
+use crate::Module;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreModuleExportType {
@@ -59,15 +57,9 @@ impl From<&Module> for CoreModuleType {
                     let ty = value.fts.0.get(idx.0 as usize).unwrap();
                     CoreModuleImportType::Func(ty.clone())
                 }
-                ImportDesc::TableType(ref ty) => {
-                    CoreModuleImportType::Table(ty.clone())
-                }
-                ImportDesc::MemType(ref ty) => {
-                    CoreModuleImportType::Memory(ty.clone())
-                }
-                ImportDesc::GlobalType(ref ty) => {
-                    CoreModuleImportType::Global(ty.clone())
-                }
+                ImportDesc::TableType(ref ty) => CoreModuleImportType::Table(ty.clone()),
+                ImportDesc::MemType(ref ty) => CoreModuleImportType::Memory(ty.clone()),
+                ImportDesc::GlobalType(ref ty) => CoreModuleImportType::Global(ty.clone()),
             };
             if let Some(y) = imports.get_mut(&x.module) {
                 y.insert(x.name.clone(), value);
@@ -76,31 +68,35 @@ impl From<&Module> for CoreModuleType {
                 map.insert(x.name.clone(), value);
             }
         });
-        let exports = value.exs.0.iter().map(|x| (x.0.clone(), {
-            match x.1 {
-                ExportDesc::Func(ref idx) => {
-                    let tidx = value.functions.get(idx.0 as usize).unwrap();
-                    let ty = value.fts.0.get(tidx.0 as usize).unwrap();
-                    CoreModuleExportType::Func(ty.clone())
-                }
-                ExportDesc::Table(ref idx) => {
-                    let ty = value.tables.get(idx.0 as usize).unwrap();
-                    CoreModuleExportType::Table(ty.clone())
-                }
-                ExportDesc::Mem(ref idx) => {
-                    let ty = value.mems.get(idx.0 as usize).unwrap();
-                    CoreModuleExportType::Memory(ty.clone())
-                }
-                ExportDesc::Global(ref idx) => {
-                    let ty = value.globals.get(idx.0 as usize).unwrap();
-                    CoreModuleExportType::Global(ty.clone())
-                }
-            }
-        })).collect::<HashMap<_, _>>();
-        Self {
-            imports,
-            exports
-        }
+        let exports = value
+            .exs
+            .0
+            .iter()
+            .map(|x| {
+                (x.0.clone(), {
+                    match x.1 {
+                        ExportDesc::Func(ref idx) => {
+                            let tidx = value.functions.get(idx.0 as usize).unwrap();
+                            let ty = value.fts.0.get(tidx.0 as usize).unwrap();
+                            CoreModuleExportType::Func(ty.clone())
+                        }
+                        ExportDesc::Table(ref idx) => {
+                            let ty = value.tables.get(idx.0 as usize).unwrap();
+                            CoreModuleExportType::Table(ty.clone())
+                        }
+                        ExportDesc::Mem(ref idx) => {
+                            let ty = value.mems.get(idx.0 as usize).unwrap();
+                            CoreModuleExportType::Memory(ty.clone())
+                        }
+                        ExportDesc::Global(ref idx) => {
+                            let ty = value.globals.get(idx.0 as usize).unwrap();
+                            CoreModuleExportType::Global(ty.clone())
+                        }
+                    }
+                })
+            })
+            .collect::<HashMap<_, _>>();
+        Self { imports, exports }
     }
 }
 

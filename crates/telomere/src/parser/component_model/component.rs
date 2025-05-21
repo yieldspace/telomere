@@ -1,13 +1,16 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{ComponentType, CoreModuleType, Type};
 use crate::component_model::{ComponentSection, CoreModule, CoreRelation, Relation};
+use crate::parser::component_model::alias::parse_alias;
 use crate::parser::component_model::export::parse_export;
 use crate::parser::component_model::import::parse_import;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::validator::ParseState;
-use crate::parser::component_model::{parse_core_instance, parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version, ComponentParseError, ParseContext, Validator};
-use crate::parser::component_model::alias::parse_alias;
+use crate::parser::component_model::{
+    parse_core_instance, parse_layer, parse_magic, parse_section_type, parse_vec_range,
+    parse_version, ComponentParseError, ParseContext, Validator,
+};
 use crate::parser::core::parse_u32;
 use crate::WasmParser;
 

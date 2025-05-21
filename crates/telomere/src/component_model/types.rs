@@ -201,10 +201,7 @@ pub struct InstanceType {
 }
 
 impl InstanceType {
-    pub fn get_export(
-        &self,
-        name: &String,
-    ) -> ParseResult<&InstanceExportType> {
+    pub fn get_export(&self, name: &String) -> ParseResult<&InstanceExportType> {
         self.exports
             .get(name)
             .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
