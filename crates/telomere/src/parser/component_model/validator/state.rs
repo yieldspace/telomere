@@ -70,7 +70,10 @@ impl<T> ValueLocalStore<T> {
     }
 
     pub fn get(&self, idx: LocalIdx<T>) -> ParseResult<GlobalIdx<T>> {
-        Ok(self.values.get(idx.get() as usize).cloned().unwrap())
+        self.values
+            .get(idx.get() as usize)
+            .cloned()
+            .ok_or_else(|| ComponentParseError::TypeIdxNotFound(idx.get()))
     }
 }
 

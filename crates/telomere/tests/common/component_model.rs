@@ -28,9 +28,7 @@ pub fn run_component_wast(text: &str) {
                 println!("Parsed component: {name:?}");
             }
             WastDirective::AssertInvalid {
-                span,
-                mut module,
-                message,
+                span, mut module, ..
             } => {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 if let Ok(source) = module.encode() {
