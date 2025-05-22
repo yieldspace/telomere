@@ -1,4 +1,4 @@
-use telomere::parser::component_model::{ParseContext, ParseState, Validator};
+use telomere::parser::component_model::{ParseState, Validator};
 use wast::parser::ParseBuffer;
 use wast::Wast;
 #[allow(dead_code)]

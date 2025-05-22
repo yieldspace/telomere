@@ -1,9 +1,7 @@
-use crate::component_model::sort::Sort;
-use crate::component_model::{
-    ExportName, ExportNameString, GlobalIdx, ImportName, ImportNameString, Instance, TypeId,
-};
-use std::collections::{HashMap, HashSet};
+use crate::component_model::{ExportNameString, ImportNameString};
+use std::collections::HashMap;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Component {
     pub(crate) imports: HashMap<ImportNameString, ComponentImport>,

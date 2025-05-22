@@ -57,9 +57,9 @@ impl From<&Module> for CoreModuleType {
                     let ty = value.fts.0.get(idx.0 as usize).unwrap();
                     CoreModuleImportType::Func(ty.clone())
                 }
-                ImportDesc::TableType(ref ty) => CoreModuleImportType::Table(ty.clone()),
-                ImportDesc::MemType(ref ty) => CoreModuleImportType::Memory(ty.clone()),
-                ImportDesc::GlobalType(ref ty) => CoreModuleImportType::Global(ty.clone()),
+                ImportDesc::TableType(ref ty) => CoreModuleImportType::Table(*ty),
+                ImportDesc::MemType(ref ty) => CoreModuleImportType::Memory(*ty),
+                ImportDesc::GlobalType(ref ty) => CoreModuleImportType::Global(*ty),
             };
             if let Some(y) = imports.get_mut(&x.module) {
                 y.insert(x.name.clone(), value);
@@ -82,15 +82,15 @@ impl From<&Module> for CoreModuleType {
                         }
                         ExportDesc::Table(ref idx) => {
                             let ty = value.tables.get(idx.0 as usize).unwrap();
-                            CoreModuleExportType::Table(ty.clone())
+                            CoreModuleExportType::Table(*ty)
                         }
                         ExportDesc::Mem(ref idx) => {
                             let ty = value.mems.get(idx.0 as usize).unwrap();
-                            CoreModuleExportType::Memory(ty.clone())
+                            CoreModuleExportType::Memory(*ty)
                         }
                         ExportDesc::Global(ref idx) => {
                             let ty = value.globals.get(idx.0 as usize).unwrap();
-                            CoreModuleExportType::Global(ty.clone())
+                            CoreModuleExportType::Global(*ty)
                         }
                     }
                 })
@@ -108,9 +108,9 @@ impl CoreModuleType {
     }
 }
 
-impl Into<CoreSortType> for CoreModuleExportType {
-    fn into(self) -> CoreSortType {
-        match self {
+impl From<CoreModuleExportType> for CoreSortType {
+    fn from(val: CoreModuleExportType) -> Self {
+        match val {
             CoreModuleExportType::Memory(_) => CoreSortType::Memory,
             CoreModuleExportType::Table(_) => CoreSortType::Table,
             CoreModuleExportType::Func(_) => CoreSortType::Func,

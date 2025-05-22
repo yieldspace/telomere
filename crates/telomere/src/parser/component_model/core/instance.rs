@@ -1,10 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{
-    CoreInstanceType, CoreModuleExportType, CoreSortType, InstanceType,
-};
+use crate::component_model::types::{CoreInstanceType, CoreModuleExportType, CoreSortType};
 use crate::component_model::{
-    CoreInstance, CoreInstanceInlineExport, CoreRelation, CoreSort, GlobalIdx, Instance, LocalIdx,
-    Relation,
+    CoreInstance, CoreInstanceInlineExport, CoreRelation, GlobalIdx, LocalIdx,
 };
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::error::ComponentParseError;
@@ -105,32 +102,21 @@ pub fn parse_core_instance_inline_export(
             Ok((name, ty.into(), CoreInstanceInlineExport::Func(idx)))
         }
         CoreSortType::Table => {
-            let ty = ctx
-                .validator
-                .scope()
-                .core_tables
-                .get(LocalIdx::new(idx))?
-                .clone();
+            let ty = *ctx.validator.scope().core_tables.get(LocalIdx::new(idx))?;
             let idx = ctx.state.scope().core_tables.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Table(idx)))
         }
         CoreSortType::Memory => {
-            let ty = ctx
+            let ty = *ctx
                 .validator
                 .scope()
                 .core_memories
-                .get(LocalIdx::new(idx))?
-                .clone();
+                .get(LocalIdx::new(idx))?;
             let idx = ctx.state.scope().core_memories.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Memory(idx)))
         }
         CoreSortType::Global => {
-            let ty = ctx
-                .validator
-                .scope()
-                .core_globals
-                .get(LocalIdx::new(idx))?
-                .clone();
+            let ty = *ctx.validator.scope().core_globals.get(LocalIdx::new(idx))?;
             let idx = ctx.state.scope().core_globals.get(LocalIdx::new(idx))?;
             Ok((name, ty.into(), CoreInstanceInlineExport::Global(idx)))
         }

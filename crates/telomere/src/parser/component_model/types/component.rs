@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use crate::binary::BinaryReader;
-use crate::component_model::types::{
-    ComponentType, ExportDecl, Generic, GenericBound, ImportDecl, InstanceDecl,
-};
+use crate::component_model::types::{ComponentType, Generic, GenericBound, ImportDecl};
 use crate::component_model::ExternDesc;
 use crate::parser::component_model::types::instance_decl::_parse_instance_decl;
 use crate::parser::component_model::types::interface::parse_import_decl;
@@ -16,7 +14,7 @@ pub fn parse_component_type(
 ) -> ParseResult<ComponentType> {
     ctx.validator.push_scope();
     let mut imports = HashMap::new();
-    let mut exports = HashMap::new();
+    let exports = HashMap::new();
     for _ in parse_vec_range(ctx)? {
         match ctx.reader.read_exact_one()? {
             0x03 => {
@@ -27,7 +25,6 @@ pub fn parse_component_type(
                     ExternDesc::Component(id) => GenericBound::Eq(id),
                     ExternDesc::Func(id) => GenericBound::Eq(id),
                     ExternDesc::Instance(id) => GenericBound::Eq(id),
-                    _ => todo!(),
                 };
                 if imports.insert(name.original, Generic::new(bound)).is_some() {
                     Err(ComponentParseError::InvalidImportName(

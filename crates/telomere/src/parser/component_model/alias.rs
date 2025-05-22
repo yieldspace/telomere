@@ -1,7 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{
-    ComponentType, CoreModuleExportType, CoreSortType, FuncType, InstanceExportType, InstanceType,
-    SortType, Type,
+    CoreModuleExportType, CoreSortType, InstanceExportType, SortType,
 };
 use crate::component_model::{CoreRelation, LocalIdx, Relation};
 use crate::parser::component_model::name::parse_export_name;
@@ -70,8 +69,7 @@ fn parse_export_alias(
             ctx.validator.scope_mut().func_indexes.add(id);
         }
         SortType::Type => {
-            let ty = todo!(); // todo(type) get type from instance export
-            ctx.validator.scope_mut().type_indexes.add(ty);
+            todo!(); // todo(type) get type from instance export
         }
         SortType::Instance => {
             let InstanceExportType::Instance(id) = export else {

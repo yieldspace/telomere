@@ -21,8 +21,4 @@ impl Linker {
     pub fn register_module<IntoString: Into<String>>(&mut self, name: IntoString, module: Module) {
         self.modules.insert(name.into(), module);
     }
-
-    pub(crate) fn get_module<IntoString: Into<String>>(&self, name: IntoString) -> Option<&Module> {
-        self.modules.get(&name.into())
-    }
 }

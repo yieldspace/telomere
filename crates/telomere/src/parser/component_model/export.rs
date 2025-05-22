@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentExport, ExternDesc, Sort, StrongUnique};
+use crate::component_model::{ComponentExport, Sort, StrongUnique};
 use crate::parser::component_model::name::parse_export_name_dash;
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::types::parse_externdesc;
@@ -22,18 +22,18 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
     let si = parse_sort_with_idx(ctx)?;
     let _ed = parse_option(ctx, parse_externdesc)?;
     match si {
-        Sort::Type(id) => {
+        Sort::Type(_id) => {
             // todo(type) register type
             Ok(())
         }
-        Sort::Component(idx, tid) => {
+        Sort::Component(_idx, _tid) => {
             ctx.state
                 .scope_mut()
                 .add_export(&name, ComponentExport::Component);
             // todo(type) register type
             Ok(())
         }
-        Sort::Instance(idx, tid) => {
+        Sort::Instance(idx, _tid) => {
             ctx.state
                 .scope_mut()
                 .add_export(&name, ComponentExport::Instance);

@@ -1,6 +1,3 @@
-use telomere::parser::component_model::{ComponentParseError, ParseContext, ParseState, Validator};
-use tracing::Level;
-
 /*#[test]
 fn test_basic_component() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
