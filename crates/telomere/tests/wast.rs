@@ -530,3 +530,36 @@ async fn simd_i16x8_extmul_i8x16() {
 async fn simd_i16x8_sat_arith() {
     run_test_file("simd_i16x8_sat_arith").await;
 }
+#[test]
+async fn simd_i32x4_arith() {
+    run_test_file("simd_i32x4_arith").await;
+}
+#[test]
+async fn simd_i32x4_arith2() {
+    run_test_file("simd_i32x4_arith2").await;
+}
+#[test]
+async fn simd_i32x4_cmp() {
+    run_test_file("simd_i32x4_cmp").await;
+}
+#[test]
+async fn simd_i32x4_dot_i16x8() {
+    run_test_file("simd_i32x4_dot_i16x8").await;
+}
+#[test]
+async fn simd_i32x4_extadd_pairwise_i16x8() {
+    run_test_file("simd_i32x4_extadd_pairwise_i16x8").await;
+}
+
+#[test]
+async fn simd_32x4_extmul_i16x8() {
+    run_test_file("simd_i32x4_extmul_i16x8").await;
+}
+#[test]
+async fn simd_i32x4_trunc_sat_f32x4() {
+    run_test_file("simd_i32x4_trunc_sat_f32x4").await;
+}
+#[test]
+async fn simd_i32x4_trunc_sat_f64x2() {
+    run_test_file("simd_i32x4_trunc_sat_f64x2").await;
+}
