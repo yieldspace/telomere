@@ -399,8 +399,8 @@ binary_op_simd_parser!(f64x2_trunc, 122);
 unary_op_simd_parser!(u8x16_avgr, 123);
 binary_op_simd_parser!(i16x8_extadd_pairwise_i8x16, 124);
 binary_op_simd_parser!(u16x8_extadd_pairwise_i8x16, 125);
-binary_op_simd_parser!(i32x4_extadd_pairwise_i16x8,126);
-binary_op_simd_parser!(u32x4_extadd_pairwise_i16x8,127);
+binary_op_simd_parser!(i32x4_extadd_pairwise_i16x8, 126);
+binary_op_simd_parser!(u32x4_extadd_pairwise_i16x8, 127);
 
 binary_op_simd_parser!(i16x8_abs, 128);
 binary_op_simd_parser!(i16x8_neg, 129);
