@@ -2939,7 +2939,32 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         u16x8_extmul_low,
                         u16x8_extmul_high,
                         i16x8_extmul_low,
-                        i16x8_extmul_high
+                        i16x8_extmul_high,
+                        i32x4_neg,
+                        i32x4_min,
+                        u32x4_min,
+                        i32x4_max,
+                        u32x4_max,
+                        i32x4_eq,
+                        i32x4_ne,
+                        i32x4_lt,
+                        u32x4_lt,
+                        i32x4_gt,
+                        u32x4_gt,
+                        i32x4_le,
+                        u32x4_le,
+                        i32x4_ge,
+                        u32x4_ge,
+                        i32x4_dot_i16x8,
+                        i32x4_extadd_pairwise_i16x8,
+                        u32x4_extadd_pairwise_i16x8,
+                        i32x4_extmul_low,
+                        i32x4_extmul_high,
+                        u32x4_extmul_low,
+                        u32x4_extmul_high,
+                        i32x4_trunc_sat_f32x4_u,
+                        i32x4_trunc_sat_f64x2_s,
+                        i32x4_trunc_sat_f64x2_u
                     );
                     (1 + len + len2, false)
                 }
