@@ -1,14 +1,15 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{ComponentType, Type};
+use crate::component_model::types::{ComponentType, CoreModuleType, Type};
 use crate::component_model::{ComponentSection, CoreModule, CoreRelation, Relation};
+use crate::parser::component_model::alias::parse_alias;
 use crate::parser::component_model::export::parse_export;
 use crate::parser::component_model::import::parse_import;
 use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::validator::ParseState;
 use crate::parser::component_model::{
-    parse_layer, parse_magic, parse_section_type, parse_vec_range, parse_version,
-    ComponentParseError, ParseContext, Validator,
+    parse_core_instance, parse_layer, parse_magic, parse_section_type, parse_vec_range,
+    parse_version, ComponentParseError, ParseContext, Validator,
 };
 use crate::parser::core::parse_u32;
 use crate::WasmParser;
@@ -49,12 +50,18 @@ pub fn _parse_component(
                 let mut sized_reader = ctx.reader.take(section_size as usize);
                 let mut core_module = WasmParser::new(&mut sized_reader);
                 let module = core_module.parse_module()?;
+                let ty = CoreModuleType::from(&module);
                 let idx = ctx
                     .state
                     .core_module_store
                     .register(CoreRelation::Defined(CoreModule { module }));
-                ctx.state.scope_mut().core_modules.register(idx);
-                // todo(type) core module typeをregisterする
+                ctx.state.scope_mut().core_modules.register(idx); // todo(type) core module typeをregisterする
+                ctx.validator.scope_mut().core_modules.add(ty);
+            }
+            ComponentSection::CoreInstance => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_core_instance(ctx)?;
+                }
             }
             ComponentSection::Component => {
                 ctx.state.push_scope();
@@ -95,6 +102,11 @@ pub fn _parse_component(
             ComponentSection::Instance => {
                 for _ in parse_vec_range(ctx)? {
                     parse_instance(ctx)?;
+                }
+            }
+            ComponentSection::Alias => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_alias(ctx)?;
                 }
             }
             v => todo!("unimplemented: {:?}", v),

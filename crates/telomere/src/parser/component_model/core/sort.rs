@@ -5,9 +5,7 @@ use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::error::ComponentParseError;
 use crate::parser::component_model::{ParseResult, SizedResult};
 
-pub fn parse_core_sort_type(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<CoreSortType> {
+pub fn parse_core_sort(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<CoreSortType> {
     let sort = match ctx.reader.read_exact_one()? {
         0x00 => CoreSortType::Func,
         0x01 => CoreSortType::Table,

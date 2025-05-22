@@ -200,8 +200,17 @@ pub struct InstanceType {
     pub exports: HashMap<String, InstanceExportType>,
 }
 
+impl InstanceType {
+    pub fn get_export(&self, name: &String) -> ParseResult<&InstanceExportType> {
+        self.exports
+            .get(name)
+            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
+    }
+}
+
 #[derive(Clone)]
 pub enum InstanceExportType {
+    CoreModule(CoreModuleType),
     Component(TypeId),
     Instance(TypeId),
     Resource(ResourceId),
