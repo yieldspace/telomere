@@ -3,7 +3,6 @@ mod component;
 /// This module contains the parsing logic for various types in the component model.
 /// ParseResult<()>を返す関数はすべて型情報をその関数内で更新しています
 mod externdesc;
-mod func;
 mod instance;
 mod instance_decl;
 mod interface;
@@ -80,7 +79,6 @@ fn is_type_opcode(opcode: i32) -> bool {
 }
 
 pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type> {
-    let start_count = ctx.reader.read_count();
     trace!("parse type");
     let (_, opcode) = parse_i32(ctx.reader)?;
 

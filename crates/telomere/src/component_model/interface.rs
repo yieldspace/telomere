@@ -1,5 +1,5 @@
 use crate::component_model::TypeId;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExternDesc {

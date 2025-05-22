@@ -3,6 +3,7 @@ use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, L
 use crate::{Registry, Store};
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 pub struct InstantiateContext<'a> {
     pub current: Option<usize>,
     pub(crate) store: &'a mut Store,
@@ -73,9 +74,4 @@ impl ResolvedImportMap {
             // core_modules: Default::default(),
         }
     }
-}
-
-pub enum ResolvedImport {
-    // CoreModule(GlobalIdx<CoreModule>),
-    // Instance(GlobalIdx<Instance>),
 }

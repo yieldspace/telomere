@@ -8,8 +8,8 @@ use crate::parser::component_model::instance::parse_instance;
 use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::validator::ParseState;
 use crate::parser::component_model::{
-    parse_core_instance, parse_layer, parse_magic, parse_section_type, parse_vec_range,
-    parse_version, ComponentParseError, ParseContext, Validator,
+    parse_core_instance, parse_core_type, parse_layer, parse_magic, parse_section_type,
+    parse_vec_range, parse_version, ComponentParseError, ParseContext, Validator,
 };
 use crate::parser::core::parse_u32;
 use crate::WasmParser;
@@ -57,6 +57,11 @@ pub fn _parse_component(
                     .register(CoreRelation::Defined(CoreModule { module }));
                 ctx.state.scope_mut().core_modules.register(idx);
                 ctx.validator.scope_mut().core_modules.add(ty);
+            }
+            ComponentSection::CoreType => {
+                for _ in parse_vec_range(ctx)? {
+                    parse_core_type(ctx)?;
+                }
             }
             ComponentSection::CoreInstance => {
                 for _ in parse_vec_range(ctx)? {

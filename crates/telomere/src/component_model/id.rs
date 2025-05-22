@@ -19,6 +19,12 @@ impl ScopeId {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ResourceId(u32);
 
+impl Default for ResourceId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResourceId {
     pub fn new() -> Self {
         static RESOURCE_HANDLE: AtomicU32 = AtomicU32::new(0);
@@ -28,6 +34,12 @@ impl ResourceId {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TypeId(usize);
+
+impl Default for TypeId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TypeId {
     pub fn new() -> Self {

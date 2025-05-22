@@ -12,11 +12,11 @@ pub enum DefValType {
     Borrow(TypeId),
 }
 impl DefValType {
-    pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
+    pub fn assert_subtype_of(&self, parent: &Self, _validator: &Validator) -> ParseResult<()> {
         use DefValType::*;
         match (self, parent) {
             (Primitive(a), Primitive(b)) => a.assert_subtype_of(b),
-            (Record(a), Record(b)) => {
+            (Record(_), Record(_)) => {
                 todo!()
             }
             (Variant(_), Variant(_)) => {

@@ -41,7 +41,7 @@ impl<'a> Validator<'a> {
 
     pub fn pop_scope(&mut self) {
         trace!("Validator::pop_scope");
-        self.scopes.pop().take();
+        let _ = self.scopes.pop();
     }
 
     #[inline]

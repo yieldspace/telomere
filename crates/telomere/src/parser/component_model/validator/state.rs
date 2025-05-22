@@ -83,6 +83,7 @@ impl<T, R> ValueStore<T, R> {
         idx
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, idx: GlobalIdx<T>) -> Option<&R> {
         self.map.get(&idx)
     }

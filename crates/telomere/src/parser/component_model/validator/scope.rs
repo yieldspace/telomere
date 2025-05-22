@@ -3,7 +3,8 @@ use crate::component_model::types::{
     CoreMemoryType, CoreModuleType, CoreTableType, CoreType, Generic, Type,
 };
 use crate::component_model::{
-    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, Func, Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
+    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, Func,
+    Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
 };
 use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;

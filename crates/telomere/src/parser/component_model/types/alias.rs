@@ -6,24 +6,20 @@ use crate::parser::component_model::{
 use crate::parser::core::parse_u32;
 
 pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
-    let start_count = ctx.reader.read_count();
     let sort = parse_sort(ctx)?;
     match ctx.reader.read_exact_one()? {
         0x00 => {
-            let idx = parse_instance_local_idx(ctx)?;
+            let _idx = parse_instance_local_idx(ctx)?;
             todo!();
         }
         0x02 => {
             let (_, ct) = parse_u32(ctx.reader)?;
-            let (_, idx) = parse_u32(ctx.reader)?;
-            let outer_scope = ctx.validator.outer_scope(ct);
+            let (_, _idx) = parse_u32(ctx.reader)?;
+            let _outer_scope = ctx.validator.outer_scope(ct);
             todo!()
         }
-        _ => {
-            return Err(ComponentParseError::InvalidSignature(format!(
-                "Invalid alias type for instance decl: {sort:?}"
-            )));
-        }
-    };
-    Ok(())
+        _ => Err(ComponentParseError::InvalidSignature(format!(
+            "Invalid alias type for instance decl: {sort:?}"
+        ))),
+    }
 }
