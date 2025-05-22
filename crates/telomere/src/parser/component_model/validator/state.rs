@@ -1,15 +1,14 @@
-use crate::component_model::types::{CoreType, Type};
+use crate::component_model::types::CoreType;
 use crate::component_model::{
     Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreRelation, CoreTable,
 };
 use crate::component_model::{
     ComponentExport, ComponentImport, ExportName, Func, GlobalIdx, ImportName, Instance, LocalIdx,
-    Relation, TypeId,
+    Relation,
 };
 use crate::parser::component_model::{ComponentParseError, ParseResult};
 use std::collections::HashMap;
 use typed_arena::Arena;
-use union_find::UnionFind;
 
 pub struct ValueLocalStore<T> {
     values: Vec<GlobalIdx<T>>,
@@ -70,7 +69,10 @@ impl<T> ValueLocalStore<T> {
     }
 
     pub fn get(&self, idx: LocalIdx<T>) -> ParseResult<GlobalIdx<T>> {
-        Ok(self.values.get(idx.get() as usize).cloned().unwrap())
+        self.values
+            .get(idx.get() as usize)
+            .cloned()
+            .ok_or_else(|| ComponentParseError::TypeIdxNotFound(idx.get()))
     }
 }
 
@@ -81,6 +83,7 @@ impl<T, R> ValueStore<T, R> {
         idx
     }
 
+    #[allow(dead_code)]
     pub fn get(&self, idx: GlobalIdx<T>) -> Option<&R> {
         self.map.get(&idx)
     }

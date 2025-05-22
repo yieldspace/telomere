@@ -1,4 +1,4 @@
-use telomere::parser::component_model::{ParseContext, ParseState, Validator};
+use telomere::parser::component_model::{ParseState, Validator};
 use wast::parser::ParseBuffer;
 use wast::Wast;
 #[allow(dead_code)]
@@ -28,9 +28,7 @@ pub fn run_component_wast(text: &str) {
                 println!("Parsed component: {name:?}");
             }
             WastDirective::AssertInvalid {
-                span,
-                mut module,
-                message,
+                span, mut module, ..
             } => {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 if let Ok(source) = module.encode() {

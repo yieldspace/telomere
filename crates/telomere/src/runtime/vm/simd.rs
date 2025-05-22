@@ -588,7 +588,7 @@ define_unary_simd_operation!(avgr, [u8x16], |a, b| {
     let a = a.to_array();
     let b = b.to_array();
     for i in 0..16 {
-        res[i] = ((a[i] as u16 + b[i] as u16 + 1) / 2) as u8;
+        res[i] = (a[i] as u16 + b[i] as u16).div_ceil(2) as u8;
     }
     res.into()
 });
@@ -598,7 +598,7 @@ define_unary_simd_operation!(avgr, [u16x8], |a, b| {
     let a = a.to_array();
     let b = b.to_array();
     for i in 0..8 {
-        res[i] = ((a[i] as u32 + b[i] as u32 + 1) / 2) as u16;
+        res[i] = (a[i] as u32 + b[i] as u32).div_ceil(2) as u16;
     }
     res.into()
 });

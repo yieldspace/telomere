@@ -108,7 +108,7 @@ impl GenericBound {
         validator: &Validator,
     ) -> ParseResult<()> {
         match (self, parent) {
-            (GenericBound::Eq(a), GenericBound::Eq(b)) => a.assert_subtype_of(*b)?,
+            (GenericBound::Eq(a), GenericBound::Eq(b)) => a.assert_subtype_of(*b, validator)?,
             (GenericBound::Eq(type_id), GenericBound::Sub) => {
                 if !validator.get_type(*type_id)?.is_resource() {
                     Err(ComponentParseError::TypeMismatch(
@@ -200,8 +200,18 @@ pub struct InstanceType {
     pub exports: HashMap<String, InstanceExportType>,
 }
 
+impl InstanceType {
+    pub fn get_export(&self, name: &String) -> ParseResult<&InstanceExportType> {
+        self.exports
+            .get(name)
+            .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
+    }
+}
+
 #[derive(Clone)]
 pub enum InstanceExportType {
+    CoreModule(CoreModuleType),
+    Func(TypeId),
     Component(TypeId),
     Instance(TypeId),
     Resource(ResourceId),

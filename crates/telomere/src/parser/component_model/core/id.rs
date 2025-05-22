@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{CoreInstance, CoreModule, Instance, LocalIdx};
+use crate::component_model::{CoreInstance, CoreModule, LocalIdx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::ParseResult;
 use crate::parser::core::parse_u32;

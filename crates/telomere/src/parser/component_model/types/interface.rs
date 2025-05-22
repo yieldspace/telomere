@@ -11,10 +11,10 @@ pub fn parse_import_decl(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResu
 }
 
 pub fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<()> {
-    let en = parse_export_name_dash(ctx)?;
-    let ed = parse_externdesc(ctx)?;
+    let _en = parse_export_name_dash(ctx)?;
+    let _ed = parse_externdesc(ctx)?;
     // ctx.validator
     //     .with_scope(|scope| scope.add_export_type(en, ed))?;
     // todo(type) add export type
-    Ok(())
+    todo!()
 }

@@ -1,13 +1,10 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::CoreSortType;
-use crate::component_model::CoreSort;
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::error::ComponentParseError;
-use crate::parser::component_model::{ParseResult, SizedResult};
+use crate::parser::component_model::ParseResult;
 
-pub fn parse_core_sort_type(
-    ctx: &mut ParseContext<impl BinaryReader>,
-) -> ParseResult<CoreSortType> {
+pub fn parse_core_sort(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<CoreSortType> {
     let sort = match ctx.reader.read_exact_one()? {
         0x00 => CoreSortType::Func,
         0x01 => CoreSortType::Table,

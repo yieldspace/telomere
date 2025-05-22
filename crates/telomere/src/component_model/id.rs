@@ -1,6 +1,5 @@
-use crate::component_model::{ExportName, ImportName};
-use crate::parser::component_model::{ComponentParseError, ParseResult};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use crate::parser::component_model::{ParseResult, Validator};
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -20,6 +19,12 @@ impl ScopeId {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ResourceId(u32);
 
+impl Default for ResourceId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResourceId {
     pub fn new() -> Self {
         static RESOURCE_HANDLE: AtomicU32 = AtomicU32::new(0);
@@ -30,18 +35,24 @@ impl ResourceId {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TypeId(usize);
 
+impl Default for TypeId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeId {
     pub fn new() -> Self {
         static TYPE_ID: AtomicUsize = AtomicUsize::new(0);
         Self(TYPE_ID.fetch_add(1, Ordering::Relaxed))
     }
-    pub fn assert_subtype_of(self, parent: TypeId) -> ParseResult<()> {
+    pub fn assert_subtype_of(self, parent: TypeId, validator: &Validator) -> ParseResult<()> {
         if self == parent {
             Ok(())
         } else {
-            Err(ComponentParseError::TypeMismatch(
-                "type id mismatch".to_owned(),
-            ))
+            validator
+                .get_type(self)?
+                .assert_subtype_of(validator.get_type(parent)?, validator)
         }
     }
 }

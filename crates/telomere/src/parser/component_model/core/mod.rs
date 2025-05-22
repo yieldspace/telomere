@@ -6,4 +6,4 @@ mod types;
 pub use id::*;
 pub use instance::*;
 pub use sort::*;
-pub(crate) use types::*;
+pub use types::*;

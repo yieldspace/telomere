@@ -1,12 +1,11 @@
 mod scope;
 mod state;
 
-use crate::component_model::types::{ComponentExportType, ComponentType, InstanceType, Type};
-use crate::component_model::{Component, GlobalIdx, Instance, LocalIdx, TypeId};
+use crate::component_model::types::{ComponentType, InstanceType, Type};
+use crate::component_model::TypeId;
 use crate::parser::component_model::ParseResult;
 pub use scope::ScopeGuard;
 pub use state::ParseState;
-use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use tracing::trace;
 use typed_arena::Arena;
@@ -42,7 +41,7 @@ impl<'a> Validator<'a> {
 
     pub fn pop_scope(&mut self) {
         trace!("Validator::pop_scope");
-        self.scopes.pop().take();
+        let _ = self.scopes.pop();
     }
 
     #[inline]

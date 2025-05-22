@@ -1,5 +1,4 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{InstanceDecl, Type};
 use crate::parser::component_model::types::alias::parse_alias_type;
 use crate::parser::component_model::types::{parse_export_decl, parse_type};
 use crate::parser::component_model::{ParseContext, ParseResult};

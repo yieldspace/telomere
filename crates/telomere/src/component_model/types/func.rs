@@ -1,5 +1,5 @@
 use crate::{
-    component_model::types::{LabelValType, ValType},
+    component_model::types::ValType,
     parser::component_model::{ComponentParseError, ParseResult, Validator},
 };
 
