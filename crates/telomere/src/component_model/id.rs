@@ -1,5 +1,5 @@
 use crate::component_model::{ExportName, ImportName};
-use crate::parser::component_model::{ComponentParseError, ParseResult};
+use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
@@ -35,13 +35,13 @@ impl TypeId {
         static TYPE_ID: AtomicUsize = AtomicUsize::new(0);
         Self(TYPE_ID.fetch_add(1, Ordering::Relaxed))
     }
-    pub fn assert_subtype_of(self, parent: TypeId) -> ParseResult<()> {
+    pub fn assert_subtype_of(self, parent: TypeId, validator: &Validator) -> ParseResult<()> {
         if self == parent {
             Ok(())
         } else {
-            Err(ComponentParseError::TypeMismatch(
-                "type id mismatch".to_owned(),
-            ))
+            validator
+                .get_type(self)?
+                .assert_subtype_of(validator.get_type(parent)?, validator)
         }
     }
 }

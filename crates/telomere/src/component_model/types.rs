@@ -108,7 +108,7 @@ impl GenericBound {
         validator: &Validator,
     ) -> ParseResult<()> {
         match (self, parent) {
-            (GenericBound::Eq(a), GenericBound::Eq(b)) => a.assert_subtype_of(*b)?,
+            (GenericBound::Eq(a), GenericBound::Eq(b)) => a.assert_subtype_of(*b, validator)?,
             (GenericBound::Eq(type_id), GenericBound::Sub) => {
                 if !validator.get_type(*type_id)?.is_resource() {
                     Err(ComponentParseError::TypeMismatch(
