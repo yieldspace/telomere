@@ -1,8 +1,7 @@
-use crate::component_model::sort::Sort;
 use crate::component_model::{
-    ExportName, ExportNameString, GlobalIdx, ImportName, ImportNameString, Instance, TypeId,
+    ExportNameString, ImportNameString,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Component {

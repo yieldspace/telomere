@@ -1,7 +1,6 @@
 use crate::common::InstanceHandle;
-use crate::component_model::GlobalIdx;
 use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
-use crate::{Module, Registry, Store};
+use crate::{Registry, Store};
 use std::collections::HashMap;
 
 pub struct InstantiateContext<'a> {

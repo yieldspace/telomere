@@ -1,11 +1,9 @@
-use crate::common::{ExportDesc, ImportDesc};
 use crate::component_model::types::{
     ComponentExportType, ComponentType, CoreFuncType, CoreGlobalType, CoreInstanceType,
     CoreMemoryType, CoreModuleType, CoreTableType, CoreType, Generic, Type,
 };
 use crate::component_model::{
-    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, Func,
-    GlobalIdx, Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
+    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, Func, Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
 };
 use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;

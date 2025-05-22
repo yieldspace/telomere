@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::{ComponentExport, ExternDesc, Sort, StrongUnique};
+use crate::component_model::{ComponentExport, Sort, StrongUnique};
 use crate::parser::component_model::name::parse_export_name_dash;
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::types::parse_externdesc;

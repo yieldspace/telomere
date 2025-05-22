@@ -1,7 +1,4 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{ComponentType, InstanceExportType, InstanceType, SortType};
-use crate::component_model::LocalIdx;
-use crate::parser::component_model::name::parse_export_name;
 use crate::parser::component_model::sort::parse_sort;
 use crate::parser::component_model::{
     parse_instance_local_idx, ComponentParseError, ParseContext, ParseResult,

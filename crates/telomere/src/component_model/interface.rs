@@ -1,6 +1,5 @@
-use crate::component_model::{ImportName, ScopeId, TypeId};
+use crate::component_model::TypeId;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExternDesc {

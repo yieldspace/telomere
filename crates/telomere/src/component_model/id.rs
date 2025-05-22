@@ -1,6 +1,5 @@
-use crate::component_model::{ExportName, ImportName};
-use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use crate::parser::component_model::{ParseResult, Validator};
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

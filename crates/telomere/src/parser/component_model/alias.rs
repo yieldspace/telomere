@@ -1,7 +1,7 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{
-    ComponentType, CoreModuleExportType, CoreSortType, FuncType, InstanceExportType, InstanceType,
-    SortType, Type,
+    CoreModuleExportType, CoreSortType, InstanceExportType,
+    SortType,
 };
 use crate::component_model::{CoreRelation, LocalIdx, Relation};
 use crate::parser::component_model::name::parse_export_name;

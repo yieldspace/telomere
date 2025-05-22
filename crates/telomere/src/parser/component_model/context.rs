@@ -1,8 +1,6 @@
 use crate::binary::BinaryReader;
-use crate::parser::component_model::validator::{ParseState, ScopeGuard};
+use crate::parser::component_model::validator::ParseState;
 use crate::parser::component_model::Validator;
-use std::cell::RefMut;
-use std::fmt::{Debug, Formatter};
 
 pub struct ParseContext<'a, 'b, 'c, R>
 where

@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{
-    ComponentExportType, ComponentType, Generic, GenericBound, Type,
+    Generic, GenericBound, Type,
 };
 use crate::component_model::{ImportName, Instance, InstanceImport, Relation, Sort};
 use crate::parser::component_model::name::parse_import_name;
@@ -9,8 +9,7 @@ use crate::parser::component_model::{
     parse_component_local_idx, ComponentParseError, ParseContext, ParseResult, SizedResult,
 };
 use crate::parser::core::parse_vec;
-use std::collections::{HashMap, HashSet};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::collections::HashSet;
 use tracing::trace;
 
 pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {

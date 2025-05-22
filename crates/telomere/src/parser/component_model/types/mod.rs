@@ -24,7 +24,6 @@ use crate::parser::component_model::{
 };
 use crate::parser::core::{parse_i32, parse_u32, parse_vec};
 use crate::parser::leb128::compile_i32;
-pub use alias::*;
 pub use component::*;
 pub use externdesc::*;
 pub use instance_decl::*;

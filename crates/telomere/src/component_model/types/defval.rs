@@ -1,5 +1,5 @@
 use crate::component_model::types::{LabelValType, PrimValType, TypeId, ValType};
-use crate::component_model::{Label, ResourceId};
+use crate::component_model::Label;
 use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
 
 #[derive(Debug, Clone)]

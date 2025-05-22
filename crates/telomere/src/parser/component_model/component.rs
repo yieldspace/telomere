@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{ComponentType, CoreModuleType, Type};
+use crate::component_model::types::{CoreModuleType, Type};
 use crate::component_model::{ComponentSection, CoreModule, CoreRelation, Relation};
 use crate::parser::component_model::alias::parse_alias;
 use crate::parser::component_model::export::parse_export;
