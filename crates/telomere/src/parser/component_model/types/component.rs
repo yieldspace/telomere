@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 
 use crate::binary::BinaryReader;
-use crate::component_model::types::{ComponentType, Generic, GenericBound, ImportDecl};
-use crate::component_model::ExternDesc;
+use crate::component_model::types::{
+    ComponentExportType, ComponentType, Generic, GenericBound, ImportDecl, Type,
+};
+use crate::component_model::{ExternDesc, TypeId};
 use crate::parser::component_model::types::instance_decl::_parse_instance_decl;
 use crate::parser::component_model::types::interface::parse_import_decl;
 use crate::parser::component_model::{
-    parse_vec_range, ComponentParseError, ParseContext, ParseResult,
+    parse_vec_range, ComponentParseError, ParseContext, ParseResult, Validator,
 };
 
 pub fn parse_component_type(
@@ -38,8 +40,8 @@ pub fn parse_component_type(
             }
         };
     }
-    let exports = ctx.validator.scope().exports.clone();
+    let component_ty = ctx.validator.make_component();
     ctx.validator.pop_scope();
 
-    Ok(ComponentType { imports, exports })
+    Ok(component_ty)
 }

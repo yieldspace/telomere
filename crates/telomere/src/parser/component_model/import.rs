@@ -35,14 +35,17 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 .imports
                 .insert(name.original, Generic::new(GenericBound::Eq(type_id)));
         }
-        ExternDesc::Instance(_) => {
-            // todo register type
+        ExternDesc::Instance(type_id) => {
             ctx.state
                 .scope_mut()
                 .add_import(&name, ComponentImport::Instance);
             ctx.state
                 .instance_store
                 .register(Relation::Import(name.original.clone()));
+            ctx.validator
+                .scope_mut()
+                .imports
+                .insert(name.original, Generic::new(GenericBound::Eq(type_id)));
         }
         ExternDesc::Eq(_) => {
             // todo register type
