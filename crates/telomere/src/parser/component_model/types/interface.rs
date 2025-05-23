@@ -13,7 +13,7 @@ pub fn parse_import_decl(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResu
     Ok(ImportDecl::new(name, ed))
 }
 
-pub fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<ExportDecl> {
+pub fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseResult<()> {
     let name = parse_export_name_dash(ctx)?;
     let desc = parse_externdesc(ctx)?;
     let export_ty = match &desc {
@@ -32,5 +32,5 @@ pub fn parse_export_decl<R: BinaryReader>(ctx: &mut ParseContext<R>) -> ParseRes
         .scope_mut()
         .exports
         .insert(name.original.clone(), export_ty);
-    Ok(ExportDecl { name, desc })
+    Ok(())
 }
