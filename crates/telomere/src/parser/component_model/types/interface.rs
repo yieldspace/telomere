@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{
-    ComponentExportType, ExportDecl, Generic, GenericBound, ImportDecl, Type,
+    ComponentExportType, Generic, GenericBound, ImportDecl, Type,
 };
 use crate::component_model::ExternDesc;
 use crate::parser::component_model::name::{parse_export_name_dash, parse_import_name_dash};
