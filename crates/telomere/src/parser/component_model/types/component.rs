@@ -14,7 +14,7 @@ pub fn parse_component_type(
 ) -> ParseResult<ComponentType> {
     ctx.validator.push_scope();
     let mut imports = HashMap::new();
-    let exports = HashMap::new();
+
     for _ in parse_vec_range(ctx)? {
         match ctx.reader.read_exact_one()? {
             0x03 => {
@@ -38,6 +38,7 @@ pub fn parse_component_type(
             }
         };
     }
+    let exports = ctx.validator.scope().exports.clone();
     ctx.validator.pop_scope();
 
     Ok(ComponentType { imports, exports })

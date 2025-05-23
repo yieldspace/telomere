@@ -79,3 +79,66 @@
     )
     "type mismatch"
 )
+(component
+    (type 
+        (component
+            (type (func (result u32)))
+            (export "x" (func (type 0)))
+        )
+    )
+    (import "b" (component (type 0)))
+    (component
+        (type 
+            (component
+                (type (func (result u32)))
+                (export "x" (func (type 0)))
+            )
+        )
+        (import "a" (component (type 0)))
+    )
+    (instance (instantiate 1 (with "a" (component 0))))
+)
+(assert_invalid
+    (component
+        (type 
+            (component
+                (type (func (result u32)))
+                (export "x" (func (type 0)))
+            )
+        )
+        (import "b" (component (type 0)))
+        (component
+            (type 
+                (component
+                    (type (func (result u32)))
+                    (export "x" (func (type 0)))
+                    (export "y" (func (type 0)))
+                )
+            )
+            (import "a" (component (type 0)))
+        )
+        (instance (instantiate 1 (with "a" (component 0))))
+    )
+    "type mismatch"
+)
+(component
+    (type 
+        (component
+            (type (func (result u32)))
+            (export "x" (func (type 0)))
+            (export "y" (func (type 0)))
+        )
+    )
+    (import "b" (component (type 0)))
+    (component
+        (type 
+            (component
+                (type (func (result u32)))
+                (export "x" (func (type 0)))
+            )
+        )
+        (import "a" (component (type 0)))
+    )
+    (instance (instantiate 1 (with "a" (component 0))))
+)
+
