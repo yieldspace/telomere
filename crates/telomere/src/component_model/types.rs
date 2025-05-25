@@ -174,6 +174,7 @@ pub enum ComponentExportType {
     Component(TypeId),
     Instance(TypeId),
     Type(TypeId),
+    Func(TypeId),
     Resource(ResourceId),
     NewResource(TypeId),
 }
@@ -192,6 +193,9 @@ impl ComponentExportType {
             ComponentExportType::NewResource(_) => ParseResult::Err(
                 ComponentParseError::TypeMismatch("NewResource cannot be used here".to_owned()),
             ),
+            ComponentExportType::Func(type_id) => Ok(Type::Func(
+                validator.get_func_type(*type_id)?.clone(),
+            ))
         }
     }
 }
