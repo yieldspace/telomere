@@ -1,4 +1,3 @@
-
 use crate::binary::BinaryReader;
 use crate::component_model::types::InstanceType;
 use crate::parser::component_model::types::parse_instance_decl;
@@ -9,8 +8,8 @@ pub fn parse_instance_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
     for _ in parse_vec_range(ctx)? {
         parse_instance_decl(ctx)?;
     }
-    let instance_ty =  ctx.validator.make_instance();
-    
+    let instance_ty = ctx.validator.make_instance();
+
     ctx.validator.pop_scope();
 
     Ok(instance_ty)

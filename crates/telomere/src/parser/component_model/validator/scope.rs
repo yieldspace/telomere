@@ -1,5 +1,6 @@
 use crate::component_model::types::{
-    CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType, CoreType, Generic, Type
+    CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType,
+    CoreType, Generic, Type,
 };
 use crate::component_model::{
     Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, ExternDesc,

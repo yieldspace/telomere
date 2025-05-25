@@ -5,7 +5,7 @@ use crate::parser::component_model::alias::parse_alias;
 use crate::parser::component_model::export::parse_export;
 use crate::parser::component_model::import::parse_import;
 use crate::parser::component_model::instance::parse_instance;
-use crate::parser::component_model::types::{parse_type};
+use crate::parser::component_model::types::parse_type;
 use crate::parser::component_model::validator::ParseState;
 use crate::parser::component_model::{
     parse_core_instance, parse_core_type, parse_layer, parse_magic, parse_section_type,

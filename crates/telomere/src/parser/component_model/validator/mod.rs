@@ -116,9 +116,7 @@ impl<'a> Validator<'a> {
                 ExternDesc::Eq(id) => InstanceExportType::Type(*id),
                 ExternDesc::Instance(id) => InstanceExportType::Instance(*id),
                 ExternDesc::Func(id) => InstanceExportType::Func(*id),
-                ExternDesc::Sub => {
-                    InstanceExportType::SubType
-                },
+                ExternDesc::Sub => InstanceExportType::SubType,
             };
             exports.insert(name.clone(), export_ty);
         }
