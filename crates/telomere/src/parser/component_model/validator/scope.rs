@@ -1,5 +1,5 @@
 use crate::component_model::types::{
-    ComponentExportType, ComponentType, CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType, CoreType, Generic, GenericBound, InstanceExportType, Type
+    CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType, CoreType, Generic, Type
 };
 use crate::component_model::{
     Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, ExternDesc,
@@ -8,8 +8,6 @@ use crate::component_model::{
 use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-
-use super::Validator;
 
 pub struct TypeStore<T> {
     types: Vec<TypeId>,

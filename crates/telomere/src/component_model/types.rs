@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 pub use val::*;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Type {
     DefVal(DefValType),
     Generic(Generic),
@@ -80,7 +80,7 @@ impl Type {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Generic {
     pub id: usize,
     pub bound: GenericBound,
@@ -96,7 +96,7 @@ impl Generic {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum GenericBound {
     Eq(TypeId),
     Sub,
@@ -129,7 +129,7 @@ impl GenericBound {
         Ok(())
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ComponentType {
     pub imports: HashMap<String, Generic>,
     pub exports: HashMap<String, ComponentExportType>,
@@ -169,7 +169,7 @@ impl ComponentType {
         Ok(())
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ComponentExportType {
     Component(TypeId),
     Instance(TypeId),
@@ -195,7 +195,7 @@ impl ComponentExportType {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InstanceType {
     pub exports: HashMap<String, InstanceExportType>,
 }
@@ -208,11 +208,12 @@ impl InstanceType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum InstanceExportType {
     CoreModule(CoreModuleType),
     Func(TypeId),
     Component(TypeId),
     Instance(TypeId),
-    Resource(ResourceId),
+    Type(TypeId),
+    SubType,
 }

@@ -1,7 +1,10 @@
 mod scope;
 mod state;
 
-use crate::component_model::types::{ComponentExportType, ComponentType, Generic, GenericBound, InstanceExportType, InstanceType, Type};
+use crate::component_model::types::{
+    ComponentExportType, ComponentType, Generic, GenericBound, InstanceExportType, InstanceType,
+    Type,
+};
 use crate::component_model::{ExternDesc, TypeId};
 use crate::parser::component_model::ParseResult;
 pub use scope::ScopeGuard;
@@ -95,7 +98,8 @@ impl<'a> Validator<'a> {
                 ExternDesc::Func(id) => ComponentExportType::Type(*id), // FIXME: ?
                 ExternDesc::Sub => {
                     let id = TypeId::new();
-                    self.types.insert(id,Type::Generic(Generic::new(GenericBound::Sub)));
+                    self.types
+                        .insert(id, Type::Generic(Generic::new(GenericBound::Sub)));
                     ComponentExportType::NewResource(id)
                 }
             };
@@ -109,13 +113,12 @@ impl<'a> Validator<'a> {
         for (name, desc) in &scope.exports {
             let export_ty = match desc {
                 ExternDesc::Component(id) => InstanceExportType::Component(*id),
-                ExternDesc::Eq(id) => InstanceExportType::(*id),
+                ExternDesc::Eq(id) => InstanceExportType::Type(*id),
                 ExternDesc::Instance(id) => InstanceExportType::Instance(*id),
-                ExternDesc::Func(id) => InstanceExportType::Func(*id), // FIXME: ?
+                ExternDesc::Func(id) => InstanceExportType::Func(*id),
                 ExternDesc::Sub => {
-                    
-                    InstanceExportType::Resource(id)
-                }
+                    InstanceExportType::SubType
+                },
             };
             exports.insert(name.clone(), export_ty);
         }

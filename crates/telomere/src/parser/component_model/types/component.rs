@@ -1,21 +1,16 @@
-use std::collections::HashMap;
-
 use crate::binary::BinaryReader;
-use crate::component_model::types::{
-    ComponentExportType, ComponentType, Generic, GenericBound, ImportDecl, Type,
-};
-use crate::component_model::{ExternDesc, TypeId};
+use crate::component_model::types::{ComponentType, Generic, GenericBound, ImportDecl};
+use crate::component_model::ExternDesc;
 use crate::parser::component_model::types::instance_decl::_parse_instance_decl;
 use crate::parser::component_model::types::interface::parse_import_decl;
 use crate::parser::component_model::{
-    parse_vec_range, ComponentParseError, ParseContext, ParseResult, Validator,
+    parse_vec_range, ComponentParseError, ParseContext, ParseResult,
 };
 
 pub fn parse_component_type(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<ComponentType> {
     ctx.validator.push_scope();
-    let mut imports = HashMap::new();
 
     for _ in parse_vec_range(ctx)? {
         match ctx.reader.read_exact_one()? {
@@ -28,12 +23,16 @@ pub fn parse_component_type(
                     ExternDesc::Func(id) => GenericBound::Eq(id),
                     ExternDesc::Instance(id) => GenericBound::Eq(id),
                 };
-                if imports.insert(name.original, Generic::new(bound)).is_some() {
+                let scope = ctx.validator.scope_mut();
+                if scope
+                    .imports
+                    .insert(name.original, Generic::new(bound))
+                    .is_some()
+                {
                     Err(ComponentParseError::InvalidImportName(
                         "Duplicated name".to_owned(),
                     ))?;
                 }
-                // todo(type) add import type
             }
             x => {
                 _parse_instance_decl(ctx, Some(x))?;

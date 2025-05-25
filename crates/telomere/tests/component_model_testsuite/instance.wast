@@ -64,8 +64,8 @@
                 (import "x" (func (type 0)))
                 (import "y" (func (type 0)))
             )
-        )
-        (import "b" (component (type 0)))
+        ) ;; type 0
+        (import "b" (component (type 0))) ;; component 0
         (component
             (type 
                 (component
@@ -74,7 +74,7 @@
                 )
             )
             (import "a" (component (type 0)))
-        )
+        ) ;; component 1
         (instance (instantiate 1 (with "a" (component 0))))
     )
     "type mismatch"
