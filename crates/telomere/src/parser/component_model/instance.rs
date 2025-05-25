@@ -64,7 +64,11 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
         .component_indexes
         .get(component_lid)?;
     let component_ty = ctx.validator.get_component_type(component_tid)?;
-
+    if component_ty.imports.len() > args.len() {
+        Err(ComponentParseError::TypeMismatch(
+            "insufficient instantiate arg len".to_owned(),
+        ))?
+    }
     for (name, sort) in &args {
         let component_def = component_ty.imports.get(&name.original).ok_or_else(|| {
             ComponentParseError::TypeMismatch(
@@ -88,7 +92,9 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
                     bound: GenericBound::Eq(b),
                 },
             ) => {
-                a.assert_subtype_of(ctx.validator.get_type(*b)?, ctx.validator)?;
+                let b = ctx.validator.get_type(*b)?;
+                tracing::trace!("instantiate_arg: {} {:?} {:?}", name.original, a, b);
+                a.assert_subtype_of(b, ctx.validator)?;
             }
             _ => Err(ComponentParseError::TypeMismatch(
                 "expected resource".to_owned(),

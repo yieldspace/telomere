@@ -1,8 +1,11 @@
 mod scope;
 mod state;
 
-use crate::component_model::types::{ComponentType, InstanceType, Type};
-use crate::component_model::TypeId;
+use crate::component_model::types::{
+    ComponentExportType, ComponentType, Generic, GenericBound, InstanceExportType, InstanceType,
+    Type,
+};
+use crate::component_model::{ExternDesc, TypeId};
 use crate::parser::component_model::ParseResult;
 pub use scope::ScopeGuard;
 pub use state::ParseState;
@@ -82,5 +85,41 @@ impl<'a> Validator<'a> {
                 "Type ID does not refer to any instance".to_owned(),
             ))?
         }
+    }
+    pub fn make_component(&mut self) -> ComponentType {
+        let scope = self.scopes.last().unwrap();
+        let imports = scope.imports.clone();
+        let mut exports = HashMap::new();
+        for (name, desc) in &scope.exports {
+            let export_ty = match desc {
+                ExternDesc::Component(id) => ComponentExportType::Component(*id),
+                ExternDesc::Eq(id) => ComponentExportType::Type(*id),
+                ExternDesc::Instance(id) => ComponentExportType::Instance(*id),
+                ExternDesc::Func(id) => ComponentExportType::Type(*id), // FIXME: ?
+                ExternDesc::Sub => {
+                    let id = TypeId::new();
+                    self.types
+                        .insert(id, Type::Generic(Generic::new(GenericBound::Sub)));
+                    ComponentExportType::NewResource(id)
+                }
+            };
+            exports.insert(name.clone(), export_ty);
+        }
+        ComponentType { imports, exports }
+    }
+    pub fn make_instance(&mut self) -> InstanceType {
+        let scope = self.scopes.last().unwrap();
+        let mut exports = HashMap::new();
+        for (name, desc) in &scope.exports {
+            let export_ty = match desc {
+                ExternDesc::Component(id) => InstanceExportType::Component(*id),
+                ExternDesc::Eq(id) => InstanceExportType::Type(*id),
+                ExternDesc::Instance(id) => InstanceExportType::Instance(*id),
+                ExternDesc::Func(id) => InstanceExportType::Func(*id),
+                ExternDesc::Sub => InstanceExportType::SubType,
+            };
+            exports.insert(name.clone(), export_ty);
+        }
+        InstanceType { exports }
     }
 }

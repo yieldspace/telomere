@@ -3,7 +3,7 @@ use crate::{
     parser::component_model::{ComponentParseError, ParseResult, Validator},
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FuncType {
     pub params: Vec<ValType>,
     pub result: Option<ValType>,

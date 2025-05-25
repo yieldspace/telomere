@@ -35,14 +35,24 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 .imports
                 .insert(name.original, Generic::new(GenericBound::Eq(type_id)));
         }
-        ExternDesc::Instance(_) => {
-            // todo register type
-            ctx.state
-                .scope_mut()
-                .add_import(&name, ComponentImport::Instance);
-            ctx.state
+        ExternDesc::Instance(type_id) => {
+            let ty = ctx.validator.get_type(type_id);
+            tracing::trace!("ExternDesc::Instance: {:?}", ty);
+            let global = ctx
+                .state
                 .instance_store
                 .register(Relation::Import(name.original.clone()));
+            let focus = ctx.state.scope_mut();
+
+            focus.add_import(&name, ComponentImport::Instance);
+            focus.instances.register(global);
+
+            let focus = ctx.validator.scope_mut();
+
+            focus
+                .imports
+                .insert(name.original, Generic::new(GenericBound::Eq(type_id)));
+            focus.instance_indexes.add(type_id);
         }
         ExternDesc::Eq(_) => {
             // todo register type

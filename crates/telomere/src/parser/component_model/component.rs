@@ -76,7 +76,7 @@ pub fn _parse_component(
                     let mut ctx = ParseContext::new(&mut sized_reader, ctx.state, ctx.validator);
                     _parse_component(&mut ctx)?;
                 }
-                let component_ty = ctx.validator.scope().make_component();
+                let component_ty = ctx.validator.make_component();
                 let component = ctx.state.scope().make_component();
 
                 ctx.validator.pop_scope();
