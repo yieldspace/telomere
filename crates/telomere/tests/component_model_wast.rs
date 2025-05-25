@@ -40,14 +40,14 @@ fn component_resource() {
 
 #[test]
 fn component_instance_type() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
     run_test_file("instancetype");
 }
 
 #[test]
 fn component_instance() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
     run_test_file("instance");
 }
 

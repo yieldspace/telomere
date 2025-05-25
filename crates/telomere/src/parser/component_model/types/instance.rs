@@ -9,7 +9,6 @@ pub fn parse_instance_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
         parse_instance_decl(ctx)?;
     }
     let instance_ty = ctx.validator.make_instance();
-
     ctx.validator.pop_scope();
 
     Ok(instance_ty)
