@@ -162,7 +162,7 @@ impl ComponentType {
             let actual_ty = self.exports.get(parent_entry_name).ok_or_else(|| {
                 ComponentParseError::TypeMismatch("import name mismatch".to_owned())
             })?;
-            expected_ty.assert_subtype_of(&actual_ty, validator)?;
+            expected_ty.assert_subtype_of(actual_ty, validator)?;
         }
         Ok(())
     }
