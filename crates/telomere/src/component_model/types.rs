@@ -240,7 +240,7 @@ impl InstanceType {
             ))?
         }
         for (name, ty) in &parent.exports {
-            self.get_export(&name)?.assert_subtype_of(ty, validator)?;
+            self.get_export(name)?.assert_subtype_of(ty, validator)?;
         }
         Ok(())
     }
