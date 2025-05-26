@@ -73,9 +73,13 @@ impl Type {
                 }
             }
             (Type::Component(a), Type::Component(b)) => a.assert_subtype_of(b, validator),
-            _ => Err(ComponentParseError::TypeMismatch(
-                "resource kind mismatch".to_owned(),
-            )),
+            (Type::Instance(a), Type::Instance(b)) => a.assert_subtype_of(b, validator),
+            (a, b) => {
+                tracing::trace!("resource kind mismatch {a:?} {b:?}");
+                Err(ComponentParseError::TypeMismatch(
+                    "resource kind mismatch".to_owned(),
+                ))
+            }
         }
     }
 }
@@ -162,9 +166,7 @@ impl ComponentType {
             let actual_ty = self.exports.get(parent_entry_name).ok_or_else(|| {
                 ComponentParseError::TypeMismatch("import name mismatch".to_owned())
             })?;
-            expected_ty
-                .cv_type(validator)?
-                .assert_subtype_of(&actual_ty.cv_type(validator)?, validator)?;
+            expected_ty.assert_subtype_of(actual_ty, validator)?;
         }
         Ok(())
     }
@@ -174,25 +176,50 @@ pub enum ComponentExportType {
     Component(TypeId),
     Instance(TypeId),
     Type(TypeId),
+    Func(TypeId),
     Resource(ResourceId),
     NewResource(TypeId),
 }
 
 impl ComponentExportType {
-    pub fn cv_type<'a>(&self, validator: &'a Validator<'a>) -> ParseResult<Type> {
-        match self {
-            ComponentExportType::Component(type_id) => Ok(Type::Component(
-                validator.get_component_type(*type_id)?.clone(),
-            )),
-            ComponentExportType::Instance(type_id) => Ok(Type::Instance(
-                validator.get_instance_type(*type_id)?.clone(),
-            )),
-            ComponentExportType::Type(type_id) => validator.get_type(*type_id).cloned(),
-            ComponentExportType::Resource(resource_id) => Ok(Type::Resource(*resource_id)),
-            ComponentExportType::NewResource(_) => ParseResult::Err(
-                ComponentParseError::TypeMismatch("NewResource cannot be used here".to_owned()),
-            ),
-        }
+    pub fn assert_subtype_of<'a>(
+        &self,
+        parent: &Self,
+        validator: &'a Validator<'a>,
+    ) -> ParseResult<()> {
+        use ComponentExportType::*;
+        match (self, parent) {
+            (Component(a), Component(b)) => {
+                validator
+                    .get_component_type(*a)?
+                    .assert_subtype_of(validator.get_component_type(*b)?, validator)?;
+            }
+            (Instance(_a), Instance(_b)) => {
+                todo!()
+            }
+            (Type(a), Type(b)) => {
+                validator
+                    .get_type(*a)?
+                    .assert_subtype_of(validator.get_type(*b)?, validator)?;
+            }
+            (Func(a), Func(b)) => validator
+                .get_func_type(*a)?
+                .assert_subtype_of(validator.get_func_type(*b)?, validator)?,
+            (Resource(a), Resource(b)) => {
+                if a != b {
+                    Err(ComponentParseError::TypeMismatch(
+                        "resource id mismatch".to_owned(),
+                    ))?
+                }
+            }
+            (NewResource(_a), NewResource(_b)) => {
+                todo!()
+            }
+            _ => Err(ComponentParseError::TypeMismatch(
+                "export kind mismatch".to_owned(),
+            ))?,
+        };
+        Ok(())
     }
 }
 #[derive(Clone, Debug)]
@@ -206,6 +233,17 @@ impl InstanceType {
             .get(name)
             .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
     }
+    pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
+        if self.exports.len() < parent.exports.len() {
+            Err(ComponentParseError::TypeMismatch(
+                "instance export count".to_owned(),
+            ))?
+        }
+        for (name, ty) in &parent.exports {
+            self.get_export(name)?.assert_subtype_of(ty, validator)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -216,4 +254,35 @@ pub enum InstanceExportType {
     Instance(TypeId),
     Type(TypeId),
     SubType,
+}
+impl InstanceExportType {
+    pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
+        use InstanceExportType::*;
+        match (self, parent) {
+            (Func(a), Func(b)) => validator
+                .get_func_type(*a)?
+                .assert_subtype_of(validator.get_func_type(*b)?, validator),
+            (Component(a), Component(b)) => validator
+                .get_component_type(*a)?
+                .assert_subtype_of(validator.get_component_type(*b)?, validator),
+            (Instance(a), Instance(b)) => validator
+                .get_instance_type(*a)?
+                .assert_subtype_of(validator.get_instance_type(*b)?, validator),
+            (Type(a), Type(b)) => validator
+                .get_type(*a)?
+                .assert_subtype_of(validator.get_type(*b)?, validator),
+            (SubType, Type(_b)) => {
+                todo!()
+            }
+            (Type(_a), SubType) => {
+                todo!()
+            }
+            (SubType, SubType) => {
+                todo!()
+            }
+            _ => Err(ComponentParseError::TypeMismatch(
+                "export kind mismatch".to_owned(),
+            ))?,
+        }
+    }
 }

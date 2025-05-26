@@ -2,8 +2,8 @@ mod scope;
 mod state;
 
 use crate::component_model::types::{
-    ComponentExportType, ComponentType, Generic, GenericBound, InstanceExportType, InstanceType,
-    Type,
+    ComponentExportType, ComponentType, FuncType, Generic, GenericBound, InstanceExportType,
+    InstanceType, Type,
 };
 use crate::component_model::{ExternDesc, TypeId};
 use crate::parser::component_model::ParseResult;
@@ -121,5 +121,15 @@ impl<'a> Validator<'a> {
             exports.insert(name.clone(), export_ty);
         }
         InstanceType { exports }
+    }
+
+    pub fn get_func_type(&self, id: TypeId) -> ParseResult<&FuncType> {
+        if let Type::Func(ty) = self.get_type(id)? {
+            Ok(ty)
+        } else {
+            Err(ComponentParseError::TypeMismatch(
+                "Type ID does not refer to any func".to_owned(),
+            ))?
+        }
     }
 }
