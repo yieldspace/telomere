@@ -73,9 +73,14 @@ impl Type {
                 }
             }
             (Type::Component(a), Type::Component(b)) => a.assert_subtype_of(b, validator),
-            _ => Err(ComponentParseError::TypeMismatch(
+            (Type::Instance(a), Type::Instance(b)) =>{
+              a.assert_subtype_of(b, validator)
+            },
+            (a,b) => {
+                tracing::trace!("resource kind mismatch {a:?} {b:?}");
+                Err(ComponentParseError::TypeMismatch(
                 "resource kind mismatch".to_owned(),
-            )),
+            ))},
         }
     }
 }
@@ -229,6 +234,15 @@ impl InstanceType {
             .get(name)
             .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
     }
+    pub fn assert_subtype_of(&self,parent: &Self,validator: &Validator) -> ParseResult<()> {
+        if self.exports.len() < parent.exports.len(){
+            Err(ComponentParseError::TypeMismatch("instance export count".to_owned()))?
+        }
+        for (name,ty) in &parent.exports{
+            self.get_export(&name)?.assert_subtype_of(ty, validator)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -239,4 +253,10 @@ pub enum InstanceExportType {
     Instance(TypeId),
     Type(TypeId),
     SubType,
+}
+impl InstanceExportType{
+    pub fn assert_subtype_of(&self,parent: &Self,validator: &Validator)->ParseResult<()>{
+        // FIXME:
+        Ok(())
+    }
 }
