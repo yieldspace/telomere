@@ -11,6 +11,7 @@ pub fn _parse_instance_decl(
     ctx: &mut ParseContext<impl BinaryReader>,
     byte: Option<u8>,
 ) -> ParseResult<()> {
+    tracing::trace!("_parse_instance_decl");
     let b = match byte {
         Some(b) => b,
         None => ctx.reader.read_exact_one()?,

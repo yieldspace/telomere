@@ -54,11 +54,16 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 .insert(name.original, Generic::new(GenericBound::Eq(type_id)));
             focus.instance_indexes.add(type_id);
         }
-        ExternDesc::Eq(_) => {
-            // todo register type
+        ExternDesc::Eq(type_id) => {
+            let focus = ctx.validator.scope_mut();
+
+            focus
+                .imports
+                .insert(name.original, Generic::new(GenericBound::Eq(type_id)));
+            focus.type_indexes.add(type_id);
         }
         ExternDesc::Sub => {
-            // todo register type
+            todo!()
         }
         ExternDesc::Func(type_id) => {
             let global_idx = ctx

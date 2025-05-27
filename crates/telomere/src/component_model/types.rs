@@ -3,12 +3,12 @@ mod core;
 mod defval;
 mod export_decl;
 mod func;
+mod generics_replace;
 mod import_decl;
 mod instance_decl;
 mod primitive;
 mod sort;
 mod val;
-
 use crate::component_model::{ResourceId, TypeId};
 use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
 pub use component_decl::*;
@@ -16,6 +16,7 @@ pub use core::*;
 pub use defval::*;
 pub use export_decl::*;
 pub use func::*;
+pub use generics_replace::GenericsReplaceDSL;
 pub use import_decl::*;
 pub use instance_decl::*;
 pub use primitive::*;
@@ -59,8 +60,22 @@ impl Type {
             (Type::Generic(_), _) => {
                 todo!()
             }
-            (_, Type::Generic(_)) => {
-                todo!()
+            (
+                a,
+                Type::Generic(Generic {
+                    id: _,
+                    bound: GenericBound::Eq(b),
+                }),
+            ) => a.assert_subtype_of(validator.get_type(*b)?, validator),
+            (
+                _a,
+                Type::Generic(Generic {
+                    id: _,
+                    bound: GenericBound::Sub,
+                }),
+            ) => {
+                tracing::warn!("should validate a is resource");
+                Ok(())
             }
             (Type::Func(a), Type::Func(b)) => a.assert_subtype_of(b, validator),
             (Type::Resource(a), Type::Resource(b)) => {
@@ -137,6 +152,7 @@ impl GenericBound {
 pub struct ComponentType {
     pub imports: HashMap<String, Generic>,
     pub exports: HashMap<String, ComponentExportType>,
+    pub generics_replacing_program: Vec<GenericsReplaceDSL>,
 }
 impl ComponentType {
     pub fn assert_subtype_of(
@@ -177,8 +193,8 @@ pub enum ComponentExportType {
     Instance(TypeId),
     Type(TypeId),
     Func(TypeId),
-    Resource(ResourceId),
-    NewResource(TypeId),
+    //Resource(ResourceId),
+    //NewResource(TypeId),
 }
 
 impl ComponentExportType {
@@ -205,16 +221,6 @@ impl ComponentExportType {
             (Func(a), Func(b)) => validator
                 .get_func_type(*a)?
                 .assert_subtype_of(validator.get_func_type(*b)?, validator)?,
-            (Resource(a), Resource(b)) => {
-                if a != b {
-                    Err(ComponentParseError::TypeMismatch(
-                        "resource id mismatch".to_owned(),
-                    ))?
-                }
-            }
-            (NewResource(_a), NewResource(_b)) => {
-                todo!()
-            }
             _ => Err(ComponentParseError::TypeMismatch(
                 "export kind mismatch".to_owned(),
             ))?,
@@ -252,8 +258,9 @@ pub enum InstanceExportType {
     Func(TypeId),
     Component(TypeId),
     Instance(TypeId),
+    //Resource(ResourceId),
     Type(TypeId),
-    SubType,
+    //SubResource(TypeId),
 }
 impl InstanceExportType {
     pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
@@ -271,15 +278,6 @@ impl InstanceExportType {
             (Type(a), Type(b)) => validator
                 .get_type(*a)?
                 .assert_subtype_of(validator.get_type(*b)?, validator),
-            (SubType, Type(_b)) => {
-                todo!()
-            }
-            (Type(_a), SubType) => {
-                todo!()
-            }
-            (SubType, SubType) => {
-                todo!()
-            }
             _ => Err(ComponentParseError::TypeMismatch(
                 "export kind mismatch".to_owned(),
             ))?,

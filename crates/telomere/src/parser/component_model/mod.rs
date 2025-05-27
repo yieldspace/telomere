@@ -134,5 +134,6 @@ pub(crate) fn parse_vec_range(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<Range<u32>, ComponentParseError> {
     let (_, size) = parse_u32(ctx.reader)?;
+    tracing::trace!("parse_vec_range :{size}");
     Ok(0..size)
 }

@@ -1,14 +1,14 @@
 use crate::component_model::types::{
-    CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType,
-    CoreType, Generic, Type,
+    CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType, CoreType, Generic, GenericsReplaceDSL, Type
 };
 use crate::component_model::{
-    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, ExternDesc,
+    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable,
     Func, Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
 };
 use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+
 
 pub struct TypeStore<T> {
     types: Vec<TypeId>,
@@ -49,6 +49,14 @@ impl<R, T> CoreTypeStore<R, T> {
         Ok(self.types.get(idx.get() as usize).unwrap())
     }
 }
+#[derive(Debug)]
+pub enum ExportInfo{
+    Component(TypeId),
+    Instance(TypeId),
+    Func(TypeId),
+    TypeEq(TypeId),
+    TypeSub,
+}
 
 #[derive(Default)]
 pub struct ScopeGuard {
@@ -65,7 +73,8 @@ pub struct ScopeGuard {
     pub core_globals: CoreTypeStore<CoreGlobal, CoreGlobalType>,
     pub core_funcs: CoreTypeStore<CoreFunc, CoreFuncType>,
     pub imports: HashMap<String, Generic>,
-    pub exports: HashMap<String, ExternDesc>,
+    pub exports: HashMap<String, ExportInfo>,
+    pub generics_replace_program: Vec<GenericsReplaceDSL>,
     pub export_names: Vec<ParsedExportName>,
     pub import_names: Vec<ParsedImportName>,
 }
