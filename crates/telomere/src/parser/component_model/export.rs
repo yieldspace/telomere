@@ -1,6 +1,6 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::GenericsReplaceDSL;
-use crate::component_model::{ComponentExport, ExternDesc, Sort, StrongUnique};
+use crate::component_model::{ComponentExport, CoreSort, ExternDesc, Sort, StrongUnique};
 use crate::parser::component_model::name::parse_export_name_dash;
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::types::parse_externdesc;
@@ -88,5 +88,16 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             // TODO: validate desc
             Ok(())
         }
+        Sort::Core(CoreSort::Module(idx, ty)) => {
+            ctx.state
+                .scope_mut()
+                .add_export(&name, ComponentExport::CoreModule);
+            ctx.state.scope_mut().core_modules.register(idx);
+            ctx.validator.scope_mut().core_modules.add(ty);
+            Ok(())
+        }
+        _ => Err(ComponentParseError::InvalidSignature(
+            "export core sorts other than core module is not supported".to_owned(),
+        )),
     }
 }

@@ -1,4 +1,5 @@
 use crate::component_model::{CoreInstance, GlobalIdx, Instance};
+use crate::runtime::component_model::instantiate::InstantiateScope;
 
 pub type ImportNameString = String;
 pub type ExportNameString = String;

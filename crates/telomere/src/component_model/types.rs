@@ -9,7 +9,8 @@ mod instance_decl;
 mod primitive;
 mod sort;
 mod val;
-use crate::component_model::{ResourceId, TypeId};
+
+use crate::component_model::{CoreSort, ResourceId, Sort, TypeId};
 use crate::parser::component_model::{ComponentParseError, ParseResult, Validator};
 pub use component_decl::*;
 pub use core::*;
@@ -281,6 +282,24 @@ impl InstanceExportType {
             _ => Err(ComponentParseError::TypeMismatch(
                 "export kind mismatch".to_owned(),
             ))?,
+        }
+    }
+}
+
+impl TryFrom<Sort> for InstanceExportType {
+    type Error = ComponentParseError;
+
+    fn try_from(sort: Sort) -> Result<Self, Self::Error> {
+        match sort {
+            Sort::Core(CoreSort::Module(_, ty)) => Ok(InstanceExportType::CoreModule(ty)),
+            Sort::Func(_, ty) => Ok(InstanceExportType::Func(ty)),
+            Sort::Component(_, ty) => Ok(InstanceExportType::Component(ty)),
+            Sort::Instance(_, ty) => Ok(InstanceExportType::Instance(ty)),
+            Sort::Type(ty) => Ok(InstanceExportType::Type(ty)),
+            _ => Err(ComponentParseError::InvalidSignature(
+                "core sort other than core module is not allowed in instance export type"
+                    .to_owned(),
+            )),
         }
     }
 }

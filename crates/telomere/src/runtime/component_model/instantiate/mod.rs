@@ -1,129 +1,183 @@
+use crate::common::InstanceHandle;
+use crate::component_model::{
+    Component, CoreInstance, CoreModule, GlobalIdx, Instance, InstanceImport,
+};
+use crate::parser::component_model::ParsedComponent;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
-use crate::runtime::component_model::instantiate::context::{ResolvedImportKey, ResolvedImportMap};
-use crate::runtime::component_model::ComponentVMError;
+use crate::runtime::component_model::{ComponentModelInstance, ComponentVMError, Linker};
+use crate::runtime::instantiate as core_instantiate;
+use crate::{Registry, Store};
+pub use state::InstantiateState;
+use std::collections::HashMap;
+use typed_arena::Arena;
 
 mod context;
+mod state;
 
 pub type InstantiateResult<T> = Result<T, ComponentVMError>;
 
-pub type InstantiateOp =
-    unsafe fn(*const InstantiateInstr, &mut InstantiateContext) -> InstantiateResult<()>;
-
-#[derive(Copy, Clone)]
-pub union InstantiateInstr {
-    pub(crate) op: InstantiateOp,
-    pub(crate) operand: InstantiateOperand,
+#[derive(Debug, Clone)]
+pub enum InstantiateOp {
+    CoreInstantiate(GlobalIdx<CoreInstance>),
+    CoreInstanceInlineExport(GlobalIdx<CoreInstance>),
+    Instantiate(GlobalIdx<Instance>),
+    InstantiateEnd,
+    InstantiateInlineExport(GlobalIdx<Instance>),
 }
 
-#[derive(Clone, Copy)]
-pub union InstantiateOperand {
-    #[allow(dead_code)]
-    idx: usize,
-    pub core_module_idx: usize,
-    pub core_instance_idx: usize,
-    pub core_func_idx: usize,
-    pub instance_idx: usize,
-    pub module_idx: usize,
-    pub func_idx: usize,
-    pub type_idx: usize,
+pub enum InstantiateScope<'a, 'b, 'o> {
+    Linker(
+        &'a Linker,
+        Option<&'b InstantiateScope<'a, 'b, 'o>>,
+        &'o [InstantiateOp],
+    ),
+    Instantiate(
+        HashMap<String, InstanceImport>,
+        Option<&'b InstantiateScope<'a, 'b, 'o>>,
+        &'o [InstantiateOp],
+    ),
 }
 
-#[inline(always)]
-pub(crate) unsafe fn instantiate_next(
-    tail_code: *const InstantiateInstr,
-    consumed: isize,
-    ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    ((*tail_code.offset(consumed)).op)(tail_code.offset(consumed + 1), ctx)
+pub struct ScopeManager<'a, 'b, 'o> {
+    arena: &'a Arena<InstantiateScope<'b, 'a, 'o>>,
+    pub current: &'a InstantiateScope<'b, 'a, 'o>,
 }
 
-pub unsafe fn instantiate_core_instance(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    instantiate_next(tail_code, 1, ctx)
+impl<'a, 'b, 'o> ScopeManager<'a, 'b, 'o> {
+    pub fn new(
+        arena: &'a Arena<InstantiateScope<'b, 'a, 'o>>,
+        linker: &'b Linker,
+        ops: &'o [InstantiateOp],
+    ) -> Self {
+        let current = arena.alloc(InstantiateScope::Linker(linker, None, ops));
+        Self { arena, current }
+    }
+
+    pub fn push(
+        &mut self,
+        imports: HashMap<String, InstanceImport>,
+        ops: &'o [InstantiateOp],
+    ) -> &InstantiateScope<'b, 'a, 'o> {
+        let new_scope = self.arena.alloc(InstantiateScope::Instantiate(
+            imports,
+            Some(self.current),
+            ops,
+        ));
+        self.current = new_scope;
+        new_scope
+    }
+
+    pub fn pop(&mut self) {
+        self.current = self.current.parent().unwrap();
+    }
 }
 
-pub unsafe fn instantiate_core_type(
-    _tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    todo!()
+impl<'a, 'b, 'o> InstantiateScope<'a, 'b, 'o> {
+    fn parent(&self) -> Option<&InstantiateScope<'a, 'b, 'o>> {
+        match self {
+            InstantiateScope::Linker(_, parent, _) => *parent,
+            InstantiateScope::Instantiate(_, parent, _) => *parent,
+        }
+    }
+
+    fn ops(&self) -> &'o [InstantiateOp] {
+        match self {
+            InstantiateScope::Linker(_, _, ops) => ops,
+            InstantiateScope::Instantiate(_, _, ops) => ops,
+        }
+    }
+
+    pub fn get_core_module(&self, name: &String) -> InstantiateResult<GlobalIdx<CoreModule>> {
+        match self {
+            InstantiateScope::Linker(_, _, _) => todo!(),
+            InstantiateScope::Instantiate(imports, _, _) => {
+                if let Some(InstanceImport::CoreModule(module_idx)) = imports.get(name) {
+                    Ok(*module_idx)
+                } else {
+                    Err(ComponentVMError::LinkError(name.clone()))
+                }
+            }
+        }
+    }
+
+    pub fn get_component(&self, name: &String) -> InstantiateResult<GlobalIdx<Component>> {
+        match self {
+            InstantiateScope::Linker(_, _, _) => todo!(),
+            InstantiateScope::Instantiate(imports, _, _) => {
+                if let Some(InstanceImport::Component(component_idx)) = imports.get(name) {
+                    Ok(*component_idx)
+                } else {
+                    Err(ComponentVMError::LinkError(name.clone()))
+                }
+            }
+        }
+    }
+
+    pub fn get_instance(&self, name: &String) -> InstantiateResult<GlobalIdx<Instance>> {
+        match self {
+            InstantiateScope::Linker(_, _, _) => todo!(),
+            InstantiateScope::Instantiate(imports, _, _) => {
+                if let Some(InstanceImport::Instance(instance_idx)) = imports.get(name) {
+                    Ok(*instance_idx)
+                } else {
+                    Err(ComponentVMError::LinkError(name.clone()))
+                }
+            }
+        }
+    }
 }
 
-pub unsafe fn instantiate_import_core_module(
-    _tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    // let idx = (*tail_code).operand.core_module_idx;
-    // let module = ctx.component.get_core_module(idx);
-    // assert!(module.value.is_none());
-    // if let Some(CoreModuleReference::Imported(name)) = &module.reference {
-    //     let imported_module = ctx.component.get_instance(idx);
-    //     ctx.resolved_imports.get_mut(&ResolvedImportKey::Child(ctx.current.unwrap())).unwrap()
-    //         .core_modules.insert(idx, )
-    // } else {
-    //     unreachable!()
-    // }
-    unreachable!()
-}
-
-pub unsafe fn instantiate_instance_start(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    let idx = (*tail_code).operand.instance_idx;
-
-    ctx.resolved_imports
-        .insert(ResolvedImportKey::Child(idx), ResolvedImportMap::new());
-
-    ctx.current = Some(idx);
-
-    instantiate_next(tail_code, 1, ctx)
-}
-
-pub unsafe fn instantiate_instance_end(
-    tail_code: *const InstantiateInstr,
-    ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    instantiate_next(tail_code, 0, ctx)
-}
-
-pub unsafe fn instantiate_inline_instance(
-    _tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    todo!();
-}
-
-pub unsafe fn instantiate_type(
-    _tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    todo!();
-}
-
-pub unsafe fn instantiate_core_function(
-    tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    let _idx = (*tail_code).operand.core_func_idx;
-
-    todo!();
-}
-#[allow(clippy::result_unit_err)]
-pub unsafe fn instantiate_function(
-    tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
-    let _idx = (*tail_code).operand.func_idx;
-    todo!()
-}
-
-#[allow(clippy::result_unit_err)]
-pub unsafe fn instantiate_special_end(
-    _tail_code: *const InstantiateInstr,
-    _ctx: &mut InstantiateContext,
-) -> InstantiateResult<()> {
+pub async fn instantiate(
+    component: ParsedComponent,
+    store: &mut Store,
+    linker: &Linker,
+) -> Result<(), ComponentVMError> {
+    let arena = Arena::new();
+    let mut manager = ScopeManager::new(&arena, linker, &component.ops);
+    let mut state = InstantiateState::new();
+    'outer: loop {
+        for op in manager.current.ops() {
+            match op {
+                InstantiateOp::CoreInstantiate(idx) => {
+                    let CoreInstance::Defined {
+                        module_idx,
+                        imports,
+                    } = component.resolve_core_instance(*idx)?
+                    else {
+                        unreachable!();
+                    };
+                    let module =
+                        component.resolve_core_module(*module_idx, manager.current, &state)?;
+                    let mut registry = Registry::new();
+                    for (name, import) in imports {
+                        registry.register(name, state.get_core_instance(import).unwrap().clone());
+                    }
+                    let r = core_instantiate(module.module.clone(), store, &registry)
+                        .await
+                        .unwrap();
+                    state.insert_core_instance(*idx, r);
+                }
+                InstantiateOp::CoreInstanceInlineExport(idx) => {}
+                InstantiateOp::Instantiate(idx) => {
+                    let Instance::Defined {
+                        imports,
+                        component_idx,
+                    } = component.resolve_instance(*idx, manager.current, &state)?
+                    else {
+                        unreachable!();
+                    };
+                    let component =
+                        component.resolve_component(*component_idx, manager.current, &state)?;
+                    manager.push(imports.clone(), &component.ops);
+                }
+                InstantiateOp::InstantiateEnd => {
+                    // special end
+                    break 'outer;
+                }
+                InstantiateOp::InstantiateInlineExport(idx) => {}
+            }
+        }
+        manager.pop();
+    }
     Ok(())
 }

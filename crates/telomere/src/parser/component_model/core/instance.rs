@@ -10,11 +10,13 @@ use crate::parser::component_model::{
     ParseResult, SizedResult,
 };
 use crate::parser::core::{parse_name, parse_u32};
+use crate::runtime::component_model::instantiate::InstantiateOp;
 use std::collections::HashMap;
 use tracing::trace;
 
 pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     trace!("parse core instance");
+    let op: fn(GlobalIdx<CoreInstance>) -> InstantiateOp;
     let (inst_ty, inst) = match ctx.reader.read_exact_one()? {
         0x00 => {
             let idx = parse_core_module_local_idx(ctx)?;
@@ -27,6 +29,7 @@ pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
 
                 imports.insert(name, idx);
             }
+            op = InstantiateOp::CoreInstantiate;
             (
                 CoreInstanceType::from(module_ty),
                 CoreInstance::Defined {
@@ -43,6 +46,7 @@ pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
                 exports.insert(name.clone(), export);
                 export_types.insert(name, ty);
             }
+            op = InstantiateOp::CoreInstanceInlineExport;
             (
                 CoreInstanceType {
                     exports: export_types,
@@ -58,6 +62,7 @@ pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
         .register(CoreRelation::Defined(inst));
     ctx.state.scope_mut().core_instances.register(instance_gidx);
     ctx.validator.scope_mut().core_instances.add(inst_ty);
+    ctx.state.scope_mut().push_op(op(instance_gidx));
     Ok(())
 }
 

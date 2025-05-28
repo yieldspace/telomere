@@ -1,8 +1,11 @@
 use telomere::parser::component_model::{ParseState, Validator};
+use telomere::runtime::component_model::{instantiate, Linker};
+use telomere::Store;
 use wast::parser::ParseBuffer;
 use wast::Wast;
+
 #[allow(dead_code)]
-pub fn run_component_wast(text: &str) {
+pub async fn run_component_wast(text: &str) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
 
@@ -25,7 +28,11 @@ pub fn run_component_wast(text: &str) {
                 ) {
                     panic!("{:?} {:?}", span.linecol_in(text), v);
                 }
-                println!("Parsed component: {name:?}");
+                let mut store = Store::new();
+                let linker = Linker::new();
+                instantiate(state.into(), &mut store, &linker)
+                    .await
+                    .unwrap();
             }
             WastDirective::AssertInvalid {
                 span, mut module, ..

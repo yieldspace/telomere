@@ -12,6 +12,7 @@ use crate::parser::component_model::{
     parse_vec_range, parse_version, ComponentParseError, ParseContext, Validator,
 };
 use crate::parser::core::parse_u32;
+use crate::runtime::component_model::instantiate::InstantiateOp;
 use crate::WasmParser;
 
 pub fn parse_component(
@@ -20,10 +21,11 @@ pub fn parse_component(
     validator: &mut Validator,
 ) -> Result<(), ComponentParseError> {
     tracing::trace!("parse_component_root");
-    let mut ctx = ParseContext::new(reader, state, validator);
-    ctx.validator.push_scope();
-    _parse_component(&mut ctx)?;
-    ctx.validator.pop_scope();
+    {
+        let mut ctx = ParseContext::new(reader, state, validator);
+        _parse_component(&mut ctx)?;
+    }
+    state.scope_mut().push_op(InstantiateOp::InstantiateEnd);
     Ok(())
 }
 
@@ -114,7 +116,8 @@ pub fn _parse_component(
                     parse_alias(ctx)?;
                 }
             }
-            v => todo!("unimplemented: {:?}", v),
+            ComponentSection::Canon => {}
+            ComponentSection::Start => {}
         }
     }
     Ok(())

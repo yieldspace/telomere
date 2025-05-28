@@ -7,9 +7,7 @@ pub mod instantiate;
 mod linker;
 
 use crate::common::InstanceHandle;
-use crate::runtime::component_model::instantiate::{
-    instantiate_next, InstantiateContext, InstantiateInstr,
-};
+pub use crate::runtime::component_model::instantiate::instantiate;
 use crate::{Registry, Store};
 pub use error::ComponentVMError;
 pub use func::*;
@@ -17,14 +15,14 @@ pub use linker::Linker;
 use std::collections::HashMap;
 
 #[derive(Debug)]
-pub struct ComponentInstantiated {
+pub struct ComponentModelInstance {
     pub core_instances: Vec<CoreInstantiated>,
     pub core_functions: Vec<CoreFunctionInstantiated>,
     pub functions: Vec<ComponentFunctionInstantiated>,
     pub export: HashMap<String, InstanceExport>,
 }
 
-impl ComponentInstantiated {
+impl ComponentModelInstance {
     fn new() -> Self {
         Self {
             core_instances: vec![],
@@ -49,17 +47,3 @@ pub struct CoreInstantiated {
 
 #[derive(Debug)]
 pub struct CoreFunctionInstantiated {}
-
-pub fn instantiate(
-    instrs: &mut [InstantiateInstr],
-    store: &mut Store,
-    linker: &Linker,
-) -> Result<ComponentInstantiated, ComponentVMError> {
-    let mut instantiated = ComponentInstantiated::new();
-    let ptr = instrs.as_ptr();
-    let mut ctx = InstantiateContext::new(store, &mut instantiated, linker);
-    unsafe {
-        instantiate_next(ptr, 0, &mut ctx).unwrap();
-    }
-    Ok(instantiated)
-}

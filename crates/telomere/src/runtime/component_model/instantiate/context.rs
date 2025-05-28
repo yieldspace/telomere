@@ -1,77 +1,74 @@
 use crate::common::InstanceHandle;
-use crate::runtime::component_model::{ComponentInstantiated, CoreInstantiated, Linker};
+use crate::component_model::{CoreInstance, CoreModule, CoreRelation, GlobalIdx};
+use crate::parser::component_model::ParsedComponent;
+use crate::runtime::component_model::instantiate::InstantiateResult;
+use crate::runtime::component_model::{
+    ComponentModelInstance, ComponentVMError, CoreInstantiated, Linker,
+};
 use crate::{Registry, Store};
 use std::collections::HashMap;
 
 #[allow(dead_code)]
 pub struct InstantiateContext<'a> {
+    component: ParsedComponent,
     pub current: Option<usize>,
     pub(crate) store: &'a mut Store,
-    pub instantiated: &'a mut ComponentInstantiated,
-    pub core_functions: Vec<(InstanceHandle, String)>,
-    pub core_memories: Vec<(InstanceHandle, String)>,
-    pub core_tables: Vec<(InstanceHandle, String)>,
-    pub resolved_imports: HashMap<ResolvedImportKey, ResolvedImportMap>,
-    pub instances: HashMap<usize, InstantiatedInstance>,
+    pub instantiated: &'a mut ComponentModelInstance,
     pub linker: &'a Linker,
 }
 
 impl<'a> InstantiateContext<'a> {
     pub fn new(
+        component: ParsedComponent,
         store: &'a mut Store,
-        instantiated: &'a mut ComponentInstantiated,
+        instantiated: &'a mut ComponentModelInstance,
         linker: &'a Linker,
     ) -> Self {
         Self {
+            component,
             current: None,
             store,
             instantiated,
-            core_functions: vec![],
-            core_memories: vec![],
-            core_tables: vec![],
-            resolved_imports: Default::default(),
-            instances: Default::default(),
             linker,
         }
     }
 
-    pub fn push_core_module_instance(&mut self, instance: InstanceHandle, registry: Registry) {
-        self.instantiated.core_instances.push(CoreInstantiated {
-            id: instance,
-            registry,
-        });
+    pub fn get_core_module(&self, idx: GlobalIdx<CoreModule>) -> InstantiateResult<&CoreModule> {
+        if let Some(instance) = self.component.core_modules.get(&idx) {
+            match instance {
+                CoreRelation::Defined(inst) => Ok(inst),
+                CoreRelation::ImportModule(_) => todo!(),
+                CoreRelation::FromExport(_, _) => todo!(),
+                CoreRelation::FromCoreExport(_, _) => todo!(),
+            }
+        } else {
+            Err(ComponentVMError::TypeMismatch(format!(
+                "core module not found: {:?}",
+                idx
+            )))
+        }
     }
-}
 
-pub enum InstantiatedInstanceExport {
-    // Module(GlobalIdx<CoreModule>),
-    // Instance(GlobalIdx<Instance>),
-}
-
-pub struct InstantiatedInstance {
-    pub exports: HashMap<String, InstantiatedInstanceExport>,
-}
-
-#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
-pub enum ResolvedImportKey {
-    Toplevel,
-    Child(usize),
-}
-
-pub struct ResolvedImportMap {
-    // pub core_modules: HashMap<GlobalIdx<CoreModule>, Module>,
-}
-
-impl Default for ResolvedImportMap {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ResolvedImportMap {
-    pub fn new() -> Self {
-        Self {
-            // core_modules: Default::default(),
+    pub fn get_core_instance(
+        &self,
+        idx: GlobalIdx<CoreInstance>,
+    ) -> InstantiateResult<&CoreInstance> {
+        if let Some(instance) = self.component.core_instances.get(&idx) {
+            match instance {
+                CoreRelation::Defined(inst) => Ok(inst),
+                CoreRelation::ImportModule(_) => Err(ComponentVMError::TypeMismatch(
+                    "core instance cannot import".into(),
+                )),
+                CoreRelation::FromExport(_, _) => Err(ComponentVMError::TypeMismatch(
+                    "core instance cannot export from instance".into(),
+                )),
+                CoreRelation::FromCoreExport(_, _) => unimplemented!("module link proposal"),
+            }
+        } else {
+            Err(ComponentVMError::TypeMismatch(format!(
+                "core instance not found: {:?}",
+                idx
+            )))
         }
     }
 }

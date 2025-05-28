@@ -1,20 +1,31 @@
-use crate::component_model::{Component, ExportNameString, Func, GlobalIdx, ImportNameString};
+use crate::component_model::{
+    Component, CoreModule, ExportNameString, Func, GlobalIdx, ImportNameString,
+};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
-pub struct Instance {
-    pub component_idx: Option<GlobalIdx<Component>>,
-    pub imports: HashMap<ImportNameString, InstanceImport>,
-    pub exports: HashMap<ExportNameString, InstanceExport>,
+pub enum Instance {
+    Defined {
+        component_idx: GlobalIdx<Component>,
+        imports: HashMap<ImportNameString, InstanceImport>,
+    },
+    InlineExport {
+        exports: HashMap<ExportNameString, InlineExport>,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum InstanceImport {
-    // CoreModule,
+    CoreModule(GlobalIdx<CoreModule>),
     Func(GlobalIdx<Func>),
     Component(GlobalIdx<Component>),
     Instance(GlobalIdx<Instance>),
 }
 
 #[derive(Debug, Clone)]
-pub struct InstanceExport {}
+pub enum InlineExport {
+    CoreModule(GlobalIdx<CoreModule>),
+    Func(GlobalIdx<Func>),
+    Component(GlobalIdx<Component>),
+    Instance(GlobalIdx<Instance>),
+}

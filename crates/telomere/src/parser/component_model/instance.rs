@@ -1,15 +1,19 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{
-    Generic, GenericBound, GenericsReplaceDSL, InstanceType, Type,
+    Generic, GenericBound, InstanceExportType, InstanceType, Type, GenericsReplaceDSL,
 };
-use crate::component_model::{ImportName, Instance, InstanceImport, Relation, Sort};
-use crate::parser::component_model::name::parse_import_name;
+use crate::component_model::{
+    CoreSort, ImportName, InlineExport, Instance, InstanceImport, Relation, Sort,
+};
+use crate::parser::component_model::name::{parse_export_name, parse_import_name};
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::{
-    parse_component_local_idx, ComponentParseError, ParseContext, ParseResult, SizedResult,
+    parse_component_local_idx, parse_vec_range, ComponentParseError, ParseContext, ParseResult,
+    SizedResult,
 };
 use crate::parser::core::parse_vec;
-use std::collections::HashSet;
+use crate::runtime::component_model::instantiate::InstantiateOp;
+use std::collections::{HashMap, HashSet};
 use tracing::trace;
 
 pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
@@ -38,28 +42,43 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
         ))?
     }
     let component_gid = ctx.state.scope().components.get(component_lid)?;
-    let instance = Instance {
-        component_idx: Some(component_gid),
-        imports: args
-            .iter()
-            .filter_map(|(name, sort)| match sort {
-                Sort::Component(idx, _) => {
-                    (name.original.clone(), InstanceImport::Component(*idx)).into()
-                }
-                Sort::Instance(idx, _) => {
-                    (name.original.clone(), InstanceImport::Instance(*idx)).into()
-                }
-                Sort::Func(idx, _) => (name.original.clone(), InstanceImport::Func(*idx)).into(),
-                Sort::Type(_) => None,
-            })
-            .collect(),
-        exports: Default::default(),
+    let instance = Instance::Defined {
+        component_idx: component_gid,
+        imports: {
+            let mut results = vec![];
+            for (name, sort) in args.iter() {
+                match sort {
+                    Sort::Component(idx, _) => {
+                        results.push((name.original.clone(), InstanceImport::Component(*idx)))
+                    }
+                    Sort::Instance(idx, _) => {
+                        results.push((name.original.clone(), InstanceImport::Instance(*idx)))
+                    }
+                    Sort::Func(idx, _) => {
+                        results.push((name.original.clone(), InstanceImport::Func(*idx)))
+                    }
+                    Sort::Type(_) => {}
+                    Sort::Core(CoreSort::Module(idx, _)) => {
+                        results.push((name.original.clone(), InstanceImport::CoreModule(*idx)))
+                    }
+                    _ => {
+                        return Err(ComponentParseError::InvalidSignature(
+                            "expected component, instance, func, or core module sort".to_owned(),
+                        ));
+                    }
+                };
+            }
+            results.into_iter().collect()
+        },
     };
     let instance_gid = ctx
         .state
         .instance_store
         .register(Relation::Defined(instance));
     ctx.state.scope_mut().instances.register(instance_gid);
+    ctx.state
+        .scope_mut()
+        .push_op(InstantiateOp::Instantiate(instance_gid));
     let component_tid = ctx
         .validator
         .scope_mut()
@@ -123,7 +142,47 @@ fn parse_instantiate_arg(
     Ok((ctx.reader.read_count() - start_count, (name, sort)))
 }
 
-fn parse_inlineexport(_ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
+fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     trace!("parse inline export");
-    todo!();
+    let mut exports = HashMap::new();
+    let mut export_types = HashMap::<String, InstanceExportType>::new();
+    for _ in parse_vec_range(ctx)? {
+        let name = parse_export_name(ctx)?;
+        let sort = parse_sort_with_idx(ctx)?;
+        export_types.insert(name.original.clone(), sort.clone().try_into()?);
+        match sort {
+            Sort::Core(CoreSort::Module(idx, _)) => {
+                exports.insert(name.original, InlineExport::CoreModule(idx));
+            }
+            Sort::Component(idx, _) => {
+                exports.insert(name.original, InlineExport::Component(idx));
+            }
+            Sort::Instance(idx, _) => {
+                exports.insert(name.original, InlineExport::Instance(idx));
+            }
+            Sort::Func(idx, _) => {
+                exports.insert(name.original, InlineExport::Func(idx));
+            }
+            Sort::Type(_) => {}
+            _ => {
+                return Err(ComponentParseError::InvalidSignature(
+                    "Core sorts other than core module are not allowed".to_owned(),
+                ))
+            }
+        }
+    }
+    let instance = Instance::InlineExport { exports };
+    let instance_gid = ctx
+        .state
+        .instance_store
+        .register(Relation::Defined(instance));
+    ctx.state.scope_mut().instances.register(instance_gid);
+    ctx.state
+        .scope_mut()
+        .push_op(InstantiateOp::InstantiateInlineExport(instance_gid));
+    let id = ctx.validator.new_type(Type::Instance(InstanceType {
+        exports: export_types,
+    }));
+    ctx.validator.scope_mut().instance_indexes.add(id);
+    Ok(())
 }

@@ -1,56 +1,56 @@
 use std::path::PathBuf;
 
 mod common;
-fn run_test_file(name: &str) {
+async fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     d.push("tests/component_model_testsuite");
     d.push(format!("{name}.wast"));
     let wast = std::fs::read_to_string(d).unwrap();
-    common::component_model::run_component_wast(&wast);
+    common::component_model::run_component_wast(&wast).await;
 }
 
-#[test]
-fn component_basic() {
-    run_test_file("basic");
+#[tokio::test]
+async fn component_basic() {
+    run_test_file("basic").await;
 }
 
-#[test]
-fn component_import() {
-    run_test_file("import");
+#[tokio::test]
+async fn component_import() {
+    run_test_file("import").await;
 }
-#[test]
-fn component_export() {
-    run_test_file("export");
+#[tokio::test]
+async fn component_export() {
+    run_test_file("export").await;
 }
-#[test]
-fn component_variant() {
-    run_test_file("variant");
-}
-
-#[test]
-fn component_valtype() {
-    run_test_file("valtype");
+#[tokio::test]
+async fn component_variant() {
+    run_test_file("variant").await;
 }
 
-#[test]
-fn component_resource() {
-    run_test_file("resource");
+#[tokio::test]
+async fn component_valtype() {
+    run_test_file("valtype").await;
 }
 
-#[test]
-fn component_instance_type() {
-    run_test_file("instancetype");
+#[tokio::test]
+async fn component_resource() {
+    run_test_file("resource").await;
 }
 
-#[test]
-fn component_instance() {
-    run_test_file("instance");
+#[tokio::test]
+async fn component_instance_type() {
+    run_test_file("instancetype").await;
 }
 
-#[test]
-fn component_core() {
-    run_test_file("core");
+#[tokio::test]
+async fn component_instance() {
+    run_test_file("instance").await;
+}
+
+#[tokio::test]
+async fn component_core() {
+    run_test_file("core").await;
 }
 #[test]
 fn component_subtyping() {

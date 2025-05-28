@@ -7,6 +7,7 @@ use crate::component_model::{
     Relation,
 };
 use crate::parser::component_model::{ComponentParseError, ParseResult};
+use crate::runtime::component_model::instantiate::InstantiateOp;
 use std::collections::HashMap;
 use typed_arena::Arena;
 
@@ -32,6 +33,7 @@ pub struct Scope {
     pub core_types: ValueLocalStore<CoreType>,
     pub imports: HashMap<String, ComponentImport>,
     pub exports: HashMap<String, ComponentExport>,
+    pub(crate) ops: Vec<InstantiateOp>,
 }
 
 pub struct ParseState<'a> {
@@ -60,6 +62,12 @@ impl<T, R> Default for ValueStore<T, R> {
         Self {
             map: HashMap::new(),
         }
+    }
+}
+
+impl<T, R> From<ValueStore<T, R>> for HashMap<GlobalIdx<T>, R> {
+    fn from(value: ValueStore<T, R>) -> Self {
+        value.map
     }
 }
 
@@ -139,6 +147,7 @@ impl Scope {
         Component {
             imports: self.imports.clone(),
             exports: self.exports.clone(),
+            ops: self.ops.clone(),
         }
     }
 
@@ -148,5 +157,13 @@ impl Scope {
 
     pub fn add_import(&mut self, name: &ImportName, import: ComponentImport) {
         self.imports.insert(name.original.clone(), import);
+    }
+
+    pub fn push_op(&mut self, op: InstantiateOp) {
+        self.ops.push(op);
+    }
+
+    pub fn extend_ops<const N: usize>(&mut self, ops: [InstantiateOp; N]) {
+        self.ops.extend_from_slice(&ops);
     }
 }

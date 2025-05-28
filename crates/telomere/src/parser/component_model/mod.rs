@@ -22,10 +22,12 @@ mod idx;
 mod import;
 mod instance;
 mod name;
+mod parser;
 mod sort;
 mod types;
 mod validator;
 
+pub use parser::{ComponentParser, ParsedComponent};
 pub use validator::ScopeGuard;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;
@@ -123,10 +125,7 @@ where
             let t = f(ctx)?;
             Ok(Some(t))
         }
-        x => {
-            println!("{x}");
-            Err(ComponentParseError::WrongMagic(x, "option".to_string()))
-        }
+        x => Err(ComponentParseError::WrongMagic(x, "option".to_string())),
     }
 }
 
