@@ -1,9 +1,8 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{
-    ComponentExportType, Generic, GenericBound, GenericsReplaceDSL, InstanceExportType,
-    InstanceType, Type,
+    Generic, GenericBound, GenericsReplaceDSL, InstanceType, Type,
 };
-use crate::component_model::{ImportName, Instance, InstanceImport, Relation, ResourceId, Sort};
+use crate::component_model::{ImportName, Instance, InstanceImport, Relation, Sort};
 use crate::parser::component_model::name::parse_import_name;
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::{
@@ -12,8 +11,6 @@ use crate::parser::component_model::{
 use crate::parser::core::parse_vec;
 use std::collections::HashSet;
 use tracing::trace;
-
-use super::Validator;
 
 pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     trace!("parse instance");
@@ -107,7 +104,7 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
         }
     }
     let program = component_ty.generics_replacing_program.clone();
-    let exports = GenericsReplaceDSL::evaluate(&program, &mut ctx.validator)?;
+    let exports = GenericsReplaceDSL::evaluate(&program, ctx.validator)?;
     // TODO:
     let id = ctx
         .validator

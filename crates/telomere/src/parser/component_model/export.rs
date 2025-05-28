@@ -1,5 +1,4 @@
 use crate::binary::BinaryReader;
-use crate::common::ExportDesc;
 use crate::component_model::types::GenericsReplaceDSL;
 use crate::component_model::{ComponentExport, ExternDesc, Sort, StrongUnique};
 use crate::parser::component_model::name::parse_export_name_dash;

@@ -6,7 +6,7 @@ use crate::component_model::types::{
     ComponentExportType, ComponentType, FuncType, Generic, GenericBound, InstanceExportType,
     InstanceType, Type,
 };
-use crate::component_model::{ExternDesc, TypeId};
+use crate::component_model::TypeId;
 use crate::parser::component_model::ParseResult;
 pub use scope::ExportInfo;
 pub use scope::ScopeGuard;

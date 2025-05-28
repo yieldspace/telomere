@@ -1,14 +1,14 @@
 use crate::component_model::types::{
-    CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType, CoreType, Generic, GenericsReplaceDSL, Type
+    CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType,
+    CoreType, Generic, GenericsReplaceDSL, Type,
 };
 use crate::component_model::{
-    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable,
-    Func, Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
+    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, Func,
+    Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
 };
 use crate::parser::component_model::ParseResult;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-
 
 pub struct TypeStore<T> {
     types: Vec<TypeId>,
@@ -50,7 +50,7 @@ impl<R, T> CoreTypeStore<R, T> {
     }
 }
 #[derive(Debug)]
-pub enum ExportInfo{
+pub enum ExportInfo {
     Component(TypeId),
     Instance(TypeId),
     Func(TypeId),
