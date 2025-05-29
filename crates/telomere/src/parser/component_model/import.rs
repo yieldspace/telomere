@@ -1,5 +1,5 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{Generic, GenericBound};
+use crate::component_model::types::{Generic, GenericBound, Type};
 use crate::component_model::{ComponentImport, ExternDesc, Relation, StrongUnique};
 use crate::parser::component_model::name::parse_import_name_dash;
 use crate::parser::component_model::types::parse_externdesc;
@@ -63,7 +63,11 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             focus.type_indexes.add(type_id);
         }
         ExternDesc::Sub => {
-            todo!()
+            let generic = Generic::new(GenericBound::Sub);
+            let type_id = ctx.validator.new_type(Type::Generic(generic.clone()));
+            let focus = ctx.validator.scope_mut();
+            focus.imports.insert(name.original, generic);
+            focus.type_indexes.add(type_id);
         }
         ExternDesc::Func(type_id) => {
             let global_idx = ctx
