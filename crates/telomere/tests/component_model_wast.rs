@@ -40,9 +40,6 @@ fn component_resource() {
 
 #[test]
 fn component_instance_type() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
     run_test_file("instancetype");
 }
 
@@ -54,4 +51,11 @@ fn component_instance() {
 #[test]
 fn component_core() {
     run_test_file("core");
+}
+#[test]
+fn component_subtyping() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
+    run_test_file("subtyping");
 }

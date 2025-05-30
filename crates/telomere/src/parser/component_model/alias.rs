@@ -69,7 +69,12 @@ fn parse_export_alias(
             ctx.validator.scope_mut().func_indexes.add(id);
         }
         SortType::Type => {
-            todo!(); // todo(type) get type from instance export
+            let InstanceExportType::Type(id) = export else {
+                return Err(ComponentParseError::InvalidSignature(
+                    "alias type is mismatch".into(),
+                ));
+            };
+            ctx.validator.scope_mut().type_indexes.add(id);
         }
         SortType::Instance => {
             let InstanceExportType::Instance(id) = export else {

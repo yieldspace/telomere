@@ -1,5 +1,7 @@
 use crate::binary::BinaryReader;
-use crate::component_model::types::{Generic, GenericBound, Type};
+use crate::component_model::types::{
+    Generic, GenericBound, GenericsReplaceDSL, InstanceType, Type,
+};
 use crate::component_model::{ImportName, Instance, InstanceImport, Relation, Sort};
 use crate::parser::component_model::name::parse_import_name;
 use crate::parser::component_model::sort::parse_sort_with_idx;
@@ -101,8 +103,13 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
             ))?,
         }
     }
-    // todo check type and generics, create new instance type
-
+    let program = component_ty.generics_replacing_program.clone();
+    let exports = GenericsReplaceDSL::evaluate(&program, ctx.validator)?;
+    // TODO:
+    let id = ctx
+        .validator
+        .new_type(Type::Instance(InstanceType { exports }));
+    ctx.validator.scope_mut().instance_indexes.add(id);
     Ok(())
 }
 

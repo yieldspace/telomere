@@ -1,19 +1,19 @@
 mod scope;
 mod state;
 
+use super::ComponentParseError;
 use crate::component_model::types::{
     ComponentExportType, ComponentType, FuncType, Generic, GenericBound, InstanceExportType,
     InstanceType, Type,
 };
-use crate::component_model::{ExternDesc, TypeId};
+use crate::component_model::TypeId;
 use crate::parser::component_model::ParseResult;
+pub use scope::ExportInfo;
 pub use scope::ScopeGuard;
 pub use state::ParseState;
 use std::collections::HashMap;
 use tracing::trace;
 use typed_arena::Arena;
-
-use super::ComponentParseError;
 
 pub struct Validator<'a> {
     arena: &'a Arena<ScopeGuard>,
@@ -90,33 +90,43 @@ impl<'a> Validator<'a> {
         let scope = self.scopes.last().unwrap();
         let imports = scope.imports.clone();
         let mut exports = HashMap::new();
-        for (name, desc) in &scope.exports {
-            let export_ty = match desc {
-                ExternDesc::Component(id) => ComponentExportType::Component(*id),
-                ExternDesc::Eq(id) => ComponentExportType::Type(*id),
-                ExternDesc::Instance(id) => ComponentExportType::Instance(*id),
-                ExternDesc::Func(id) => ComponentExportType::Type(*id), // FIXME: ?
-                ExternDesc::Sub => {
+        for (name, info) in &scope.exports {
+            let export_ty = match &info {
+                ExportInfo::Component(id) => ComponentExportType::Component(*id),
+                ExportInfo::TypeEq(id) => ComponentExportType::Type(*id),
+                ExportInfo::Instance(id) => ComponentExportType::Instance(*id),
+                ExportInfo::Func(id) => ComponentExportType::Func(*id),
+                ExportInfo::TypeSub => {
                     let id = TypeId::new();
                     self.types
                         .insert(id, Type::Generic(Generic::new(GenericBound::Sub)));
-                    ComponentExportType::NewResource(id)
+                    ComponentExportType::Type(id)
                 }
             };
             exports.insert(name.clone(), export_ty);
         }
-        ComponentType { imports, exports }
+        ComponentType {
+            imports,
+            exports,
+            generics_replacing_program: scope.generics_replace_program.clone(),
+        }
     }
     pub fn make_instance(&mut self) -> InstanceType {
         let scope = self.scopes.last().unwrap();
         let mut exports = HashMap::new();
-        for (name, desc) in &scope.exports {
-            let export_ty = match desc {
-                ExternDesc::Component(id) => InstanceExportType::Component(*id),
-                ExternDesc::Eq(id) => InstanceExportType::Type(*id),
-                ExternDesc::Instance(id) => InstanceExportType::Instance(*id),
-                ExternDesc::Func(id) => InstanceExportType::Func(*id),
-                ExternDesc::Sub => InstanceExportType::SubType,
+        tracing::trace!("make_instance {:?}", scope.exports);
+        for (name, info) in &scope.exports {
+            let export_ty = match info {
+                ExportInfo::Component(type_id) => InstanceExportType::Component(*type_id),
+                ExportInfo::Instance(type_id) => InstanceExportType::Instance(*type_id),
+                ExportInfo::Func(type_id) => InstanceExportType::Func(*type_id),
+                ExportInfo::TypeEq(type_id) => InstanceExportType::Type(*type_id),
+                ExportInfo::TypeSub => {
+                    let id = TypeId::new();
+                    self.types
+                        .insert(id, Type::Generic(Generic::new(GenericBound::Sub)));
+                    InstanceExportType::Type(id)
+                }
             };
             exports.insert(name.clone(), export_ty);
         }
