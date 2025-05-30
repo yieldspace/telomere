@@ -4,9 +4,7 @@ use crate::component_model::{
     Func, GlobalIdx, Instance, Relation,
 };
 use crate::parser::component_model::{parse_component, ParseResult, ParseState, Validator};
-use crate::runtime::component_model::instantiate::{
-    InstantiateOp, InstantiateResult, InstantiateScope, InstantiateState,
-};
+use crate::runtime::component_model::instantiate::{InstantiateOp, InstantiateResult, InstantiateScope, InstantiateState};
 use crate::runtime::component_model::ComponentVMError;
 use std::collections::HashMap;
 use typed_arena::Arena;
@@ -99,8 +97,7 @@ impl ParsedComponent {
             .and_then(|relation| match relation {
                 CoreRelation::Defined(module) => Ok(module),
                 CoreRelation::ImportModule(name) => {
-                    let module_idx = scope.get_core_module(name)?;
-                    self.resolve_core_module(module_idx, scope, state)
+                    todo!("Importing core module: {}", name);
                 }
                 CoreRelation::FromExport(idx, name) => {
                     todo!()
@@ -150,8 +147,7 @@ impl ParsedComponent {
             .and_then(|relation| match relation {
                 Relation::Defined(component) => Ok(component),
                 Relation::Import(name) => {
-                    let component_idx = scope.get_component(name)?;
-                    self.resolve_component(component_idx, scope, state)
+                    todo!()
                 }
                 Relation::FromExport(_, _) => Err(ComponentVMError::LinkError(format!(
                     "Component with index {:?} is not defined",
@@ -174,8 +170,7 @@ impl ParsedComponent {
             .and_then(|relation| match relation {
                 Relation::Defined(instance) => Ok(instance),
                 Relation::Import(name) => {
-                    let instance_idx = scope.get_instance(name)?;
-                    self.resolve_instance(instance_idx, scope, state)
+                    todo!()
                 }
                 Relation::FromExport(_, _) => Err(ComponentVMError::LinkError(format!(
                     "Instance with index {:?} is not defined",

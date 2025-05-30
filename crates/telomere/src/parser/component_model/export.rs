@@ -1,11 +1,11 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::GenericsReplaceDSL;
-use crate::component_model::{ComponentExport, CoreSort, ExternDesc, Sort, StrongUnique};
+use crate::component_model::{ComponentExport, CoreSort, ExternDesc, InstanceExport, Sort, StrongUnique};
 use crate::parser::component_model::name::parse_export_name_dash;
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{parse_option, ParseContext, ParseResult};
-
+use crate::runtime::component_model::instantiate::InstantiateOp;
 use super::ComponentParseError;
 
 pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
@@ -44,11 +44,12 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             focus.generics_replace_program.push(instr);
             Ok(())
         }
-        Sort::Component(_idx, type_id) => {
+        Sort::Component(idx, type_id) => {
             ctx.state
                 .scope_mut()
                 .add_export(&name, ComponentExport::Component);
             focus.component_indexes.add(type_id);
+            ctx.state.scope_mut().push_op(InstantiateOp::MapExport(name.original.clone().into(), InstanceExport::Component(idx)));
             focus
                 .generics_replace_program
                 .push(GenericsReplaceDSL::ExportComponent(
@@ -63,6 +64,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 .scope_mut()
                 .add_export(&name, ComponentExport::Instance);
             ctx.state.scope_mut().instances.register(idx);
+            ctx.state.scope_mut().push_op(InstantiateOp::MapExport(name.original.clone().into(), InstanceExport::Instance(idx)));
             focus
                 .generics_replace_program
                 .push(GenericsReplaceDSL::ExportInstance(
@@ -78,6 +80,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 .scope_mut()
                 .add_export(&name, ComponentExport::Func);
             ctx.state.scope_mut().funcs.register(idx);
+            ctx.state.scope_mut().push_op(InstantiateOp::MapExport(name.original.clone().into(), InstanceExport::Func(idx)));
             focus
                 .generics_replace_program
                 .push(GenericsReplaceDSL::ExportFunc(
@@ -94,6 +97,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                 .add_export(&name, ComponentExport::CoreModule);
             ctx.state.scope_mut().core_modules.register(idx);
             ctx.validator.scope_mut().core_modules.add(ty);
+            ctx.state.scope_mut().push_op(InstantiateOp::MapExport(name.original.clone().into(), InstanceExport::CoreModule(idx)));
             Ok(())
         }
         _ => Err(ComponentParseError::InvalidSignature(

@@ -10,7 +10,7 @@ pub enum Instance {
         imports: HashMap<ImportNameString, InstanceImport>,
     },
     InlineExport {
-        exports: HashMap<ExportNameString, InlineExport>,
+        exports: HashMap<ExportNameString, InstanceExport>,
     },
 }
 
@@ -23,7 +23,7 @@ pub enum InstanceImport {
 }
 
 #[derive(Debug, Clone)]
-pub enum InlineExport {
+pub enum InstanceExport {
     CoreModule(GlobalIdx<CoreModule>),
     Func(GlobalIdx<Func>),
     Component(GlobalIdx<Component>),

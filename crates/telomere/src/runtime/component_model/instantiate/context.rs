@@ -14,7 +14,7 @@ pub struct InstantiateContext<'a> {
     pub current: Option<usize>,
     pub(crate) store: &'a mut Store,
     pub instantiated: &'a mut ComponentModelInstance,
-    pub linker: &'a Linker,
+    pub linker: &'a Linker<'a>,
 }
 
 impl<'a> InstantiateContext<'a> {
@@ -22,7 +22,7 @@ impl<'a> InstantiateContext<'a> {
         component: ParsedComponent,
         store: &'a mut Store,
         instantiated: &'a mut ComponentModelInstance,
-        linker: &'a Linker,
+        linker: &'a Linker<'a>,
     ) -> Self {
         Self {
             component,

@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 macro_rules! impl_idx {
     ($name:ident, $value:ty) => {
@@ -38,7 +38,7 @@ macro_rules! impl_idx {
 }
 
 impl_idx!(LocalIdx, u32);
-impl_idx!(GlobalIdx, usize);
+impl_idx!(GlobalIdx, u32);
 
 impl<T> LocalIdx<T> {
     pub fn new(value: u32) -> Self {
@@ -56,7 +56,7 @@ impl<T> From<usize> for LocalIdx<T> {
     }
 }
 
-static GLOBAL_IDX_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static GLOBAL_IDX_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 impl<T> Default for GlobalIdx<T> {
     fn default() -> Self {
@@ -70,35 +70,5 @@ impl<T> GlobalIdx<T> {
             GLOBAL_IDX_COUNTER.fetch_add(1, Ordering::Relaxed),
             PhantomData,
         )
-    }
-}
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum AliasIdx {
-    CoreFunc,
-    CoreTable,
-    CoreMemory,
-    CoreGlobal,
-    CoreType,
-    CoreModule,
-    CoreInstance,
-    Func,
-    Type,
-    Component,
-    Instance,
-}
-
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub struct AnyGlobalIdx(usize);
-
-impl<T> From<AnyGlobalIdx> for GlobalIdx<T> {
-    fn from(value: AnyGlobalIdx) -> Self {
-        Self(value.0, PhantomData)
-    }
-}
-
-impl<T> From<GlobalIdx<T>> for AnyGlobalIdx {
-    fn from(value: GlobalIdx<T>) -> Self {
-        Self(value.0)
     }
 }

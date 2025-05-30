@@ -3,7 +3,7 @@ use crate::component_model::types::{
     Generic, GenericBound, InstanceExportType, InstanceType, Type, GenericsReplaceDSL,
 };
 use crate::component_model::{
-    CoreSort, ImportName, InlineExport, Instance, InstanceImport, Relation, Sort,
+    CoreSort, ImportName, InstanceExport, Instance, InstanceImport, Relation, Sort,
 };
 use crate::parser::component_model::name::{parse_export_name, parse_import_name};
 use crate::parser::component_model::sort::parse_sort_with_idx;
@@ -152,16 +152,16 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
         export_types.insert(name.original.clone(), sort.clone().try_into()?);
         match sort {
             Sort::Core(CoreSort::Module(idx, _)) => {
-                exports.insert(name.original, InlineExport::CoreModule(idx));
+                exports.insert(name.original, InstanceExport::CoreModule(idx));
             }
             Sort::Component(idx, _) => {
-                exports.insert(name.original, InlineExport::Component(idx));
+                exports.insert(name.original, InstanceExport::Component(idx));
             }
             Sort::Instance(idx, _) => {
-                exports.insert(name.original, InlineExport::Instance(idx));
+                exports.insert(name.original, InstanceExport::Instance(idx));
             }
             Sort::Func(idx, _) => {
-                exports.insert(name.original, InlineExport::Func(idx));
+                exports.insert(name.original, InstanceExport::Func(idx));
             }
             Sort::Type(_) => {}
             _ => {

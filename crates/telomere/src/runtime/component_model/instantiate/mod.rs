@@ -1,7 +1,5 @@
 use crate::common::InstanceHandle;
-use crate::component_model::{
-    Component, CoreInstance, CoreModule, GlobalIdx, Instance, InstanceImport,
-};
+use crate::component_model::{Component, CoreInstance, CoreModule, GlobalIdx, Instance, InstanceExport, InstanceImport};
 use crate::parser::component_model::ParsedComponent;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::runtime::component_model::{ComponentModelInstance, ComponentVMError, Linker};
@@ -9,10 +7,15 @@ use crate::runtime::instantiate as core_instantiate;
 use crate::{Registry, Store};
 pub use state::InstantiateState;
 use std::collections::HashMap;
+use std::rc::Rc;
 use typed_arena::Arena;
+pub use scope::{ScopeManager, InstantiateScope};
+use crate::runtime::component_model::instantiate::id::ResolveId;
 
 mod context;
 mod state;
+mod scope;
+mod id;
 
 pub type InstantiateResult<T> = Result<T, ComponentVMError>;
 
@@ -22,115 +25,30 @@ pub enum InstantiateOp {
     CoreInstanceInlineExport(GlobalIdx<CoreInstance>),
     Instantiate(GlobalIdx<Instance>),
     InstantiateEnd,
+    MapExport(Box<String>, InstanceExport),
+    MapImport(Box<String>, InstanceImport),
     InstantiateInlineExport(GlobalIdx<Instance>),
 }
 
-pub enum InstantiateScope<'a, 'b, 'o> {
-    Linker(
-        &'a Linker,
-        Option<&'b InstantiateScope<'a, 'b, 'o>>,
-        &'o [InstantiateOp],
-    ),
-    Instantiate(
-        HashMap<String, InstanceImport>,
-        Option<&'b InstantiateScope<'a, 'b, 'o>>,
-        &'o [InstantiateOp],
-    ),
+#[derive(Default)]
+pub struct ComponentInstance {
+    pub(crate) exports: HashMap<String, Export>,
 }
 
-pub struct ScopeManager<'a, 'b, 'o> {
-    arena: &'a Arena<InstantiateScope<'b, 'a, 'o>>,
-    pub current: &'a InstantiateScope<'b, 'a, 'o>,
+pub enum Import {
+    Instance(Rc<ComponentInstance>),
+    Func,
 }
 
-impl<'a, 'b, 'o> ScopeManager<'a, 'b, 'o> {
-    pub fn new(
-        arena: &'a Arena<InstantiateScope<'b, 'a, 'o>>,
-        linker: &'b Linker,
-        ops: &'o [InstantiateOp],
-    ) -> Self {
-        let current = arena.alloc(InstantiateScope::Linker(linker, None, ops));
-        Self { arena, current }
-    }
-
-    pub fn push(
-        &mut self,
-        imports: HashMap<String, InstanceImport>,
-        ops: &'o [InstantiateOp],
-    ) -> &InstantiateScope<'b, 'a, 'o> {
-        let new_scope = self.arena.alloc(InstantiateScope::Instantiate(
-            imports,
-            Some(self.current),
-            ops,
-        ));
-        self.current = new_scope;
-        new_scope
-    }
-
-    pub fn pop(&mut self) {
-        self.current = self.current.parent().unwrap();
-    }
-}
-
-impl<'a, 'b, 'o> InstantiateScope<'a, 'b, 'o> {
-    fn parent(&self) -> Option<&InstantiateScope<'a, 'b, 'o>> {
-        match self {
-            InstantiateScope::Linker(_, parent, _) => *parent,
-            InstantiateScope::Instantiate(_, parent, _) => *parent,
-        }
-    }
-
-    fn ops(&self) -> &'o [InstantiateOp] {
-        match self {
-            InstantiateScope::Linker(_, _, ops) => ops,
-            InstantiateScope::Instantiate(_, _, ops) => ops,
-        }
-    }
-
-    pub fn get_core_module(&self, name: &String) -> InstantiateResult<GlobalIdx<CoreModule>> {
-        match self {
-            InstantiateScope::Linker(_, _, _) => todo!(),
-            InstantiateScope::Instantiate(imports, _, _) => {
-                if let Some(InstanceImport::CoreModule(module_idx)) = imports.get(name) {
-                    Ok(*module_idx)
-                } else {
-                    Err(ComponentVMError::LinkError(name.clone()))
-                }
-            }
-        }
-    }
-
-    pub fn get_component(&self, name: &String) -> InstantiateResult<GlobalIdx<Component>> {
-        match self {
-            InstantiateScope::Linker(_, _, _) => todo!(),
-            InstantiateScope::Instantiate(imports, _, _) => {
-                if let Some(InstanceImport::Component(component_idx)) = imports.get(name) {
-                    Ok(*component_idx)
-                } else {
-                    Err(ComponentVMError::LinkError(name.clone()))
-                }
-            }
-        }
-    }
-
-    pub fn get_instance(&self, name: &String) -> InstantiateResult<GlobalIdx<Instance>> {
-        match self {
-            InstantiateScope::Linker(_, _, _) => todo!(),
-            InstantiateScope::Instantiate(imports, _, _) => {
-                if let Some(InstanceImport::Instance(instance_idx)) = imports.get(name) {
-                    Ok(*instance_idx)
-                } else {
-                    Err(ComponentVMError::LinkError(name.clone()))
-                }
-            }
-        }
-    }
+pub enum Export {
+    Instance(Rc<ComponentInstance>),
+    Func,
 }
 
 pub async fn instantiate(
     component: ParsedComponent,
     store: &mut Store,
-    linker: &Linker,
+    linker: &Linker<'_>,
 ) -> Result<(), ComponentVMError> {
     let arena = Arena::new();
     let mut manager = ScopeManager::new(&arena, linker, &component.ops);
@@ -168,15 +86,20 @@ pub async fn instantiate(
                     };
                     let component =
                         component.resolve_component(*component_idx, manager.current, &state)?;
-                    manager.push(imports.clone(), &component.ops);
+                    manager.push(imports.clone(), *idx, &component.ops);
                 }
                 InstantiateOp::InstantiateEnd => {
                     // special end
                     break 'outer;
                 }
                 InstantiateOp::InstantiateInlineExport(idx) => {}
+                InstantiateOp::MapExport(name, exp) => {
+                    
+                }
+                InstantiateOp::MapImport(_, _) => {}
             }
         }
+        let idx = manager.current.idx();
         manager.pop();
     }
     Ok(())

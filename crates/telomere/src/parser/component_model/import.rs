@@ -1,10 +1,10 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{Generic, GenericBound, Type};
-use crate::component_model::{ComponentImport, ExternDesc, Relation, StrongUnique};
+use crate::component_model::{ComponentImport, ExternDesc, InstanceImport, Relation, StrongUnique};
 use crate::parser::component_model::name::parse_import_name_dash;
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{ParseContext, ParseResult};
-
+use crate::runtime::component_model::instantiate::InstantiateOp;
 use super::ComponentParseError;
 
 pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
@@ -28,6 +28,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             let focus = ctx.state.scope_mut();
             focus.add_import(&name, ComponentImport::Component);
             focus.components.register(global_idx);
+            focus.push_op(InstantiateOp::MapImport(Box::new(name.original.clone()), InstanceImport::Component(global_idx)));
 
             let focus = ctx.validator.scope_mut();
             focus.component_indexes.add(type_id);
@@ -46,6 +47,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
 
             focus.add_import(&name, ComponentImport::Instance);
             focus.instances.register(global);
+            focus.push_op(InstantiateOp::MapImport(Box::new(name.original.clone()), InstanceImport::Instance(global)));
 
             let focus = ctx.validator.scope_mut();
 
@@ -78,6 +80,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             let focus = ctx.state.scope_mut();
             focus.add_import(&name, ComponentImport::Func);
             focus.funcs.register(global_idx);
+            focus.push_op(InstantiateOp::MapImport(Box::new(name.original.clone()), InstanceImport::Func(global_idx)));
 
             let focus = ctx.validator.scope_mut();
             focus.func_indexes.add(type_id);
