@@ -135,10 +135,10 @@ impl TypeChecker {
     pub fn cond_op(&mut self, ty: ValType) -> Result<()> {
         self.op(&[ty, ty], &[ValType::I32])
     }
-    pub fn unary_op(&mut self, ty: ValType) -> Result<()> {
+    pub fn binary_op(&mut self, ty: ValType) -> Result<()> {
         self.op(&[ty, ty], &[ty])
     }
-    pub fn binary_op(&mut self, ty: ValType) -> Result<()> {
+    pub fn unary_op(&mut self, ty: ValType) -> Result<()> {
         self.op(&[ty], &[ty])
     }
 }

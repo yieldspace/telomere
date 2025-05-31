@@ -38,7 +38,7 @@ impl Parse for DefineSimdOperationInput {
         })
     }
 }
-fn generate_vm_unary_op(
+fn generate_vm_binary_op(
     handler: Ident,
     target: &[Ident],
     op_name: impl IdentFragment,
@@ -63,7 +63,7 @@ fn generate_vm_unary_op(
 #[proc_macro]
 pub fn define_simd_operation(stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(stream as DefineSimdOperationInput);
-    let code = generate_vm_unary_op(
+    let code = generate_vm_binary_op(
         input.handler,
         &input.target_types,
         input.operation_name,

@@ -541,7 +541,7 @@ extend_instruction!(i32x4_extend_low_i16x8_u, u16x8, u32x4, 0, 1, 2, 3);
 extend_instruction!(i32x4_extend_high_i16x8_u, u16x8, u32x4, 4, 5, 6, 7);
 
 #[inline]
-unsafe fn handle_unary_op<T>(
+unsafe fn handle_binary_op<T>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
     op: impl FnOnce(T, T) -> T,
@@ -558,7 +558,7 @@ where
 }
 
 #[inline]
-unsafe fn handle_binary_op<T>(
+unsafe fn handle_unary_op<T>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
     op: impl FnOnce(T) -> T,
@@ -573,17 +573,17 @@ where
     call_next(tail_code, 0, ctx)
 }
 
-macro_rules! define_unary_simd_operation {
-    ($op: ident,[$($target: ident),*],$expr: expr) => {
-        define_simd_operation!(handle_unary_op,$op,[$($target),*],$expr);
-    };
-}
 macro_rules! define_binary_simd_operation {
     ($op: ident,[$($target: ident),*],$expr: expr) => {
         define_simd_operation!(handle_binary_op,$op,[$($target),*],$expr);
     };
 }
-define_unary_simd_operation!(avgr, [u8x16], |a, b| {
+macro_rules! define_unary_simd_operation {
+    ($op: ident,[$($target: ident),*],$expr: expr) => {
+        define_simd_operation!(handle_unary_op,$op,[$($target),*],$expr);
+    };
+}
+define_binary_simd_operation!(avgr, [u8x16], |a, b| {
     let mut res = [0u8; 16];
     let a = a.to_array();
     let b = b.to_array();
@@ -593,7 +593,7 @@ define_unary_simd_operation!(avgr, [u8x16], |a, b| {
     res.into()
 });
 
-define_unary_simd_operation!(avgr, [u16x8], |a, b| {
+define_binary_simd_operation!(avgr, [u16x8], |a, b| {
     let mut res = [0u16; 8];
     let a = a.to_array();
     let b = b.to_array();
@@ -602,7 +602,7 @@ define_unary_simd_operation!(avgr, [u16x8], |a, b| {
     }
     res.into()
 });
-define_binary_simd_operation!(popcnt, [u8x16], |a| {
+define_unary_simd_operation!(popcnt, [u8x16], |a| {
     let mut res = [0u8; 16];
     let a = a.to_array();
     for i in 0..16 {
@@ -611,20 +611,20 @@ define_binary_simd_operation!(popcnt, [u8x16], |a| {
     res.into()
 });
 
-define_unary_simd_operation!(add, [f32x4, f64x2, i8x16, i16x8, i32x4, i64x2], |a, b| a
+define_binary_simd_operation!(add, [f32x4, f64x2, i8x16, i16x8, i32x4, i64x2], |a, b| a
     + b);
-define_unary_simd_operation!(add_sat, [i8x16, u8x16, i16x8, u16x8], |a, b| a
+define_binary_simd_operation!(add_sat, [i8x16, u8x16, i16x8, u16x8], |a, b| a
     .saturating_add(b));
-define_unary_simd_operation!(sub, [f32x4, f64x2, i8x16, i16x8, i32x4, i64x2], |a, b| a
+define_binary_simd_operation!(sub, [f32x4, f64x2, i8x16, i16x8, i32x4, i64x2], |a, b| a
     - b);
-define_unary_simd_operation!(sub_sat, [i8x16, u8x16, i16x8, u16x8], |a, b| a
+define_binary_simd_operation!(sub_sat, [i8x16, u8x16, i16x8, u16x8], |a, b| a
     .saturating_sub(b));
-define_unary_simd_operation!(mul, [f32x4, f64x2, i16x8, i32x4, i64x2], |a, b| a * b);
-define_unary_simd_operation!(div, [f32x4, f64x2], |a, b| a / b);
-define_unary_simd_operation!(swizzle, [i8x16], |a, b| a.swizzle(b));
-define_unary_simd_operation!(min, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
+define_binary_simd_operation!(mul, [f32x4, f64x2, i16x8, i32x4, i64x2], |a, b| a * b);
+define_binary_simd_operation!(div, [f32x4, f64x2], |a, b| a / b);
+define_binary_simd_operation!(swizzle, [i8x16], |a, b| a.swizzle(b));
+define_binary_simd_operation!(min, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
     .min(b));
-define_unary_simd_operation!(min, [f32x4], |a, b| {
+define_binary_simd_operation!(min, [f32x4], |a, b| {
     let aa = a.to_array();
     let bb = b.to_array();
     let mut result = [0.0f32; 4];
@@ -650,7 +650,7 @@ define_unary_simd_operation!(min, [f32x4], |a, b| {
 
     f32x4::from(result)
 });
-define_unary_simd_operation!(min, [f64x2], |a, b| {
+define_binary_simd_operation!(min, [f64x2], |a, b| {
     let aa = a.to_array();
     let bb = b.to_array();
     let mut result = [0.0f64; 2];
@@ -677,9 +677,9 @@ define_unary_simd_operation!(min, [f64x2], |a, b| {
     f64x2::from(result)
 });
 
-define_unary_simd_operation!(max, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
+define_binary_simd_operation!(max, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
     .max(b));
-define_unary_simd_operation!(max, [f32x4], |a, b| {
+define_binary_simd_operation!(max, [f32x4], |a, b| {
     let aa = a.to_array();
     let bb = b.to_array();
     let mut result = [0.0f32; 4];
@@ -705,7 +705,7 @@ define_unary_simd_operation!(max, [f32x4], |a, b| {
 
     f32x4::from(result)
 });
-define_unary_simd_operation!(max, [f64x2], |a, b| {
+define_binary_simd_operation!(max, [f64x2], |a, b| {
     let aa = a.to_array();
     let bb = b.to_array();
     let mut result = [0.0f64; 2];
@@ -731,7 +731,7 @@ define_unary_simd_operation!(max, [f64x2], |a, b| {
 
     f64x2::from(result)
 });
-define_unary_simd_operation!(pmin, [f32x4], |a, b| {
+define_binary_simd_operation!(pmin, [f32x4], |a, b| {
     let a_arr = a.to_array();
     let b_arr = b.to_array();
     let mut result = [0.0f32; 4];
@@ -753,7 +753,7 @@ define_unary_simd_operation!(pmin, [f32x4], |a, b| {
 
     f32x4::from(result)
 });
-define_unary_simd_operation!(pmax, [f32x4], |a, b| {
+define_binary_simd_operation!(pmax, [f32x4], |a, b| {
     let a_arr = a.to_array();
     let b_arr = b.to_array();
     let mut result = [0.0f32; 4];
@@ -776,7 +776,7 @@ define_unary_simd_operation!(pmax, [f32x4], |a, b| {
     f32x4::from(result)
 });
 
-define_unary_simd_operation!(pmin, [f64x2], |a, b| {
+define_binary_simd_operation!(pmin, [f64x2], |a, b| {
     let a_arr = a.to_array();
     let b_arr = b.to_array();
     let mut result = [0.0f64; 2];
@@ -798,7 +798,7 @@ define_unary_simd_operation!(pmin, [f64x2], |a, b| {
 
     f64x2::from(result)
 });
-define_unary_simd_operation!(pmax, [f64x2], |a, b| {
+define_binary_simd_operation!(pmax, [f64x2], |a, b| {
     let a_arr = a.to_array();
     let b_arr = b.to_array();
     let mut result = [0.0f64; 2];
@@ -821,10 +821,10 @@ define_unary_simd_operation!(pmax, [f64x2], |a, b| {
     f64x2::from(result)
 });
 
-define_binary_simd_operation!(abs, [f64x2, f32x4, i32x4, i8x16, i16x8], |a| a.abs());
-define_binary_simd_operation!(ceil, [f64x2, f32x4], |a| a.ceil());
-define_binary_simd_operation!(floor, [f64x2, f32x4], |a| a.floor());
-define_binary_simd_operation!(trunc, [f32x4], |a| {
+define_unary_simd_operation!(abs, [f64x2, f32x4, i32x4, i8x16, i16x8], |a| a.abs());
+define_unary_simd_operation!(ceil, [f64x2, f32x4], |a| a.ceil());
+define_unary_simd_operation!(floor, [f64x2, f32x4], |a| a.floor());
+define_unary_simd_operation!(trunc, [f32x4], |a| {
     let arr = a.to_array();
     f32x4::from([
         arr[0].trunc(),
@@ -833,11 +833,11 @@ define_binary_simd_operation!(trunc, [f32x4], |a| {
         arr[3].trunc(),
     ])
 });
-define_binary_simd_operation!(trunc, [f64x2], |a| {
+define_unary_simd_operation!(trunc, [f64x2], |a| {
     let arr = a.to_array();
     f64x2::from([arr[0].trunc(), arr[1].trunc()])
 });
-define_binary_simd_operation!(nearest, [f32x4], |a| {
+define_unary_simd_operation!(nearest, [f32x4], |a| {
     let arr = a.to_array();
     f32x4::from([
         arr[0].round_ties_even(),
@@ -846,7 +846,7 @@ define_binary_simd_operation!(nearest, [f32x4], |a| {
         arr[3].round_ties_even(),
     ])
 });
-define_binary_simd_operation!(nearest, [f64x2], |a| {
+define_unary_simd_operation!(nearest, [f64x2], |a| {
     let arr = a.to_array();
     f64x2::from([arr[0].round_ties_even(), arr[1].round_ties_even()])
 });
@@ -890,8 +890,8 @@ pub unsafe fn i64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     vm_try!(ctx.stack.push(a.bitxor(-i64x2::ONE) + i64x2::ONE));
     call_next(tail_code, 0, ctx)
 }
-define_binary_simd_operation!(sqrt, [f64x2, f32x4], |a| a.sqrt());
-use std::ops::{Neg, Not};
+define_unary_simd_operation!(sqrt, [f64x2, f32x4], |a| a.sqrt());
+use std::ops::Not;
 use wide::CmpEq;
 use wide::CmpGe;
 use wide::CmpGt;
@@ -900,7 +900,7 @@ use wide::CmpLt;
 use wide::CmpNe;
 macro_rules! define_simd_cmp_operation {
     ($op_name: ident,[$($ty: ident),*],$op: expr) => {
-        $(define_simd_operation!(handle_unary_op, $op_name, [$ty], |a, b| {
+        $(define_simd_operation!(handle_binary_op, $op_name, [$ty], |a, b| {
             let mut res = [0; $ty::LANE_SIZE];
             let a: [<$ty as LaneType>::BaseType; $ty::LANE_SIZE] = a.to_array();
             let b: [<$ty as LaneType>::BaseType; $ty::LANE_SIZE] = b.to_array();
@@ -920,18 +920,18 @@ macro_rules! define_simd_cmp_operation {
     };
 }
 
-define_unary_simd_operation!(eq, [f32x4, f64x2, i8x16, i16x8, i32x4], |a, b| a.cmp_eq(b));
-define_unary_simd_operation!(ne, [f32x4, f64x2], |a, b| a.cmp_ne(b));
-define_unary_simd_operation!(ne, [i8x16, i16x8, i32x4], |a, b| a.cmp_eq(b).not());
-define_unary_simd_operation!(lt, [f32x4, f64x2], |a, b| a.cmp_lt(b));
+define_binary_simd_operation!(eq, [f32x4, f64x2, i8x16, i16x8, i32x4], |a, b| a.cmp_eq(b));
+define_binary_simd_operation!(ne, [f32x4, f64x2], |a, b| a.cmp_ne(b));
+define_binary_simd_operation!(ne, [i8x16, i16x8, i32x4], |a, b| a.cmp_eq(b).not());
+define_binary_simd_operation!(lt, [f32x4, f64x2], |a, b| a.cmp_lt(b));
 define_simd_cmp_operation!(lt, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a < b);
 
-define_unary_simd_operation!(gt, [f32x4, f64x2], |a, b| a.cmp_gt(b));
+define_binary_simd_operation!(gt, [f32x4, f64x2], |a, b| a.cmp_gt(b));
 define_simd_cmp_operation!(gt, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a > b);
-define_unary_simd_operation!(le, [f32x4, f64x2], |a, b| a.cmp_le(b));
+define_binary_simd_operation!(le, [f32x4, f64x2], |a, b| a.cmp_le(b));
 define_simd_cmp_operation!(le, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
     <= b);
-define_unary_simd_operation!(ge, [f32x4, f64x2], |a, b| a.cmp_ge(b));
+define_binary_simd_operation!(ge, [f32x4, f64x2], |a, b| a.cmp_ge(b));
 define_simd_cmp_operation!(ge, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
     >= b);
 pub unsafe fn i16x8_extadd_pairwise_i8x16(
@@ -987,7 +987,7 @@ pub unsafe fn u32x4_extadd_pairwise_i16x8(
     call_next(tail_code, 0, ctx)
 }
 
-define_unary_simd_operation!(q15mulr_sat_s, [i16x8], |a, b| a.mul_scale_round(b));
+define_binary_simd_operation!(q15mulr_sat_s, [i16x8], |a, b| a.mul_scale_round(b));
 fn extend_low_i8x16_to_i16x8(input: i8x16) -> i16x8 {
     let arr = input.to_array();
     let mut extended = [0i16; 8];
