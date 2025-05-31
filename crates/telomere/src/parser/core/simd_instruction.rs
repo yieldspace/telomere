@@ -500,7 +500,7 @@ unary_op_simd_parser!(i32x4_extmul_low, 188);
 unary_op_simd_parser!(i32x4_extmul_high, 189);
 unary_op_simd_parser!(u32x4_extmul_low, 190);
 unary_op_simd_parser!(u32x4_extmul_high, 191);
-
+binary_op_simd_parser!(i64x2_neg, 193);
 pub(crate) mod i64x2_all_true {
     use super::prelude::*;
     pub(crate) const CODE: u32 = 195;
@@ -529,6 +529,9 @@ shift_instruction_parser!(i64x2_shl, 203);
 shift_instruction_parser!(i64x2_shr, 204);
 shift_instruction_parser!(u64x2_shr, 205);
 unary_op_simd_parser!(i64x2_add, 206);
+
+unary_op_simd_parser!(i64x2_sub, 209);
+unary_op_simd_parser!(i64x2_mul, 213);
 
 binary_op_simd_parser!(f32x4_abs, 224);
 binary_op_simd_parser!(f32x4_neg, 225);

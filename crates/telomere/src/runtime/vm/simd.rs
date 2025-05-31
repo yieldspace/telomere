@@ -615,10 +615,11 @@ define_unary_simd_operation!(add, [f32x4, f64x2, i8x16, i16x8, i32x4, i64x2], |a
     + b);
 define_unary_simd_operation!(add_sat, [i8x16, u8x16, i16x8, u16x8], |a, b| a
     .saturating_add(b));
-define_unary_simd_operation!(sub, [f32x4, f64x2, i8x16, i16x8, i32x4], |a, b| a - b);
+define_unary_simd_operation!(sub, [f32x4, f64x2, i8x16, i16x8, i32x4, i64x2], |a, b| a
+    - b);
 define_unary_simd_operation!(sub_sat, [i8x16, u8x16, i16x8, u16x8], |a, b| a
     .saturating_sub(b));
-define_unary_simd_operation!(mul, [f32x4, f64x2, i16x8, i32x4], |a, b| a * b);
+define_unary_simd_operation!(mul, [f32x4, f64x2, i16x8, i32x4, i64x2], |a, b| a * b);
 define_unary_simd_operation!(div, [f32x4, f64x2], |a, b| a / b);
 define_unary_simd_operation!(swizzle, [i8x16], |a, b| a.swizzle(b));
 define_unary_simd_operation!(min, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
@@ -882,8 +883,15 @@ pub unsafe fn i32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     vm_try!(ctx.stack.push(a.bitxor(-i32x4::ONE) + i32x4::ONE));
     call_next(tail_code, 0, ctx)
 }
+pub unsafe fn i64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    use std::ops::BitXor;
+    let a: i64x2 = ctx.stack.pop();
+
+    vm_try!(ctx.stack.push(a.bitxor(-i64x2::ONE) + i64x2::ONE));
+    call_next(tail_code, 0, ctx)
+}
 define_binary_simd_operation!(sqrt, [f64x2, f32x4], |a| a.sqrt());
-use std::ops::Not;
+use std::ops::{Neg, Not};
 use wide::CmpEq;
 use wide::CmpGe;
 use wide::CmpGt;

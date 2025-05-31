@@ -2964,7 +2964,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         u32x4_extmul_high,
                         i32x4_trunc_sat_f32x4_u,
                         i32x4_trunc_sat_f64x2_s,
-                        i32x4_trunc_sat_f64x2_u
+                        i32x4_trunc_sat_f64x2_u,
+                        i64x2_sub,
+                        i64x2_mul,
+                        i64x2_neg
                     );
                     (1 + len + len2, false)
                 }

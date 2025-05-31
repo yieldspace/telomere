@@ -563,3 +563,11 @@ async fn simd_i32x4_trunc_sat_f32x4() {
 async fn simd_i32x4_trunc_sat_f64x2() {
     run_test_file("simd_i32x4_trunc_sat_f64x2").await;
 }
+
+#[test]
+async fn simd_i64x2_arith() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .init();
+    run_test_file("simd_i64x2_arith").await;
+}
