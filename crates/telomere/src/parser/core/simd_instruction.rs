@@ -533,6 +533,12 @@ binary_op_simd_parser!(i64x2_add, 206);
 
 binary_op_simd_parser!(i64x2_sub, 209);
 binary_op_simd_parser!(i64x2_mul, 213);
+binary_op_simd_parser!(i64x2_eq, 214);
+binary_op_simd_parser!(i64x2_ne, 215);
+binary_op_simd_parser!(i64x2_lt, 216);
+binary_op_simd_parser!(i64x2_gt, 217);
+binary_op_simd_parser!(i64x2_le, 218);
+binary_op_simd_parser!(i64x2_ge, 219);
 
 unary_op_simd_parser!(f32x4_abs, 224);
 unary_op_simd_parser!(f32x4_neg, 225);

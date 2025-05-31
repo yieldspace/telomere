@@ -920,20 +920,35 @@ macro_rules! define_simd_cmp_operation {
     };
 }
 
-define_binary_simd_operation!(eq, [f32x4, f64x2, i8x16, i16x8, i32x4], |a, b| a.cmp_eq(b));
+define_binary_simd_operation!(eq, [f32x4, f64x2, i8x16, i16x8, i32x4, i64x2], |a, b| a
+    .cmp_eq(b));
 define_binary_simd_operation!(ne, [f32x4, f64x2], |a, b| a.cmp_ne(b));
-define_binary_simd_operation!(ne, [i8x16, i16x8, i32x4], |a, b| a.cmp_eq(b).not());
+define_binary_simd_operation!(ne, [i8x16, i16x8, i32x4, i64x2], |a, b| a.cmp_eq(b).not());
 define_binary_simd_operation!(lt, [f32x4, f64x2], |a, b| a.cmp_lt(b));
-define_simd_cmp_operation!(lt, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a < b);
+define_simd_cmp_operation!(
+    lt,
+    [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4, i64x2],
+    |a, b| a < b
+);
 
 define_binary_simd_operation!(gt, [f32x4, f64x2], |a, b| a.cmp_gt(b));
-define_simd_cmp_operation!(gt, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a > b);
+define_simd_cmp_operation!(
+    gt,
+    [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4, i64x2],
+    |a, b| a > b
+);
 define_binary_simd_operation!(le, [f32x4, f64x2], |a, b| a.cmp_le(b));
-define_simd_cmp_operation!(le, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
-    <= b);
+define_simd_cmp_operation!(
+    le,
+    [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4, i64x2],
+    |a, b| a <= b
+);
 define_binary_simd_operation!(ge, [f32x4, f64x2], |a, b| a.cmp_ge(b));
-define_simd_cmp_operation!(ge, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
-    >= b);
+define_simd_cmp_operation!(
+    ge,
+    [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4, i64x2],
+    |a, b| a >= b
+);
 pub unsafe fn i16x8_extadd_pairwise_i8x16(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

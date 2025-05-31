@@ -2966,6 +2966,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         i32x4_trunc_sat_f64x2_s,
                         i32x4_trunc_sat_f64x2_u,
                         i64x2_abs,
+                        i64x2_eq,
+                        i64x2_ne,
+                        i64x2_lt,
+                        i64x2_gt,
+                        i64x2_le,
+                        i64x2_ge,
                         i64x2_sub,
                         i64x2_mul,
                         i64x2_neg

@@ -573,3 +573,8 @@ async fn simd_i64x2_arith() {
 async fn simd_i64x2_arith2() {
     run_test_file("simd_i64x2_arith2").await;
 }
+
+#[test]
+async fn simd_i64x2_cmp() {
+    run_test_file("simd_i64x2_cmp").await;
+}
