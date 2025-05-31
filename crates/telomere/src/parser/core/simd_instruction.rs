@@ -500,6 +500,7 @@ binary_op_simd_parser!(i32x4_extmul_low, 188);
 binary_op_simd_parser!(i32x4_extmul_high, 189);
 binary_op_simd_parser!(u32x4_extmul_low, 190);
 binary_op_simd_parser!(u32x4_extmul_high, 191);
+unary_op_simd_parser!(i64x2_abs, 192);
 unary_op_simd_parser!(i64x2_neg, 193);
 pub(crate) mod i64x2_all_true {
     use super::prelude::*;

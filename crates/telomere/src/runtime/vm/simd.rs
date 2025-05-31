@@ -821,7 +821,7 @@ define_binary_simd_operation!(pmax, [f64x2], |a, b| {
     f64x2::from(result)
 });
 
-define_unary_simd_operation!(abs, [f64x2, f32x4, i32x4, i8x16, i16x8], |a| a.abs());
+define_unary_simd_operation!(abs, [f64x2, f32x4, i32x4, i8x16, i16x8, i64x2], |a| a.abs());
 define_unary_simd_operation!(ceil, [f64x2, f32x4], |a| a.ceil());
 define_unary_simd_operation!(floor, [f64x2, f32x4], |a| a.floor());
 define_unary_simd_operation!(trunc, [f32x4], |a| {
