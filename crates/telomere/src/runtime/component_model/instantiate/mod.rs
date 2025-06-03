@@ -101,52 +101,23 @@ pub async fn instantiate(
     let arena = Arena::new();
     let mut manager = ScopeManager::new(&arena, linker, &component.ops);
     let mut state = InstantiateState::new();
-    'outer: loop {
-        for op in manager.current.ops() {
-            match op {
-                InstantiateOp::CoreInstantiate(idx) => {
-                    let CoreInstance::Defined {
-                        module_idx,
-                        imports,
-                    } = component.resolve_core_instance(*idx)?
-                    else {
-                        unreachable!();
-                    };
-                    let module =
-                        component.resolve_core_module(*module_idx, manager.current, &state)?;
-                    let mut registry = Registry::new();
-                    for (name, import) in imports {
-                        registry.register(name, state.get_core_instance(import).unwrap().clone());
-                    }
-                    let r = core_instantiate(module.module.clone(), store, &registry)
-                        .await
-                        .unwrap();
-                    state.insert_core_instance(*idx, r);
-                }
-                InstantiateOp::CoreInstanceInlineExport(idx) => {}
-                InstantiateOp::Instantiate(idx) => {
-                    let Instance::Defined {
-                        imports,
-                        component_idx,
-                    } = component.resolve_instance(*idx, manager.current, &state)?
-                    else {
-                        unreachable!();
-                    };
-                    let component =
-                        component.resolve_component(*component_idx, manager.current, &state)?;
-                    manager.push(imports.clone(), *idx, &component.ops);
-                }
-                InstantiateOp::InstantiateEnd => {
-                    // special end
-                    break 'outer;
-                }
-                InstantiateOp::InstantiateInlineExport(idx) => {}
-                InstantiateOp::MapExport(name, exp) => {}
-                InstantiateOp::MapImport(_, _) => {}
-            }
+    let mut iter = InstantiateOpIterator::new(manager.current.ops(), |idx| {
+        let Instance::Defined {component_idx, ..} = component.resolve_instance(idx, manager.current, &state).unwrap() else {
+            unreachable!();
+        };
+        let component = component.resolve_component(*component_idx, manager.current, &state).unwrap();
+        component.ops.iter()
+    });
+    for op in iter {
+        match op {
+            InstantiateOp::CoreInstantiate(_) => {}
+            InstantiateOp::CoreInstanceInlineExport(_) => {}
+            InstantiateOp::Instantiate(_) => {}
+            InstantiateOp::InstantiateEnd => {}
+            InstantiateOp::MapExport(_, _) => {}
+            InstantiateOp::MapImport(_, _) => {}
+            InstantiateOp::InstantiateInlineExport(_) => {}
         }
-        let idx = manager.current.idx();
-        manager.pop();
     }
     Ok(())
 }

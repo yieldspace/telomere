@@ -115,11 +115,12 @@ impl<'a, 'b, 'o> InstantiateScope<'a, 'b, 'o> {
                 todo!()
             }
             InstanceImport::Instance(idx) => {
-                let Import::Instance(inst) = self.get_import(name.as_ref()) else {
-                    panic!("Expected Instance import for {}", name);
-                };
-                let inst = inst.clone();
-                self.state_mut().instances.insert(idx, inst);
+                // let Import::Instance(inst) = self.get_import(name.as_ref()) else {
+                //     panic!("Expected Instance import for {}", name);
+                // };
+                // let inst = inst.clone();
+                // self.state_mut().instances.insert(idx, inst);
+                todo!()
             }
         }
     }
