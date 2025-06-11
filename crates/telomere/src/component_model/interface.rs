@@ -1,6 +1,6 @@
+use crate::component_model::types::CoreModuleType;
 use crate::component_model::TypeId;
 use std::hash::Hash;
-use crate::component_model::types::CoreModuleType;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExternDesc {

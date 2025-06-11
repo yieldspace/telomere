@@ -1,11 +1,13 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{
-    Generic, GenericBound, InstanceExportType, InstanceType, Type, GenericsReplaceDSL,
+    Generic, GenericBound, GenericsReplaceDSL, InstanceExportType, InstanceType, Type,
 };
 use crate::component_model::{
-    CoreSort, ImportName, InstanceExport, Instance, InstanceImport, Relation, Sort,
+    CoreSort, ImportName, Instance, InstanceExport, InstanceImport, Relation, Sort,
 };
-use crate::parser::component_model::name::{parse_export_name, parse_import_name};
+use crate::parser::component_model::name::{
+    parse_export_name, parse_export_name_dash, parse_import_name,
+};
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::{
     parse_component_local_idx, parse_vec_range, ComponentParseError, ParseContext, ParseResult,
@@ -147,7 +149,7 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
     let mut exports = HashMap::new();
     let mut export_types = HashMap::<String, InstanceExportType>::new();
     for _ in parse_vec_range(ctx)? {
-        let name = parse_export_name(ctx)?;
+        let name = parse_export_name_dash(ctx)?;
         let sort = parse_sort_with_idx(ctx)?;
         export_types.insert(name.original.clone(), sort.clone().try_into()?);
         match sort {

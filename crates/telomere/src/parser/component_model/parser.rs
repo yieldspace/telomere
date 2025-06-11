@@ -4,7 +4,9 @@ use crate::component_model::{
     Func, GlobalIdx, Instance, Relation,
 };
 use crate::parser::component_model::{parse_component, ParseResult, ParseState, Validator};
-use crate::runtime::component_model::instantiate::{InstantiateOp, InstantiateResult, InstantiateScope, InstantiateState};
+use crate::runtime::component_model::instantiate::{
+    InstantiateOp, InstantiateResult, InstantiateScope, InstantiateState,
+};
 use crate::runtime::component_model::ComponentVMError;
 use std::collections::HashMap;
 use typed_arena::Arena;
@@ -86,8 +88,6 @@ impl ParsedComponent {
     pub fn resolve_core_module(
         &self,
         idx: GlobalIdx<CoreModule>,
-        scope: &InstantiateScope,
-        state: &InstantiateState,
     ) -> InstantiateResult<&CoreModule> {
         self.core_modules
             .get(&idx)
@@ -133,12 +133,7 @@ impl ParsedComponent {
             })
     }
 
-    pub fn resolve_component(
-        &self,
-        idx: GlobalIdx<Component>,
-        scope: &InstantiateScope,
-        state: &InstantiateState,
-    ) -> InstantiateResult<&Component> {
+    pub fn resolve_component(&self, idx: GlobalIdx<Component>) -> InstantiateResult<&Component> {
         self.components
             .get(&idx)
             .ok_or_else(|| {
@@ -156,12 +151,7 @@ impl ParsedComponent {
             })
     }
 
-    pub fn resolve_instance(
-        &self,
-        idx: GlobalIdx<Instance>,
-        scope: &InstantiateScope,
-        state: &InstantiateState,
-    ) -> InstantiateResult<&Instance> {
+    pub fn resolve_instance(&self, idx: GlobalIdx<Instance>) -> InstantiateResult<&Instance> {
         self.instances
             .get(&idx)
             .ok_or_else(|| {

@@ -1,6 +1,7 @@
 use crate::common::InstanceHandle;
 use crate::component_model::{
     Component, CoreInstance, CoreModule, GlobalIdx, Instance, InstanceExport, InstanceImport,
+    Relation,
 };
 use crate::parser::component_model::ParsedComponent;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
@@ -26,10 +27,16 @@ pub enum InstantiateOp {
     CoreInstantiate(GlobalIdx<CoreInstance>),
     CoreInstanceInlineExport(GlobalIdx<CoreInstance>),
     Instantiate(GlobalIdx<Instance>),
+    Import(String, InstanceImport),
+    Export(String, InstanceExport),
+    Alias(AliasOp),
     InstantiateEnd,
-    MapExport(Box<String>, InstanceExport),
-    MapImport(Box<String>, InstanceImport),
     InstantiateInlineExport(GlobalIdx<Instance>),
+}
+
+#[derive(Debug, Clone)]
+pub enum AliasOp {
+    Instance(GlobalIdx<Instance>),
 }
 type InnerTy<'a> = std::slice::Iter<'a, InstantiateOp>;
 pub struct InstantiateOpIterator<'a, F>
@@ -78,18 +85,24 @@ where
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug)]
 pub struct ComponentInstance {
-    pub(crate) exports: HashMap<String, Export>,
+    pub(crate) exports: HashMap<String, InstanceExport>,
+    pub(crate) core_modules: HashMap<GlobalIdx<CoreModule>, GlobalIdx<CoreModule>>,
+    pub(crate) instances: HashMap<GlobalIdx<Instance>, ComponentInstance>,
+    pub(crate) core_instances: HashMap<GlobalIdx<CoreInstance>, InstanceHandle>,
 }
 
+#[derive(Clone)]
 pub enum Import {
-    Instance(Rc<ComponentInstance>),
+    CoreModule(GlobalIdx<CoreModule>),
+    Instance(ComponentInstance),
     Func,
 }
 
+#[derive(Clone)]
 pub enum Export {
-    Instance(Rc<ComponentInstance>),
+    Instance(ComponentInstance),
     Func,
 }
 
@@ -98,26 +111,120 @@ pub async fn instantiate(
     store: &mut Store,
     linker: &Linker<'_>,
 ) -> Result<(), ComponentVMError> {
-    let arena = Arena::new();
-    let mut manager = ScopeManager::new(&arena, linker, &component.ops);
-    let mut state = InstantiateState::new();
-    let mut iter = InstantiateOpIterator::new(manager.current.ops(), |idx| {
-        let Instance::Defined {component_idx, ..} = component.resolve_instance(idx, manager.current, &state).unwrap() else {
+    let mut manager = ScopeManager::new(&linker);
+    let iter = InstantiateOpIterator::new(&component.ops, |idx| {
+        let Instance::Defined { component_idx, .. } = component.resolve_instance(idx).unwrap()
+        else {
             unreachable!();
         };
-        let component = component.resolve_component(*component_idx, manager.current, &state).unwrap();
+        let component = component.resolve_component(*component_idx).unwrap();
         component.ops.iter()
     });
     for op in iter {
         match op {
-            InstantiateOp::CoreInstantiate(_) => {}
+            InstantiateOp::CoreInstantiate(idx) => {
+                let CoreInstance::Defined {
+                    module_idx,
+                    imports,
+                } = component.resolve_core_instance(*idx)?
+                else {
+                    unreachable!();
+                };
+                let module = component.resolve_core_module(*module_idx)?;
+                let mut registry = Registry::new();
+                for (name, import) in imports {
+                    registry.register(
+                        name,
+                        manager
+                            .scope()
+                            .get_core_instance_instantiated(import)
+                            .clone(),
+                    );
+                }
+                let r = core_instantiate(module.module.clone(), store, &registry)
+                    .await
+                    .unwrap();
+                manager.scope_mut().register_core_instance(*idx, r);
+            }
             InstantiateOp::CoreInstanceInlineExport(_) => {}
-            InstantiateOp::Instantiate(_) => {}
-            InstantiateOp::InstantiateEnd => {}
-            InstantiateOp::MapExport(_, _) => {}
-            InstantiateOp::MapImport(_, _) => {}
-            InstantiateOp::InstantiateInlineExport(_) => {}
+            InstantiateOp::Instantiate(idx) => {
+                // scopeをセットする
+                let Instance::Defined {
+                    component_idx,
+                    imports,
+                } = component.resolve_instance(*idx)?
+                else {
+                    unreachable!();
+                };
+                let data = {
+                    let scope = manager.scope();
+                    let mut data = HashMap::new();
+                    for (name, import) in imports {
+                        match import {
+                            InstanceImport::CoreModule(idx) => {
+                                data.insert(name.clone(), Import::CoreModule(*idx));
+                            }
+                            InstanceImport::Func(_) => {}
+                            InstanceImport::Component(_) => {}
+                            InstanceImport::Instance(idx) => {
+                                let inst = scope.get_instance_instantiated(idx);
+                                data.insert(name.clone(), Import::Instance(inst.clone()));
+                            }
+                        }
+                    }
+                    data
+                };
+                manager.push(*idx, data);
+            }
+            InstantiateOp::InstantiateEnd => {
+                let scope = manager.pop();
+                let idx = scope.idx().clone().unwrap();
+                let inst = scope.make();
+                manager.scope_mut().register_instance(idx, inst);
+            }
+            InstantiateOp::InstantiateInlineExport(idx) => {
+                let Instance::InlineExport { exports } = component.resolve_instance(*idx)? else {
+                    unreachable!();
+                };
+                let inst = ComponentInstance {
+                    exports: exports.clone(),
+                    core_modules: Default::default(),
+                    instances: exports
+                        .iter()
+                        .filter_map(|(_, v)| match v {
+                            InstanceExport::Instance(x) => {
+                                Some((*x, manager.scope().get_instance_instantiated(x).clone()))
+                            }
+                            _ => None,
+                        })
+                        .collect(),
+                    core_instances: Default::default(),
+                };
+                manager.scope_mut().register_instance(*idx, inst);
+            }
+            InstantiateOp::Export(name, target) => {
+                manager
+                    .scope_mut()
+                    .register_export(name.clone(), target.clone());
+            }
+            InstantiateOp::Import(_, _) => {}
+            InstantiateOp::Alias(op) => match op {
+                AliasOp::Instance(base_idx) => match component.instances.get(base_idx).unwrap() {
+                    Relation::FromExport(idx, name) => {
+                        let inst = manager.scope().get_instance_instantiated(idx);
+                        let InstanceExport::Instance(idx) = inst.exports.get(name).unwrap() else {
+                            unreachable!();
+                        };
+                        let export_inst = inst.instances.get(idx).unwrap().clone();
+                        manager
+                            .scope_mut()
+                            .register_instance(*base_idx, export_inst);
+                    }
+                    _ => unreachable!(),
+                },
+            },
         }
     }
+    println!("{:?}", manager.pop().make());
     Ok(())
 }

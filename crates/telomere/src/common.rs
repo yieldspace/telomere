@@ -1,6 +1,6 @@
 #[macro_use]
 mod vm_result;
-use std::fmt::Display;
+use std::fmt::{Debug, Display, Formatter};
 
 use std::rc::Rc;
 
@@ -34,7 +34,7 @@ pub struct TypeIdx(pub u32);
 pub struct FuncIdx(pub u32);
 impl Display for FuncIdx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        std::fmt::Display::fmt(&self.0, f)
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -447,11 +447,17 @@ impl ExecuteContext<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InstanceHandle(pub(crate) Rc<GcRootHandle>);
 impl InstanceHandle {
     pub(crate) fn get_gc_ref_with_pool(&self, pool_ref: &MemoryPool) -> GcRef {
         self.0.get_gc_ref_with_pool(pool_ref)
+    }
+}
+
+impl Debug for InstanceHandle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InstanceHandle")
     }
 }
 

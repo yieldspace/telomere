@@ -1,6 +1,6 @@
+use crate::runtime::component_model::instantiate::ComponentInstance;
 use crate::Module;
 use std::collections::HashMap;
-use crate::runtime::component_model::instantiate::ComponentInstance;
 
 pub struct Linker<'a> {
     modules: HashMap<String, &'a Module>,
@@ -21,7 +21,11 @@ impl<'a> Linker<'a> {
         }
     }
 
-    pub fn register_module<IntoString: Into<String>>(&mut self, name: IntoString, module: &'a Module) {
+    pub fn register_module<IntoString: Into<String>>(
+        &mut self,
+        name: IntoString,
+        module: &'a Module,
+    ) {
         self.modules.insert(name.into(), module);
     }
 

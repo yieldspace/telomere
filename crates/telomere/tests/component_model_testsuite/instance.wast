@@ -142,3 +142,14 @@
     (instance (instantiate 1 (with "a" (component 0))))
 )
 
+
+(component
+    (component
+        (component)
+        (instance (instantiate 0))
+        (export "a" (instance 0))
+    )
+    (instance (instantiate 0))
+    (alias export 0 "a" (instance))
+    (instance (export "b" (instance 1)))
+)

@@ -1,149 +1,139 @@
+use crate::common::InstanceHandle;
+use crate::component_model::{
+    Component, ComponentImport, CoreInstance, CoreModule, GlobalIdx, Instance, InstanceExport,
+    InstanceImport,
+};
+use crate::runtime::component_model::instantiate::id::ResolveId;
+use crate::runtime::component_model::instantiate::{
+    ComponentInstance, Export, Import, InstantiateOp, InstantiateResult,
+};
+use crate::runtime::component_model::{ComponentVMError, Linker};
 use std::collections::HashMap;
 use std::rc::Rc;
 use typed_arena::Arena;
-use crate::common::InstanceHandle;
-use crate::component_model::{Component, ComponentImport, CoreInstance, CoreModule, GlobalIdx, Instance, InstanceImport};
-use crate::runtime::component_model::instantiate::{ComponentInstance, Export, Import, InstantiateOp, InstantiateResult};
-use crate::runtime::component_model::{ComponentVMError, Linker};
-use crate::runtime::component_model::instantiate::id::ResolveId;
 
-pub enum InstantiateScope<'a, 'b, 'o> {
-    Linker(
-        &'a Linker<'a>,
-        ScopeState<'b, 'a, 'o>,
-        &'o [InstantiateOp],
-    ),
-    Instantiate(
-        HashMap<String, Import>,
-        ScopeState<'b, 'a, 'o>,
-        &'o [InstantiateOp],
-    ),
+pub enum InstantiateScope<'a> {
+    Linker(&'a Linker<'a>, ScopeState),
+    Instantiate(HashMap<String, Import>, ScopeState),
 }
 
-pub struct ScopeManager<'a, 'b, 'o> {
-    arena: &'a Arena<InstantiateScope<'b, 'a, 'o>>,
-    pub current: &'a InstantiateScope<'b, 'a, 'o>,
+pub struct ScopeManager<'a> {
+    pub scopes: Vec<InstantiateScope<'a>>,
 }
 
-pub struct ScopeState<'a, 'b, 'o> {
-    instantiated: ComponentInstance,
-    parent: Option<&'b InstantiateScope<'a, 'b, 'o>>,
+pub struct ScopeState {
     idx: Option<GlobalIdx<Instance>>,
-    instances: HashMap<GlobalIdx<Instance>, Rc<ComponentInstance>>,
+    exports: HashMap<String, InstanceExport>,
+    instances: HashMap<GlobalIdx<Instance>, ComponentInstance>,
     core_instances: HashMap<GlobalIdx<CoreInstance>, InstanceHandle>,
+    core_modules: HashMap<GlobalIdx<CoreModule>, GlobalIdx<CoreModule>>,
 }
 
-impl<'a, 'b, 'o> ScopeManager<'a, 'b, 'o> {
-    pub fn new(
-        arena: &'a Arena<InstantiateScope<'b, 'a, 'o>>,
-        linker: &'b Linker,
-        ops: &'o [InstantiateOp],
-    ) -> Self {
-        let current = arena.alloc(InstantiateScope::Linker(linker, ScopeState::new(None, None), ops));
-        Self { arena, current }
+impl<'a> ScopeManager<'a> {
+    pub fn new(linker: &'a Linker) -> Self {
+        Self {
+            scopes: vec![InstantiateScope::Linker(linker, ScopeState::new(None))],
+        }
     }
 
-    pub fn push(
-        &mut self,
-        imports: HashMap<String, Import>,
-        idx: GlobalIdx<Instance>,
-        ops: &'o [InstantiateOp],
-    ) -> &InstantiateScope<'b, 'a, 'o> {
-        let new_scope = self.arena.alloc(InstantiateScope::Instantiate(
+    pub fn scope(&self) -> &InstantiateScope<'a> {
+        self.scopes.last().unwrap()
+    }
+
+    pub fn scope_mut(&mut self) -> &mut InstantiateScope<'a> {
+        self.scopes.last_mut().unwrap()
+    }
+
+    pub fn push(&mut self, idx: GlobalIdx<Instance>, imports: HashMap<String, Import>) {
+        self.scopes.push(InstantiateScope::Instantiate(
             imports,
-            ScopeState::new(Some(self.current), Some(idx)),
-            ops,
+            ScopeState::new(Some(idx)),
         ));
-        self.current = new_scope;
-        new_scope
     }
 
-    pub fn pop(&mut self) {
-        self.current = self.current.parent().unwrap();
+    pub fn pop(&mut self) -> InstantiateScope {
+        self.scopes.pop().unwrap()
     }
 }
 
-impl<'a, 'b, 'o> InstantiateScope<'a, 'b, 'o> {
-    fn parent(&self) -> Option<&InstantiateScope<'a, 'b, 'o>> {
+impl<'a> InstantiateScope<'a> {
+    pub fn state_mut(&mut self) -> &mut ScopeState {
         match self {
-            InstantiateScope::Linker(_, state, _) => state.parent,
-            InstantiateScope::Instantiate(_, state, _) => state.parent,
-        }
-    }
-    
-    fn state_mut(&mut self) -> &mut ScopeState<'a, 'b, 'o> {
-        match self {
-            InstantiateScope::Linker(_, state, _) => state,
-            InstantiateScope::Instantiate(_, state, _) => state,
-        }
-    }
-    
-    pub fn state(&self) -> &ScopeState<'a, 'b, 'o> {
-        match self {
-            InstantiateScope::Linker(_, state, _) => state,
-            InstantiateScope::Instantiate(_, state, _) => state,
+            InstantiateScope::Linker(_, state) => state,
+            InstantiateScope::Instantiate(_, state) => state,
         }
     }
 
-    pub(crate) fn ops(&self) -> &'o [InstantiateOp] {
+    pub fn state(&self) -> &ScopeState {
         match self {
-            InstantiateScope::Linker(_, _, ops) => ops,
-            InstantiateScope::Instantiate(_, _, ops) => ops,
+            InstantiateScope::Linker(_, state) => state,
+            InstantiateScope::Instantiate(_, state) => state,
         }
     }
-    
+
     pub fn idx(&self) -> Option<GlobalIdx<Instance>> {
         match self {
-            InstantiateScope::Linker(_, state, _) => state.idx,
-            InstantiateScope::Instantiate(_, state, _) => state.idx,
-        }
-    }
-    
-    pub fn register_import(
-        &mut self,
-        name: Box<String>,
-        import: InstanceImport,
-    ) {
-        match import {
-            InstanceImport::CoreModule(idx) => {
-                todo!()
-            }
-            InstanceImport::Func(idx) => {
-                todo!()
-            }
-            InstanceImport::Component(idx) => {
-                todo!()
-            }
-            InstanceImport::Instance(idx) => {
-                // let Import::Instance(inst) = self.get_import(name.as_ref()) else {
-                //     panic!("Expected Instance import for {}", name);
-                // };
-                // let inst = inst.clone();
-                // self.state_mut().instances.insert(idx, inst);
-                todo!()
-            }
+            InstantiateScope::Linker(_, state) => state.idx,
+            InstantiateScope::Instantiate(_, state) => state.idx,
         }
     }
 
-    pub fn register_instance(&mut self, idx: GlobalIdx<Instance>, inst: Rc<ComponentInstance>) {
-        self.state_mut().instances.insert(
+    pub fn register_export(&mut self, name: String, export: InstanceExport) {
+        self.state_mut().exports.insert(name, export);
+    }
+
+    pub fn register_instance(&mut self, idx: GlobalIdx<Instance>, inst: ComponentInstance) {
+        self.state_mut().instances.insert(idx, inst);
+    }
+
+    pub fn register_core_instance(&mut self, idx: GlobalIdx<CoreInstance>, inst: InstanceHandle) {
+        self.state_mut().core_instances.insert(idx, inst);
+    }
+
+    pub fn register_core_module(
+        &mut self,
+        idx: GlobalIdx<CoreModule>,
+        target: GlobalIdx<CoreModule>,
+    ) {
+        self.state_mut().core_modules.insert(idx, target);
+    }
+
+    pub fn get_core_instance_instantiated(&self, idx: &GlobalIdx<CoreInstance>) -> &InstanceHandle {
+        self.state().core_instances.get(idx).unwrap()
+    }
+
+    pub fn get_instance_instantiated(&self, idx: &GlobalIdx<Instance>) -> &ComponentInstance {
+        self.state().instances.get(idx).unwrap()
+    }
+
+    pub fn make(self) -> ComponentInstance {
+        let ScopeState {
             idx,
-            inst
-        );
+            exports,
+            instances,
+            core_instances,
+            core_modules,
+        } = match self {
+            InstantiateScope::Linker(_, state) => state,
+            InstantiateScope::Instantiate(_, state) => state,
+        };
+        ComponentInstance {
+            exports,
+            core_modules,
+            instances,
+            core_instances,
+        }
     }
 }
 
-impl<'a, 'b, 'o> ScopeState<'a, 'b, 'o> {
-    pub fn new(
-        parent: Option<&'b InstantiateScope<'a, 'b, 'o>>,
-        idx: Option<GlobalIdx<Instance>>,
-    ) -> Self {
+impl ScopeState {
+    pub fn new(idx: Option<GlobalIdx<Instance>>) -> Self {
         Self {
-            instantiated: ComponentInstance::default(),
-            parent,
             idx,
+            exports: HashMap::new(),
             instances: Default::default(),
             core_instances: Default::default(),
+            core_modules: Default::default(),
         }
     }
 }

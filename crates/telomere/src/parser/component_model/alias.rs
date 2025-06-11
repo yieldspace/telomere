@@ -10,6 +10,7 @@ use crate::parser::component_model::{
     ParseResult,
 };
 use crate::parser::core::{parse_name, parse_u32};
+use crate::runtime::component_model::instantiate::{AliasOp, InstantiateOp};
 
 pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     let sort = parse_sort(ctx)?;
@@ -87,6 +88,9 @@ fn parse_export_alias(
                 .instance_store
                 .register(Relation::FromExport(instance_gidx, name.original.clone()));
             ctx.state.scope_mut().instances.register(gidx);
+            ctx.state
+                .scope_mut()
+                .push_op(InstantiateOp::Alias(AliasOp::Instance(gidx)));
             ctx.validator.scope_mut().instance_indexes.add(id);
         }
         SortType::Core(CoreSortType::Module) => {

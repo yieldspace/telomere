@@ -144,10 +144,12 @@ impl<'a> ParseState<'a> {
 
 impl Scope {
     pub fn make_component(&self) -> Component {
+        let mut ops = self.ops.clone();
+        ops.push(InstantiateOp::InstantiateEnd);
         Component {
             imports: self.imports.clone(),
             exports: self.exports.clone(),
-            ops: self.ops.clone(),
+            ops,
         }
     }
 

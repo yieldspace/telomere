@@ -25,7 +25,6 @@ pub fn parse_component(
         let mut ctx = ParseContext::new(reader, state, validator);
         _parse_component(&mut ctx)?;
     }
-    state.scope_mut().push_op(InstantiateOp::InstantiateEnd);
     Ok(())
 }
 
