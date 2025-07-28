@@ -1,7 +1,7 @@
-use crate::binary::BinaryReader;
 use crate::common::MemArg;
 use crate::parser::leb128::Leb128Parser;
 use crate::WasmParserError;
+use binary_reader::BinaryReader;
 use tracing::trace;
 
 pub type Result<R> = std::result::Result<R, WasmParserError>;

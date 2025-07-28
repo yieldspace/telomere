@@ -1,6 +1,6 @@
 use crate::component_model::types::SortType;
 use crate::component_model::TypeId;
-use crate::WasmParserError;
+use telomere_wasm::WasmParserError;
 use thiserror::Error;
 
 /// `ComponentParseError` represents the possible errors that can occur in the component model parser.

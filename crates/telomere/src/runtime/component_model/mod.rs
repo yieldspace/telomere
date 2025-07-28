@@ -6,13 +6,13 @@ mod func;
 pub mod instantiate;
 mod linker;
 
-use crate::common::InstanceHandle;
 pub use crate::runtime::component_model::instantiate::instantiate;
-use crate::{Registry, Store};
 pub use error::ComponentVMError;
 pub use func::*;
 pub use linker::Linker;
 use std::collections::HashMap;
+use telomere_wasm::common::InstanceHandle;
+use telomere_wasm::{Registry, Store};
 
 #[derive(Debug)]
 pub struct ComponentModelInstance {

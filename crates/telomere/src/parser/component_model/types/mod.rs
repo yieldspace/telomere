@@ -9,7 +9,6 @@ mod interface;
 mod valtype;
 mod variant;
 
-use crate::binary::BinaryReader;
 use crate::component_model::types::{
     Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType,
 };
@@ -21,14 +20,15 @@ use crate::parser::component_model::{
     parse_func_local_idx, parse_option, parse_type_local_idx, parse_vec_range, ComponentParseError,
     ParseContext, ParseResult, SizedResult,
 };
-use crate::parser::core::{parse_i32, parse_u32, parse_vec};
-use crate::parser::leb128::compile_i32;
+use binary_reader::BinaryReader;
 pub use component::*;
 pub use externdesc::*;
 pub use instance_decl::*;
 pub use interface::*;
 use num_traits::FromPrimitive;
 use std::collections::HashSet;
+use telomere_wasm::parser::core::{parse_i32, parse_u32, parse_vec};
+use telomere_wasm::parser::leb128::compile_i32;
 use tracing::trace;
 pub use variant::*;
 

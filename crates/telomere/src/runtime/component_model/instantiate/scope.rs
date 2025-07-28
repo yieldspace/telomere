@@ -1,4 +1,3 @@
-use crate::common::InstanceHandle;
 use crate::component_model::{
     Component, ComponentImport, CoreInstance, CoreModule, GlobalIdx, Instance, InstanceExport,
     InstanceImport,
@@ -10,6 +9,7 @@ use crate::runtime::component_model::instantiate::{
 use crate::runtime::component_model::{ComponentVMError, Linker};
 use std::collections::HashMap;
 use std::rc::Rc;
+use telomere_wasm::common::InstanceHandle;
 use typed_arena::Arena;
 
 pub enum InstantiateScope<'a> {

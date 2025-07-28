@@ -1,4 +1,3 @@
-use crate::binary::BinaryReader;
 use crate::component_model::{
     Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreRelation, CoreTable,
     Func, GlobalIdx, Instance, Relation,
@@ -8,6 +7,7 @@ use crate::runtime::component_model::instantiate::{
     InstantiateOp, InstantiateResult, InstantiateScope, InstantiateState,
 };
 use crate::runtime::component_model::ComponentVMError;
+use binary_reader::BinaryReader;
 use std::collections::HashMap;
 use typed_arena::Arena;
 

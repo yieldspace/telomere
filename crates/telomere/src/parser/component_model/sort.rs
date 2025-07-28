@@ -1,4 +1,3 @@
-use crate::binary::BinaryReader;
 use crate::component_model::types::SortType;
 use crate::component_model::Sort;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
@@ -7,6 +6,7 @@ use crate::parser::component_model::{
     parse_component_local_idx, parse_core_sort, parse_func_local_idx, parse_instance_local_idx,
     parse_type_local_idx, ParseContext, ParseResult,
 };
+use binary_reader::BinaryReader;
 
 pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<SortType> {
     let sort = match ctx.reader.read_exact_one()? {

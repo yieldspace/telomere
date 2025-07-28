@@ -1,14 +1,14 @@
-use crate::binary::BinaryReader;
 use crate::component_model::{
     Dependency, ExportName, HashName, ImportName, InterfaceName, Label, LockedDependency,
     PackagePath, ParsedExportName, ParsedImportName, PlainName, UnlockedDependency, UrlName,
     VersionRange,
 };
 use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult};
-use crate::parser::core::parse_name;
+use binary_reader::BinaryReader;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use semver::Version;
+use telomere_wasm::parser::core::parse_name;
 use tracing::trace;
 
 static LABEL: Lazy<Regex> = Lazy::new(|| {

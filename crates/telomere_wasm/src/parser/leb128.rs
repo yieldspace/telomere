@@ -1,5 +1,5 @@
-use crate::binary::BinaryReader;
 use crate::parser::core::WasmParserError;
+use binary_reader::BinaryReader;
 
 pub type Result<R> = std::result::Result<R, WasmParserError>;
 
@@ -139,7 +139,7 @@ pub const fn compile_i32<const N: usize>(bytes: [u8; N]) -> i32 {
 mod tests {
     use crate::parser::core::parse_i32;
     use crate::parser::leb128::compile_i32;
-    use crate::IoReadBinaryReader;
+    use binary_reader::IoReadBinaryReader;
 
     #[test]
     fn test_sleb128() {

@@ -4,16 +4,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use binary_reader::IoReadBinaryReader;
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
-use telomere::{ResultValue, WasmValue};
+use telomere_wasm::{ResultValue, WasmValue};
 use tokio::runtime::Runtime;
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("benches/telomere-benchmark.wasm");
     let file = fs::File::open(path).unwrap();
-    let mut reader = telomere::IoReadBinaryReader::from(file);
-    let mut parser = telomere::WasmParser::new(&mut reader);
+    let mut reader = IoReadBinaryReader::from(file);
+    let mut parser = telomere_wasm::WasmParser::new(&mut reader);
     let module = parser.parse_module().unwrap();
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("criterion_benchmark");
@@ -25,19 +26,19 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                 let module = module.clone();
                 let mut duration = Duration::new(0, 0);
                 for _ in 0..iters {
-                    let mut store = telomere::Store::new();
-                    let registry = telomere::Registry::new();
-                    let handle = telomere::instantiate(module.clone(), &mut store, &registry)
+                    let mut store = telomere_wasm::Store::new();
+                    let registry = telomere_wasm::Registry::new();
+                    let handle = telomere_wasm::instantiate(module.clone(), &mut store, &registry)
                         .await
                         .unwrap();
                     let start = Instant::now();
                     assert_eq!(
                         black_box(
-                            telomere::run_module_function(
+                            telomere_wasm::run_module_function(
                                 &handle,
                                 &mut store,
                                 "run",
-                                &telomere::ResultValue::new(vec![WasmValue::I32(20)]),
+                                &telomere_wasm::ResultValue::new(vec![WasmValue::I32(20)]),
                             )
                             .await,
                         )

@@ -1,9 +1,9 @@
-use crate::binary::BinaryReader;
 use crate::parser::component_model::sort::parse_sort;
 use crate::parser::component_model::{
     parse_instance_local_idx, ComponentParseError, ParseContext, ParseResult,
 };
-use crate::parser::core::parse_u32;
+use binary_reader::BinaryReader;
+use telomere_wasm::parser::core::parse_u32;
 
 pub fn parse_alias_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     let sort = parse_sort(ctx)?;

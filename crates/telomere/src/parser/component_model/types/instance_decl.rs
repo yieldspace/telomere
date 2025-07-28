@@ -1,7 +1,7 @@
-use crate::binary::BinaryReader;
 use crate::parser::component_model::types::alias::parse_alias_type;
 use crate::parser::component_model::types::{parse_export_decl, parse_type};
 use crate::parser::component_model::{ParseContext, ParseResult};
+use binary_reader::BinaryReader;
 
 pub fn parse_instance_decl(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     _parse_instance_decl(ctx, None)

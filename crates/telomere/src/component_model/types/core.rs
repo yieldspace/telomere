@@ -1,12 +1,12 @@
-use crate::common::{ExportDesc, ImportDesc};
-pub use crate::common::{
+use crate::component_model::types::CoreSortType;
+use crate::parser::component_model::{ComponentParseError, ParseResult};
+use std::collections::HashMap;
+use telomere_wasm::common::{ExportDesc, ImportDesc};
+pub use telomere_wasm::common::{
     FuncType as CoreFuncType, GlobalType as CoreGlobalType, MemType as CoreMemoryType,
     TableType as CoreTableType,
 };
-use crate::component_model::types::CoreSortType;
-use crate::parser::component_model::{ComponentParseError, ParseResult};
-use crate::Module;
-use std::collections::HashMap;
+use telomere_wasm::Module;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreModuleExportType {

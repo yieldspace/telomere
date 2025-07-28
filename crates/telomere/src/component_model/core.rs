@@ -1,7 +1,7 @@
 use crate::component_model::types::CoreType;
 use crate::component_model::GlobalIdx;
-use crate::Module;
 use std::collections::HashMap;
+use telomere_wasm::Module;
 
 pub struct CoreModule {
     pub module: Module,

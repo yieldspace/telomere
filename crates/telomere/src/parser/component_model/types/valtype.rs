@@ -1,11 +1,11 @@
-use crate::binary::BinaryReader;
 use crate::component_model::types::{LabelValType, PrimValType, Type, ValType};
 use crate::component_model::LocalIdx;
 use crate::parser::component_model::name::parse_label_dash;
 use crate::parser::component_model::types::is_type_opcode;
 use crate::parser::component_model::{ComponentParseError, ParseContext, ParseResult, SizedResult};
-use crate::parser::core::parse_i32;
+use binary_reader::BinaryReader;
 use num_traits::FromPrimitive;
+use telomere_wasm::parser::core::parse_i32;
 
 pub fn parse_valtype(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<ValType> {
     let (_, value) = parse_i32(ctx.reader)?;

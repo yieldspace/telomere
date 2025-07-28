@@ -1,4 +1,3 @@
-use crate::common::InstanceHandle;
 use crate::component_model::{
     Component, CoreInstance, CoreModule, GlobalIdx, Instance, InstanceExport, InstanceImport,
     Relation,
@@ -7,12 +6,13 @@ use crate::parser::component_model::ParsedComponent;
 pub use crate::runtime::component_model::instantiate::context::InstantiateContext;
 use crate::runtime::component_model::instantiate::id::ResolveId;
 use crate::runtime::component_model::{ComponentModelInstance, ComponentVMError, Linker};
-use crate::runtime::instantiate as core_instantiate;
-use crate::{Registry, Store};
 pub use scope::{InstantiateScope, ScopeManager};
 pub use state::InstantiateState;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+use telomere_wasm::common::InstanceHandle;
+use telomere_wasm::runtime::instantiate as core_instantiate;
+use telomere_wasm::{Registry, Store};
 use typed_arena::Arena;
 
 mod context;

@@ -1,8 +1,8 @@
-use crate::binary::BinaryReader;
 use crate::component_model::{CoreInstance, CoreModule, LocalIdx};
 use crate::parser::component_model::context::ParseContext;
 use crate::parser::component_model::ParseResult;
-use crate::parser::core::parse_u32;
+use binary_reader::BinaryReader;
+use telomere_wasm::parser::core::parse_u32;
 
 pub fn parse_core_module_local_idx(
     ctx: &mut ParseContext<impl BinaryReader>,

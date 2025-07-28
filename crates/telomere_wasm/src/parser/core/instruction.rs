@@ -5,7 +5,6 @@ use super::type_checker::TypeChecker;
 use super::validate::*;
 use super::values;
 use super::Result;
-use crate::binary::BinaryReader;
 use crate::common::BlockReturn;
 use crate::common::ElemInit;
 use crate::common::ElemMode;
@@ -25,6 +24,7 @@ use crate::{
     },
     WasmParserError,
 };
+use binary_reader::BinaryReader;
 use tracing::trace;
 macro_rules! simd_instruction {
     ($code: expr,$ctx: expr, $($name: ident),*) => {

@@ -1,0 +1,11 @@
+[package]
+name = "component_model"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+publish.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+
+[dependencies]

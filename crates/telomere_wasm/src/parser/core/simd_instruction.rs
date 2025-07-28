@@ -1,4 +1,4 @@
-use crate::binary::BinaryReader;
+use binary_reader::BinaryReader;
 
 use super::{instruction_generator::InstructionGenerator, type_checker::TypeChecker};
 
@@ -10,9 +10,8 @@ pub(crate) struct SimdParserContext<'a, R: BinaryReader> {
 mod prelude {
     pub(crate) use super::SimdParserContext;
     pub(crate) use crate::common::ValType;
-    pub(crate) use crate::{
-        binary::BinaryReader, common::Operand, parser::core::values, runtime::vm, WasmParserError,
-    };
+    pub(crate) use crate::{common::Operand, parser::core::values, runtime::vm, WasmParserError};
+    pub(crate) use binary_reader::BinaryReader;
 }
 
 macro_rules! unary_op_simd_parser {

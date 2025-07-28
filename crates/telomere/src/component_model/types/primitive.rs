@@ -1,8 +1,6 @@
-use crate::parser::{
-    component_model::{ComponentParseError, ParseResult},
-    leb128::compile_i32,
-};
+use crate::parser::component_model::{ComponentParseError, ParseResult};
 use num_derive::FromPrimitive;
+use telomere_wasm::parser::leb128::compile_i32;
 
 #[derive(Debug, FromPrimitive, Clone, Hash, PartialEq, Eq)]
 #[repr(i32)]

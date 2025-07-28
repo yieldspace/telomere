@@ -1,4 +1,3 @@
-use crate::binary::BinaryReader;
 use crate::component_model::types::{CoreInstanceType, CoreModuleExportType, CoreSortType};
 use crate::component_model::{
     CoreInstance, CoreInstanceInlineExport, CoreRelation, GlobalIdx, LocalIdx,
@@ -9,9 +8,10 @@ use crate::parser::component_model::{
     parse_core_instance_local_idx, parse_core_module_local_idx, parse_core_sort, parse_vec_range,
     ParseResult, SizedResult,
 };
-use crate::parser::core::{parse_name, parse_u32};
 use crate::runtime::component_model::instantiate::InstantiateOp;
+use binary_reader::BinaryReader;
 use std::collections::HashMap;
+use telomere_wasm::parser::core::{parse_name, parse_u32};
 use tracing::trace;
 
 pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {

@@ -1,6 +1,6 @@
 use crate::runtime::component_model::instantiate::ComponentInstance;
-use crate::Module;
 use std::collections::HashMap;
+use telomere_wasm::Module;
 
 pub struct Linker<'a> {
     modules: HashMap<String, &'a Module>,

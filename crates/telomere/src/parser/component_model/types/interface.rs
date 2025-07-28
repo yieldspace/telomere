@@ -1,9 +1,9 @@
-use crate::binary::BinaryReader;
 use crate::component_model::types::{Generic, GenericBound, GenericsReplaceDSL, ImportDecl, Type};
 use crate::parser::component_model::name::{parse_export_name_dash, parse_import_name_dash};
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::validator::ExportInfo;
 use crate::parser::component_model::{ParseContext, ParseResult};
+use binary_reader::BinaryReader;
 
 pub fn parse_import_decl(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<ImportDecl> {
     let name = parse_import_name_dash(ctx)?;

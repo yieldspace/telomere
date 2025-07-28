@@ -1,4 +1,3 @@
-use crate::binary::BinaryReader;
 use crate::component_model::types::{
     Generic, GenericBound, GenericsReplaceDSL, InstanceExportType, InstanceType, Type,
 };
@@ -13,9 +12,10 @@ use crate::parser::component_model::{
     parse_component_local_idx, parse_vec_range, ComponentParseError, ParseContext, ParseResult,
     SizedResult,
 };
-use crate::parser::core::parse_vec;
 use crate::runtime::component_model::instantiate::InstantiateOp;
+use binary_reader::BinaryReader;
 use std::collections::{HashMap, HashSet};
+use telomere_wasm::parser::core::parse_vec;
 use tracing::trace;
 
 pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {

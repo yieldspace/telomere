@@ -1,6 +1,7 @@
+use binary_reader::IoReadBinaryReader;
 use telomere::parser::component_model::{ParseState, Validator};
 use telomere::runtime::component_model::{instantiate, Linker};
-use telomere::Store;
+use telomere_wasm::Store;
 use wast::parser::ParseBuffer;
 use wast::Wast;
 
@@ -16,7 +17,7 @@ pub async fn run_component_wast(text: &str) {
                 let name = m.name();
                 let span = m.span();
                 let source = m.encode().unwrap();
-                let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+                let mut reader = IoReadBinaryReader::from(&source[..]);
                 let state_arena = typed_arena::Arena::new();
                 let mut state = ParseState::new(&state_arena);
                 let arena = typed_arena::Arena::new();
@@ -39,7 +40,7 @@ pub async fn run_component_wast(text: &str) {
             } => {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 if let Ok(source) = module.encode() {
-                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
+                    let mut reader = IoReadBinaryReader::from(&source[..]);
                     let state_arena = typed_arena::Arena::new();
                     let mut state = ParseState::new(&state_arena);
                     let arena = typed_arena::Arena::new();

@@ -1,7 +1,7 @@
-use crate::binary::BinaryReader;
 use crate::common::custom_section::{
     FuncNameSubSec, LocalNameSubSec, ModuleNameSubSec, NameSubSection,
 };
+use binary_reader::BinaryReader;
 
 use super::base::WasmBaseParser;
 use super::{Result, WasmParserError};

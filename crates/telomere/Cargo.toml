@@ -8,6 +8,7 @@ keywords.workspace = true
 
 
 [dependencies]
+binary_reader.workspace = true
 wide = { version = "0.7.32", optional = true }
 thiserror = "2.0.11"
 tracing = { version = "0.1.41" }
@@ -21,6 +22,7 @@ typed-arena = "2.0.2"
 telomere-macros.workspace = true
 futures = { version = "0.3.31", optional = true }
 tokio = { workspace = true, optional = true }
+telomere_wasm = {workspace = true}
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.19" }

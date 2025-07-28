@@ -1,11 +1,11 @@
 use super::ComponentParseError;
-use crate::binary::BinaryReader;
 use crate::component_model::types::{Generic, GenericBound, Type};
 use crate::component_model::{ComponentImport, ExternDesc, InstanceImport, Relation, StrongUnique};
 use crate::parser::component_model::name::parse_import_name_dash;
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{ParseContext, ParseResult};
 use crate::runtime::component_model::instantiate::InstantiateOp;
+use binary_reader::BinaryReader;
 
 pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     let name = parse_import_name_dash(ctx)?;

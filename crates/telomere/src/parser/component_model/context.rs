@@ -1,6 +1,6 @@
-use crate::binary::BinaryReader;
 use crate::parser::component_model::validator::ParseState;
 use crate::parser::component_model::Validator;
+use binary_reader::BinaryReader;
 
 pub struct ParseContext<'a, 'b, 'c, R>
 where

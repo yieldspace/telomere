@@ -12,12 +12,14 @@ clap = { version = "4.5.37", features = ["derive"] }
 anyhow = "1.0.98"
 telomere.workspace = true
 tokio.workspace = true
+binary_reader.workspace = true
+telomere_wasm.workspace = true
 
 [workspace]
 resolver = "2"
-members = [
+members = [ "crates/binary_reader", "crates/component_model",
     "crates/telomere",
-    "crates/telomere-macros",
+    "crates/telomere-macros", "crates/telomere_wasm",
     "crates/union-find"
 ]
 
@@ -32,9 +34,21 @@ keywords = ["webassembly", "runtime"]
 
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }
+telomere_wasm = { path = "crates/telomere_wasm" }
+binary_reader = { path = "crates/binary_reader" }
+component_model = { path = "crates/component_model" }
 union-find = {path = "crates/union-find"}
 telomere-macros = { path = "crates/telomere-macros" }
 tokio = { version = "1.0", features = ["full"] }
+wide = { version = "0.7.32" }
+thiserror = "2.0.11"
+tracing = { version = "0.1.41" }
+num-derive = "0.4.2"
+num-traits = "0.2.19"
+once_cell = "1.21.3"
+semver = "1.0.26"
+typed-arena = "2.0.2"
+futures = { version = "0.3.31" }
 
 regex = "1.11.1"
 

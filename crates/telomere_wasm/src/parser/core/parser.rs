@@ -1,6 +1,3 @@
-use std::collections::HashSet;
-use tracing::trace;
-
 use crate::common::custom_section::NameSubSection;
 use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, LocalsData, Operand};
 use crate::parser::core::instruction_generator::InstructionGenerator;
@@ -10,7 +7,6 @@ use crate::parser::core::validate::validate_locals;
 use crate::parser::core::InstructionParser;
 use crate::runtime::vm;
 use crate::{
-    binary::BinaryReader,
     common::{
         CodeSection, Data, DataCountVerifier, DataMode, DataSection, Elem, ElemMode,
         ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FuncType, FunctionSection,
@@ -19,6 +15,9 @@ use crate::{
     },
     Module,
 };
+use binary_reader::BinaryReader;
+use std::collections::HashSet;
+use tracing::trace;
 
 use super::base::WasmBaseParser;
 use super::custom_section::CustomSectionParser;

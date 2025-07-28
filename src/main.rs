@@ -1,7 +1,8 @@
+use binary_reader::IoReadBinaryReader;
 use clap::Parser;
 use cli::Cli;
 use std::env::current_dir;
-use telomere::WasmValue;
+use telomere_wasm::WasmValue;
 
 mod cli;
 
@@ -24,34 +25,34 @@ async fn main() -> anyhow::Result<()> {
         let bytes = std::fs::read(path)?;
 
         // Create a binary reader for the module bytes.
-        let mut reader = telomere::IoReadBinaryReader::from(&bytes[..]);
+        let mut reader = IoReadBinaryReader::from(&bytes[..]);
 
         // Parse the WebAssembly module using the `WasmParser`.
-        let mut parser = telomere::WasmParser::new(&mut reader);
+        let mut parser = telomere_wasm::WasmParser::new(&mut reader);
         parser.parse_module()?
     };
 
     // Create a new WebAssembly store to manage module state.
-    let mut store = telomere::Store::new();
+    let mut store = telomere_wasm::Store::new();
 
     // Create a new registry for managing imports and exports.
-    let registry = telomere::Registry::new();
+    let registry = telomere_wasm::Registry::new();
 
     // Instantiate the WebAssembly module with the store and registry.
-    let instance = telomere::instantiate(module, &mut store, &registry)
+    let instance = telomere_wasm::instantiate(module, &mut store, &registry)
         .await
         .unwrap();
 
     // Prepare the arguments for the WebAssembly function as `WasmValue`s.
-    let wasm_args = telomere::ResultValue::new(
+    let wasm_args = telomere_wasm::ResultValue::new(
         args.args
             .iter()
-            .map(|x| telomere::WasmValue::I32(*x))
+            .map(|x| telomere_wasm::WasmValue::I32(*x))
             .collect(),
     );
 
     // Run the specified WebAssembly function with the provided arguments.
-    let ret = telomere::run_module_function(&instance, &mut store, &args.func, &wasm_args)
+    let ret = telomere_wasm::run_module_function(&instance, &mut store, &args.func, &wasm_args)
         .await
         .unwrap();
 

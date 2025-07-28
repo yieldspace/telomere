@@ -1,5 +1,4 @@
 use super::ComponentParseError;
-use crate::binary::BinaryReader;
 use crate::component_model::types::GenericsReplaceDSL;
 use crate::component_model::{
     ComponentExport, CoreSort, ExternDesc, InstanceExport, Sort, StrongUnique,
@@ -9,6 +8,7 @@ use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::types::parse_externdesc;
 use crate::parser::component_model::{parse_option, ParseContext, ParseResult};
 use crate::runtime::component_model::instantiate::InstantiateOp;
+use binary_reader::BinaryReader;
 
 pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     tracing::trace!("parse_export");

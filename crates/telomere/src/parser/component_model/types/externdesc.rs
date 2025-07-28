@@ -1,7 +1,7 @@
-use crate::binary::BinaryReader;
 use crate::component_model::ExternDesc;
 use crate::parser::component_model::{parse_type_local_idx, ComponentParseError};
 use crate::parser::component_model::{ParseContext, ParseResult};
+use binary_reader::BinaryReader;
 
 pub fn parse_externdesc(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<ExternDesc> {
     let desc = match ctx.reader.read_exact_one()? {

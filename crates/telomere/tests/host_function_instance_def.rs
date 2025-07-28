@@ -1,6 +1,6 @@
 mod common;
 use common::run_wast_with;
-use telomere::{
+use telomere_wasm::{
     common::{
         ExecuteContext, FuncType, GcRef, HostFunctionDefinition, Instr, NativeModule, ValType,
     },
@@ -54,10 +54,10 @@ async fn test_print() {
 
 const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
     Instr {
-        op: telomere::special_function_return,
+        op: telomere_wasm::special_function_return,
     },
     Instr {
-        operand: telomere::common::Operand { u32: 4 },
+        operand: telomere_wasm::common::Operand { u32: 4 },
     },
 ];
 

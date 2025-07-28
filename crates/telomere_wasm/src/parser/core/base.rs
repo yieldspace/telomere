@@ -1,4 +1,3 @@
-use crate::binary::BinaryReader;
 use crate::common::BlockType;
 use crate::common::FuncType;
 use crate::common::GlobalType;
@@ -6,6 +5,7 @@ use crate::common::MemType;
 use crate::common::RefType;
 use crate::common::TableType;
 use crate::common::ValType;
+use binary_reader::BinaryReader;
 
 use super::types;
 use super::values;

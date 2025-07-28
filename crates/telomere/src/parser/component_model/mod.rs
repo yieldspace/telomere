@@ -1,6 +1,4 @@
-use crate::binary::BinaryReader;
-use crate::parser::core::parse_u32;
-use crate::WasmParserError;
+use binary_reader::BinaryReader;
 use std::ops::Range;
 use tracing::trace;
 
@@ -28,6 +26,8 @@ mod types;
 mod validator;
 
 pub use parser::{ComponentParser, ParsedComponent};
+use telomere_wasm::parser::core::parse_u32;
+use telomere_wasm::WasmParserError;
 pub use validator::ScopeGuard;
 
 pub type SizedResult<T> = std::result::Result<(usize, T), ComponentParseError>;

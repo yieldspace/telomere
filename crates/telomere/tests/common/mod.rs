@@ -1,8 +1,9 @@
 pub mod component_model;
 
-use telomere::{
-    common::InstanceHandle, get_global, instantiate, IoReadBinaryReader, Registry, ResultValue,
-    Store, VMResult, WasmParser, WasmValue,
+use binary_reader::IoReadBinaryReader;
+use telomere_wasm::{
+    common::InstanceHandle, get_global, instantiate, Registry, ResultValue, Store, VMResult,
+    WasmParser, WasmValue,
 };
 use tracing::error;
 use wast::{
@@ -96,8 +97,8 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                 let name = m.name();
                 let span = m.span();
                 let source = m.encode().unwrap();
-                let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                let mut parser = telomere::WasmParser::new(&mut reader);
+                let mut reader = IoReadBinaryReader::from(&source[..]);
+                let mut parser = telomere_wasm::WasmParser::new(&mut reader);
                 let m = match parser.parse_module() {
                     Ok(v) => v,
                     Err(v) => {
@@ -125,7 +126,7 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                     );
                     let actual = if let Some(id) = v.module {
                         let instance = registry.get(id.name()).unwrap();
-                        telomere::run_module_function(
+                        telomere_wasm::run_module_function(
                             &instance,
                             store,
                             v.name,
@@ -134,7 +135,7 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                         .await
                         .unwrap()
                     } else {
-                        telomere::run_module_function(
+                        telomere_wasm::run_module_function(
                             instance.as_ref().unwrap(),
                             store,
                             v.name,
@@ -342,8 +343,8 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                 let test = module.to_test().unwrap();
                 match test {
                     wast::QuoteWatTest::Text(source) => {
-                        let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                        let mut parser = telomere::WasmParser::new(&mut reader);
+                        let mut reader = IoReadBinaryReader::from(&source[..]);
+                        let mut parser = telomere_wasm::WasmParser::new(&mut reader);
                         assert!(
                             parser.parse_module().is_err(),
                             "{:?}",
@@ -351,8 +352,8 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                         )
                     }
                     wast::QuoteWatTest::Binary(source) => {
-                        let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                        let mut parser = telomere::WasmParser::new(&mut reader);
+                        let mut reader = IoReadBinaryReader::from(&source[..]);
+                        let mut parser = telomere_wasm::WasmParser::new(&mut reader);
                         assert!(
                             parser.parse_module().is_err(),
                             "{:?}",
@@ -371,8 +372,8 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                 if message != "alignment must not be larger than natural" {
                     //TODO: Is there anything that wast fails to encode that could be binary?
                     if let Ok(source) = module.encode() {
-                        let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                        let mut parser = telomere::WasmParser::new(&mut reader);
+                        let mut reader = IoReadBinaryReader::from(&source[..]);
+                        let mut parser = telomere_wasm::WasmParser::new(&mut reader);
                         // TODO: test error message
                         let res = parser.parse_module();
 
@@ -393,7 +394,7 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                 call,
                 message: _,
             } => {
-                let result = telomere::run_module_function(
+                let result = telomere_wasm::run_module_function(
                     instance.as_ref().unwrap(),
                     store,
                     call.name,
@@ -417,7 +418,7 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
 
                     if let Some(id) = v.module {
                         let instance = registry.get(id.name()).unwrap();
-                        let result = telomere::run_module_function(
+                        let result = telomere_wasm::run_module_function(
                             &instance,
                             store,
                             v.name,
@@ -426,7 +427,7 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                         .await;
                         assert!(result.is_err(), "{:?}", span.linecol_in(text))
                     } else {
-                        let result = telomere::run_module_function(
+                        let result = telomere_wasm::run_module_function(
                             instance.as_ref().unwrap(),
                             store,
                             v.name,
@@ -438,8 +439,8 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                 }
                 wast::WastExecute::Wat(mut v) => {
                     let source = v.encode().unwrap();
-                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                    let mut parser = telomere::WasmParser::new(&mut reader);
+                    let mut reader = IoReadBinaryReader::from(&source[..]);
+                    let mut parser = telomere_wasm::WasmParser::new(&mut reader);
                     let m = parser.parse_module().unwrap();
                     assert!(
                         instantiate(m, store, registry).await.is_err(),
@@ -457,7 +458,7 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
                     invoke.name,
                     invoke.span.linecol_in(text)
                 );
-                let result = telomere::run_module_function(
+                let result = telomere_wasm::run_module_function(
                     instance.as_ref().unwrap(),
                     store,
                     invoke.name,
@@ -484,8 +485,8 @@ pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registr
             } => {
                 //TODO: Is there anything that wast fails to encode that could be binary?
                 if let Ok(source) = module.encode() {
-                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                    let mut parser = telomere::WasmParser::new(&mut reader);
+                    let mut reader = IoReadBinaryReader::from(&source[..]);
+                    let mut parser = telomere_wasm::WasmParser::new(&mut reader);
                     let module = parser.parse_module().unwrap();
 
                     // TODO: test error message

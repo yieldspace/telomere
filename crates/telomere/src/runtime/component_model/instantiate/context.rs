@@ -1,12 +1,12 @@
-use crate::common::InstanceHandle;
 use crate::component_model::{CoreInstance, CoreModule, CoreRelation, GlobalIdx};
 use crate::parser::component_model::ParsedComponent;
 use crate::runtime::component_model::instantiate::InstantiateResult;
 use crate::runtime::component_model::{
     ComponentModelInstance, ComponentVMError, CoreInstantiated, Linker,
 };
-use crate::{Registry, Store};
 use std::collections::HashMap;
+use telomere_wasm::common::InstanceHandle;
+use telomere_wasm::{Registry, Store};
 
 #[allow(dead_code)]
 pub struct InstantiateContext<'a> {

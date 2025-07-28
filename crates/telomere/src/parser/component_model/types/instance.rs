@@ -1,7 +1,7 @@
-use crate::binary::BinaryReader;
 use crate::component_model::types::InstanceType;
 use crate::parser::component_model::types::parse_instance_decl;
 use crate::parser::component_model::{parse_vec_range, ParseContext, ParseResult};
+use binary_reader::BinaryReader;
 
 pub fn parse_instance_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<InstanceType> {
     tracing::trace!("parse_instance_type");

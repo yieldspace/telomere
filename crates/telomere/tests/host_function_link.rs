@@ -1,6 +1,6 @@
 mod common;
 use common::{instantiate_wat, run_wast_with};
-use telomere::{
+use telomere_wasm::{
     common::{ExecuteContext, Instr},
     link_host_function_with_function_idx, vm_try, Registry, Store, VMResult,
 };
@@ -47,10 +47,10 @@ async fn test_print() {
 
 const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
     Instr {
-        op: telomere::special_function_return,
+        op: telomere_wasm::special_function_return,
     },
     Instr {
-        operand: telomere::common::Operand { u32: 4 },
+        operand: telomere_wasm::common::Operand { u32: 4 },
     },
 ];
 

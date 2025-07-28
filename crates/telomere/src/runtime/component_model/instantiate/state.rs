@@ -1,6 +1,6 @@
-use crate::common::InstanceHandle;
 use crate::component_model::{CoreInstance, CoreModule, GlobalIdx};
 use std::collections::HashMap;
+use telomere_wasm::common::InstanceHandle;
 
 #[derive(Default)]
 pub struct InstantiateState {
