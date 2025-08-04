@@ -1,7 +1,14 @@
+mod error;
+mod parser;
+
+pub use error::ComponentParseError;
+pub use parser::ComponentParser;
 use std::collections::HashMap;
 use std::pin::Pin;
 use telomere_wasm::common::{Import, InstanceHandle};
 use telomere_wasm::{instantiate as core_instantiate, Module, Registry, Store};
+
+pub type Result<T> = std::result::Result<T, ComponentParseError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ComponentIndex(pub u32);
@@ -39,42 +46,31 @@ impl<'a> ContextImportRegistry<'a> {
 }
 
 impl ImportRegistryImpl for ContextImportRegistry<'_> {
-    fn register_to_context(&self, imports: &HashMap<String, ComponentImport>, context: &mut InstantiateContext) {
+    fn register_to_context(
+        &self,
+        imports: &HashMap<String, ComponentImport>,
+        context: &mut InstantiateContext,
+    ) {
         todo!()
     }
 }
 
 #[derive(Clone)]
-pub struct InstantiateContext {
-}
+pub struct InstantiateContext {}
 
 impl InstantiateContext {
-    pub fn get_core_module(
-        &self,
-        index: CoreModuleIndex,
-    ) -> Option<&Module> {
+    pub fn get_core_module(&self, index: CoreModuleIndex) -> Option<&Module> {
         todo!()
     }
-    
-    pub fn get_component(
-        &self,
-        index: ComponentIndex,
-    ) -> Option<&Component> {
+
+    pub fn get_component(&self, index: ComponentIndex) -> Option<&Component> {
         todo!()
     }
-    
-    pub fn register_instance(
-        &mut self,
-        index: InstanceIndex,
-        instance: Instance,
-    ) {
+
+    pub fn register_instance(&mut self, index: InstanceIndex, instance: Instance) {
         todo!()
     }
-    pub fn register_core_instance(
-        &mut self,
-        index: CoreInstanceIndex,
-        instance: InstanceHandle,
-    ) {
+    pub fn register_core_instance(&mut self, index: CoreInstanceIndex, instance: InstanceHandle) {
         todo!()
     }
 }
@@ -86,6 +82,7 @@ pub struct CoreInstance {
 #[derive(Clone)]
 pub struct Component {
     pub imports: HashMap<String, ComponentImport>,
+    pub exports: HashMap<String, ComponentExport>,
     pub context: InstantiateContext,
     pub dependencies: Vec<Dependency>,
 }
@@ -96,6 +93,16 @@ pub enum ComponentImport {
     Component(ComponentIndex), // note: あとで型をつける
     Instance(InstanceIndex),
     Function(FunctionIndex),
+    Resource,
+    CoreModule(CoreModuleIndex),
+}
+
+#[derive(Clone)]
+pub enum ComponentExport {
+    Component(ComponentIndex),
+    Instance(InstanceIndex),
+    Function(FunctionIndex),
+    Type,
     Resource,
     CoreModule(CoreModuleIndex),
 }
@@ -115,17 +122,27 @@ pub enum InstanceExport {
     CoreModule(CoreModuleIndex),
 }
 
-pub struct ComponentFunction {
+pub struct ComponentFunction {}
+
+pub enum ComponentFuncDef {
+    Lift(ComponentFunction),
+    ResourceNew,
+    ResourceDrop,
+    ResourceRep,
 }
 
 impl Component {
     /// componentをインタンス化する．
     /// componentの中での依存関係であってもこの関数を利用する
-    pub async fn instantiate<R>(self, store: &mut Store, registry: R) -> Instance where R: ImportRegistryImpl {
+    pub async fn instantiate<R>(self, store: &mut Store, registry: R) -> Instance
+    where
+        R: ImportRegistryImpl,
+    {
         let Self {
             imports,
             dependencies,
             mut context,
+            ..
         } = self;
         // todo: importを処理してcontextに登録する．
         registry.register_to_context(&imports, &mut context);
@@ -160,10 +177,7 @@ impl Component {
                         .expect("Component not found");
                     {
                         let registry = ContextImportRegistry::new(&context);
-                        let instance = component
-                            .clone()
-                            .instantiate(store, registry)
-                            .await;
+                        let instance = component.clone().instantiate(store, registry).await;
                         context.register_instance(idx, instance);
                     }
                 }

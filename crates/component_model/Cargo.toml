@@ -8,9 +8,13 @@ authors.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 
+[features]
+value-imports-exports = []
+
 [dependencies]
 telomere_wasm.workspace = true
 tokio.workspace = true
 wat = "1.236.0"
 anyhow.workspace = true
 binary_reader.workspace = true
+thiserror.workspace = true

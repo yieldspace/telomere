@@ -232,6 +232,7 @@ dependencies = [
  "anyhow",
  "binary_reader",
  "telomere_wasm",
+ "thiserror",
  "tokio",
  "wat",
 ]
