@@ -9,7 +9,7 @@ mod vec;
 
 use crate::parser::component::{RawComponent, RawCoreData, RawData};
 use crate::parser::idx::{RawComponentIdx, RawCoreInstanceIdx, RawCoreModuleIdx, RawInstanceIdx};
-use crate::parser::instance::RawInstance;
+use crate::parser::instance::{RawInstance, RawInstanceDef};
 use crate::parser::section_type::ComponentSection;
 use crate::parser::vec::RawIndexVec;
 use crate::{Component, ComponentParseError, InstantiateContext, Result};
@@ -20,7 +20,7 @@ use telomere_wasm::WasmParser;
 pub struct ComponentParser<'a, T: BinaryReader> {
     reader: &'a mut T,
     components: RawIndexVec<RawComponentIdx, RawData<RawComponent>>,
-    instances: RawIndexVec<RawInstanceIdx, RawData<RawInstance>>,
+    instances: RawIndexVec<RawInstanceIdx, RawData<RawInstanceDef>>,
     core_modules: RawIndexVec<RawCoreModuleIdx, RawCoreData<telomere_wasm::Module>>,
     core_instances: RawIndexVec<RawCoreInstanceIdx, RawCoreData<()>>,
 }
