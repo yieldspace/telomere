@@ -231,9 +231,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "binary_reader",
+ "num-derive",
+ "num-traits",
+ "once_cell",
+ "regex",
+ "semver",
  "telomere_wasm",
  "thiserror",
  "tokio",
+ "tracing",
  "wat",
 ]
 

@@ -1,4 +1,5 @@
 mod error;
+mod name;
 mod parser;
 
 pub use error::ComponentParseError;

@@ -1,4 +1,8 @@
 use crate::parser::vec::RawIdx;
+use crate::Result;
+use crate::{ComponentParseError, ComponentParser};
+use binary_reader::BinaryReader;
+use telomere_wasm::parser::core::parse_u32;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RawIndex {
@@ -21,10 +25,12 @@ macro_rules! raw_index {
                 Self(RawIndex::Relative(outer, index))
             }
 
-            fn index(&self) -> Result<usize, ()> {
+            fn index(&self) -> Result<usize> {
                 match self.0 {
                     RawIndex::Index(idx) => Ok(idx as usize),
-                    RawIndex::Relative(_, _) => Err(()),
+                    RawIndex::Relative(_, _) => Err(ComponentParseError::IndexError(
+                        "this idx cannot get index".into(),
+                    )),
                 }
             }
         }
@@ -33,9 +39,68 @@ macro_rules! raw_index {
 
 raw_index!(RawCoreModuleIdx);
 raw_index!(RawComponentIdx);
+raw_index!(RawInstanceIdx);
+raw_index!(RawCoreInstanceIdx);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RawImportIdx(pub u32);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RawExportIdx(pub u32);
+
+impl<T> ComponentParser<'_, T>
+where
+    T: BinaryReader,
+{
+    pub fn parse_component_idx(&mut self) -> Result<RawComponentIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawComponentIdx::new(index);
+        if self.components.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid component index: {}",
+                index
+            )))
+        }
+    }
+
+    pub fn parse_core_module_idx(&mut self) -> Result<RawCoreModuleIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawCoreModuleIdx::new(index);
+        if self.core_modules.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid core module index: {}",
+                index
+            )))
+        }
+    }
+
+    pub fn parse_instance_idx(&mut self) -> Result<RawInstanceIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawInstanceIdx::new(index);
+        if self.instances.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid instance index: {}",
+                index
+            )))
+        }
+    }
+
+    pub fn parse_core_instance_idx(&mut self) -> Result<RawCoreInstanceIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawCoreInstanceIdx::new(index);
+        if self.core_instances.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid core instance index: {}",
+                index
+            )))
+        }
+    }
+}

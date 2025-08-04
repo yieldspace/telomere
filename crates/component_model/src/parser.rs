@@ -2,23 +2,27 @@ mod component;
 mod core;
 mod idx;
 mod instance;
+mod name;
 mod section_type;
+mod sort;
 mod vec;
 
-use crate::parser::component::RawComponent;
-use crate::parser::idx::{RawComponentIdx, RawCoreModuleIdx};
+use crate::parser::component::{RawComponent, RawCoreData, RawData};
+use crate::parser::idx::{RawComponentIdx, RawCoreInstanceIdx, RawCoreModuleIdx, RawInstanceIdx};
+use crate::parser::instance::RawInstance;
 use crate::parser::section_type::ComponentSection;
 use crate::parser::vec::RawIndexVec;
 use crate::{Component, ComponentParseError, InstantiateContext, Result};
 use binary_reader::BinaryReader;
-use std::collections::{BTreeMap, HashMap};
 use telomere_wasm::parser::core::parse_u32;
 use telomere_wasm::WasmParser;
 
 pub struct ComponentParser<'a, T: BinaryReader> {
     reader: &'a mut T,
-    components: RawIndexVec<RawComponentIdx, RawComponent>,
-    core_modules: RawIndexVec<RawCoreModuleIdx, telomere_wasm::Module>,
+    components: RawIndexVec<RawComponentIdx, RawData<RawComponent>>,
+    instances: RawIndexVec<RawInstanceIdx, RawData<RawInstance>>,
+    core_modules: RawIndexVec<RawCoreModuleIdx, RawCoreData<telomere_wasm::Module>>,
+    core_instances: RawIndexVec<RawCoreInstanceIdx, RawCoreData<()>>,
 }
 
 impl<'a, T> ComponentParser<'a, T>
@@ -29,8 +33,19 @@ where
         Self {
             reader,
             components: RawIndexVec::with_capacity(256),
+            instances: RawIndexVec::with_capacity(256),
             core_modules: RawIndexVec::with_capacity(256),
+            core_instances: RawIndexVec::with_capacity(256),
         }
+    }
+
+    pub fn parse_vec<V>(&mut self, mut func: impl FnMut(&mut Self) -> Result<V>) -> Result<Vec<V>> {
+        let (_, count) = parse_u32(self.reader)?;
+        let mut vec = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            vec.push(func(self)?);
+        }
+        Ok(vec)
     }
 
     fn parse_magic(&mut self) -> Result<()> {
@@ -121,7 +136,7 @@ where
                         let mut core_module = WasmParser::new(&mut sized_reader);
                         core_module.parse_module()
                     }?;
-                    let _idx = self.core_modules.push(module);
+                    let _idx = self.core_modules.push(RawCoreData::Defined(module));
                 }
                 ComponentSection::CoreInstance => {
                     let (_, count) = parse_u32(self.reader)?;
@@ -136,7 +151,7 @@ where
                         let parser = ComponentParser::new(&mut sized_reader);
                         parser.parse()?
                     };
-                    let _idx = self.components.push(component);
+                    let _idx = self.components.push(RawData::Defined(component));
                 }
                 ComponentSection::Instance => {
                     let (_, count) = parse_u32(self.reader)?;

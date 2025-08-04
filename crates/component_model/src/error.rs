@@ -11,4 +11,12 @@ pub enum ComponentParseError {
     InvalidSignature(Box<[u8]>, Box<[u8]>, String),
     #[error("Invalid core instance type: {0}")]
     InvalidCoreInstanceType(u8),
+    #[error("Invalid instance type: {0}")]
+    InvalidInstanceType(u8),
+    #[error("Index error: {0}")]
+    IndexError(String),
+    #[error("Invalid name: {0}")]
+    InvalidName(String),
+    #[error("Invalid sort type: {0}")]
+    InvalidSortType(u8),
 }
