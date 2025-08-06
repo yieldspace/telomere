@@ -23,6 +23,7 @@ telomere-macros.workspace = true
 futures = { version = "0.3.31", optional = true }
 tokio = { workspace = true, optional = true }
 telomere_wasm = {workspace = true}
+component_model.workspace = true
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.19" }

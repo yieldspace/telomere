@@ -29,8 +29,13 @@ where
                 self.core_modules
                     .push(RawCoreData::ReExportedModule(name, instance_idx))?;
             }
-            SortType::Func => todo!(),
-            SortType::Type => todo!(),
+            SortType::Func => {
+                self.funcs.push(RawData::ReExported(name, instance_idx))?;
+            }
+            SortType::Type => {
+                self.components
+                    .push(RawData::ReExported(name, instance_idx))?;
+            }
             SortType::Component => {
                 self.components
                     .push(RawData::ReExported(name, instance_idx))?;
@@ -47,8 +52,37 @@ where
     fn parse_core_export_alias(&mut self, sort: CoreSortType) -> Result<()> {
         let core_instance_idx = self.parse_core_instance_idx()?;
         let (_, name) = parse_name(self.reader)?;
-        // register
-        todo!()
+        match sort {
+            CoreSortType::Func => {
+                self.core_funcs
+                    .push(RawCoreData::ReExported(name, core_instance_idx))?;
+            }
+            CoreSortType::Table => {
+                self.core_modules
+                    .push(RawCoreData::ReExported(name, core_instance_idx))?;
+            }
+            CoreSortType::Memory => {
+                self.core_modules
+                    .push(RawCoreData::ReExported(name, core_instance_idx))?;
+            }
+            CoreSortType::Global => {
+                self.core_modules
+                    .push(RawCoreData::ReExported(name, core_instance_idx))?;
+            }
+            CoreSortType::Type => {
+                self.core_modules
+                    .push(RawCoreData::ReExported(name, core_instance_idx))?;
+            }
+            CoreSortType::Module => {
+                self.core_modules
+                    .push(RawCoreData::ReExported(name, core_instance_idx))?;
+            }
+            CoreSortType::Instance => {
+                self.core_instances
+                    .push(RawCoreData::ReExported(name, core_instance_idx))?;
+            }
+        }
+        Ok(())
     }
 
     fn parse_outer_export_alias(&mut self, sort: SortType) -> Result<()> {

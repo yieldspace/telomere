@@ -1,6 +1,6 @@
 use crate::parser::idx::{
-    RawComponentIdx, RawCoreFuncIdx, RawCoreInstanceIdx, RawCoreMemoryIdx, RawCoreModuleIdx,
-    RawCoreTypeIdx, RawFuncIdx, RawInstanceIdx, RawTypeIdx,
+    RawComponentIdx, RawCoreFuncIdx, RawCoreGlobalIdx, RawCoreInstanceIdx, RawCoreMemoryIdx,
+    RawCoreModuleIdx, RawCoreTableIdx, RawCoreTypeIdx, RawFuncIdx, RawInstanceIdx, RawTypeIdx,
 };
 use crate::Result;
 use crate::{ComponentParseError, ComponentParser};
@@ -9,9 +9,9 @@ use binary_reader::BinaryReader;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CoreSort {
     Func(RawCoreFuncIdx),
-    Table(u32),
+    Table(RawCoreTableIdx),
     Memory(RawCoreMemoryIdx),
-    Global(u32),
+    Global(RawCoreGlobalIdx),
     Type(RawCoreTypeIdx),
     Module(RawCoreModuleIdx),
     Instance(RawCoreInstanceIdx),
@@ -55,12 +55,27 @@ impl<T> ComponentParser<'_, '_, T>
 where
     T: BinaryReader,
 {
+    pub fn parse_core_sort(&mut self) -> Result<CoreSort> {
+        let sort = match self.reader.read_exact_one()? {
+            0x00 => CoreSort::Func(self.parse_core_func_idx()?),
+            0x01 => CoreSort::Table(self.parse_core_table_idx()?),
+            0x02 => CoreSort::Memory(self.parse_core_memory_idx()?),
+            0x03 => CoreSort::Global(self.parse_core_global_idx()?),
+            0x04 => CoreSort::Type(self.parse_core_type_idx()?),
+            0x05 => CoreSort::Module(self.parse_core_module_idx()?),
+            0x06 => CoreSort::Instance(self.parse_core_instance_idx()?),
+            x => return Err(ComponentParseError::InvalidCoreSortType(x)),
+        };
+        Ok(sort)
+    }
+
     pub fn parse_sort(&mut self) -> Result<Sort> {
         let sort = match self.reader.read_exact_one()? {
-            0x00 => todo!("core"),
-            0x01 => todo!("func"),
+            0x00 => Sort::Core(self.parse_core_sort()?),
+            0x01 => Sort::Func(self.parse_func_idx()?),
+            #[cfg(feature = "value-imports-exports")]
             0x02 => todo!("value"),
-            0x03 => todo!("type"),
+            0x03 => Sort::Type(self.parse_type_idx()?),
             0x04 => Sort::Component(self.parse_component_idx()?),
             0x05 => Sort::Instance(self.parse_instance_idx()?),
             x => return Err(ComponentParseError::InvalidSortType(x)),

@@ -13,7 +13,7 @@ pub enum RawData<T> {
 pub enum RawCoreData<T> {
     Defined(T),
     Imported(RawImportId),
-    ReExported(ExportName, RawCoreInstanceIdx),
+    ReExported(String, RawCoreInstanceIdx),
     /// Only used for core modules
     ReExportedModule(ExportName, RawInstanceIdx),
 }

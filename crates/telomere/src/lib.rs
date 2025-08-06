@@ -1,3 +1,2 @@
-pub mod component_model;
-pub mod parser;
-pub mod runtime;
+pub use component_model as component;
+pub use telomere_wasm as core;

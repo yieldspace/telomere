@@ -47,6 +47,8 @@ raw_index!(RawTypeIdx);
 raw_index!(RawCoreModuleIdx);
 raw_index!(RawCoreInstanceIdx);
 raw_index!(RawCoreFuncIdx);
+raw_index!(RawCoreTableIdx);
+raw_index!(RawCoreGlobalIdx);
 raw_index!(RawCoreMemoryIdx);
 raw_index!(RawCoreTypeIdx);
 
@@ -147,14 +149,67 @@ where
     }
 
     pub fn parse_core_memory_idx(&mut self) -> Result<RawCoreMemoryIdx> {
-        todo!()
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawCoreMemoryIdx::new(index);
+        if self.core_memories.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid core memory index: {}",
+                index
+            )))
+        }
     }
 
     pub fn parse_core_func_idx(&mut self) -> Result<RawCoreFuncIdx> {
-        todo!()
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawCoreFuncIdx::new(index);
+        if self.core_funcs.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid core func index: {}",
+                index
+            )))
+        }
     }
 
-    pub fn parse_core_type_idx(&mut self) -> Result<CoreTypeId> {
-        todo!()
+    pub fn parse_core_table_idx(&mut self) -> Result<RawCoreTableIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawCoreTableIdx::new(index);
+        if self.core_tables.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid core table index: {}",
+                index
+            )))
+        }
+    }
+
+    pub fn parse_core_global_idx(&mut self) -> Result<RawCoreGlobalIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawCoreGlobalIdx::new(index);
+        if self.core_globals.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid core global index: {}",
+                index
+            )))
+        }
+    }
+
+    pub fn parse_core_type_idx(&mut self) -> Result<RawCoreTypeIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawCoreTypeIdx::new(index);
+        if self.core_types.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid core type index: {}",
+                index
+            )))
+        }
     }
 }

@@ -1,6 +1,5 @@
 use binary_reader::IoReadBinaryReader;
-use telomere::parser::component_model::{ParseState, Validator};
-use telomere::runtime::component_model::{instantiate, Linker};
+use component_model::ComponentParser;
 use telomere_wasm::Store;
 use wast::parser::ParseBuffer;
 use wast::Wast;
@@ -18,22 +17,8 @@ pub async fn run_component_wast(text: &str) {
                 let span = m.span();
                 let source = m.encode().unwrap();
                 let mut reader = IoReadBinaryReader::from(&source[..]);
-                let state_arena = typed_arena::Arena::new();
-                let mut state = ParseState::new(&state_arena);
-                let arena = typed_arena::Arena::new();
-                let mut validator = Validator::new(&arena);
-                if let Err(v) = telomere::parser::component_model::parse_component(
-                    &mut reader,
-                    &mut state,
-                    &mut validator,
-                ) {
-                    panic!("{:?} {:?}", span.linecol_in(text), v);
-                }
-                let mut store = Store::new();
-                let linker = Linker::new();
-                instantiate(state.into(), &mut store, &linker)
-                    .await
-                    .unwrap();
+                let parser = ComponentParser::new(&mut reader, None);
+                let component = parser.parse().unwrap();
             }
             WastDirective::AssertInvalid {
                 span, mut module, ..
@@ -41,15 +26,8 @@ pub async fn run_component_wast(text: &str) {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 if let Ok(source) = module.encode() {
                     let mut reader = IoReadBinaryReader::from(&source[..]);
-                    let state_arena = typed_arena::Arena::new();
-                    let mut state = ParseState::new(&state_arena);
-                    let arena = typed_arena::Arena::new();
-                    let mut validator = Validator::new(&arena);
-                    let res = telomere::parser::component_model::parse_component(
-                        &mut reader,
-                        &mut state,
-                        &mut validator,
-                    );
+                    let parser = ComponentParser::new(&mut reader, None);
+                    let res = parser.parse();
 
                     match res {
                         Err(_err) => {

@@ -890,6 +890,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "binary_reader",
+ "component_model",
  "criterion",
  "futures",
  "num-derive",

@@ -14,10 +14,12 @@ mod vec;
 
 use crate::parser::canon::{RawCoreFunction, RawFunction};
 use crate::parser::component::{RawComponent, RawCoreData, RawData};
+use crate::parser::core::CoreInstanceDef;
 use crate::parser::export::RawExport;
 use crate::parser::idx::{
-    RawComponentIdx, RawCoreFuncIdx, RawCoreInstanceIdx, RawCoreModuleIdx, RawExportId, RawFuncIdx,
-    RawImportId, RawInstanceIdx,
+    RawComponentIdx, RawCoreFuncIdx, RawCoreGlobalIdx, RawCoreInstanceIdx, RawCoreMemoryIdx,
+    RawCoreModuleIdx, RawCoreTableIdx, RawCoreTypeIdx, RawExportId, RawFuncIdx, RawImportId,
+    RawInstanceIdx,
 };
 use crate::parser::import::RawImport;
 use crate::parser::instance::{RawInstance, RawInstanceDef};
@@ -39,7 +41,11 @@ pub struct ComponentParser<'a, 'b, T: BinaryReader> {
     instances: RawIndexVec<RawInstanceIdx, RawData<RawInstanceDef>>,
     funcs: RawIndexVec<RawFuncIdx, RawData<RawFunction>>,
     core_modules: RawIndexVec<RawCoreModuleIdx, RawCoreData<telomere_wasm::Module>>,
-    core_instances: RawIndexVec<RawCoreInstanceIdx, RawCoreData<()>>,
+    core_instances: RawIndexVec<RawCoreInstanceIdx, RawCoreData<CoreInstanceDef>>,
+    core_memories: RawIndexVec<RawCoreMemoryIdx, RawCoreData<()>>,
+    core_globals: RawIndexVec<RawCoreGlobalIdx, RawCoreData<()>>,
+    core_tables: RawIndexVec<RawCoreTableIdx, RawCoreData<()>>,
+    core_types: RawIndexVec<RawCoreTypeIdx, RawCoreData<()>>,
     core_funcs: RawIndexVec<RawCoreFuncIdx, RawCoreData<RawCoreFunction>>,
 }
 
@@ -60,6 +66,10 @@ where
             core_modules: RawIndexVec::with_capacity(256),
             core_instances: RawIndexVec::with_capacity(256),
             core_funcs: RawIndexVec::with_capacity(256),
+            core_memories: RawIndexVec::with_capacity(256),
+            core_globals: RawIndexVec::with_capacity(256),
+            core_tables: RawIndexVec::with_capacity(256),
+            core_types: RawIndexVec::with_capacity(256),
         }
     }
 
