@@ -1,3 +1,4 @@
+use crate::Result;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -5,11 +6,16 @@ use std::marker::PhantomData;
 pub trait RawIdx: Copy + 'static + Eq + PartialEq + Debug + Hash {
     fn new(index: u32) -> Self;
     fn new_outer(outer: u32, index: u32) -> Self;
-    fn index(&self) -> crate::Result<usize>;
+    fn index(&self) -> Result<usize>;
+}
+
+pub enum Relation<T, I: RawIdx> {
+    Direct(T),
+    Alias(I),
 }
 
 pub(crate) struct RawIndexVec<I: RawIdx, T> {
-    pub raw: Vec<T>,
+    pub raw: Vec<Relation<T, I>>,
     _marker: PhantomData<fn(&I)>,
 }
 
@@ -28,23 +34,23 @@ impl<I: RawIdx, T> RawIndexVec<I, T> {
         }
     }
 
-    pub fn push(&mut self, item: T) -> Result<I, ()> {
+    pub fn push(&mut self, item: T) -> Result<I> {
         let index = self.raw.len() as u32;
-        self.raw.push(item);
+        self.raw.push(Relation::Direct(item));
         Ok(I::new(index))
     }
 
-    pub fn get(&self, idx: &I) -> Option<&T> {
-        let index = idx.index().ok()?;
-        self.raw.get(index)
-    }
-
-    pub fn get_mut(&mut self, idx: &I) -> Option<&mut T> {
-        let index = idx.index().ok()?;
-        self.raw.get_mut(index)
+    pub fn push_alias(&mut self, alias: I) -> Result<()> {
+        if !self.is_valid(&alias) {
+            return Err(crate::ComponentParseError::IndexError(
+                "Invalid alias index".into(),
+            ));
+        }
+        self.raw.push(Relation::Alias(alias));
+        Ok(())
     }
 
     pub fn is_valid(&self, idx: &I) -> bool {
-        idx.index().map_or(false, |index| index < self.raw.len())
+        idx.index().map_or(true, |index| index < self.raw.len())
     }
 }

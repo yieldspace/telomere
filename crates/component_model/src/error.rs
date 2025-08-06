@@ -19,4 +19,12 @@ pub enum ComponentParseError {
     InvalidName(String),
     #[error("Invalid sort type: {0}")]
     InvalidSortType(u8),
+    #[error("Invalid core sort type: {0}")]
+    InvalidCoreSortType(u8),
+    #[error("Invalid alias type: {0}")]
+    InvalidAliasType(u8),
+    #[error("Invalid canon type: {0}")]
+    InvalidCanonType(u8),
+    #[error("Invalid canon opt: {0}")]
+    InvalidCanonOpt(String),
 }

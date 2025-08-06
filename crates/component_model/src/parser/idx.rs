@@ -37,10 +37,14 @@ macro_rules! raw_index {
     };
 }
 
-raw_index!(RawCoreModuleIdx);
 raw_index!(RawComponentIdx);
 raw_index!(RawInstanceIdx);
+raw_index!(RawFuncIdx);
+raw_index!(RawTypeIdx);
+raw_index!(RawCoreModuleIdx);
 raw_index!(RawCoreInstanceIdx);
+raw_index!(RawCoreFuncIdx);
+raw_index!(RawCoreMemoryIdx);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RawImportIdx(pub u32);
@@ -91,6 +95,23 @@ where
         }
     }
 
+    pub fn parse_type_idx(&mut self) -> Result<RawTypeIdx> {
+        todo!()
+    }
+
+    pub fn parse_func_idx(&mut self) -> Result<RawFuncIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = RawFuncIdx::new(index);
+        if self.funcs.is_valid(&idx) {
+            Ok(idx)
+        } else {
+            Err(ComponentParseError::IndexError(format!(
+                "Invalid func index: {}",
+                index
+            )))
+        }
+    }
+
     pub fn parse_core_instance_idx(&mut self) -> Result<RawCoreInstanceIdx> {
         let (_, index) = parse_u32(self.reader)?;
         let idx = RawCoreInstanceIdx::new(index);
@@ -102,5 +123,13 @@ where
                 index
             )))
         }
+    }
+
+    pub fn parse_core_memory_idx(&mut self) -> Result<RawCoreMemoryIdx> {
+        todo!()
+    }
+
+    pub fn parse_core_func_idx(&mut self) -> Result<RawCoreFuncIdx> {
+        todo!()
     }
 }

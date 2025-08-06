@@ -1,3 +1,4 @@
+mod canon;
 mod error;
 mod name;
 mod parser;

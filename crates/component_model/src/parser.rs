@@ -1,3 +1,5 @@
+mod alias;
+mod canon;
 mod component;
 mod core;
 mod idx;
@@ -7,8 +9,12 @@ mod section_type;
 mod sort;
 mod vec;
 
+use crate::parser::canon::{RawCoreFunction, RawFunction};
 use crate::parser::component::{RawComponent, RawCoreData, RawData};
-use crate::parser::idx::{RawComponentIdx, RawCoreInstanceIdx, RawCoreModuleIdx, RawInstanceIdx};
+use crate::parser::idx::{
+    RawComponentIdx, RawCoreFuncIdx, RawCoreInstanceIdx, RawCoreModuleIdx, RawFuncIdx,
+    RawInstanceIdx,
+};
 use crate::parser::instance::{RawInstance, RawInstanceDef};
 use crate::parser::section_type::ComponentSection;
 use crate::parser::vec::RawIndexVec;
@@ -21,8 +27,10 @@ pub struct ComponentParser<'a, T: BinaryReader> {
     reader: &'a mut T,
     components: RawIndexVec<RawComponentIdx, RawData<RawComponent>>,
     instances: RawIndexVec<RawInstanceIdx, RawData<RawInstanceDef>>,
+    funcs: RawIndexVec<RawFuncIdx, RawData<RawFunction>>,
     core_modules: RawIndexVec<RawCoreModuleIdx, RawCoreData<telomere_wasm::Module>>,
     core_instances: RawIndexVec<RawCoreInstanceIdx, RawCoreData<()>>,
+    core_funcs: RawIndexVec<RawCoreFuncIdx, RawCoreData<RawCoreFunction>>,
 }
 
 impl<'a, T> ComponentParser<'a, T>
@@ -34,8 +42,10 @@ where
             reader,
             components: RawIndexVec::with_capacity(256),
             instances: RawIndexVec::with_capacity(256),
+            funcs: RawIndexVec::with_capacity(256),
             core_modules: RawIndexVec::with_capacity(256),
             core_instances: RawIndexVec::with_capacity(256),
+            core_funcs: RawIndexVec::with_capacity(256),
         }
     }
 
@@ -160,16 +170,20 @@ where
                     }
                 }
                 ComponentSection::Alias => {
-                    // Parse alias section
-                    // Implementation omitted for brevity
+                    let (_, count) = parse_u32(self.reader)?;
+                    for _ in 0..count {
+                        self.parse_alias()?
+                    }
                 }
                 ComponentSection::Type => {
                     // Parse type section
                     // Implementation omitted for brevity
                 }
                 ComponentSection::Canon => {
-                    // Parse canon section
-                    // Implementation omitted for brevity
+                    let (_, count) = parse_u32(self.reader)?;
+                    for _ in 0..count {
+                        self.parse_canon()?;
+                    }
                 }
                 ComponentSection::Start => {
                     // Parse start section

@@ -1,3 +1,4 @@
+use crate::name::ExportName;
 use crate::parser::idx::{
     RawCoreInstanceIdx, RawCoreModuleIdx, RawExportIdx, RawImportIdx, RawInstanceIdx,
 };
@@ -6,13 +7,15 @@ use std::collections::HashMap;
 pub enum RawData<T> {
     Defined(T),
     Imported(RawImportIdx),
-    ReExported(RawInstanceIdx),
+    ReExported(ExportName, RawInstanceIdx),
 }
 
 pub enum RawCoreData<T> {
     Defined(T),
     Imported(RawImportIdx),
-    ReExported(RawCoreInstanceIdx),
+    ReExported(ExportName, RawCoreInstanceIdx),
+    /// Only used for core modules
+    ReExportedModule(ExportName, RawInstanceIdx),
 }
 
 pub struct RawComponent {
