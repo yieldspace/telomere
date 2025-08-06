@@ -93,8 +93,14 @@ where
                 self.core_modules
                     .push_alias(RawCoreModuleIdx::new_outer(ct, idx))?;
             }
-            SortType::Func => todo!(),
-            SortType::Type => todo!(),
+            SortType::Func => {
+                self.funcs
+                    .push_alias(RawIdx::new_outer(ct, idx))?;
+            },
+            SortType::Type => {
+                self.components
+                    .push_alias(RawIdx::new_outer(ct, idx))?;
+            },
             SortType::Component => {
                 self.components
                     .push_alias(RawComponentIdx::new_outer(ct, idx))?;
