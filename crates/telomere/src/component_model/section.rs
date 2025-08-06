@@ -24,7 +24,7 @@ pub enum ComponentSection {
     Canon = 0x08,
     /// Start section type.
     Start = 0x09,
-    /// Import section type.
+    /// RawImport section type.
     Import = 0x0a,
     /// Export section type.
     Export = 0x0b,

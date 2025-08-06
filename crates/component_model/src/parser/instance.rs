@@ -22,7 +22,7 @@ pub enum RawInstanceDef {
     InlineExport(RawInstanceInlineExport),
 }
 
-impl<'a, T> ComponentParser<'a, T>
+impl<T> ComponentParser<'_, '_, T>
 where
     T: BinaryReader,
 {
@@ -57,8 +57,7 @@ where
             args,
         };
         self.instances
-            .push(RawData::Defined(RawInstanceDef::Instantiate(instance)))
-            .unwrap();
+            .push(RawData::Defined(RawInstanceDef::Instantiate(instance)))?;
         Ok(())
     }
 

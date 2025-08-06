@@ -7,7 +7,7 @@ use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 use telomere_wasm::parser::core::{parse_name, parse_u32};
 
-impl<T> ComponentParser<'_, T>
+impl<T> ComponentParser<'_, '_, T>
 where
     T: BinaryReader,
 {

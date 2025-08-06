@@ -1,7 +1,10 @@
+use crate::name::{ExportName, ImportName};
 use crate::parser::vec::RawIdx;
+use crate::types::{CoreTypeId, TypeIdx};
 use crate::Result;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use telomere_wasm::parser::core::parse_u32;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -45,14 +48,31 @@ raw_index!(RawCoreModuleIdx);
 raw_index!(RawCoreInstanceIdx);
 raw_index!(RawCoreFuncIdx);
 raw_index!(RawCoreMemoryIdx);
+raw_index!(RawCoreTypeIdx);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct RawImportIdx(pub u32);
+pub struct RawImportId(u64);
+
+impl RawImportId {
+    pub fn new(name: &ImportName) -> Self {
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        Self(hasher.finish())
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct RawExportIdx(pub u32);
+pub struct RawExportId(u64);
 
-impl<T> ComponentParser<'_, T>
+impl RawExportId {
+    pub fn new(name: &ExportName) -> Self {
+        let mut hasher = DefaultHasher::new();
+        name.hash(&mut hasher);
+        Self(hasher.finish())
+    }
+}
+
+impl<T> ComponentParser<'_, '_, T>
 where
     T: BinaryReader,
 {
@@ -95,6 +115,7 @@ where
         }
     }
 
+    /// indexからtype idに変換したものを返す
     pub fn parse_type_idx(&mut self) -> Result<RawTypeIdx> {
         todo!()
     }
@@ -130,6 +151,10 @@ where
     }
 
     pub fn parse_core_func_idx(&mut self) -> Result<RawCoreFuncIdx> {
+        todo!()
+    }
+
+    pub fn parse_core_type_idx(&mut self) -> Result<CoreTypeId> {
         todo!()
     }
 }

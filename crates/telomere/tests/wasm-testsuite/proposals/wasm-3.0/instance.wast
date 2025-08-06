@@ -57,7 +57,7 @@
 (assert_return (invoke "tag") (i32.const 0))
 
 
-;; Import is not generative
+;; RawImport is not generative
 
 (module
   (import "I1" "glob" (global $glob1 (mut i32)))

@@ -1,15 +1,18 @@
-use crate::parser::idx::{RawComponentIdx, RawCoreInstanceIdx, RawCoreModuleIdx, RawInstanceIdx};
+use crate::parser::idx::{
+    RawComponentIdx, RawCoreFuncIdx, RawCoreInstanceIdx, RawCoreMemoryIdx, RawCoreModuleIdx,
+    RawCoreTypeIdx, RawFuncIdx, RawInstanceIdx, RawTypeIdx,
+};
 use crate::Result;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CoreSort {
-    Func(u32),
+    Func(RawCoreFuncIdx),
     Table(u32),
-    Memory(u32),
+    Memory(RawCoreMemoryIdx),
     Global(u32),
-    Type(u32),
+    Type(RawCoreTypeIdx),
     Module(RawCoreModuleIdx),
     Instance(RawCoreInstanceIdx),
 }
@@ -17,10 +20,10 @@ pub enum CoreSort {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Sort {
     Core(CoreSort),
-    Func(u32),
+    Func(RawFuncIdx),
     #[cfg(feature = "value-imports-exports")]
     Value(u32),
-    Type(u32),
+    Type(RawTypeIdx),
     Component(RawComponentIdx),
     Instance(RawInstanceIdx),
 }
@@ -48,7 +51,7 @@ pub enum SortType {
     Instance = 5,
 }
 
-impl<T> ComponentParser<'_, T>
+impl<T> ComponentParser<'_, '_, T>
 where
     T: BinaryReader,
 {

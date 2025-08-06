@@ -37,7 +37,7 @@ pub fn parse_import(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
         }
         ExternDesc::Instance(type_id) => {
             let ty = ctx.validator.get_type(type_id);
-            tracing::trace!("ExternDesc::Instance: {:?}", ty);
+            tracing::trace!("RawExternDesc::Instance: {:?}", ty);
             let global = ctx
                 .state
                 .instance_store

@@ -2,29 +2,39 @@ mod alias;
 mod canon;
 mod component;
 mod core;
+mod export;
 mod idx;
+mod import;
 mod instance;
 mod name;
 mod section_type;
 mod sort;
+mod types;
 mod vec;
 
 use crate::parser::canon::{RawCoreFunction, RawFunction};
 use crate::parser::component::{RawComponent, RawCoreData, RawData};
+use crate::parser::export::RawExport;
 use crate::parser::idx::{
-    RawComponentIdx, RawCoreFuncIdx, RawCoreInstanceIdx, RawCoreModuleIdx, RawFuncIdx,
-    RawInstanceIdx,
+    RawComponentIdx, RawCoreFuncIdx, RawCoreInstanceIdx, RawCoreModuleIdx, RawExportId, RawFuncIdx,
+    RawImportId, RawInstanceIdx,
 };
+use crate::parser::import::RawImport;
 use crate::parser::instance::{RawInstance, RawInstanceDef};
 use crate::parser::section_type::ComponentSection;
 use crate::parser::vec::RawIndexVec;
+use crate::types::TypeValidator;
 use crate::{Component, ComponentParseError, InstantiateContext, Result};
 use binary_reader::BinaryReader;
+use std::collections::HashMap;
 use telomere_wasm::parser::core::parse_u32;
 use telomere_wasm::WasmParser;
 
-pub struct ComponentParser<'a, T: BinaryReader> {
+pub struct ComponentParser<'a, 'b, T: BinaryReader> {
     reader: &'a mut T,
+    validator: TypeValidator<'b>,
+    imports: HashMap<RawImportId, RawImport>,
+    exports: HashMap<RawExportId, RawExport>,
     components: RawIndexVec<RawComponentIdx, RawData<RawComponent>>,
     instances: RawIndexVec<RawInstanceIdx, RawData<RawInstanceDef>>,
     funcs: RawIndexVec<RawFuncIdx, RawData<RawFunction>>,
@@ -33,13 +43,17 @@ pub struct ComponentParser<'a, T: BinaryReader> {
     core_funcs: RawIndexVec<RawCoreFuncIdx, RawCoreData<RawCoreFunction>>,
 }
 
-impl<'a, T> ComponentParser<'a, T>
+impl<'a, 'b, T> ComponentParser<'a, 'b, T>
 where
     T: BinaryReader,
 {
-    pub fn new(reader: &'a mut T) -> Self {
+    pub fn new(reader: &'a mut T, type_validator: Option<&'b TypeValidator>) -> Self {
         Self {
             reader,
+            validator: type_validator
+                .map_or_else(|| TypeValidator::new(), |x| TypeValidator::with_parent(x)),
+            imports: HashMap::new(),
+            exports: HashMap::new(),
             components: RawIndexVec::with_capacity(256),
             instances: RawIndexVec::with_capacity(256),
             funcs: RawIndexVec::with_capacity(256),
@@ -56,6 +70,18 @@ where
             vec.push(func(self)?);
         }
         Ok(vec)
+    }
+
+    pub fn parse_option(&mut self) -> Result<Option<&mut Self>> {
+        match self.reader.read_exact_one()? {
+            0x00 => Ok(None),
+            0x01 => Ok(Some(self)),
+            x => Err(ComponentParseError::InvalidSignature(
+                Box::new([x]),
+                Box::new([0x00]),
+                "option".to_string(),
+            )),
+        }
     }
 
     fn parse_magic(&mut self) -> Result<()> {
@@ -158,7 +184,7 @@ where
                 ComponentSection::Component => {
                     let component = {
                         let mut sized_reader = self.reader.take(section_size as usize);
-                        let parser = ComponentParser::new(&mut sized_reader);
+                        let parser = ComponentParser::new(&mut sized_reader, Some(&self.validator));
                         parser.parse()?
                     };
                     let _idx = self.components.push(RawData::Defined(component));
@@ -176,8 +202,11 @@ where
                     }
                 }
                 ComponentSection::Type => {
-                    // Parse type section
-                    // Implementation omitted for brevity
+                    let mut data = Vec::with_capacity(section_size as usize);
+                    assert_eq!(
+                        section_size as usize,
+                        self.reader.read_slice(data.as_mut_slice())?
+                    );
                 }
                 ComponentSection::Canon => {
                     let (_, count) = parse_u32(self.reader)?;
@@ -185,17 +214,18 @@ where
                         self.parse_canon()?;
                     }
                 }
-                ComponentSection::Start => {
-                    // Parse start section
-                    // Implementation omitted for brevity
-                }
+                ComponentSection::Start => todo!(),
                 ComponentSection::Import => {
-                    // Parse import section
-                    // Implementation omitted for brevity
+                    let (_, count) = parse_u32(self.reader)?;
+                    for _ in 0..count {
+                        self.parse_import()?;
+                    }
                 }
                 ComponentSection::Export => {
-                    // Parse export section
-                    // Implementation omitted for brevity
+                    let (_, count) = parse_u32(self.reader)?;
+                    for _ in 0..count {
+                        self.parse_export()?;
+                    }
                 }
             }
         }

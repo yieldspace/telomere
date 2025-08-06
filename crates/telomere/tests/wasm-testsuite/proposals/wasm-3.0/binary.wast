@@ -476,7 +476,7 @@
   "section size mismatch"
 )
 
-;; Import count can be zero
+;; RawImport count can be zero
 (module binary
     "\00asm" "\01\00\00\00"
     "\01\05\01"                             ;; type section
@@ -1070,8 +1070,8 @@
 (assert_malformed
   (module binary
       "\00asm" "\01\00\00\00"
-      "\02\01\00"                 ;; Import section with zero entries
-      "\02\01\00"                 ;; Import section with zero entries
+      "\02\01\00"                 ;; RawImport section with zero entries
+      "\02\01\00"                 ;; RawImport section with zero entries
   )
   "unexpected content after last section"
 )
@@ -1100,18 +1100,18 @@
 (assert_malformed
   (module binary
       "\00asm" "\01\00\00\00"
-      "\02\01\00"                 ;; Import section with zero entries
+      "\02\01\00"                 ;; RawImport section with zero entries
       "\01\01\00"                 ;; Type section with zero entries
   )
   "unexpected content after last section"
 )
 
-;; Import section out of order
+;; RawImport section out of order
 (assert_malformed
   (module binary
       "\00asm" "\01\00\00\00"
       "\03\01\00"                 ;; Function section with zero entries
-      "\02\01\00"                 ;; Import section with zero entries
+      "\02\01\00"                 ;; RawImport section with zero entries
   )
   "unexpected content after last section"
 )

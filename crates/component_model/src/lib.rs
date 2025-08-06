@@ -2,6 +2,7 @@ mod canon;
 mod error;
 mod name;
 mod parser;
+mod types;
 
 pub use error::ComponentParseError;
 pub use parser::ComponentParser;

@@ -195,7 +195,7 @@ pub enum ComponentExportType {
     Type(TypeId),
     Func(TypeId),
     //Resource(ResourceId),
-    //NewResource(TypeId),
+    //NewResource(TypeIdx),
 }
 
 impl ComponentExportType {
@@ -261,7 +261,7 @@ pub enum InstanceExportType {
     Instance(TypeId),
     //Resource(ResourceId),
     Type(TypeId),
-    //SubResource(TypeId),
+    //SubResource(TypeIdx),
 }
 impl InstanceExportType {
     pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {

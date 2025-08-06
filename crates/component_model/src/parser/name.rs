@@ -22,7 +22,7 @@ static INTERFACE_NAME: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^(?<namespace>[a-z][0-9a-z-]*):(?<label>[a-zA-Z][a-zA-Z0-9-]*)/(?<projection>[a-zA-Z][a-zA-Z0-9-]*)(|@(?<version>[0-9.><=\-]+))$").unwrap()
 });
 
-impl<T> ComponentParser<'_, T>
+impl<T> ComponentParser<'_, '_, T>
 where
     T: BinaryReader,
 {
@@ -81,7 +81,7 @@ where
             });
         }
         Err(ComponentParseError::InvalidName(format!(
-            "Import name: `{}`",
+            "RawImport name: `{}`",
             name
         )))
     }

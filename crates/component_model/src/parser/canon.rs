@@ -1,6 +1,7 @@
 use crate::canon::StringEncoding;
 use crate::parser::component::{RawCoreData, RawData};
 use crate::parser::idx::{RawCoreFuncIdx, RawCoreMemoryIdx, RawFuncIdx, RawTypeIdx};
+use crate::types::TypeIdx;
 use crate::Result;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
@@ -82,7 +83,7 @@ pub enum RawCoreFunction {
     Lower(RawLowerAdaptor),
 }
 
-impl<T> ComponentParser<'_, T>
+impl<T> ComponentParser<'_, '_, T>
 where
     T: BinaryReader,
 {
