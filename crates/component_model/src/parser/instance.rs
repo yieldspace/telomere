@@ -22,7 +22,7 @@ pub enum RawInstanceDef {
     InlineExport(RawInstanceInlineExport),
 }
 
-impl<T> ComponentParser<'_, '_, T>
+impl<T> ComponentParser<'_, T>
 where
     T: BinaryReader,
 {

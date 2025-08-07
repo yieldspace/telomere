@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use telomere_wasm::common::{Import, InstanceHandle};
 use telomere_wasm::{instantiate as core_instantiate, Module, Registry, Store};
+pub use types::TypeValidator;
 
 pub type Result<T> = std::result::Result<T, ComponentParseError>;
 

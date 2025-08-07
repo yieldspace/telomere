@@ -32,9 +32,9 @@ use std::collections::HashMap;
 use telomere_wasm::parser::core::parse_u32;
 use telomere_wasm::WasmParser;
 
-pub struct ComponentParser<'a, 'b, T: BinaryReader> {
+pub struct ComponentParser<'a, T: BinaryReader> {
     reader: &'a mut T,
-    validator: TypeValidator<'b>,
+    validator: &'a mut TypeValidator,
     imports: HashMap<RawImportId, RawImport>,
     exports: HashMap<RawExportId, RawExport>,
     components: RawIndexVec<RawComponentIdx, RawData<RawComponent>>,
@@ -49,15 +49,14 @@ pub struct ComponentParser<'a, 'b, T: BinaryReader> {
     core_funcs: RawIndexVec<RawCoreFuncIdx, RawCoreData<RawCoreFunction>>,
 }
 
-impl<'a, 'b, T> ComponentParser<'a, 'b, T>
+impl<'a, T> ComponentParser<'a, T>
 where
     T: BinaryReader,
 {
-    pub fn new(reader: &'a mut T, type_validator: Option<&'b TypeValidator>) -> Self {
+    pub fn new(reader: &'a mut T, type_validator: &'a mut TypeValidator) -> Self {
         Self {
             reader,
-            validator: type_validator
-                .map_or_else(|| TypeValidator::new(), |x| TypeValidator::with_parent(x)),
+            validator: type_validator,
             imports: HashMap::new(),
             exports: HashMap::new(),
             components: RawIndexVec::with_capacity(256),
@@ -194,7 +193,7 @@ where
                 ComponentSection::Component => {
                     let component = {
                         let mut sized_reader = self.reader.take(section_size as usize);
-                        let parser = ComponentParser::new(&mut sized_reader, Some(&self.validator));
+                        let parser = ComponentParser::new(&mut sized_reader, self.validator);
                         parser.parse()?
                     };
                     let _idx = self.components.push(RawData::Defined(component));

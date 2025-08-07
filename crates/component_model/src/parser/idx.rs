@@ -74,7 +74,7 @@ impl RawExportId {
     }
 }
 
-impl<T> ComponentParser<'_, '_, T>
+impl<T> ComponentParser<'_, T>
 where
     T: BinaryReader,
 {

@@ -7,7 +7,7 @@ use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 use telomere_wasm::parser::core::{parse_name, parse_u32};
 
-impl<T> ComponentParser<'_, '_, T>
+impl<T> ComponentParser<'_, T>
 where
     T: BinaryReader,
 {
@@ -94,13 +94,11 @@ where
                     .push_alias(RawCoreModuleIdx::new_outer(ct, idx))?;
             }
             SortType::Func => {
-                self.funcs
-                    .push_alias(RawIdx::new_outer(ct, idx))?;
-            },
+                self.funcs.push_alias(RawIdx::new_outer(ct, idx))?;
+            }
             SortType::Type => {
-                self.components
-                    .push_alias(RawIdx::new_outer(ct, idx))?;
-            },
+                self.components.push_alias(RawIdx::new_outer(ct, idx))?;
+            }
             SortType::Component => {
                 self.components
                     .push_alias(RawComponentIdx::new_outer(ct, idx))?;

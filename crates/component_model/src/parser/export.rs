@@ -11,7 +11,7 @@ pub enum RawExport {
     Instance,
 }
 
-impl<T> ComponentParser<'_, '_, T>
+impl<T> ComponentParser<'_, T>
 where
     T: BinaryReader,
 {

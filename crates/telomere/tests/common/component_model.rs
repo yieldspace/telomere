@@ -1,5 +1,5 @@
 use binary_reader::IoReadBinaryReader;
-use component_model::ComponentParser;
+use component_model::{ComponentParser, TypeValidator};
 use telomere_wasm::Store;
 use wast::parser::ParseBuffer;
 use wast::Wast;
@@ -17,7 +17,8 @@ pub async fn run_component_wast(text: &str) {
                 let span = m.span();
                 let source = m.encode().unwrap();
                 let mut reader = IoReadBinaryReader::from(&source[..]);
-                let parser = ComponentParser::new(&mut reader, None);
+                let mut validator = TypeValidator::new();
+                let parser = ComponentParser::new(&mut reader, &mut validator);
                 let component = parser.parse().unwrap();
             }
             WastDirective::AssertInvalid {
@@ -26,7 +27,8 @@ pub async fn run_component_wast(text: &str) {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 if let Ok(source) = module.encode() {
                     let mut reader = IoReadBinaryReader::from(&source[..]);
-                    let parser = ComponentParser::new(&mut reader, None);
+                    let mut validator = TypeValidator::new();
+                    let parser = ComponentParser::new(&mut reader, &mut validator);
                     let res = parser.parse();
 
                     match res {

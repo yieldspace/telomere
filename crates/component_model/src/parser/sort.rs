@@ -51,7 +51,7 @@ pub enum SortType {
     Instance = 5,
 }
 
-impl<T> ComponentParser<'_, '_, T>
+impl<T> ComponentParser<'_, T>
 where
     T: BinaryReader,
 {
