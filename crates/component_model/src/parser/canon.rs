@@ -1,7 +1,6 @@
 use crate::canon::StringEncoding;
 use crate::parser::component::{RawCoreData, RawData};
 use crate::parser::idx::{RawCoreFuncIdx, RawCoreMemoryIdx, RawFuncIdx, RawTypeIdx};
-use crate::types::TypeIdx;
 use crate::Result;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
@@ -125,6 +124,10 @@ where
         let adaptor = RawLowerAdaptor::ResourceNew(type_idx);
         self.core_funcs
             .push(RawCoreData::Defined(RawCoreFunction::Lower(adaptor)))?;
+
+        if let Some(rid) = self.validator.types.get_by_type_index(type_idx) {
+            self.validator.usec.note_canon_resource(rid);
+        }
         Ok(())
     }
 
@@ -133,6 +136,10 @@ where
         let adaptor = RawLowerAdaptor::ResourceDrop(type_idx);
         self.core_funcs
             .push(RawCoreData::Defined(RawCoreFunction::Lower(adaptor)))?;
+
+        if let Some(rid) = self.validator.types.get_by_type_index(type_idx) {
+            self.validator.usec.note_canon_resource(rid);
+        }
         Ok(())
     }
 
@@ -141,6 +148,10 @@ where
         let adaptor = RawLowerAdaptor::ResourceRep(type_idx);
         self.core_funcs
             .push(RawCoreData::Defined(RawCoreFunction::Lower(adaptor)))?;
+
+        if let Some(rid) = self.validator.types.get_by_type_index(type_idx) {
+            self.validator.usec.note_canon_resource(rid);
+        }
         Ok(())
     }
 

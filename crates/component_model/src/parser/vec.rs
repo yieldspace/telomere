@@ -53,4 +53,23 @@ impl<I: RawIdx, T> RawIndexVec<I, T> {
     pub fn is_valid(&self, idx: &I) -> bool {
         idx.index().map_or(true, |index| index < self.raw.len())
     }
+
+    #[track_caller]
+    pub fn get(&self, idx: &I) -> Result<&T> {
+        if !self.is_valid(idx) {
+            return Err(crate::ComponentParseError::IndexError(
+                "Invalid index".into(),
+            ));
+        }
+        if let Some(relation) = self.raw.get(idx.index()?) {
+            match relation {
+                Relation::Direct(item) => Ok(item),
+                Relation::Alias(i) => self.get(i),
+            }
+        } else {
+            Err(crate::ComponentParseError::IndexError(
+                "Not found".into(),
+            ))
+        }
+    }
 }

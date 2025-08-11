@@ -1,16 +1,18 @@
 use crate::name::{ExportName, ImportName};
 use crate::parser::component::RawData;
 use crate::parser::idx::RawComponentIdx;
-use crate::parser::sort::Sort;
+use crate::parser::sort::{CoreSort, Sort};
 use crate::parser::ComponentParser;
 use crate::{ComponentParseError, Result};
 use binary_reader::BinaryReader;
 use std::collections::HashSet;
 use tracing::trace;
+use wasmparser::ComponentExternalKind;
+use crate::types::{InstanceArg, InstanceType};
 
 pub struct RawInstance {
     pub component_idx: RawComponentIdx,
-    pub args: Vec<(ImportName, Sort)>,
+    pub args: Vec<(ImportName, Sort, ComponentExternalKind)>,
 }
 
 pub struct RawInstanceInlineExport {
@@ -41,16 +43,28 @@ where
         let args = {
             let mut name_unique = HashSet::new();
             self.parse_vec(move |slf| {
-                let (name, sort) = slf.parse_instantiate_arg()?;
+                let (name, sort, kind) = slf.parse_instantiate_arg()?;
                 if name_unique.contains(&name) {
                     Err(ComponentParseError::InvalidName(
                         "Duplicated target import name".to_owned(),
                     ))?
                 } else {
                     name_unique.insert(name.clone());
-                    Ok((name, sort))
+                    Ok((name, sort, kind))
                 }
             })?
+        };
+        let ty = InstanceType {
+            component_index: component_idx,
+            args: args.iter().enumerate().map(|(i, (name, sort, kind))| {
+                InstanceArg {
+                    name: name.clone(),
+                    kind: *kind,
+                    index: i as u32,
+                }
+            }).collect::<Vec<_>>(),
+            resolved_tables: Default::default(),
+            table_map: vec![],
         };
         let instance = RawInstance {
             component_idx,
@@ -61,10 +75,30 @@ where
         Ok(())
     }
 
-    fn parse_instantiate_arg(&mut self) -> Result<(ImportName, Sort)> {
+    fn parse_instantiate_arg(&mut self) -> Result<(ImportName, Sort, ComponentExternalKind)> {
         let name = self.parse_import_name()?;
         let sort = self.parse_sort()?;
-        Ok((name, sort))
+        let kind = match sort {
+            Sort::Core(CoreSort::Module(idx)) => {
+                ComponentExternalKind::Module
+            }
+            Sort::Func(_) => {
+                ComponentExternalKind::Func
+            }
+            Sort::Type(_) => {
+                ComponentExternalKind::Type
+            }
+            Sort::Component(_) => {
+                ComponentExternalKind::Component
+            }
+            Sort::Instance(_) => {
+                ComponentExternalKind::Instance
+            }
+            _ => {
+                panic!("Invalid sort type for instantiate argument")
+            }
+        };
+        Ok((name, sort, kind))
     }
 
     fn parse_instantiate_inline_export(&mut self) -> Result<()> {

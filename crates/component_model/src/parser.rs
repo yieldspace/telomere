@@ -1,16 +1,16 @@
-mod alias;
-mod canon;
-mod component;
-mod core;
-mod export;
-mod idx;
-mod import;
-mod instance;
-mod name;
-mod section_type;
-mod sort;
-mod types;
-mod vec;
+pub(crate) mod alias;
+pub(crate) mod canon;
+pub(crate) mod component;
+pub(crate) mod core;
+pub(crate) mod export;
+pub(crate) mod idx;
+pub(crate) mod import;
+pub(crate) mod instance;
+pub(crate) mod name;
+pub(crate) mod section_type;
+pub(crate) mod sort;
+pub(crate) mod types;
+pub(crate) mod vec;
 
 use crate::parser::canon::{RawCoreFunction, RawFunction};
 use crate::parser::component::{RawComponent, RawCoreData, RawData};
@@ -25,14 +25,18 @@ use crate::parser::import::RawImport;
 use crate::parser::instance::{RawInstance, RawInstanceDef};
 use crate::parser::section_type::ComponentSection;
 use crate::parser::vec::RawIndexVec;
-use crate::types::TypeValidator;
+use crate::types::{ComponentDefId, TypeValidator};
 use crate::{Component, ComponentParseError, InstantiateContext, Result};
 use binary_reader::BinaryReader;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use telomere_wasm::parser::core::parse_u32;
 use telomere_wasm::WasmParser;
+use crate::inline::Inliner;
+use crate::vec::Idx;
 
 pub struct ComponentParser<'a, T: BinaryReader> {
+    id: ComponentDefId,
     reader: &'a mut T,
     validator: &'a mut TypeValidator,
     imports: HashMap<RawImportId, RawImport>,
@@ -54,7 +58,9 @@ where
     T: BinaryReader,
 {
     pub fn new(reader: &'a mut T, type_validator: &'a mut TypeValidator) -> Self {
+        static NEXT_ID: AtomicU32 = AtomicU32::new(0);
         Self {
+            id: ComponentDefId::new(),
             reader,
             validator: type_validator,
             imports: HashMap::new(),
@@ -160,7 +166,15 @@ where
         }
     }
 
-    pub fn parse(mut self) -> Result<RawComponent> {
+    pub fn parse(self) -> Result<Component> {
+        let raw_component = self.parse_component()?;
+        let mut inliner = Inliner::new(raw_component);
+        // let component = inliner.run()?;
+        // Ok(component)
+        todo!()
+    }
+
+    fn parse_component(mut self) -> Result<RawComponent> {
         self.parse_magic()?;
         self.parse_version()?;
         self.parse_layer()?;
@@ -194,7 +208,7 @@ where
                     let component = {
                         let mut sized_reader = self.reader.take(section_size as usize);
                         let parser = ComponentParser::new(&mut sized_reader, self.validator);
-                        parser.parse()?
+                        parser.parse_component()?
                     };
                     let _idx = self.components.push(RawData::Defined(component));
                 }
@@ -238,9 +252,6 @@ where
                 }
             }
         }
-        Ok(RawComponent {
-            imports: Default::default(),
-            exports: Default::default(),
-        })
+        todo!()
     }
 }

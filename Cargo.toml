@@ -26,7 +26,7 @@ members = [ "crates/binary_reader", "crates/component_model",
 [workspace.package]
 version = "0.1.0"
 rust-version = "1.86.0"
-edition = "2021"
+edition = "2024"
 publish = false
 authors = ["sizumita", "tignear"]
 homepage = "https://github.com/yieldspace/telomere"
@@ -53,6 +53,7 @@ typed-arena = "2.0.2"
 futures = { version = "0.3.31" }
 
 regex = "1.11.1"
+fxhash = "0.2.1"
 
 [profile.release]
 codegen-units = 16

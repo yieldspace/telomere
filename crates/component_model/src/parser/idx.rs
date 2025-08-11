@@ -1,11 +1,11 @@
 use crate::name::{ExportName, ImportName};
 use crate::parser::vec::RawIdx;
-use crate::types::{CoreTypeId, TypeIdx};
 use crate::Result;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use telomere_wasm::parser::core::parse_u32;
+use crate::vec::Idx;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RawIndex {

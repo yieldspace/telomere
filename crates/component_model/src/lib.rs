@@ -3,6 +3,8 @@ mod error;
 mod name;
 mod parser;
 mod types;
+mod inline;
+mod vec;
 
 pub use error::ComponentParseError;
 pub use parser::ComponentParser;
