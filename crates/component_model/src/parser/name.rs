@@ -1,9 +1,9 @@
+use crate::Result;
 use crate::name::{
     Dependency, ExportName, HashName, ImportName, InterfaceName, Label, LockedDependency,
     PackagePath, ParsedExportName, ParsedImportName, PlainName, UnlockedDependency, UrlName,
     VersionRange,
 };
-use crate::Result;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 use once_cell::sync::Lazy;
@@ -122,9 +122,22 @@ fn parse_plain_name_string(text: &str) -> Result<Option<PlainName>> {
             todo!()
         }
         // constructor
-        [b'[', b'c', b'o', b'n', b's', b't', b'r', b'u', b'c', b't', b'o', b'r', b']', ..] => {
-            Ok(Some(PlainName::Constructor(parse_label(&text[13..])?)))
-        }
+        [
+            b'[',
+            b'c',
+            b'o',
+            b'n',
+            b's',
+            b't',
+            b'r',
+            b'u',
+            b'c',
+            b't',
+            b'o',
+            b'r',
+            b']',
+            ..,
+        ] => Ok(Some(PlainName::Constructor(parse_label(&text[13..])?))),
         // method
         [b'[', b'm', b'e', b't', b'h', b'o', b'd', b']', ..] => {
             match *text[8..].split(".").collect::<Vec<_>>() {
@@ -144,8 +157,23 @@ fn parse_plain_name_string(text: &str) -> Result<Option<PlainName>> {
         }
         #[cfg(feature = "async")]
         // async method
-        [b'[', b'a', b's', b'y', b'n', b'c', b' ', b'm', b'e', b't', b'h', b'o', b'd', b']', ..] => {
-        }
+        [
+            b'[',
+            b'a',
+            b's',
+            b'y',
+            b'n',
+            b'c',
+            b' ',
+            b'm',
+            b'e',
+            b't',
+            b'h',
+            b'o',
+            b'd',
+            b']',
+            ..,
+        ] => {}
         // static
         [b'[', b's', b't', b'a', b't', b'i', b'c', b']', ..] => {
             match *text[8..].split(".").collect::<Vec<_>>() {
@@ -165,8 +193,23 @@ fn parse_plain_name_string(text: &str) -> Result<Option<PlainName>> {
         }
         #[cfg(feature = "async")]
         // async static
-        [b'[', b'a', b's', b'y', b'n', b'c', b' ', b's', b't', b'a', b't', b'i', b'c', b']', ..] => {
-        }
+        [
+            b'[',
+            b'a',
+            b's',
+            b'y',
+            b'n',
+            b'c',
+            b' ',
+            b's',
+            b't',
+            b'a',
+            b't',
+            b'i',
+            b'c',
+            b']',
+            ..,
+        ] => {}
         _ if LABEL.is_match(text) => Ok(Some(PlainName::Plain(Label::new(text)))),
         _ => Ok(None),
     }

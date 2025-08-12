@@ -1,7 +1,8 @@
+use crate::Result;
 use crate::canon::StringEncoding;
 use crate::parser::component::{RawCoreData, RawData};
-use crate::parser::idx::{RawCoreFuncIdx, RawCoreMemoryIdx, RawFuncIdx, RawTypeIdx};
-use crate::Result;
+use crate::parser::idx::{RawCoreFuncIdx, RawCoreMemoryIdx, RawFuncIdx};
+use crate::types::TypeIdx;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 
@@ -66,15 +67,15 @@ impl RawCanonOpt {
 pub struct RawFunction {
     pub core_func_index: RawCoreFuncIdx,
     pub opt: RawCanonOpt,
-    pub ft: RawTypeIdx,
+    pub ft: TypeIdx,
     // type
 }
 
 pub enum RawLowerAdaptor {
     Lower(RawFuncIdx, RawCanonOpt),
-    ResourceNew(RawTypeIdx),
-    ResourceDrop(RawTypeIdx),
-    ResourceRep(RawTypeIdx),
+    ResourceNew(TypeIdx),
+    ResourceDrop(TypeIdx),
+    ResourceRep(TypeIdx),
 }
 
 pub enum RawCoreFunction {
@@ -125,9 +126,12 @@ where
         self.core_funcs
             .push(RawCoreData::Defined(RawCoreFunction::Lower(adaptor)))?;
 
-        if let Some(rid) = self.validator.types.get_by_type_index(type_idx) {
-            self.validator.usec.note_canon_resource(rid);
-        }
+        let resource_id = self
+            .validator
+            .locals
+            .get_type(&type_idx)?
+            .ensure_resource()?;
+        self.validator.usec.note_canon_resource(resource_id);
         Ok(())
     }
 
@@ -137,9 +141,12 @@ where
         self.core_funcs
             .push(RawCoreData::Defined(RawCoreFunction::Lower(adaptor)))?;
 
-        if let Some(rid) = self.validator.types.get_by_type_index(type_idx) {
-            self.validator.usec.note_canon_resource(rid);
-        }
+        let resource_id = self
+            .validator
+            .locals
+            .get_type(&type_idx)?
+            .ensure_resource()?;
+        self.validator.usec.note_canon_resource(resource_id);
         Ok(())
     }
 
@@ -149,9 +156,12 @@ where
         self.core_funcs
             .push(RawCoreData::Defined(RawCoreFunction::Lower(adaptor)))?;
 
-        if let Some(rid) = self.validator.types.get_by_type_index(type_idx) {
-            self.validator.usec.note_canon_resource(rid);
-        }
+        let resource_id = self
+            .validator
+            .locals
+            .get_type(&type_idx)?
+            .ensure_resource()?;
+        self.validator.usec.note_canon_resource(resource_id);
         Ok(())
     }
 

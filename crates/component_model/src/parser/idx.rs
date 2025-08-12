@@ -1,11 +1,12 @@
+use crate::Result;
 use crate::name::{ExportName, ImportName};
 use crate::parser::vec::RawIdx;
-use crate::Result;
+use crate::types::TypeIdx;
+use crate::vec::Idx;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use telomere_wasm::parser::core::parse_u32;
-use crate::vec::Idx;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RawIndex {
@@ -17,7 +18,7 @@ pub enum RawIndex {
 macro_rules! raw_index {
     ($name:ident) => {
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-        pub struct $name(RawIndex);
+        pub struct $name(pub(crate) RawIndex);
 
         impl RawIdx for $name {
             fn new(index: u32) -> Self {
@@ -43,7 +44,6 @@ macro_rules! raw_index {
 raw_index!(RawComponentIdx);
 raw_index!(RawInstanceIdx);
 raw_index!(RawFuncIdx);
-raw_index!(RawTypeIdx);
 raw_index!(RawCoreModuleIdx);
 raw_index!(RawCoreInstanceIdx);
 raw_index!(RawCoreFuncIdx);
@@ -118,8 +118,11 @@ where
     }
 
     /// indexからtype idに変換したものを返す
-    pub fn parse_type_idx(&mut self) -> Result<RawTypeIdx> {
-        todo!()
+    pub fn parse_type_idx(&mut self) -> Result<TypeIdx> {
+        let (_, index) = parse_u32(self.reader)?;
+        let idx = TypeIdx::new(index);
+        // todo: validate type index
+        Ok(idx)
     }
 
     pub fn parse_func_idx(&mut self) -> Result<RawFuncIdx> {

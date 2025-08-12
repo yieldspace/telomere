@@ -8,6 +8,7 @@ pub trait Idx: Copy + 'static + Eq + PartialEq + Debug + Hash + From<u32> {
     fn index(&self) -> usize;
 }
 
+#[derive(Clone, Eq, Hash, PartialEq, Debug)]
 pub(crate) struct IndexVec<I: Idx, T> {
     pub raw: Vec<T>,
     _marker: PhantomData<fn(&I)>,
@@ -28,10 +29,10 @@ impl<I: Idx, T> IndexVec<I, T> {
         }
     }
 
-    pub fn push(&mut self, item: T) -> Result<I> {
+    pub fn push(&mut self, item: T) -> I {
         let index = self.raw.len() as u32;
         self.raw.push(item);
-        Ok(I::new(index))
+        I::new(index)
     }
 
     pub fn is_valid(&self, idx: &I) -> bool {
@@ -46,6 +47,10 @@ impl<I: Idx, T> IndexVec<I, T> {
             ));
         }
         Ok(self.raw.get(idx.index()).unwrap())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.raw.iter()
     }
 }
 

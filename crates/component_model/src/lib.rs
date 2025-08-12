@@ -1,9 +1,9 @@
 mod canon;
 mod error;
+mod inline;
 mod name;
 mod parser;
 mod types;
-mod inline;
 mod vec;
 
 pub use error::ComponentParseError;
@@ -11,8 +11,8 @@ pub use parser::ComponentParser;
 use std::collections::HashMap;
 use std::pin::Pin;
 use telomere_wasm::common::{Import, InstanceHandle};
-use telomere_wasm::{instantiate as core_instantiate, Module, Registry, Store};
-pub use types::TypeValidator;
+use telomere_wasm::{Module, Registry, Store, instantiate as core_instantiate};
+pub use types::TypeStore;
 
 pub type Result<T> = std::result::Result<T, ComponentParseError>;
 

@@ -10,15 +10,17 @@ async fn test_basic() -> anyhow::Result<()> {
     let component = r#"
 (component
    (core module)
-   (component)
-   (instance (instantiate 0))
+   (component
+     (import "key" (type (sub resource)))
+   )
+   (type (resource (rep i32)))
+   (instance (instantiate 0 (with "key" (type 0))))
 )
     "#;
     let binary = wat::parse_str(component)?;
     let mut reader = IoReadBinaryReader::from(binary.as_slice());
 
-    let mut validator = component_model::TypeValidator::new();
-    let parser = ComponentParser::new(&mut reader, &mut validator);
+    let parser = ComponentParser::new(&mut reader);
     let component = parser.parse()?;
     Ok(())
 }

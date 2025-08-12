@@ -1,15 +1,20 @@
-use indexmap::{IndexMap, IndexSet};
-use crate::parser::idx::RawTypeIdx;
+use crate::parser::idx::{RawComponentIdx, RawFuncIdx, RawInstanceIdx};
 use crate::parser::vec::RawIdx;
-use crate::types::resource::{ResourcePlan, ResourceTypes};
-use crate::types::{ResourceDefId, TypeId, TypeInterner, TypeResourceTableIndex};
+use crate::types::component::ComponentSurface;
+use crate::types::resource::ResourcePlan;
+use crate::types::{
+    ComponentTypeId, FuncTypeId, InstanceTypeId, ResourceDefId, TypeId, TypeIdx,
+    TypeResourceTableIndex, TypeStore,
+};
 use crate::vec::IndexVec;
+use crate::{ComponentParseError, Result};
+use indexmap::{IndexMap, IndexSet};
 
 /// パース時に"resource使用"を集計するヘルパ
 #[derive(Default)]
-struct ResourceUseCollector {
+pub struct ResourceUseCollector {
     /// 観測した（表が必要な）ResourceKey
-    used: IndexSet<ResourceDefId>,
+    pub(crate) used: IndexSet<ResourceDefId>,
 }
 impl ResourceUseCollector {
     pub(crate) fn note_own(&mut self, res_id: ResourceDefId) {
@@ -24,38 +29,76 @@ impl ResourceUseCollector {
     }
     pub(crate) fn finalize_plan(self, plan: &mut ResourcePlan) {
         for (i, key) in self.used.into_iter().enumerate() {
-            plan.table_index_of_key.insert(key, TypeResourceTableIndex(i as u32));
+            plan.table_index_of_key
+                .insert(key, TypeResourceTableIndex(i as u32));
         }
     }
 }
 
-pub struct TypeValidator<'a> {
-    pub types: ResourceTypes,
-    pub plan: ResourcePlan,
+pub struct TypeValidator {
     pub usec: ResourceUseCollector,
-    pub interner: &'a mut TypeInterner,
-    type_vec: Vec<TypeId>,
+    pub store: TypeStore,
+    pub locals: LocalTypeMap,
+    pub surface: ComponentSurface,
 }
 
-impl<'a> TypeValidator<'a> {
-    pub fn new(interner: &'a mut TypeInterner) -> Self {
+#[derive(Default, Debug)]
+pub struct LocalTypeMap {
+    pub(crate) types: IndexVec<TypeIdx, TypeId>,
+    pub(crate) components: IndexMap<RawComponentIdx, ComponentTypeId>,
+    pub(crate) instances: IndexMap<RawInstanceIdx, InstanceTypeId>,
+    pub(crate) funcs: IndexMap<RawFuncIdx, FuncTypeId>,
+}
+
+impl TypeValidator {
+    pub fn new() -> Self {
         Self {
-            types: ResourceTypes::default(),
-            plan: ResourcePlan::default(),
             usec: ResourceUseCollector::default(),
-            interner,
-            type_vec: Vec::new(),
+            store: TypeStore::default(),
+            locals: LocalTypeMap::default(),
+            surface: ComponentSurface::default(),
         }
     }
+}
 
-    pub fn new_raw_type_idx(&mut self) -> RawTypeIdx {
-        let idx = RawTypeIdx::new(self.type_vec.len() as u32);
-        idx
+impl LocalTypeMap {
+    pub fn register_type_idx(&mut self, ty: TypeId) -> TypeIdx {
+        self.types.push(ty)
     }
 
-    pub fn insert_type(&mut self, ty: TypeId) -> RawTypeIdx {
-        let idx = self.new_raw_type_idx();
-        self.type_vec.push(ty);
-        idx
+    pub fn get_type(&self, idx: &TypeIdx) -> Result<&TypeId> {
+        self.types.get(idx)
+    }
+
+    pub fn push_component(&mut self, idx: RawComponentIdx, ty: ComponentTypeId) {
+        self.components.insert(idx, ty);
+    }
+
+    pub fn push_instance(&mut self, idx: RawInstanceIdx, ty: InstanceTypeId) {
+        self.instances.insert(idx, ty);
+    }
+
+    pub fn push_func(&mut self, idx: RawFuncIdx, ty: FuncTypeId) {
+        self.funcs.insert(idx, ty);
+    }
+
+    pub fn get_component_type(&self, idx: &RawComponentIdx) -> Result<ComponentTypeId> {
+        self.components.get(idx).cloned().ok_or_else(|| {
+            ComponentParseError::IndexError(format!("component {:?} not found", idx))
+        })
+    }
+
+    pub fn get_instance_type(&self, idx: &RawInstanceIdx) -> Result<InstanceTypeId> {
+        self.instances
+            .get(idx)
+            .cloned()
+            .ok_or_else(|| ComponentParseError::IndexError(format!("instance {:?} not found", idx)))
+    }
+
+    pub fn get_func_type(&self, idx: &RawFuncIdx) -> Result<FuncTypeId> {
+        self.funcs
+            .get(idx)
+            .cloned()
+            .ok_or_else(|| ComponentParseError::IndexError(format!("function {:?} not found", idx)))
     }
 }

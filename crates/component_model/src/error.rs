@@ -27,4 +27,6 @@ pub enum ComponentParseError {
     InvalidCanonType(u8),
     #[error("Invalid canon opt: {0}")]
     InvalidCanonOpt(String),
+    #[error("Type error: {0}")]
+    TypeError(String),
 }

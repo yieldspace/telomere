@@ -12,6 +12,7 @@ pub(crate) mod sort;
 pub(crate) mod types;
 pub(crate) mod vec;
 
+use crate::inline::Inliner;
 use crate::parser::canon::{RawCoreFunction, RawFunction};
 use crate::parser::component::{RawComponent, RawCoreData, RawData};
 use crate::parser::core::CoreInstanceDef;
@@ -25,20 +26,19 @@ use crate::parser::import::RawImport;
 use crate::parser::instance::{RawInstance, RawInstanceDef};
 use crate::parser::section_type::ComponentSection;
 use crate::parser::vec::RawIndexVec;
-use crate::types::{ComponentDefId, TypeValidator};
+use crate::types::component::ComponentType;
+use crate::types::resource::ResourcePlan;
+use crate::types::{ResourceUseCollector, TypeResourceTableIndex, TypeStore, TypeValidator};
 use crate::{Component, ComponentParseError, InstantiateContext, Result};
 use binary_reader::BinaryReader;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use telomere_wasm::parser::core::parse_u32;
 use telomere_wasm::WasmParser;
-use crate::inline::Inliner;
-use crate::vec::Idx;
+use telomere_wasm::parser::core::parse_u32;
 
 pub struct ComponentParser<'a, T: BinaryReader> {
-    id: ComponentDefId,
     reader: &'a mut T,
-    validator: &'a mut TypeValidator,
+    validator: TypeValidator,
     imports: HashMap<RawImportId, RawImport>,
     exports: HashMap<RawExportId, RawExport>,
     components: RawIndexVec<RawComponentIdx, RawData<RawComponent>>,
@@ -57,12 +57,10 @@ impl<'a, T> ComponentParser<'a, T>
 where
     T: BinaryReader,
 {
-    pub fn new(reader: &'a mut T, type_validator: &'a mut TypeValidator) -> Self {
-        static NEXT_ID: AtomicU32 = AtomicU32::new(0);
+    pub fn new(reader: &'a mut T) -> Self {
         Self {
-            id: ComponentDefId::new(),
             reader,
-            validator: type_validator,
+            validator: TypeValidator::new(),
             imports: HashMap::new(),
             exports: HashMap::new(),
             components: RawIndexVec::with_capacity(256),
@@ -166,15 +164,13 @@ where
         }
     }
 
-    pub fn parse(self) -> Result<Component> {
-        let raw_component = self.parse_component()?;
-        let mut inliner = Inliner::new(raw_component);
-        // let component = inliner.run()?;
-        // Ok(component)
-        todo!()
+    pub fn parse(self) -> Result<RawComponent> {
+        let (raw_component, ty) = self.parse_component()?;
+        println!("{:#?}", ty.store.components.raw);
+        Ok(raw_component)
     }
 
-    fn parse_component(mut self) -> Result<RawComponent> {
+    fn parse_component(mut self) -> Result<(RawComponent, ComponentType)> {
         self.parse_magic()?;
         self.parse_version()?;
         self.parse_layer()?;
@@ -205,12 +201,14 @@ where
                 }
                 ComponentSection::CoreType => todo!(),
                 ComponentSection::Component => {
-                    let component = {
+                    let (component, component_ty) = {
                         let mut sized_reader = self.reader.take(section_size as usize);
-                        let parser = ComponentParser::new(&mut sized_reader, self.validator);
+                        let parser = ComponentParser::new(&mut sized_reader);
                         parser.parse_component()?
                     };
-                    let _idx = self.components.push(RawData::Defined(component));
+                    let idx = self.components.push(RawData::Defined(component))?;
+                    let id = self.validator.store.push_component_in_type(component_ty);
+                    self.validator.locals.push_component(idx, id);
                 }
                 ComponentSection::Instance => {
                     let (_, count) = parse_u32(self.reader)?;
@@ -225,11 +223,10 @@ where
                     }
                 }
                 ComponentSection::Type => {
-                    let mut data = Vec::with_capacity(section_size as usize);
-                    assert_eq!(
-                        section_size as usize,
-                        self.reader.read_slice(data.as_mut_slice())?
-                    );
+                    let (_, count) = parse_u32(self.reader)?;
+                    for _ in 0..count {
+                        self.parse_type()?;
+                    }
                 }
                 ComponentSection::Canon => {
                     let (_, count) = parse_u32(self.reader)?;
@@ -252,6 +249,62 @@ where
                 }
             }
         }
-        todo!()
+
+        {
+            let Self {
+                validator,
+                imports,
+                exports,
+                components,
+                instances,
+                funcs,
+                core_modules,
+                core_instances,
+                core_memories,
+                core_globals,
+                core_tables,
+                core_types,
+                core_funcs,
+                ..
+            } = self;
+            let TypeValidator {
+                usec,
+                store,
+                locals,
+                surface,
+            } = validator;
+
+            let mut plan = ResourcePlan::default();
+            finalize_plan(&mut plan, usec);
+            let component = RawComponent {
+                imports,
+                exports,
+                ops: vec![],
+                components,
+                instances,
+                funcs,
+                core_modules,
+                core_instances,
+                core_memories,
+                core_globals,
+                core_tables,
+                core_types,
+                core_funcs,
+            };
+            let ty = ComponentType {
+                store,
+                local_type_map: locals,
+                plan,
+                surface,
+            };
+            Ok((component, ty))
+        }
+    }
+}
+
+fn finalize_plan(plan: &mut ResourcePlan, usec: ResourceUseCollector) {
+    for (i, k) in usec.used.into_iter().enumerate() {
+        plan.table_index_of_key
+            .insert(k, TypeResourceTableIndex(i as u32));
     }
 }

@@ -1,21 +1,20 @@
-use std::collections::HashMap;
-use crate::parser::component::{ComponentOp, RawComponent, RawData};
-use crate::{Component, Dependency, Result, ComponentIndex, InstanceIndex};
 use crate::name::ExportName;
+use crate::parser::component::{ComponentOp, RawComponent, RawData};
 use crate::parser::idx::{RawComponentIdx, RawImportId, RawInstanceIdx};
 use crate::parser::instance::RawInstanceDef;
-
+use crate::{Component, ComponentIndex, Dependency, InstanceIndex, Result};
+use std::collections::HashMap;
 
 pub struct Inliner {
     raw_component: RawComponent,
 }
 
 pub enum InlineInstanceExport {
-    Component(RawComponent)
+    Component(RawComponent),
 }
 
 pub struct InlineInstance {
-    exports: HashMap<ExportName, InlineInstanceExport>
+    exports: HashMap<ExportName, InlineInstanceExport>,
 }
 
 pub struct LocalContext {
@@ -29,11 +28,12 @@ pub struct InlineContext {
 
 impl InlineContext {
     fn get_component_from_data(&self, data: &RawData<RawComponent>) -> Result<&RawComponent> {
-        match data {
-            RawData::Defined(component) => Ok(component),
-            RawData::Imported(import_id) => Err("Cannot inline imported component".into()),
-            RawData::ReExported(_, _) => Err("Cannot inline re-exported component".into()),
-        }
+        // match data {
+        //     RawData::Defined(component) => Ok(component),
+        //     RawData::Imported(import_id) => Err("Cannot inline imported component".into()),
+        //     RawData::ReExported(_, _) => Err("Cannot inline re-exported component".into()),
+        // }
+        todo!()
     }
 }
 
@@ -51,10 +51,11 @@ impl Inliner {
                     match instance {
                         RawData::Defined(instance_def) => match instance_def {
                             RawInstanceDef::Instantiate(instance) => {
-                                let component = raw_component.get_component(&instance.component_idx)?;
+                                let component =
+                                    raw_component.get_component(&instance.component_idx)?;
                             }
                             RawInstanceDef::InlineExport(inline_export) => {}
-                        }
+                        },
                         RawData::Imported(import_id) => {}
                         RawData::ReExported(name, idx) => {}
                     }
@@ -64,7 +65,7 @@ impl Inliner {
                 ComponentOp::DefineComponent(_) => {}
             }
         }
-        Ok(())
+        todo!()
     }
 }
 
@@ -75,7 +76,5 @@ impl InlineContext {
         }
     }
 
-    pub fn push_instantiate(&mut self,) {
-
-    }
+    pub fn push_instantiate(&mut self) {}
 }

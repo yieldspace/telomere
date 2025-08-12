@@ -1,8 +1,9 @@
+use crate::Result;
 use crate::parser::idx::{
     RawComponentIdx, RawCoreFuncIdx, RawCoreGlobalIdx, RawCoreInstanceIdx, RawCoreMemoryIdx,
-    RawCoreModuleIdx, RawCoreTableIdx, RawCoreTypeIdx, RawFuncIdx, RawInstanceIdx, RawTypeIdx,
+    RawCoreModuleIdx, RawCoreTableIdx, RawCoreTypeIdx, RawFuncIdx, RawInstanceIdx,
 };
-use crate::Result;
+use crate::types::{TypeId, TypeIdx};
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 
@@ -23,7 +24,7 @@ pub enum Sort {
     Func(RawFuncIdx),
     #[cfg(feature = "value-imports-exports")]
     Value(u32),
-    Type(RawTypeIdx),
+    Type(TypeIdx),
     Component(RawComponentIdx),
     Instance(RawInstanceIdx),
 }
@@ -49,6 +50,34 @@ pub enum SortType {
     Type = 3,
     Component = 4,
     Instance = 5,
+}
+
+impl CoreSort {
+    pub fn get_type(&self) -> CoreSortType {
+        match self {
+            CoreSort::Func(_) => CoreSortType::Func,
+            CoreSort::Table(_) => CoreSortType::Table,
+            CoreSort::Memory(_) => CoreSortType::Memory,
+            CoreSort::Global(_) => CoreSortType::Global,
+            CoreSort::Type(_) => CoreSortType::Type,
+            CoreSort::Module(_) => CoreSortType::Module,
+            CoreSort::Instance(_) => CoreSortType::Instance,
+        }
+    }
+}
+
+impl Sort {
+    pub fn get_type(&self) -> SortType {
+        match self {
+            Sort::Core(sort) => SortType::Core(sort.get_type()),
+            Sort::Func(_) => SortType::Func,
+            #[cfg(feature = "value-imports-exports")]
+            Sort::Value(_) => SortType::Value,
+            Sort::Type(_) => SortType::Type,
+            Sort::Component(_) => SortType::Component,
+            Sort::Instance(_) => SortType::Instance,
+        }
+    }
 }
 
 impl<T> ComponentParser<'_, T>
@@ -109,5 +138,27 @@ where
             x => return Err(ComponentParseError::InvalidSortType(x)),
         };
         Ok(sort)
+    }
+
+    pub fn get_type_id_from_sort(&self, sort: &Sort) -> Result<Option<TypeId>> {
+        match sort {
+            Sort::Core(_) => Ok(None),
+            Sort::Func(idx) => {
+                let func_type = self.validator.locals.get_func_type(idx)?;
+                Ok(Some(TypeId::Func(func_type)))
+            }
+            Sort::Type(idx) => {
+                let type_id = self.validator.locals.get_type(idx)?;
+                Ok(Some(*type_id))
+            }
+            Sort::Component(idx) => {
+                let component_type = self.validator.locals.get_component_type(idx)?;
+                Ok(Some(TypeId::Component(component_type)))
+            }
+            Sort::Instance(idx) => {
+                let instance_type = self.validator.locals.get_instance_type(idx)?;
+                Ok(Some(TypeId::Instance(instance_type)))
+            }
+        }
     }
 }

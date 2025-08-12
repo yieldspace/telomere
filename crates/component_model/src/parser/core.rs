@@ -1,7 +1,7 @@
+use crate::parser::ComponentParser;
 use crate::parser::component::RawCoreData;
 use crate::parser::idx::{RawCoreInstanceIdx, RawCoreModuleIdx};
 use crate::parser::sort::CoreSort;
-use crate::parser::ComponentParser;
 use crate::{ComponentParseError, Result};
 use binary_reader::BinaryReader;
 use telomere_wasm::parser::core::parse_name;

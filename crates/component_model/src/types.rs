@@ -1,25 +1,34 @@
-mod externdesc;
-mod primitive;
-mod validator;
-mod resource;
-mod instance;
+pub mod component;
+pub mod func;
+pub mod instance;
+pub mod primitive;
+pub mod resource;
+pub mod val;
+pub mod validator;
 
+use crate::{ComponentParseError, Result};
 pub use primitive::PrimValType;
-pub use instance::*;
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use std::sync::Arc;
+use crate::name::{ExportName, ImportName};
+use crate::types::component::ComponentType;
+use crate::types::func::FuncType;
+use crate::types::instance::InstanceType;
+use crate::types::resource::ResourceDef;
+use crate::types::val::ValType;
+use crate::vec::{Idx, IndexVec};
 use fxhash::FxHashMap;
+use indexmap::IndexMap;
 use smallvec::SmallVec;
-pub use externdesc::*;
+use std::sync::Arc;
 pub use validator::*;
-use crate::name::ImportName;
-use crate::vec::{IndexVec, Idx};
 
 macro_rules! index {
     ($name:ident) => {
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-        pub struct $name(u32);
+        pub struct $name(pub u32);
 
         impl Idx for $name {
             fn new(value: u32) -> Self {
@@ -39,94 +48,183 @@ macro_rules! index {
     };
 }
 
-index!(TypeId);
+index!(ValTypeId);
 index!(ComponentTypeId);
 index!(InstanceTypeId);
-index!(TypeSchemaId);
+index!(FuncTypeId);
+index!(AliasTypeId);
 index!(ResourceDefId);
-index!(ResourceInstId);
-index!(TypeParamId);
-index!(ComponentDefId);
-index!(ComponentInstanceId);
-index!(TableClassId);
-index!(TypeResourceTableIndex);
+index!(TypeIdx);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TypeIndex {
-    Mono(TypeId),
+pub enum TypeId {
+    Val(ValTypeId),
+    Func(FuncTypeId),
+    Resource(ResourceDefId),
     Component(ComponentTypeId),
     Instance(InstanceTypeId),
+    Alias(AliasTypeId),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct TypeResourceTableIndex(pub u32);
 
-pub enum PrimitiveType {
-    Bool, S8, U8, S16, U16, S32, U32, S64, U64,
-    F32, F64, Char,
-    String,
-    #[cfg(feature = "async")]
-    ErrorContext,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ResourceTableId(pub u32);
+
+#[derive(Debug, Clone)]
+pub enum ExportTyRef {
+    Func(TypeId),
+    Instance(TypeId),
+    Component(TypeId),
+    TypeEq(TypeId),
+    TypeSubResource(ResourceDefId),
 }
 
-pub enum MonoType {
-    Prim(PrimitiveType),
-    List(TypeId), Option(TypeId),
-    Result { ok: Option<TypeId>, err: Option<TypeId> },
-    Tuple(SmallVec<[TypeId; 4]>),
-    Record(SmallVec<[(String, TypeId); 4]>),
-    Variant(SmallVec<[(String, Option<TypeId>); 4]>),
-
-    Resource(ResourceDefId),       // WIT の resource 定義
-    HandleOwn(ResourceDefId),
-    HandleBorrow(ResourceDefId),
+#[derive(Default, Debug)]
+pub struct TypeStore {
+    pub(crate) val_types: IndexVec<ValTypeId, ValType>,
+    pub(crate) alias: IndexVec<AliasTypeId, AliasTarget>,
+    pub(crate) funcs: IndexVec<FuncTypeId, FuncType>,
+    pub(crate) components: IndexVec<ComponentTypeId, ComponentType>,
+    pub(crate) instances: IndexVec<InstanceTypeId, InstanceType>,
+    pub(crate) resources: IndexVec<ResourceDefId, ResourceDef>,
 }
 
-pub struct TypeInterner { map: FxHashMap<MonoType, TypeId>, arena: Vec<MonoType> }
-impl TypeInterner {
-    pub fn new() -> Self {
-        Self { map: FxHashMap::default(), arena: Vec::new() }
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub enum AliasTarget {
+    OuterType {
+        outward_count: u32,
+        index: TypeIdx,
+    },
+    InstanceExportType {
+        instance_type_id: InstanceTypeId,
+        name: ExportName,
+    },
+}
+
+pub struct Interner<K: Idx, V> {
+    map: HashMap<V, K>,
+    keys: IndexVec<K, V>,
+}
+impl<K: Idx, V: Hash + Eq + Clone> Interner<K, V> {
+    pub fn intern(&mut self, value: V) -> K {
+        *self
+            .map
+            .entry(value.clone())
+            .or_insert_with(|| self.keys.push(value))
     }
 
-    pub fn intern(&mut self, t: MonoType) -> TypeId {
-        todo!()
-    }
-}
-
-pub struct ImportResolver { /* package -> (types/resources) -> DefId */ }
-impl ImportResolver {
-    pub fn resolve_resource(&self, path: &ImportName) -> ResourceDefId {
-        todo!()
-    }
-    pub fn resolve_type(&self, path: &ImportName) -> TypeId {
-        todo!()
-    } // record等
-}
-
-pub struct ComponentInstance {
-    resource_tables: IndexVec<TypeResourceTableIndex, ResourceTable>,
-    // dtorや「このtyの所有はどのruntime instanceか」等のメタへアクセスできるhandles
-}
-
-impl ComponentInstance {
-    pub fn instantiate() -> Self {
-        let num = 0;
-        let mut tables = IndexVec::with_capacity(num);
-        for _ in 0..num { tables.push(ResourceTable::default()); } // 0..N-1 を確保
-        Self { resource_tables: tables }
+    pub fn iter(&self) -> impl Iterator<Item = &V> {
+        self.keys.raw.iter()
     }
 }
 
-pub struct ResourceEntry { rep: u32, borrows: u32 /* + 世代番号など */ }
-#[derive(Default)]
-pub struct ResourceTable { entries: slab::Slab<ResourceEntry> /* + 親子追跡は任意 */ }
+impl<K: Idx, V> Default for Interner<K, V> {
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+            keys: IndexVec::new(),
+        }
+    }
+}
 
-impl ResourceTable {
-    pub fn new_own(&mut self, rep: u32) -> u32 {
-        todo!()
+impl TypeId {
+    pub fn ensure_val_type(&self) -> Result<ValTypeId> {
+        match self {
+            TypeId::Val(id) => Ok(*id),
+            _ => Err(ComponentParseError::TypeError("Expected ValType".into())),
+        }
     }
-    pub fn rep_of (&self, idx: u32) -> Result<u32, ()> {
-        todo!()
+
+    pub fn ensure_func_type(&self) -> Result<FuncTypeId> {
+        match self {
+            TypeId::Func(id) => Ok(*id),
+            _ => Err(ComponentParseError::TypeError("Expected FuncType".into())),
+        }
     }
-    pub fn drop_own(&mut self, idx: u32) -> Result<(), ()> {
-        todo!()
+
+    pub fn ensure_resource(&self) -> Result<ResourceDefId> {
+        match self {
+            TypeId::Resource(id) => Ok(*id),
+            _ => Err(ComponentParseError::TypeError(
+                "Expected ResourceDef".into(),
+            )),
+        }
+    }
+
+    pub fn ensure_component_type(&self) -> Result<ComponentTypeId> {
+        match self {
+            TypeId::Component(id) => Ok(*id),
+            _ => Err(ComponentParseError::TypeError(
+                "Expected ComponentType".into(),
+            )),
+        }
+    }
+
+    pub fn ensure_instance_type(&self) -> Result<InstanceTypeId> {
+        match self {
+            TypeId::Instance(id) => Ok(*id),
+            _ => Err(ComponentParseError::TypeError(
+                "Expected InstanceType".into(),
+            )),
+        }
+    }
+
+    pub fn ensure_alias_type(&self) -> Result<AliasTypeId> {
+        match self {
+            TypeId::Alias(id) => Ok(*id),
+            _ => Err(ComponentParseError::TypeError("Expected AliasType".into())),
+        }
+    }
+}
+
+impl TypeStore {
+    pub fn push_val_type_in_type(&mut self, val_type: ValType) -> ValTypeId {
+        self.val_types.push(val_type)
+    }
+
+    pub fn push_alias_in_type(&mut self, alias: AliasTarget) -> AliasTypeId {
+        self.alias.push(alias)
+    }
+
+    pub fn push_func_in_type(&mut self, func: FuncType) -> FuncTypeId {
+        self.funcs.push(func)
+    }
+
+    pub fn push_component_in_type(&mut self, component: ComponentType) -> ComponentTypeId {
+        self.components.push(component)
+    }
+
+    pub fn push_instance_in_type(&mut self, instance: InstanceType) -> InstanceTypeId {
+        self.instances.push(instance)
+    }
+
+    pub fn push_resource_in_type(&mut self, resource: ResourceDef) -> ResourceDefId {
+        self.resources.push(resource)
+    }
+
+    pub fn get_val_type(&self, idx: &ValTypeId) -> Result<&ValType> {
+        self.val_types.get(idx)
+    }
+
+    pub fn get_alias(&self, idx: &AliasTypeId) -> Result<&AliasTarget> {
+        self.alias.get(idx)
+    }
+
+    pub fn get_func(&self, idx: &FuncTypeId) -> Result<&FuncType> {
+        self.funcs.get(idx)
+    }
+
+    pub fn get_component(&self, idx: &ComponentTypeId) -> Result<&ComponentType> {
+        self.components.get(idx)
+    }
+
+    pub fn get_instance(&self, idx: &InstanceTypeId) -> Result<&InstanceType> {
+        self.instances.get(idx)
+    }
+
+    pub fn get_resource(&self, idx: &ResourceDefId) -> Result<&ResourceDef> {
+        self.resources.get(idx)
     }
 }

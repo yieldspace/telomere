@@ -40,14 +40,15 @@ impl<I: RawIdx, T> RawIndexVec<I, T> {
         Ok(I::new(index))
     }
 
-    pub fn push_alias(&mut self, alias: I) -> Result<()> {
+    pub fn push_alias(&mut self, alias: I) -> Result<I> {
         if !self.is_valid(&alias) {
             return Err(crate::ComponentParseError::IndexError(
                 "Invalid alias index".into(),
             ));
         }
+        let index = self.raw.len() as u32;
         self.raw.push(Relation::Alias(alias));
-        Ok(())
+        Ok(I::new(index))
     }
 
     pub fn is_valid(&self, idx: &I) -> bool {
@@ -67,9 +68,7 @@ impl<I: RawIdx, T> RawIndexVec<I, T> {
                 Relation::Alias(i) => self.get(i),
             }
         } else {
-            Err(crate::ComponentParseError::IndexError(
-                "Not found".into(),
-            ))
+            Err(crate::ComponentParseError::IndexError("Not found".into()))
         }
     }
 }
