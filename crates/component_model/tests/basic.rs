@@ -21,7 +21,7 @@ async fn test_basic() -> anyhow::Result<()> {
     let mut reader = IoReadBinaryReader::from(binary.as_slice());
 
     let mut store = TypeStore::default();
-    let parser = ComponentParser::new(&mut reader, &mut store);
+    let parser = ComponentParser::new(&mut reader, None);
     let component = parser.parse()?;
     Ok(())
 }

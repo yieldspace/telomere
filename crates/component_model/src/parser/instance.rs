@@ -12,7 +12,10 @@ use tracing::trace;
 use crate::types::component::{ComponentType, PublicTyRef};
 use crate::types::instance::{ChildImportLookup, InstanceArg, InstanceType, ParentExportLookup};
 use crate::types::resource::{ResourceDef, ResourcePlan};
-use crate::types::{ResourceDefId, ResourceTableId, TypeId, TypeResourceTableIndex, TypeValidator};
+use crate::types::{
+    AliasResolvable, Relation, ResourceDefId, ResourceTableId, TypeId, TypeResourceTableIndex,
+    TypeValidator,
+};
 
 pub struct RawInstance {
     pub component_idx: RawComponentIdx,
@@ -75,7 +78,10 @@ where
             };
             type_args.insert(name.clone(), arg);
         }
-        let component_type = self.validator.store.get_component(&component_type_id)?;
+        let component_type = self.alias_context.resolve_component_type(
+            &self.validator.store,
+            self.validator.store.get_component(&component_type_id)?,
+        )?;
         bind_instance_tables(component_type, &mut ty, type_args)?;
         let instance = RawInstance {
             component_idx,
@@ -84,7 +90,10 @@ where
         let idx = self
             .instances
             .push(RawData::Defined(RawInstanceDef::Instantiate(instance)))?;
-        let id = self.validator.store.push_instance_in_type(ty);
+        let id = self
+            .validator
+            .store
+            .push_instance_in_type(Relation::Direct(ty));
         self.validator.locals.push_instance(idx, id);
         Ok(())
     }

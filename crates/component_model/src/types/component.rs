@@ -12,6 +12,7 @@ use thiserror::__private::AsDisplay;
 #[derive(Debug)]
 pub struct ComponentType {
     pub id: ComponentDefId,
+    pub store: TypeStore,
     pub local_type_map: LocalTypeMap,
     pub plan: ResourcePlan,
     pub surface: ComponentSurface,

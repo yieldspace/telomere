@@ -130,8 +130,14 @@ pub enum Relation<T> {
     Alias(AliasTypeId),
 }
 
+pub trait AliasResolvable<T> {
+    fn resolve(&self, current_validator: &TypeValidator, context: &AliasContext<'_>) -> Result<&T>;
+}
+
 #[derive(Default, Debug)]
 pub struct TypeStore {
+    pub(crate) component_defs: IndexMap<ComponentDefId, ComponentTypeId>,
+
     pub(crate) val_types: Interner<ValTypeId, Relation<ValType>>,
     pub(crate) alias: IndexVec<AliasTypeId, AliasTarget>,
     pub(crate) funcs: IndexVec<FuncTypeId, Relation<FuncType>>,
@@ -142,6 +148,8 @@ pub struct TypeStore {
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum AliasTarget {
+    /// alias outerのうち，ctが0のもの
+    Current { index: u32 },
     OuterType {
         levels: Box<[ComponentDefId]>,
         index: u32,

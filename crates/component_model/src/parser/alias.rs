@@ -118,14 +118,16 @@ where
         let (_, ct) = parse_u32(self.reader)?;
         let (_, idx) = parse_u32(self.reader)?;
         let levels = self
-            .outer
+            .alias_context
+            .outers
             .clone()
-            .drain(..self.outer.len() - (ct as usize))
+            .drain(..self.alias_context.outers.len() - (ct as usize))
             .collect();
-        let id = self
-            .validator
-            .store
-            .push_alias_in_type(AliasTarget::OuterType { levels, index: idx });
+        let id = self.validator.store.push_alias_in_type(if ct == 0 {
+            AliasTarget::Current { index: idx }
+        } else {
+            AliasTarget::OuterType { levels, index: idx }
+        });
         match sort {
             SortType::Core(CoreSortType::Module) => {
                 self.core_modules

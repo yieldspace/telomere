@@ -18,7 +18,7 @@ pub async fn run_component_wast(text: &str) {
                 let source = m.encode().unwrap();
                 let mut reader = IoReadBinaryReader::from(&source[..]);
                 let mut store = TypeStore::default();
-                let parser = ComponentParser::new(&mut reader, &mut store);
+                let parser = ComponentParser::new(&mut reader, None);
                 let component = parser.parse().unwrap();
             }
             WastDirective::AssertInvalid {
@@ -28,7 +28,7 @@ pub async fn run_component_wast(text: &str) {
                 if let Ok(source) = module.encode() {
                     let mut reader = IoReadBinaryReader::from(&source[..]);
                     let mut store = TypeStore::default();
-                    let parser = ComponentParser::new(&mut reader, &mut store);
+                    let parser = ComponentParser::new(&mut reader, None);
                     let res = parser.parse();
 
                     match res {

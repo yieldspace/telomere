@@ -1,14 +1,75 @@
 use crate::parser::idx::{RawComponentIdx, RawFuncIdx, RawInstanceIdx};
 use crate::parser::vec::RawIdx;
-use crate::types::component::ComponentSurface;
+use crate::types::component::{ComponentSurface, ComponentType};
 use crate::types::resource::ResourcePlan;
 use crate::types::{
-    ComponentDefId, ComponentTypeId, FuncTypeId, InstanceTypeId, ResourceDefId, TypeId, TypeIdx,
-    TypeResourceTableIndex, TypeStore,
+    AliasResolvable, AliasTarget, ComponentDefId, ComponentTypeId, FuncTypeId, InstanceTypeId,
+    Relation, ResourceDefId, TypeId, TypeIdx, TypeResourceTableIndex, TypeStore,
 };
-use crate::vec::IndexVec;
+use crate::vec::{Idx, IndexVec};
 use crate::{ComponentParseError, Result};
 use indexmap::{IndexMap, IndexSet};
+
+#[derive(Default, Clone)]
+pub struct AliasContext<'a> {
+    pub toplevel: Option<&'a TypeValidator>,
+    pub outers: Vec<ComponentDefId>,
+}
+
+impl<'a> AliasContext<'a> {
+    pub fn resolve_component_type(
+        &self,
+        store: &'a TypeStore,
+        value: &'a Relation<ComponentType>,
+    ) -> Result<&'a ComponentType> {
+        match value {
+            Relation::Direct(ty) => Ok(ty),
+            Relation::Alias(alias_id) => {
+                let alias = store.alias.get(alias_id)?;
+                match alias {
+                    AliasTarget::Current { index } => self.resolve_component_type(
+                        store,
+                        store.get_component(&ComponentTypeId::new(*index))?,
+                    ),
+                    AliasTarget::OuterType { levels, index } => {
+                        let mut current = {
+                            let id = self
+                                .toplevel
+                                .unwrap()
+                                .store
+                                .component_defs
+                                .get(&levels[0])
+                                .unwrap();
+                            self.resolve_component_type(
+                                &self.toplevel.unwrap().store,
+                                self.toplevel.unwrap().store.get_component(id)?,
+                            )
+                        }?;
+                        for i in 1..levels.len() {
+                            let level = &levels[i];
+                            let id = current.store.component_defs.get(level).unwrap();
+                            current = self.resolve_component_type(
+                                &current.store,
+                                current.store.get_component(id)?,
+                            )?;
+                        }
+                        self.resolve_component_type(
+                            &current.store,
+                            current.store.get_component(&ComponentTypeId::new(*index))?,
+                        )
+                    }
+                    AliasTarget::InstanceExportType {
+                        instance_type_id,
+                        name,
+                    } => {
+                        // ここではまだインスタンスの型は解決しない
+                        unimplemented!()
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// パース時に"resource使用"を集計するヘルパ
 #[derive(Default)]
@@ -35,10 +96,10 @@ impl ResourceUseCollector {
     }
 }
 
-pub struct TypeValidator<'a> {
+pub struct TypeValidator {
     pub id: ComponentDefId,
     pub usec: ResourceUseCollector,
-    pub store: &'a mut TypeStore,
+    pub store: TypeStore,
     pub locals: LocalTypeMap,
     pub surface: ComponentSurface,
 }
@@ -51,12 +112,12 @@ pub struct LocalTypeMap {
     pub(crate) funcs: IndexMap<RawFuncIdx, FuncTypeId>,
 }
 
-impl<'a> TypeValidator<'a> {
-    pub fn new(store: &'a mut TypeStore) -> Self {
+impl TypeValidator {
+    pub fn new() -> Self {
         Self {
             id: ComponentDefId::new(),
             usec: ResourceUseCollector::default(),
-            store,
+            store: TypeStore::default(),
             locals: LocalTypeMap::default(),
             surface: ComponentSurface::default(),
         }
