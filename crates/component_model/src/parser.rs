@@ -29,7 +29,8 @@ use crate::parser::vec::RawIndexVec;
 use crate::types::component::ComponentType;
 use crate::types::resource::ResourcePlan;
 use crate::types::{
-    ComponentDefId, ResourceUseCollector, TypeResourceTableIndex, TypeStore, TypeValidator,
+    ComponentDefId, Relation, ResourceUseCollector, TypeResourceTableIndex, TypeStore,
+    TypeValidator,
 };
 use crate::{Component, ComponentParseError, InstantiateContext, Result};
 use binary_reader::BinaryReader;
@@ -227,7 +228,10 @@ where
                         parser.parse_component()?
                     };
                     let idx = self.components.push(RawData::Defined(component))?;
-                    let id = self.validator.store.push_component_in_type(component_ty);
+                    let id = self
+                        .validator
+                        .store
+                        .push_component_in_type(Relation::Direct(component_ty));
                     self.validator.locals.push_component(idx, id);
                 }
                 ComponentSection::Instance => {

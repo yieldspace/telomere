@@ -3,7 +3,7 @@ use crate::parser::component::{RawCoreData, RawData};
 use crate::parser::idx::{RawComponentIdx, RawCoreModuleIdx, RawInstanceIdx};
 use crate::parser::sort::{CoreSortType, SortType};
 use crate::parser::vec::RawIdx;
-use crate::types::{AliasTarget, TypeIdx};
+use crate::types::{AliasTarget, Relation, TypeId, TypeIdx};
 use crate::vec::Idx;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
@@ -25,26 +25,52 @@ where
 
     fn parse_export_alias(&mut self, sort: SortType) -> Result<()> {
         let instance_idx = self.parse_instance_idx()?;
+        let instance_id = self.validator.locals.get_instance_type(&instance_idx)?;
         let name = self.parse_export_name()?;
+        let id = self
+            .validator
+            .store
+            .push_alias_in_type(AliasTarget::InstanceExportType {
+                instance_type_id: instance_id,
+                name: name.clone(),
+            });
         match sort {
             SortType::Core(CoreSortType::Module) => {
                 self.core_modules
                     .push(RawCoreData::ReExportedModule(name, instance_idx))?;
             }
             SortType::Func => {
-                self.funcs.push(RawData::ReExported(name, instance_idx))?;
+                let idx = self.funcs.push(RawData::ReExported(name, instance_idx))?;
+                let func_id = self.validator.store.push_func_in_type(Relation::Alias(id));
+                self.validator.locals.push_func(idx, func_id);
             }
             SortType::Type => {
                 self.components
                     .push(RawData::ReExported(name, instance_idx))?;
+                self.validator.locals.register_type_idx(TypeId::Alias(id));
             }
             SortType::Component => {
-                self.components
+                let idx = self
+                    .components
                     .push(RawData::ReExported(name, instance_idx))?;
+                self.validator.locals.push_component(
+                    idx,
+                    self.validator
+                        .store
+                        .push_component_in_type(Relation::Alias(id)),
+                );
             }
             SortType::Instance => {
-                self.instances
+                let idx = self
+                    .instances
                     .push(RawData::ReExported(name, instance_idx))?;
+
+                self.validator.locals.push_instance(
+                    idx,
+                    self.validator
+                        .store
+                        .push_instance_in_type(Relation::Alias(id)),
+                );
             }
             _ => return Err(ComponentParseError::InvalidSortType(0)),
         }
@@ -56,7 +82,8 @@ where
         let (_, name) = parse_name(self.reader)?;
         match sort {
             CoreSortType::Func => {
-                self.core_funcs
+                let idx = self
+                    .core_funcs
                     .push(RawCoreData::ReExported(name, core_instance_idx))?;
             }
             CoreSortType::Table => {
@@ -90,6 +117,15 @@ where
     fn parse_outer_export_alias(&mut self, sort: SortType) -> Result<()> {
         let (_, ct) = parse_u32(self.reader)?;
         let (_, idx) = parse_u32(self.reader)?;
+        let levels = self
+            .outer
+            .clone()
+            .drain(..self.outer.len() - (ct as usize))
+            .collect();
+        let id = self
+            .validator
+            .store
+            .push_alias_in_type(AliasTarget::OuterType { levels, index: idx });
         match sort {
             SortType::Core(CoreSortType::Module) => {
                 self.core_modules
@@ -97,22 +133,32 @@ where
             }
             SortType::Func => {
                 let idx = self.funcs.push_alias(RawIdx::new_outer(ct, idx))?;
-                // let id = self.validator.store.push_alias_in_type(AliasTarget::OuterType {
-                //     target_def_id: *self.outer.get(self.outer.len() - (ct as usize)).unwrap(),
-                //     index: TypeIdx::new(idx),
-                // });
-                // self.validator.locals.push_func(idx, id);
+                let id = self.validator.store.push_func_in_type(Relation::Alias(id));
+                self.validator.locals.push_func(idx, id);
             }
             SortType::Type => {
                 self.components.push_alias(RawIdx::new_outer(ct, idx))?;
+                self.validator.locals.register_type_idx(TypeId::Alias(id));
             }
             SortType::Component => {
-                self.components
+                let idx = self
+                    .components
                     .push_alias(RawComponentIdx::new_outer(ct, idx))?;
+                let id = self
+                    .validator
+                    .store
+                    .push_component_in_type(Relation::Alias(id));
+                self.validator.locals.push_component(idx, id);
             }
             SortType::Instance => {
-                self.instances
+                let idx = self
+                    .instances
                     .push_alias(RawInstanceIdx::new_outer(ct, idx))?;
+                let id = self
+                    .validator
+                    .store
+                    .push_instance_in_type(Relation::Alias(id));
+                self.validator.locals.push_instance(idx, id);
             }
             _ => return Err(ComponentParseError::InvalidSortType(0)),
         };

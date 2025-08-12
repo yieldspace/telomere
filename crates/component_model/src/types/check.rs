@@ -32,7 +32,8 @@ impl<'a> TypeChecker<'a> {
             (Func(self_id), Func(other_id)) => {
                 let self_type = self.store.get_func(&self_id)?;
                 let other_type = self.store.get_func(&other_id)?;
-                self_type.is_subtype_of(self.store, other_type)
+                // self_type.is_subtype_of(self.store, other_type)
+                Ok(false)
             }
             (Component(self_id), Component(other_id)) => Ok(true),
             (Instance(self_id), Instance(other_id)) => Ok(true),

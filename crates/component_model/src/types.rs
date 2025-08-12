@@ -14,6 +14,7 @@ use std::hash::Hash;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::name::{ExportName, ImportName};
+use crate::parser::vec::RawIdx;
 use crate::types::component::ComponentType;
 use crate::types::func::FuncType;
 use crate::types::instance::InstanceType;
@@ -123,21 +124,27 @@ pub enum ExportTyRef {
     TypeSubResource(ResourceDefId),
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum Relation<T> {
+    Direct(T),
+    Alias(AliasTypeId),
+}
+
 #[derive(Default, Debug)]
 pub struct TypeStore {
-    pub(crate) val_types: Interner<ValTypeId, ValType>,
+    pub(crate) val_types: Interner<ValTypeId, Relation<ValType>>,
     pub(crate) alias: IndexVec<AliasTypeId, AliasTarget>,
-    pub(crate) funcs: IndexVec<FuncTypeId, FuncType>,
-    pub(crate) components: IndexVec<ComponentTypeId, ComponentType>,
-    pub(crate) instances: IndexVec<InstanceTypeId, InstanceType>,
+    pub(crate) funcs: IndexVec<FuncTypeId, Relation<FuncType>>,
+    pub(crate) components: IndexVec<ComponentTypeId, Relation<ComponentType>>,
+    pub(crate) instances: IndexVec<InstanceTypeId, Relation<InstanceType>>,
     pub(crate) resources: IndexVec<ResourceDefId, ResourceDef>,
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum AliasTarget {
     OuterType {
-        target_def_id: ComponentDefId,
-        index: TypeIdx,
+        levels: Box<[ComponentDefId]>,
+        index: u32,
     },
     InstanceExportType {
         instance_type_id: InstanceTypeId,
@@ -227,7 +234,7 @@ impl TypeId {
 }
 
 impl TypeStore {
-    pub fn push_val_type_in_type(&mut self, val_type: ValType) -> ValTypeId {
+    pub fn push_val_type_in_type(&mut self, val_type: Relation<ValType>) -> ValTypeId {
         self.val_types.intern(val_type)
     }
 
@@ -235,15 +242,18 @@ impl TypeStore {
         self.alias.push(alias)
     }
 
-    pub fn push_func_in_type(&mut self, func: FuncType) -> FuncTypeId {
+    pub fn push_func_in_type(&mut self, func: Relation<FuncType>) -> FuncTypeId {
         self.funcs.push(func)
     }
 
-    pub fn push_component_in_type(&mut self, component: ComponentType) -> ComponentTypeId {
+    pub fn push_component_in_type(
+        &mut self,
+        component: Relation<ComponentType>,
+    ) -> ComponentTypeId {
         self.components.push(component)
     }
 
-    pub fn push_instance_in_type(&mut self, instance: InstanceType) -> InstanceTypeId {
+    pub fn push_instance_in_type(&mut self, instance: Relation<InstanceType>) -> InstanceTypeId {
         self.instances.push(instance)
     }
 
@@ -251,7 +261,7 @@ impl TypeStore {
         self.resources.push(resource)
     }
 
-    pub fn get_val_type(&self, idx: &ValTypeId) -> Result<&ValType> {
+    pub fn get_val_type(&self, idx: &ValTypeId) -> Result<&Relation<ValType>> {
         self.val_types.get(idx)
     }
 
@@ -259,15 +269,15 @@ impl TypeStore {
         self.alias.get(idx)
     }
 
-    pub fn get_func(&self, idx: &FuncTypeId) -> Result<&FuncType> {
+    pub fn get_func(&self, idx: &FuncTypeId) -> Result<&Relation<FuncType>> {
         self.funcs.get(idx)
     }
 
-    pub fn get_component(&self, idx: &ComponentTypeId) -> Result<&ComponentType> {
+    pub fn get_component(&self, idx: &ComponentTypeId) -> Result<&Relation<ComponentType>> {
         self.components.get(idx)
     }
 
-    pub fn get_instance(&self, idx: &InstanceTypeId) -> Result<&InstanceType> {
+    pub fn get_instance(&self, idx: &InstanceTypeId) -> Result<&Relation<InstanceType>> {
         self.instances.get(idx)
     }
 
