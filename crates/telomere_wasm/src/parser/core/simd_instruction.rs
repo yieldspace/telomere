@@ -10,7 +10,7 @@ pub(crate) struct SimdParserContext<'a, R: BinaryReader> {
 mod prelude {
     pub(crate) use super::SimdParserContext;
     pub(crate) use crate::common::ValType;
-    pub(crate) use crate::{common::Operand, parser::core::values, runtime::vm, WasmParserError};
+    pub(crate) use crate::{WasmParserError, common::Operand, parser::core::values, runtime::vm};
     pub(crate) use binary_reader::BinaryReader;
 }
 

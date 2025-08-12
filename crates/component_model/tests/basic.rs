@@ -1,5 +1,5 @@
 use binary_reader::IoReadBinaryReader;
-use component_model::{ComponentParser, CoreInstanceIndex, CoreModuleIndex, Dependency};
+use component_model::{ComponentParser, CoreInstanceIndex, CoreModuleIndex, Dependency, TypeStore};
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -20,7 +20,8 @@ async fn test_basic() -> anyhow::Result<()> {
     let binary = wat::parse_str(component)?;
     let mut reader = IoReadBinaryReader::from(binary.as_slice());
 
-    let parser = ComponentParser::new(&mut reader);
+    let mut store = TypeStore::default();
+    let parser = ComponentParser::new(&mut reader, &mut store);
     let component = parser.parse()?;
     Ok(())
 }

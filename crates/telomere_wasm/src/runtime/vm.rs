@@ -5,14 +5,14 @@ pub(crate) mod simd;
 use std::ops::BitXor;
 
 use crate::{
+    Store,
     common::{
-        execute_elem_init_const_expr,
-        gc::{GcRef, InstanceData},
         ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, Stack,
-        VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
+        TABLE_UNINITIALIZED, VMResult, ValType, WasmValue, execute_elem_init_const_expr,
+        gc::{GcRef, InstanceData},
     },
     runtime::scheduler::{ReadyFlag, Scheduler, Task},
-    trap_func, Store,
+    trap_func,
 };
 
 use super::memory_effect::{ReadOperationHandler, WriteOperation};
@@ -624,9 +624,7 @@ pub unsafe fn op_br_table(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     };
     trace!(
         "op_br_table: index={} table_size={} => addr={}",
-        index,
-        table_size,
-        addr
+        index, table_size, addr
     );
     let tail_code = ctx.code().offset(addr as isize);
     call_next(tail_code, 0, ctx)
@@ -1945,9 +1943,10 @@ pub unsafe fn op_ref_is_null(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 }
 pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let funcidx = (*tail_code).operand.u32;
-    vm_try!(ctx
-        .stack
-        .push_u32(ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize].get()));
+    vm_try!(
+        ctx.stack
+            .push_u32(ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize].get())
+    );
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn special_start_host_function_call(

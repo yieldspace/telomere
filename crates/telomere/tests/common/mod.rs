@@ -2,14 +2,14 @@ pub mod component_model;
 
 use binary_reader::IoReadBinaryReader;
 use telomere_wasm::{
-    common::InstanceHandle, get_global, instantiate, Registry, ResultValue, Store, VMResult,
-    WasmParser, WasmValue,
+    Registry, ResultValue, Store, VMResult, WasmParser, WasmValue, common::InstanceHandle,
+    get_global, instantiate,
 };
 use tracing::error;
 use wast::{
+    Wast, WastArg, WastRet, Wat,
     core::{AbstractHeapType, HeapType, NanPattern, V128Pattern, WastRetCore},
     parser::ParseBuffer,
-    Wast, WastArg, WastRet, Wat,
 };
 
 pub async fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceHandle {

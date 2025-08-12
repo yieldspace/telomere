@@ -5,7 +5,7 @@ use std::{
 };
 
 use binary_reader::IoReadBinaryReader;
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use telomere_wasm::{ResultValue, WasmValue};
 use tokio::runtime::Runtime;
 

@@ -7,9 +7,9 @@ use crate::common::TableType;
 use crate::common::ValType;
 use binary_reader::BinaryReader;
 
+use super::Result;
 use super::types;
 use super::values;
-use super::Result;
 pub trait WasmBaseParser<R: BinaryReader>
 where
     Self: Sized,

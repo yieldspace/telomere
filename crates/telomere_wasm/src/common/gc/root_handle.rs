@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use super::{object::GcRefDynamicArray, GcRef, MemoryPool};
+use super::{GcRef, MemoryPool, object::GcRefDynamicArray};
 
 #[derive(Debug)]
 pub struct GcRootHandle {

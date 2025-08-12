@@ -1,3 +1,4 @@
+mod check;
 pub mod component;
 pub mod func;
 pub mod instance;
@@ -49,11 +50,42 @@ macro_rules! index {
 }
 
 index!(ValTypeId);
+impl From<ValTypeId> for TypeId {
+    fn from(value: ValTypeId) -> Self {
+        Self::Val(value)
+    }
+}
 index!(ComponentTypeId);
+impl From<ComponentTypeId> for TypeId {
+    fn from(value: ComponentTypeId) -> Self {
+        Self::Component(value)
+    }
+}
+
 index!(InstanceTypeId);
+impl From<InstanceTypeId> for TypeId {
+    fn from(value: InstanceTypeId) -> Self {
+        Self::Instance(value)
+    }
+}
 index!(FuncTypeId);
+impl From<FuncTypeId> for TypeId {
+    fn from(value: FuncTypeId) -> Self {
+        Self::Func(value)
+    }
+}
 index!(AliasTypeId);
+impl From<AliasTypeId> for TypeId {
+    fn from(value: AliasTypeId) -> Self {
+        Self::Alias(value)
+    }
+}
 index!(ResourceDefId);
+impl From<ResourceDefId> for TypeId {
+    fn from(value: ResourceDefId) -> Self {
+        Self::Resource(value)
+    }
+}
 index!(TypeIdx);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,6 +104,16 @@ pub struct TypeResourceTableIndex(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ResourceTableId(pub u32);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ComponentDefId(pub u32);
+
+impl ComponentDefId {
+    pub fn new() -> Self {
+        static NEXT_ID: AtomicU32 = AtomicU32::new(0);
+        Self(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ExportTyRef {
     Func(TypeId),
@@ -83,7 +125,7 @@ pub enum ExportTyRef {
 
 #[derive(Default, Debug)]
 pub struct TypeStore {
-    pub(crate) val_types: IndexVec<ValTypeId, ValType>,
+    pub(crate) val_types: Interner<ValTypeId, ValType>,
     pub(crate) alias: IndexVec<AliasTypeId, AliasTarget>,
     pub(crate) funcs: IndexVec<FuncTypeId, FuncType>,
     pub(crate) components: IndexVec<ComponentTypeId, ComponentType>,
@@ -94,7 +136,7 @@ pub struct TypeStore {
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub enum AliasTarget {
     OuterType {
-        outward_count: u32,
+        target_def_id: ComponentDefId,
         index: TypeIdx,
     },
     InstanceExportType {
@@ -103,6 +145,7 @@ pub enum AliasTarget {
     },
 }
 
+#[derive(Debug)]
 pub struct Interner<K: Idx, V> {
     map: HashMap<V, K>,
     keys: IndexVec<K, V>,
@@ -113,6 +156,10 @@ impl<K: Idx, V: Hash + Eq + Clone> Interner<K, V> {
             .map
             .entry(value.clone())
             .or_insert_with(|| self.keys.push(value))
+    }
+
+    pub fn get(&self, key: &K) -> Result<&V> {
+        self.keys.get(key)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &V> {
@@ -181,7 +228,7 @@ impl TypeId {
 
 impl TypeStore {
     pub fn push_val_type_in_type(&mut self, val_type: ValType) -> ValTypeId {
-        self.val_types.push(val_type)
+        self.val_types.intern(val_type)
     }
 
     pub fn push_alias_in_type(&mut self, alias: AliasTarget) -> AliasTypeId {

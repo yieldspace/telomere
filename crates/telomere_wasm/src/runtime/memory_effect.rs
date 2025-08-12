@@ -1,8 +1,8 @@
 use std::{future::Future, ops::Range, pin::Pin};
 
 use crate::{
-    common::{GcRef, Instr},
     Stack,
+    common::{GcRef, Instr},
 };
 
 use super::scheduler::AsyncResult;

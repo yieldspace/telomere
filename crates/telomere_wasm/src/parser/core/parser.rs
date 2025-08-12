@@ -1,19 +1,19 @@
 use crate::common::custom_section::NameSubSection;
 use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, LocalsData, Operand};
+use crate::parser::core::InstructionParser;
 use crate::parser::core::instruction_generator::InstructionGenerator;
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::validate::validate_locals;
-use crate::parser::core::InstructionParser;
 use crate::runtime::vm;
 use crate::{
+    Module,
     common::{
         CodeSection, Data, DataCountVerifier, DataMode, DataSection, Elem, ElemMode,
         ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FuncType, FunctionSection,
         Global, GlobalIdx, GlobalType, Import, ImportDesc, ImportSection, MemIdx, MemType, Mut,
         RefType, ResultType, Table, TableIdx, TableType, TypeIdx, TypeSection, ValType,
     },
-    Module,
 };
 use binary_reader::BinaryReader;
 use std::collections::HashSet;
@@ -751,7 +751,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         )?;
         trace!("function return");
 
-        checker.op(&functype.1 .0, &[])?;
+        checker.op(&functype.1.0, &[])?;
 
         checker.leave_block()?;
 

@@ -1,4 +1,4 @@
-use super::{GcView, MemoryPool, HEADER_LEN};
+use super::{GcView, HEADER_LEN, MemoryPool};
 
 // NOTE: GcRef will disabled after gc
 #[repr(transparent)]

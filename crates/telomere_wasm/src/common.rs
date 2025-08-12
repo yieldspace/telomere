@@ -24,8 +24,8 @@ pub use gc::GcRef;
 
 pub use store::{Store, StoreState};
 
-use crate::runtime::scheduler::EffectSupplier;
 use crate::WasmParserError;
+use crate::runtime::scheduler::EffectSupplier;
 pub mod custom_section;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

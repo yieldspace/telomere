@@ -3,12 +3,12 @@ use crate::{
     runtime::{memory_effect::WriteOperation, vm::load_internal},
 };
 use telomere_macros::define_simd_operation;
-use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
+use wide::{f32x4, f64x2, i8x16, i16x8, i32x4, i64x2, u8x16, u16x8, u32x4, u64x2};
 
 use crate::{
-    common::{stack::StackOperation, ExecuteContext, Instr},
-    runtime::vm::call_next,
     Stack, VMResult,
+    common::{ExecuteContext, Instr, stack::StackOperation},
+    runtime::vm::call_next,
 };
 
 use super::store_internal;
@@ -454,9 +454,10 @@ pub unsafe fn f32x4_demote_f64x2_zero(
 ) -> VMResult<()> {
     let v: f64x2 = ctx.stack.pop();
     let [a, b] = v.to_array();
-    vm_try!(ctx
-        .stack
-        .push(f32x4::from([a as f32, b as f32, 0.0f32, 0.0f32])));
+    vm_try!(
+        ctx.stack
+            .push(f32x4::from([a as f32, b as f32, 0.0f32, 0.0f32]))
+    );
     call_next(tail_code, 0, ctx)
 }
 pub unsafe fn f64x2_promote_low_f32x4(

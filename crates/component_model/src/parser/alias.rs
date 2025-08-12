@@ -3,6 +3,8 @@ use crate::parser::component::{RawCoreData, RawData};
 use crate::parser::idx::{RawComponentIdx, RawCoreModuleIdx, RawInstanceIdx};
 use crate::parser::sort::{CoreSortType, SortType};
 use crate::parser::vec::RawIdx;
+use crate::types::{AliasTarget, TypeIdx};
+use crate::vec::Idx;
 use crate::{ComponentParseError, ComponentParser};
 use binary_reader::BinaryReader;
 use telomere_wasm::parser::core::{parse_name, parse_u32};
@@ -94,7 +96,12 @@ where
                     .push_alias(RawCoreModuleIdx::new_outer(ct, idx))?;
             }
             SortType::Func => {
-                self.funcs.push_alias(RawIdx::new_outer(ct, idx))?;
+                let idx = self.funcs.push_alias(RawIdx::new_outer(ct, idx))?;
+                // let id = self.validator.store.push_alias_in_type(AliasTarget::OuterType {
+                //     target_def_id: *self.outer.get(self.outer.len() - (ct as usize)).unwrap(),
+                //     index: TypeIdx::new(idx),
+                // });
+                // self.validator.locals.push_func(idx, id);
             }
             SortType::Type => {
                 self.components.push_alias(RawIdx::new_outer(ct, idx))?;

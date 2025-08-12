@@ -2,8 +2,8 @@ use crate::Result;
 use crate::name::{ExportName, ImportName};
 use crate::types::resource::ResourcePlan;
 use crate::types::{
-    ComponentTypeId, FuncTypeId, InstanceTypeId, LocalTypeMap, ResourceDefId, TypeId, TypeIdx,
-    TypeStore,
+    ComponentDefId, ComponentTypeId, FuncTypeId, InstanceTypeId, LocalTypeMap, ResourceDefId,
+    TypeId, TypeIdx, TypeStore,
 };
 use indexmap::IndexMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -11,7 +11,7 @@ use thiserror::__private::AsDisplay;
 
 #[derive(Debug)]
 pub struct ComponentType {
-    pub store: TypeStore,
+    pub id: ComponentDefId,
     pub local_type_map: LocalTypeMap,
     pub plan: ResourcePlan,
     pub surface: ComponentSurface,

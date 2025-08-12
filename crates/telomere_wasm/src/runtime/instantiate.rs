@@ -1,22 +1,22 @@
 use std::rc::Rc;
 
 use crate::{
+    Instance, Module, Registry, Stack, Store, VMResult,
     common::{
-        execute_elem_init_const_expr,
+        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection, Export,
+        ExportDesc, ExportSection, FuncIdx, FunctionBody, GlobalIdx, HostFunction,
+        HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Instr, Limits,
+        LocalReference, MemIdx, ModuleInstance, NativeModule, PAGE_SIZE_MAX, TableIdx, TypeIdx,
+        TypeSection, execute_elem_init_const_expr,
         gc::{
             FunctionInstanceData, GcRef, GcRootHandle, Header, InstanceData, MemoryPool, ObjectType,
         },
-        word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
-        ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, GlobalIdx,
-        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Instr,
-        Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TypeIdx,
-        TypeSection, PAGE_SIZE_MAX,
+        word_size,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
         vm::{self, special_start_host_function_call},
     },
-    Instance, Module, Registry, Stack, Store, VMResult,
 };
 
 pub(crate) fn init_global(

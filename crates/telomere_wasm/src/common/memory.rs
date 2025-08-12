@@ -1,6 +1,6 @@
 use std::slice::SliceIndex;
 
-use super::{VMResult, PAGE_SIZE};
+use super::{PAGE_SIZE, VMResult};
 #[derive(Debug, Clone, Copy)]
 pub struct MemArg {
     pub align: u32,

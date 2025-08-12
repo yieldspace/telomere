@@ -1,10 +1,10 @@
+use super::Result;
 use super::base::WasmBaseParser;
 use super::instruction_generator::InstructionGenerator;
 use super::jump_resolver::JumpResolver;
 use super::type_checker::TypeChecker;
 use super::validate::*;
 use super::values;
-use super::Result;
 use crate::common::BlockReturn;
 use crate::common::ElemInit;
 use crate::common::ElemMode;
@@ -18,11 +18,11 @@ use crate::parser::core::jump_resolver::JumpResolverDSL;
 use crate::parser::core::type_checker::MaybeUnreachable;
 use crate::runtime::vm;
 use crate::{
+    WasmParserError,
     common::{
         BlockType, DataCountVerifier, Elem, FuncIdx, FuncType, Instr, LocalReassignTable, MemType,
         Operand, TableType, TypeIdx, TypeSection, ValType, ValueSize,
     },
-    WasmParserError,
 };
 use binary_reader::BinaryReader;
 use tracing::trace;
@@ -77,7 +77,7 @@ fn validate_br_table_types(
                     let ty = type_section
                         .get(*idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                    checker.check(&ty.1 .0)?;
+                    checker.check(&ty.1.0)?;
                     ty.1.iter().count() as u32
                 }
             },
@@ -90,7 +90,7 @@ fn validate_br_table_types(
                     let ty = type_section
                         .get(*idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                    checker.check(&ty.0 .0)?;
+                    checker.check(&ty.0.0)?;
                     ty.0.iter().count() as u32
                 }
             },
@@ -178,9 +178,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         .types
                         .get(idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-                    checker.op(&ty.0 .0, &[])?;
+                    checker.op(&ty.0.0, &[])?;
                     checker.enter_block(BlockKind::Block, blocktype);
-                    checker.op(&[], &ty.0 .0)?;
+                    checker.op(&[], &ty.0.0)?;
                 } else {
                     checker.enter_block(BlockKind::Block, blocktype);
                 };
@@ -220,10 +220,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             .get(idx)
                             .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
 
-                        checker.op(&ty.1 .0, &[])?;
+                        checker.op(&ty.1.0, &[])?;
 
                         checker.leave_block()?;
-                        checker.op(&[], &ty.1 .0)?;
+                        checker.op(&[], &ty.1.0)?;
                     }
                     BlockType::ValType(ty) => {
                         checker.op(&[ty], &[])?;
@@ -247,9 +247,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         .types
                         .get(idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-                    checker.op(&ty.0 .0, &[])?;
+                    checker.op(&ty.0.0, &[])?;
                     checker.enter_block(BlockKind::Loop, blocktype);
-                    checker.op(&[], &ty.0 .0)?;
+                    checker.op(&[], &ty.0.0)?;
                 } else {
                     checker.enter_block(BlockKind::Loop, blocktype);
                 }
@@ -306,9 +306,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             .types
                             .get(idx)
                             .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-                        checker.op(&ty.1 .0, &[])?;
+                        checker.op(&ty.1.0, &[])?;
                         checker.leave_block()?;
-                        checker.op(&[], &ty.1 .0)?;
+                        checker.op(&[], &ty.1.0)?;
                     }
                     BlockType::ValType(ty) => {
                         checker.op(&[ty], &[])?;
@@ -338,9 +338,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         .types
                         .get(idx)
                         .ok_or(WasmParserError::InvalidTypeIdx(idx))?;
-                    checker.op(&ty.0 .0, &[])?;
+                    checker.op(&ty.0.0, &[])?;
                     checker.enter_block(BlockKind::If, blocktype);
-                    checker.op(&[], &ty.0 .0)?;
+                    checker.op(&[], &ty.0.0)?;
                 } else {
                     checker.enter_block(BlockKind::If, blocktype);
                 }
@@ -378,20 +378,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             if instrs.is_unreachable() {
                                 checker.reset_stack()?;
                             } else {
-                                checker.op(&ty.1 .0, &[])?;
+                                checker.op(&ty.1.0, &[])?;
                             }
                             checker.leave_block()?;
                             checker.enter_block(BlockKind::If, blocktype);
-                            checker.op(&[], &ty.0 .0)?;
+                            checker.op(&[], &ty.0.0)?;
                         }
                         if instrs.is_unreachable() {
                             checker.reset_stack()?;
                         } else {
-                            checker.op(&ty.1 .0, &[])?;
+                            checker.op(&ty.1.0, &[])?;
                         }
                         instrs.leave_block();
                         checker.leave_block()?;
-                        checker.op(&[], &ty.1 .0)?;
+                        checker.op(&[], &ty.1.0)?;
                     }
                     BlockType::ValType(ty) => {
                         if else_addr.is_none() {
@@ -450,11 +450,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                                 if inst_unreachable {
                                     checker.reset_stack()?;
                                 } else {
-                                    checker.op(&ty.1 .0, &[])?;
+                                    checker.op(&ty.1.0, &[])?;
                                 }
                                 checker.leave_block()?;
                                 checker.enter_block(BlockKind::If, blocktype);
-                                checker.op(&[], &ty.0 .0)?;
+                                checker.op(&[], &ty.0.0)?;
                             }
                             BlockType::ValType(ty) => {
                                 if inst_unreachable {
@@ -509,7 +509,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                                 .types
                                 .get(*idx)
                                 .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                            checker.op(&ty.1 .0, &[])?;
+                            checker.op(&ty.1.0, &[])?;
                         }
                     },
                     BlockKind::Loop => match blocktype {
@@ -521,7 +521,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                                 .types
                                 .get(*idx)
                                 .ok_or(WasmParserError::InvalidTypeIdx(*idx))?;
-                            checker.op(&ty.0 .0, &[])?;
+                            checker.op(&ty.0.0, &[])?;
                         }
                     },
                 }
@@ -620,7 +620,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     });
                     instrs.set_unreachable();
                 }
-                checker.op(&self.functype.1 .0, &[])?;
+                checker.op(&self.functype.1.0, &[])?;
                 checker.unreachable();
 
                 (1, false)
@@ -685,7 +685,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .get(*typeidx)
                     .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
                 checker.op_func_type(ty)?;
-                checker.op(&self.functype.1 .0, &[])?;
+                checker.op(&self.functype.1.0, &[])?;
                 checker.unreachable();
 
                 instrs.push(Instr {
@@ -713,7 +713,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .get(TypeIdx(typeidx))
                     .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(typeidx)))?;
                 checker.op_func_type(ty)?;
-                checker.op(&self.functype.1 .0, &[])?;
+                checker.op(&self.functype.1.0, &[])?;
                 checker.unreachable();
                 instrs.push(Instr {
                     op: vm::op_return_call_indirect,
@@ -808,8 +808,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let (len, idx) = self.parse_u32()?;
                 trace!(
                     "parse_op_local_get: {:?} {:?} {idx}",
-                    self.locals,
-                    self.functype.0
+                    self.locals, self.functype.0
                 );
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 

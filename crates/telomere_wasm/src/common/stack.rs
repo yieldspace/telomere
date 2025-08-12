@@ -1,9 +1,9 @@
-use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
+use wide::{f32x4, f64x2, i8x16, i16x8, i32x4, i64x2, u8x16, u16x8, u32x4, u64x2};
 
 use crate::VMResult;
 use std::fmt::Debug;
 
-use super::{gc::GcRef, Instr};
+use super::{Instr, gc::GcRef};
 
 pub(crate) trait LaneType
 where

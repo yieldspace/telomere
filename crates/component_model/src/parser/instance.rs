@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use tracing::trace;
 
-use crate::types::component::ComponentType;
+use crate::types::component::{ComponentType, PublicTyRef};
 use crate::types::instance::{ChildImportLookup, InstanceArg, InstanceType, ParentExportLookup};
 use crate::types::resource::{ResourceDef, ResourcePlan};
 use crate::types::{ResourceDefId, ResourceTableId, TypeId, TypeResourceTableIndex, TypeValidator};
@@ -65,7 +65,7 @@ where
             resolved_tables: Default::default(),
             table_map: vec![],
         };
-        let mut type_args = Vec::new();
+        let mut type_args = IndexMap::new();
         for (name, sort) in &args {
             let type_id = self.get_type_id_from_sort(sort)?.expect("todo: core type");
             let arg = InstanceArg {
@@ -73,7 +73,7 @@ where
                 sort: sort.get_type(),
                 name: name.clone(),
             };
-            type_args.push(arg);
+            type_args.insert(name.clone(), arg);
         }
         let component_type = self.validator.store.get_component(&component_type_id)?;
         bind_instance_tables(component_type, &mut ty, type_args)?;
@@ -140,12 +140,30 @@ fn concretize_key(
 fn bind_instance_tables(
     child: &ComponentType,   // instantiate される子
     inst: &mut InstanceType, // 子の Instance ノード（args 済み）
-    args: Vec<InstanceArg>,
+    args: IndexMap<ImportName, InstanceArg>,
 ) -> Result<()> {
     let mut subst: IndexMap<ResourceDefId, ResourceDefId> = IndexMap::new();
     // todo: sub resource以外の場合は型を比較してchildがparentのsubtypeかを確認する
     // eq typeの場合もresourceと同じことをしたい．後々共通化とかできたら嬉しい
-    for arg in args {
+    for (import_name, ty) in &child.surface.imports {
+        let arg = args.get(import_name).ok_or_else(|| {
+            ComponentParseError::TypeError(format!("import name {} not found", import_name))
+        })?;
+        match (ty, arg.sort) {
+            (PublicTyRef::Func(id), SortType::Func) => {}
+            (PublicTyRef::Instance(id), SortType::Instance) => {}
+            (PublicTyRef::Component(id), SortType::Component) => {}
+            (PublicTyRef::TypeEq(id), SortType::Type) => {}
+            (PublicTyRef::TypeSubResource(id), SortType::Type) => {}
+            _ => {
+                return Err(ComponentParseError::TypeError(format!(
+                    "Type mismatch for import {}: expected {:?}, found {:?}",
+                    import_name, ty, arg.sort
+                )));
+            }
+        }
+    }
+    for (_, arg) in args {
         if arg.sort != SortType::Type {
             continue;
         }

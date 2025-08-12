@@ -5,8 +5,8 @@ use super::{
     vm::traps::TRAPS_MEMORY_INDEX_OUT_OF_RANGE,
 };
 use crate::{
-    common::{gc::MemoryPool, ExecuteContext, GcRef, Instr, LocalReference, MemArg},
     Stack, Store, VMResult,
+    common::{ExecuteContext, GcRef, Instr, LocalReference, MemArg, gc::MemoryPool},
 };
 use futures::{future::FusedFuture, stream::FuturesUnordered};
 use std::{
@@ -288,7 +288,7 @@ impl<'a> Scheduler<'a> {
     }
     #[cfg(feature = "async-runtime")]
     async fn await_executation(&mut self) {
-        use futures::{select_biased, StreamExt};
+        use futures::{StreamExt, select_biased};
         trace!("await_executation");
         loop {
             select_biased! {
@@ -392,9 +392,9 @@ impl<'a> Scheduler<'a> {
 #[cfg(test)]
 mod tests {
     use crate::{
+        Stack, Store, VMResult,
         common::{ExecuteContext, Instr, LocalReference},
         runtime::memory_effect::{AsyncEffect, AsyncEffectOperation, Effect},
-        Stack, Store, VMResult,
     };
 
     use super::{AsyncResult, ReadyFlag, Scheduler, Task};

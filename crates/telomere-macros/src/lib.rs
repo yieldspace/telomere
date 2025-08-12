@@ -1,13 +1,13 @@
 use proc_macro2::TokenStream;
-use quote::format_ident;
-use quote::quote;
 use quote::IdentFragment;
 use quote::ToTokens;
+use quote::format_ident;
+use quote::quote;
+use syn::ExprClosure;
+use syn::Ident;
 use syn::bracketed;
 use syn::parse::Parse;
 use syn::parse_macro_input;
-use syn::ExprClosure;
-use syn::Ident;
 
 struct DefineSimdOperationInput {
     handler: Ident,

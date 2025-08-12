@@ -1,6 +1,6 @@
+use crate::VMResult;
 use crate::runtime::vm::ExecuteContext;
 use crate::runtime::vm::Instr;
-use crate::VMResult;
 
 macro_rules! generate_trap_func {
     ($name: ident,$instrs_name: ident,$expr: expr) => {

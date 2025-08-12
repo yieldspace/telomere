@@ -1,12 +1,13 @@
 mod common;
 use common::run_wast_with;
 use telomere_wasm::{
+    Registry, Store, VMResult,
     common::{
         ExecuteContext, FuncType, GcRef, HostFunctionDefinition, Instr, NativeModule, ValType,
     },
     link_host_function_with_function_idx,
     runtime::instantiate_native_module,
-    vm_try, Registry, Store, VMResult,
+    vm_try,
 };
 static mut PRINT_CALL: Vec<()> = vec![];
 fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {

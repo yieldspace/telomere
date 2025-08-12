@@ -1,6 +1,6 @@
 use crate::types::{PrimValType, TypeId};
 
-#[derive(Debug)]
+#[derive(Debug, Hash, Eq, PartialEq, Clone)]
 pub enum ValType {
     Primitive(PrimValType),
     Record(Vec<TypeId>),

@@ -28,7 +28,9 @@ use crate::parser::section_type::ComponentSection;
 use crate::parser::vec::RawIndexVec;
 use crate::types::component::ComponentType;
 use crate::types::resource::ResourcePlan;
-use crate::types::{ResourceUseCollector, TypeResourceTableIndex, TypeStore, TypeValidator};
+use crate::types::{
+    ComponentDefId, ResourceUseCollector, TypeResourceTableIndex, TypeStore, TypeValidator,
+};
 use crate::{Component, ComponentParseError, InstantiateContext, Result};
 use binary_reader::BinaryReader;
 use std::collections::HashMap;
@@ -38,7 +40,8 @@ use telomere_wasm::parser::core::parse_u32;
 
 pub struct ComponentParser<'a, T: BinaryReader> {
     reader: &'a mut T,
-    validator: TypeValidator,
+    outer: Vec<ComponentDefId>,
+    validator: TypeValidator<'a>,
     imports: HashMap<RawImportId, RawImport>,
     exports: HashMap<RawExportId, RawExport>,
     components: RawIndexVec<RawComponentIdx, RawData<RawComponent>>,
@@ -57,10 +60,11 @@ impl<'a, T> ComponentParser<'a, T>
 where
     T: BinaryReader,
 {
-    pub fn new(reader: &'a mut T) -> Self {
+    pub fn new(reader: &'a mut T, store: &'a mut TypeStore) -> Self {
         Self {
             reader,
-            validator: TypeValidator::new(),
+            outer: vec![],
+            validator: TypeValidator::new(store),
             imports: HashMap::new(),
             exports: HashMap::new(),
             components: RawIndexVec::with_capacity(256),
@@ -74,6 +78,16 @@ where
             core_tables: RawIndexVec::with_capacity(256),
             core_types: RawIndexVec::with_capacity(256),
         }
+    }
+
+    pub fn new_with_outer(
+        reader: &'a mut T,
+        store: &'a mut TypeStore,
+        outer: Vec<ComponentDefId>,
+    ) -> Self {
+        let mut parser = Self::new(reader, store);
+        parser.outer = outer;
+        parser
     }
 
     pub fn parse_vec<V>(&mut self, mut func: impl FnMut(&mut Self) -> Result<V>) -> Result<Vec<V>> {
@@ -166,7 +180,7 @@ where
 
     pub fn parse(self) -> Result<RawComponent> {
         let (raw_component, ty) = self.parse_component()?;
-        println!("{:#?}", ty.store.components.raw);
+        println!("{:#?}", ty);
         Ok(raw_component)
     }
 
@@ -203,7 +217,13 @@ where
                 ComponentSection::Component => {
                     let (component, component_ty) = {
                         let mut sized_reader = self.reader.take(section_size as usize);
-                        let parser = ComponentParser::new(&mut sized_reader);
+                        let mut outer = self.outer.clone();
+                        outer.push(self.validator.id);
+                        let parser = ComponentParser::new_with_outer(
+                            &mut sized_reader,
+                            self.validator.store,
+                            outer,
+                        );
                         parser.parse_component()?
                     };
                     let idx = self.components.push(RawData::Defined(component))?;
@@ -268,8 +288,9 @@ where
                 ..
             } = self;
             let TypeValidator {
+                id,
                 usec,
-                store,
+                store: _,
                 locals,
                 surface,
             } = validator;
@@ -292,7 +313,7 @@ where
                 core_funcs,
             };
             let ty = ComponentType {
-                store,
+                id,
                 local_type_map: locals,
                 plan,
                 surface,

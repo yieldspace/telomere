@@ -3,7 +3,7 @@ use crate::parser::vec::RawIdx;
 use crate::types::component::ComponentSurface;
 use crate::types::resource::ResourcePlan;
 use crate::types::{
-    ComponentTypeId, FuncTypeId, InstanceTypeId, ResourceDefId, TypeId, TypeIdx,
+    ComponentDefId, ComponentTypeId, FuncTypeId, InstanceTypeId, ResourceDefId, TypeId, TypeIdx,
     TypeResourceTableIndex, TypeStore,
 };
 use crate::vec::IndexVec;
@@ -35,9 +35,10 @@ impl ResourceUseCollector {
     }
 }
 
-pub struct TypeValidator {
+pub struct TypeValidator<'a> {
+    pub id: ComponentDefId,
     pub usec: ResourceUseCollector,
-    pub store: TypeStore,
+    pub store: &'a mut TypeStore,
     pub locals: LocalTypeMap,
     pub surface: ComponentSurface,
 }
@@ -50,11 +51,12 @@ pub struct LocalTypeMap {
     pub(crate) funcs: IndexMap<RawFuncIdx, FuncTypeId>,
 }
 
-impl TypeValidator {
-    pub fn new() -> Self {
+impl<'a> TypeValidator<'a> {
+    pub fn new(store: &'a mut TypeStore) -> Self {
         Self {
+            id: ComponentDefId::new(),
             usec: ResourceUseCollector::default(),
-            store: TypeStore::default(),
+            store,
             locals: LocalTypeMap::default(),
             surface: ComponentSurface::default(),
         }

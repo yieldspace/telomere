@@ -1,19 +1,20 @@
 use crate::{
-    common::{
-        gc::{header::PADDING_MASK, object::GcRefFixedArray, HEADER_LEN},
-        word_size, Instr, LocalsData, Memory, ModuleInstance, TableInstance, TableType, PAGE_SIZE,
-    },
     Instance,
+    common::{
+        Instr, LocalsData, Memory, ModuleInstance, PAGE_SIZE, TableInstance, TableType,
+        gc::{HEADER_LEN, header::PADDING_MASK, object::GcRefFixedArray},
+        word_size,
+    },
 };
 
 #[cfg(test)]
 use super::object::U32FixedArray;
 use super::{
+    GcRef, GcView, Header, ObjectType,
     object::{
-        FunctionInstanceData, GcRefDynamicArray, Global16Data, Global4Data, Global8Data,
+        FunctionInstanceData, GcRefDynamicArray, Global4Data, Global8Data, Global16Data,
         GlobalRefData, InstanceData, RootTable,
     },
-    GcRef, GcView, Header, ObjectType,
 };
 #[derive(Debug)]
 pub struct MemoryPool {
