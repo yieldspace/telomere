@@ -27,7 +27,7 @@ pub fn parse_component(
     Ok(())
 }
 
-pub fn _parse_component(
+fn _parse_component(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> Result<(), ComponentParseError> {
     tracing::trace!("_parse_component");

@@ -5,7 +5,6 @@ use std::collections::HashMap;
 pub struct Instance {
     pub component_idx: Option<GlobalIdx<Component>>,
     pub imports: HashMap<ImportNameString, InstanceImport>,
-    pub exports: HashMap<ExportNameString, InstanceExport>,
 }
 
 #[derive(Debug, Clone)]

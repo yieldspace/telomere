@@ -1,4 +1,6 @@
-use crate::component_model::{ExportNameString, ImportNameString};
+use crate::component_model::{
+    ExportNameString, Func, GlobalIdx, ImportNameString, Instance, ResourceId,
+};
 use std::collections::HashMap;
 
 #[allow(dead_code)]
@@ -18,9 +20,8 @@ pub enum ComponentImport {
 
 #[derive(Debug, Clone)]
 pub enum ComponentExport {
-    Component,
-    Instance,
-    Func,
-    Type,
-    Resource,
+    Component(GlobalIdx<Component>),
+    Instance(GlobalIdx<Instance>),
+    Func(GlobalIdx<Func>),
+    Resource(ResourceId),
 }

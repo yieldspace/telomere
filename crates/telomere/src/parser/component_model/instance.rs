@@ -1,15 +1,19 @@
 use crate::binary::BinaryReader;
 use crate::component_model::types::{
-    Generic, GenericBound, GenericsReplaceDSL, InstanceType, Type,
+    ComponentType, Generic, GenericBound, GenericsReplaceDSL, InstanceType, Type,
 };
-use crate::component_model::{ImportName, Instance, InstanceImport, Relation, Sort};
-use crate::parser::component_model::name::parse_import_name;
+use crate::component_model::{
+    Component, ComponentExport, ExportName, ImportName, Instance, InstanceExport, InstanceImport,
+    Relation, Sort,
+};
+use crate::parser::component_model::name::{parse_export_name, parse_import_name};
 use crate::parser::component_model::sort::parse_sort_with_idx;
 use crate::parser::component_model::{
     parse_component_local_idx, ComponentParseError, ParseContext, ParseResult, SizedResult,
 };
 use crate::parser::core::parse_vec;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use tracing::trace;
 
 pub fn parse_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
@@ -53,7 +57,6 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
                 Sort::Type(_) => None,
             })
             .collect(),
-        exports: Default::default(),
     };
     let instance_gid = ctx
         .state
@@ -120,10 +123,70 @@ fn parse_instantiate_arg(
     trace!("parse instantiate arg");
     let name = parse_import_name(ctx)?;
     let sort = parse_sort_with_idx(ctx)?;
+
     Ok((ctx.reader.read_count() - start_count, (name, sort)))
 }
+fn name_sort(ctx: &mut ParseContext<impl BinaryReader>) -> SizedResult<(ExportName, Sort)> {
+    let start_count = ctx.reader.read_count();
+    trace!("parse name_sort");
+    // FXIME: ここに0x00入れるの古い仕様な気がしている
+    if ctx.reader.read_exact_one()? != 0x00 {
+        return Err(ComponentParseError::EmptyVariant);
+    }
+    let name = parse_export_name(ctx)?;
+    let sort = parse_sort_with_idx(ctx)?;
+    Ok((ctx.reader.read_count() - start_count, (name, sort)))
+}
+fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
+    let (_, pairs) = parse_vec(ctx, |e| e.reader, name_sort)?;
+    let mut component_exports = HashMap::new();
+    let mut program = Vec::new();
+    for (name, sort) in pairs {
+        let op = match sort {
+            Sort::Component(global_idx, type_id) => {
+                component_exports.insert(
+                    name.original.clone(),
+                    ComponentExport::Component(global_idx),
+                );
+                GenericsReplaceDSL::ExportComponent(name.original.clone(), type_id)
+            }
+            Sort::Instance(global_idx, type_id) => {
+                component_exports
+                    .insert(name.original.clone(), ComponentExport::Instance(global_idx));
+                GenericsReplaceDSL::ExportInstance(name.original.clone(), type_id)
+            }
+            Sort::Func(global_idx, type_id) => {
+                component_exports.insert(name.original.clone(), ComponentExport::Func(global_idx));
+                GenericsReplaceDSL::ExportFunc(name.original.clone(), type_id)
+            }
+            Sort::Type(type_id) => GenericsReplaceDSL::ExportTypeEq(name.original.clone(), type_id),
+        };
+        program.push(op);
+    }
+    let component = Component {
+        imports: Default::default(),
+        exports: component_exports,
+    };
+    let component_gid = ctx
+        .state
+        .component_store
+        .register(Relation::Defined(component));
+    let exports = GenericsReplaceDSL::evaluate(&program, ctx.validator)?;
 
-fn parse_inlineexport(_ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
-    trace!("parse inline export");
-    todo!();
+    let instance = Instance {
+        component_idx: Some(component_gid),
+        imports: Default::default(),
+    };
+    let instance_gid = ctx
+        .state
+        .instance_store
+        .register(Relation::Defined(instance));
+    ctx.state.scope_mut().instances.register(instance_gid);
+
+    let id = ctx
+        .validator
+        .new_type(Type::Instance(InstanceType { exports }));
+    ctx.validator.scope_mut().instance_indexes.add(id);
+
+    Ok(())
 }
