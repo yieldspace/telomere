@@ -66,7 +66,7 @@ impl Notify {
         self.ready.store(true, std::sync::atomic::Ordering::Release);
         self.waker.wake_by_ref();
     }
-    fn receiver(&mut self) -> NotificationReceiver {
+    fn receiver(&mut self) -> NotificationReceiver<'_> {
         NotificationReceiver { notify: self }
     }
 }
