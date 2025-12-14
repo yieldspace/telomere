@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-
 mod common;
 fn run_test_file(name: &str) {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
