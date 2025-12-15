@@ -11,7 +11,8 @@ use crate::{
         ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, Stack,
         VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
-    runtime::scheduler::{ReadyFlag, Scheduler, Task}, Store,
+    runtime::scheduler::{ReadyFlag, Scheduler, Task},
+    Store,
 };
 
 use super::memory_effect::{ReadOperationHandler, WriteOperation};
