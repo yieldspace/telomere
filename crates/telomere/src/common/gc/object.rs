@@ -4,6 +4,7 @@ mod ref_dynamic_array;
 pub(crate) use ref_dynamic_array::GcRefDynamicArray;
 mod ref_fixed_array;
 pub(crate) use ref_fixed_array::GcRefFixedArray;
+#[cfg(test)]
 mod u32_fixed_array;
 #[cfg(test)]
 pub(crate) use u32_fixed_array::U32FixedArray;

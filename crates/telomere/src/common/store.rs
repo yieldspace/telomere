@@ -69,12 +69,6 @@ impl StoreState {
         let ptr = self.0 as *const T;
         unsafe { ptr.as_ref() }
     }
-
-    #[inline]
-    pub fn get_mut<T>(&self) -> Option<&mut T> {
-        let ptr = self.0 as *mut T;
-        unsafe { ptr.as_mut() }
-    }
 }
 
 #[cfg(test)]
