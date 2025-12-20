@@ -44,10 +44,10 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
             focus.generics_replace_program.push(instr);
             Ok(())
         }
-        Sort::Component(_idx, type_id) => {
+        Sort::Component(idx, type_id) => {
             ctx.state
                 .scope_mut()
-                .add_export(&name, ComponentExport::Component);
+                .add_export(&name, ComponentExport::Component(idx));
             focus.component_indexes.add(type_id);
             focus
                 .generics_replace_program
@@ -61,7 +61,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
         Sort::Instance(idx, type_id) => {
             ctx.state
                 .scope_mut()
-                .add_export(&name, ComponentExport::Instance);
+                .add_export(&name, ComponentExport::Instance(idx));
             ctx.state.scope_mut().instances.register(idx);
             focus
                 .generics_replace_program
@@ -76,7 +76,7 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
         Sort::Func(idx, type_id) => {
             ctx.state
                 .scope_mut()
-                .add_export(&name, ComponentExport::Func);
+                .add_export(&name, ComponentExport::Func(idx));
             ctx.state.scope_mut().funcs.register(idx);
             focus
                 .generics_replace_program

@@ -9,7 +9,7 @@ use crate::parser::core::parse_name;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use semver::Version;
-use tracing::trace;
+use tracing::{trace, warn};
 
 static LABEL: Lazy<Regex> = Lazy::new(|| {
     Regex::new("^(?:[a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(?:-(?:[a-z][0-9a-z]*|[A-Z][0-9A-Z]*))*$")
@@ -39,6 +39,7 @@ pub fn parse_export_name_dash(
 pub fn parse_export_name(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<ExportName> {
     trace!("parse_export_name");
     let (_, name) = parse_name(ctx.reader)?;
+    warn!("{name}");
     let plain_name = parse_plain_name_string(name.as_str())?;
     if let Some(parsed) = plain_name {
         return Ok(ExportName {

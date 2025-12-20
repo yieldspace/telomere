@@ -54,8 +54,9 @@ fn component_core() {
 }
 #[test]
 fn component_subtyping() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .init();
     run_test_file("subtyping");
+}
+#[test]
+fn component_inlineexport() {
+    run_test_file("inlineexport");
 }

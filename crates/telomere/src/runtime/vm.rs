@@ -12,7 +12,7 @@ use crate::{
         VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::scheduler::{ReadyFlag, Scheduler, Task},
-    trap_func, Store,
+    Store,
 };
 
 use super::memory_effect::{ReadOperationHandler, WriteOperation};
