@@ -21,12 +21,17 @@ pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
             let module_gidx = ctx.state.scope().core_modules.get(idx)?;
             let module_ty = ctx.validator.scope().core_modules.get(idx)?.clone();
             let mut imports = HashMap::new();
+            let mut import_types = HashMap::new();
             for _ in parse_vec_range(ctx)? {
                 let (_, (name, _ty, idx)) = parse_core_instantiate_arg(ctx)?;
-                // todo(type) maybe? check module_type's import
-
+                if import_types.insert(name.clone(), _ty).is_some() {
+                    return Err(ComponentParseError::TypeMismatch(
+                        "duplicated core module instantiate arg".to_owned(),
+                    ));
+                }
                 imports.insert(name, idx);
             }
+            module_ty.assert_instantiation_args(&import_types)?;
             (
                 CoreInstanceType::from(module_ty),
                 CoreInstance::Defined {
@@ -40,6 +45,11 @@ pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
             let mut export_types = HashMap::new();
             for _ in parse_vec_range(ctx)? {
                 let (name, ty, export) = parse_core_instance_inline_export(ctx)?;
+                if export_types.contains_key(&name) {
+                    return Err(ComponentParseError::TypeMismatch(format!(
+                        "export name `{name}` already defined"
+                    )));
+                }
                 exports.insert(name.clone(), export);
                 export_types.insert(name, ty);
             }
@@ -50,7 +60,11 @@ pub fn parse_core_instance(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
                 CoreInstance::InlineExport { exports },
             )
         }
-        _ => unreachable!(),
+        x => {
+            return Err(ComponentParseError::InvalidSignature(format!(
+                "invalid core instance opcode: {x}"
+            )));
+        }
     };
     let instance_gidx = ctx
         .state

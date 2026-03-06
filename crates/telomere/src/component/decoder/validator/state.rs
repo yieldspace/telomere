@@ -10,15 +10,17 @@ use crate::component::ir::{
 use std::collections::HashMap;
 use typed_arena::Arena;
 
+#[derive(Clone, Debug)]
 pub struct ValueLocalStore<T> {
     values: Vec<GlobalIdx<T>>,
 }
 
+#[derive(Clone, Debug)]
 pub struct ValueStore<T, R = Relation<T>> {
     map: HashMap<GlobalIdx<T>, R>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug)]
 pub struct Scope {
     pub components: ValueLocalStore<Component>,
     pub instances: ValueLocalStore<Instance>,
@@ -42,6 +44,7 @@ pub struct ParseState<'a> {
     pub(crate) instance_store: ValueStore<Instance>,
     pub(crate) func_store: ValueStore<Func>,
     pub(crate) core_module_store: ValueStore<CoreModule, CoreRelation<CoreModule>>,
+    pub(crate) core_type_store: ValueStore<CoreType, CoreRelation<CoreType>>,
     pub(crate) core_instance_store: ValueStore<CoreInstance, CoreRelation<CoreInstance>>,
     pub(crate) core_func_store: ValueStore<CoreFunc, CoreRelation<CoreFunc>>,
     pub(crate) core_memory_store: ValueStore<CoreMemory, CoreRelation<CoreMemory>>,
@@ -87,6 +90,13 @@ impl<T, R> ValueStore<T, R> {
     pub fn get(&self, idx: GlobalIdx<T>) -> Option<&R> {
         self.map.get(&idx)
     }
+
+    pub fn snapshot(&self) -> HashMap<GlobalIdx<T>, R>
+    where
+        R: Clone,
+    {
+        self.map.clone()
+    }
 }
 
 impl<'a> ParseState<'a> {
@@ -99,6 +109,7 @@ impl<'a> ParseState<'a> {
             instance_store: Default::default(),
             func_store: Default::default(),
             core_module_store: Default::default(),
+            core_type_store: Default::default(),
             core_instance_store: Default::default(),
             core_func_store: Default::default(),
             core_memory_store: Default::default(),
@@ -121,12 +132,15 @@ impl<'a> ParseState<'a> {
     }
 
     pub fn outer_scope(&self, ct: u32) -> ParseResult<&Scope> {
-        let length = self.scopes.len();
-        let k = self
+        let index = self
             .scopes
-            .get(length - 1 - ct as usize)
+            .len()
+            .checked_sub(1 + ct as usize)
             .ok_or(ComponentParseError::InvalidScope)?;
-        Ok(k)
+        self.scopes
+            .get(index)
+            .map(|scope| &**scope)
+            .ok_or(ComponentParseError::InvalidScope)
     }
 
     pub fn scope_mut(&mut self) -> &mut Scope {

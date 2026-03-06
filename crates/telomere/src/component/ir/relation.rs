@@ -3,6 +3,7 @@ use crate::component::ir::{CoreInstance, GlobalIdx, Instance};
 pub type ImportNameString = String;
 pub type ExportNameString = String;
 
+#[derive(Clone, Debug)]
 pub enum CoreRelation<T> {
     Defined(T),
     ImportModule(ImportNameString),

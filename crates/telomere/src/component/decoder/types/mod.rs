@@ -10,12 +10,14 @@ mod valtype;
 mod variant;
 
 use crate::binary::BinaryReader;
-use crate::component::decoder::name::parse_label_dash;
+use crate::common::ValType as CoreValType;
+use crate::component::decoder::name::{is_kebab_label, parse_label_dash};
+use crate::component::decoder::parse_core_func_local_idx;
 use crate::component::decoder::types::instance::parse_instance_type;
 use crate::component::decoder::types::valtype::{parse_label_valtype, parse_valtype};
 use crate::component::decoder::{
-    parse_func_local_idx, parse_option, parse_type_local_idx, parse_vec_range, ComponentParseError,
-    ParseContext, ParseResult, SizedResult,
+    parse_option, parse_type_local_idx, parse_vec_range, ComponentParseError, ParseContext,
+    ParseResult, SizedResult,
 };
 use crate::component::ir::types::{
     Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType,
@@ -92,6 +94,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
             let mut fields = vec![];
             for _ in parse_vec_range(ctx)? {
                 let (_, field) = parse_label_valtype(ctx)?;
+                ensure_kebab_label(&field.label, "record field name")?;
                 if !name_set.insert(field.label.flat()) {
                     return Err(ComponentParseError::RedundantRecordFieldName);
                 }
@@ -107,6 +110,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
             let mut cases = vec![];
             for _ in parse_vec_range(ctx)? {
                 let case = parse_case(ctx)?;
+                ensure_kebab_label(&case.label, "variant case name")?;
                 if !name_set.insert(case.label.flat()) {
                     return Err(ComponentParseError::RedundantVariantCaseName);
                 }
@@ -132,6 +136,11 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
                 |v| v.reader,
                 |ctx| SizedResult::Ok((0, parse_valtype(ctx)?)),
             )?;
+            if types.is_empty() {
+                return Err(ComponentParseError::TypeMismatch(
+                    "tuple type must have at least one type".to_owned(),
+                ));
+            }
             Type::DefVal(DefValType::Record(
                 types
                     .into_iter()
@@ -145,6 +154,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
             let mut labels = vec![];
             for _ in parse_vec_range(ctx)? {
                 let label = parse_label_dash(ctx)?;
+                ensure_kebab_label(&label, "flag name")?;
                 if !name_set.insert(label.flat()) {
                     return Err(ComponentParseError::RedundantFlagsVariantName);
                 }
@@ -165,6 +175,7 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
             let mut labels = vec![];
             for _ in parse_vec_range(ctx)? {
                 let label = parse_label_dash(ctx)?;
+                ensure_kebab_label(&label, "enum tag name")?;
                 if !name_set.insert(label.flat()) {
                     return Err(ComponentParseError::RedundantEnumVariantName);
                 }
@@ -192,22 +203,45 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
         }
         DEFVALTYPE_OWN => {
             let idx = parse_type_local_idx(ctx)?;
-            Type::DefVal(DefValType::Own(
-                ctx.validator.scope().type_indexes.get(idx)?,
-            ))
+            let type_id = ctx.validator.scope().type_indexes.get(idx)?;
+            if !is_resource_like_type(ctx, type_id)? {
+                return Err(ComponentParseError::TypeMismatch(
+                    "not a resource type".to_owned(),
+                ));
+            }
+            Type::DefVal(DefValType::Own(type_id))
         }
         DEFVALTYPE_BORROW => {
             let idx = parse_type_local_idx(ctx)?;
-            Type::DefVal(DefValType::Borrow(
-                ctx.validator.scope().type_indexes.get(idx)?,
-            ))
+            let type_id = ctx.validator.scope().type_indexes.get(idx)?;
+            if !is_resource_like_type(ctx, type_id)? {
+                return Err(ComponentParseError::TypeMismatch(
+                    "not a resource type".to_owned(),
+                ));
+            }
+            Type::DefVal(DefValType::Borrow(type_id))
         }
         FUNC_TYPE => {
             let (_, ps) = parse_vec(ctx, |v| v.reader, parse_label_valtype)?;
+            let mut param_names = HashSet::new();
+            for param in &ps {
+                ensure_kebab_label(&param.label, "function parameter name")?;
+                if let Some(previous) = param_names.replace(param.label.flat()) {
+                    return Err(ComponentParseError::TypeMismatch(format!(
+                        "function parameter name `{}` conflicts with previous parameter name `{previous}`",
+                        param.label
+                    )));
+                }
+            }
             let rs = {
                 match ctx.reader.read_exact_one()? {
                     0x00 => {
                         let t = parse_valtype(ctx)?;
+                        if valtype_contains_borrow(ctx, &t)? {
+                            return Err(ComponentParseError::TypeMismatch(
+                                "function result cannot contain a `borrow` type".to_owned(),
+                            ));
+                        }
                         Some(t)
                     }
                     0x01 => match ctx.reader.read_exact_one()? {
@@ -225,14 +259,21 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
                     }
                 }
             };
+            let param_names = ps.iter().map(|v| v.label.clone()).collect();
             Type::Func(FuncType {
                 params: ps.into_iter().map(|v| v.ty).collect(),
+                param_names,
                 result: rs,
             })
         }
         COMPONENT_TYPE => Type::Component(parse_component_type(ctx)?),
         INSTANCE_TYPE => Type::Instance(parse_instance_type(ctx)?),
         RESOURCE_TYPE => {
+            if !ctx.validator.in_concrete_scope() {
+                return Err(ComponentParseError::TypeMismatch(
+                    "resources can only be defined within a concrete component".to_owned(),
+                ));
+            }
             let magic = ctx.reader.read_exact_one()?;
             if magic != 0x7f {
                 Err(ComponentParseError::WrongMagic(
@@ -240,27 +281,104 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
                     "resource".to_string(),
                 ))?
             }
-            if let Some(idx) = parse_option(ctx, parse_func_local_idx)? {
-                let ty = ctx.validator.scope().func_indexes.get(idx)?;
-                ctx.validator.get_type(ty)?.assert_subtype_of(
-                    &Type::Func(FuncType {
-                        params: vec![ValType::Primitive(PrimValType::S32)],
-                        result: None,
-                    }),
-                    ctx.validator,
-                )?;
-                // todo(type) assert type
-                // ty.assert_type(vec![ValType::Primitive(PrimValType::S32)], None)?;
-                Type::Resource(ResourceId::new())
+            if let Some(idx) = parse_option(ctx, parse_core_func_local_idx)? {
+                let ty = ctx.validator.scope().core_funcs.get(idx)?.clone();
+                if ty != crate::common::FuncType::new(vec![CoreValType::I32], vec![]) {
+                    return Err(ComponentParseError::TypeMismatch(
+                        "wrong signature for a destructor".to_owned(),
+                    ));
+                }
+                let dtor = ctx.state.scope().core_funcs.get(idx)?;
+                Type::Resource(ResourceId::with_dtor(
+                    ctx.validator.current_scope_id(),
+                    Some(dtor.into()),
+                ))
             } else {
-                Type::Resource(ResourceId::new())
+                Type::Resource(ResourceId::new(ctx.validator.current_scope_id()))
             }
         }
         RESOURCE_TYPE_WITH_ASYNC_CALLBACK => {
-            todo!()
+            return Err(ComponentParseError::Unsupported(
+                "async resource callbacks are not supported".to_owned(),
+            ));
         }
-        _ => unreachable!(),
+        _ => {
+            return Err(ComponentParseError::InvalidType(format!(
+                "unknown component type opcode: {opcode}"
+            )));
+        }
     };
 
     Ok(ty)
+}
+
+fn valtype_contains_borrow(
+    ctx: &ParseContext<impl BinaryReader>,
+    ty: &ValType,
+) -> ParseResult<bool> {
+    match ty {
+        ValType::Primitive(_) => Ok(false),
+        ValType::Type(type_id) => type_contains_borrow(ctx, ctx.validator.get_type(*type_id)?),
+    }
+}
+
+fn ensure_kebab_label(label: &Label, kind: &str) -> ParseResult<()> {
+    if label.0.is_empty() {
+        return Err(ComponentParseError::InvalidLabel(
+            "name cannot be empty".to_owned(),
+        ));
+    }
+    if is_kebab_label(&label.0) {
+        Ok(())
+    } else {
+        Err(ComponentParseError::InvalidLabel(format!(
+            "{kind} `{}` is not in kebab case",
+            label
+        )))
+    }
+}
+
+fn type_contains_borrow(ctx: &ParseContext<impl BinaryReader>, ty: &Type) -> ParseResult<bool> {
+    Ok(match ty {
+        Type::DefVal(def) => match def {
+            DefValType::Primitive(_) | DefValType::Own(_) => false,
+            DefValType::Borrow(_) => true,
+            DefValType::Record(fields) => fields.iter().try_fold(false, |found, field| {
+                if found {
+                    Ok(true)
+                } else {
+                    valtype_contains_borrow(ctx, &field.ty)
+                }
+            })?,
+            DefValType::Variant(cases) => cases
+                .iter()
+                .filter_map(|case| case.ty.as_ref())
+                .try_fold(false, |found, ty| {
+                    if found {
+                        Ok(true)
+                    } else {
+                        valtype_contains_borrow(ctx, ty)
+                    }
+                })?,
+            DefValType::List(ty, _) => valtype_contains_borrow(ctx, ty)?,
+        },
+        Type::Generic(_)
+        | Type::Resource(_)
+        | Type::Func(_)
+        | Type::Component(_)
+        | Type::Instance(_) => false,
+    })
+}
+
+fn is_resource_like_type(
+    ctx: &ParseContext<impl BinaryReader>,
+    type_id: crate::component::ir::TypeId,
+) -> ParseResult<bool> {
+    Ok(match ctx.validator.get_type(type_id)? {
+        Type::Resource(_) | Type::Generic(_) => true,
+        Type::DefVal(DefValType::Own(inner)) | Type::DefVal(DefValType::Borrow(inner)) => {
+            is_resource_like_type(ctx, *inner)?
+        }
+        Type::DefVal(_) | Type::Func(_) | Type::Component(_) | Type::Instance(_) => false,
+    })
 }

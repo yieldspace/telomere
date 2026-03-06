@@ -14,6 +14,9 @@ pub enum CoreModuleExportType {
     Table(CoreTableType),
     Func(CoreFuncType),
     Global(CoreGlobalType),
+    Type(CoreType),
+    Module(CoreModuleType),
+    Instance(CoreInstanceType),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +34,7 @@ pub struct CoreInstanceType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreType {
+    Func(CoreFuncType),
     Module(CoreModuleType),
 }
 
@@ -66,6 +70,7 @@ impl From<&Module> for CoreModuleType {
             } else {
                 let mut map = HashMap::new();
                 map.insert(x.name.clone(), value);
+                imports.insert(x.module.clone(), map);
             }
         });
         let exports = value
@@ -106,6 +111,175 @@ impl CoreModuleType {
             .get(name)
             .ok_or_else(|| ComponentParseError::ExportNotFound(name.clone()))
     }
+
+    pub fn assert_subtype_of(&self, parent: &Self) -> ParseResult<()> {
+        for (module, actual_imports) in &self.imports {
+            let Some(expected_imports) = parent.imports.get(module) else {
+                return Err(ComponentParseError::TypeMismatch(
+                    "core module import mismatch".to_owned(),
+                ));
+            };
+            for (name, actual_import) in actual_imports {
+                let Some(expected_import) = expected_imports.get(name) else {
+                    return Err(ComponentParseError::TypeMismatch(
+                        "core module import mismatch".to_owned(),
+                    ));
+                };
+                expected_import.assert_satisfies_import(actual_import)?;
+            }
+        }
+        for (name, expected_export) in &parent.exports {
+            let Some(actual_export) = self.exports.get(name) else {
+                return Err(ComponentParseError::TypeMismatch(
+                    "core module import mismatch".to_owned(),
+                ));
+            };
+            expected_export.assert_satisfied_by(actual_export)?;
+        }
+        Ok(())
+    }
+
+    pub fn assert_instantiation_args(
+        &self,
+        actual_args: &HashMap<String, CoreInstanceType>,
+    ) -> ParseResult<()> {
+        for (module_name, expected_imports) in &self.imports {
+            let actual_instance = actual_args.get(module_name).ok_or_else(|| {
+                ComponentParseError::TypeMismatch("core module import mismatch".to_owned())
+            })?;
+            for (export_name, expected_ty) in expected_imports {
+                let actual_ty = actual_instance.exports.get(export_name).ok_or_else(|| {
+                    ComponentParseError::TypeMismatch("core module import mismatch".to_owned())
+                })?;
+                expected_ty.assert_satisfied_by(actual_ty)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl CoreModuleImportType {
+    pub fn assert_satisfied_by(&self, actual: &CoreModuleExportType) -> ParseResult<()> {
+        match (self, actual) {
+            (CoreModuleImportType::Func(expected), CoreModuleExportType::Func(actual)) => {
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(ComponentParseError::TypeMismatch(
+                        "core module import mismatch".to_owned(),
+                    ))
+                }
+            }
+            (CoreModuleImportType::Table(expected), CoreModuleExportType::Table(actual)) => {
+                assert_table_matches(expected, actual)
+            }
+            (CoreModuleImportType::Memory(expected), CoreModuleExportType::Memory(actual)) => {
+                assert_memory_matches(expected, actual)
+            }
+            (CoreModuleImportType::Global(expected), CoreModuleExportType::Global(actual)) => {
+                assert_global_matches(expected, actual)
+            }
+            _ => Err(ComponentParseError::TypeMismatch(
+                "core module import mismatch".to_owned(),
+            )),
+        }
+    }
+
+    pub fn assert_satisfies_import(&self, actual: &CoreModuleImportType) -> ParseResult<()> {
+        match (self, actual) {
+            (CoreModuleImportType::Func(expected), CoreModuleImportType::Func(actual)) => {
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(ComponentParseError::TypeMismatch(
+                        "core module import mismatch".to_owned(),
+                    ))
+                }
+            }
+            (CoreModuleImportType::Table(expected), CoreModuleImportType::Table(actual)) => {
+                assert_table_matches(actual, expected)
+            }
+            (CoreModuleImportType::Memory(expected), CoreModuleImportType::Memory(actual)) => {
+                assert_memory_matches(actual, expected)
+            }
+            (CoreModuleImportType::Global(expected), CoreModuleImportType::Global(actual)) => {
+                assert_global_matches(actual, expected)
+            }
+            _ => Err(ComponentParseError::TypeMismatch(
+                "core module import mismatch".to_owned(),
+            )),
+        }
+    }
+}
+
+impl CoreModuleExportType {
+    pub fn assert_satisfied_by(&self, actual: &CoreModuleExportType) -> ParseResult<()> {
+        match self {
+            CoreModuleExportType::Func(expected) => {
+                CoreModuleImportType::Func(expected.clone()).assert_satisfied_by(actual)
+            }
+            CoreModuleExportType::Table(expected) => {
+                CoreModuleImportType::Table(*expected).assert_satisfied_by(actual)
+            }
+            CoreModuleExportType::Memory(expected) => {
+                CoreModuleImportType::Memory(*expected).assert_satisfied_by(actual)
+            }
+            CoreModuleExportType::Global(expected) => {
+                CoreModuleImportType::Global(*expected).assert_satisfied_by(actual)
+            }
+            _ => {
+                if self == actual {
+                    Ok(())
+                } else {
+                    Err(ComponentParseError::TypeMismatch(
+                        "core module import mismatch".to_owned(),
+                    ))
+                }
+            }
+        }
+    }
+}
+
+fn assert_table_matches(expected: &CoreTableType, actual: &CoreTableType) -> ParseResult<()> {
+    if expected.reftype != actual.reftype {
+        return Err(ComponentParseError::TypeMismatch(
+            "core module import mismatch".to_owned(),
+        ));
+    }
+    assert_limits_match(expected.limits, actual.limits)
+}
+
+fn assert_memory_matches(expected: &CoreMemoryType, actual: &CoreMemoryType) -> ParseResult<()> {
+    assert_limits_match(expected.0, actual.0)
+}
+
+fn assert_global_matches(expected: &CoreGlobalType, actual: &CoreGlobalType) -> ParseResult<()> {
+    if expected.0 != actual.0 || expected.1 != actual.1 {
+        return Err(ComponentParseError::TypeMismatch(
+            "core module import mismatch".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn assert_limits_match(
+    expected: crate::common::Limits,
+    actual: crate::common::Limits,
+) -> ParseResult<()> {
+    if actual.min < expected.min {
+        return Err(ComponentParseError::TypeMismatch(
+            "core module import mismatch".to_owned(),
+        ));
+    }
+    match (expected.max, actual.max) {
+        (Some(expected_max), Some(actual_max)) if actual_max > expected_max => Err(
+            ComponentParseError::TypeMismatch("core module import mismatch".to_owned()),
+        ),
+        (Some(_), None) => Err(ComponentParseError::TypeMismatch(
+            "core module import mismatch".to_owned(),
+        )),
+        _ => Ok(()),
+    }
 }
 
 impl From<CoreModuleExportType> for CoreSortType {
@@ -115,6 +289,9 @@ impl From<CoreModuleExportType> for CoreSortType {
             CoreModuleExportType::Table(_) => CoreSortType::Table,
             CoreModuleExportType::Func(_) => CoreSortType::Func,
             CoreModuleExportType::Global(_) => CoreSortType::Global,
+            CoreModuleExportType::Type(_) => CoreSortType::Type,
+            CoreModuleExportType::Module(_) => CoreSortType::Module,
+            CoreModuleExportType::Instance(_) => CoreSortType::Instance,
         }
     }
 }
@@ -144,19 +321,19 @@ impl From<CoreGlobalType> for CoreModuleExportType {
 }
 
 impl From<CoreType> for CoreModuleExportType {
-    fn from(_value: CoreType) -> Self {
-        unimplemented!("type export proposal")
+    fn from(value: CoreType) -> Self {
+        CoreModuleExportType::Type(value)
     }
 }
 
 impl From<CoreModuleType> for CoreModuleExportType {
-    fn from(_value: CoreModuleType) -> Self {
-        unimplemented!("module export proposal")
+    fn from(value: CoreModuleType) -> Self {
+        CoreModuleExportType::Module(value)
     }
 }
 
 impl From<CoreInstanceType> for CoreModuleExportType {
-    fn from(_value: CoreInstanceType) -> Self {
-        unimplemented!("instance export proposal")
+    fn from(value: CoreInstanceType) -> Self {
+        CoreModuleExportType::Instance(value)
     }
 }

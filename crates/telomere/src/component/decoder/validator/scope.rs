@@ -1,11 +1,11 @@
 use crate::component::decoder::ParseResult;
 use crate::component::ir::types::{
-    CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType, CoreModuleType, CoreTableType,
-    CoreType, Generic, GenericsReplaceDSL, Type,
+    ComponentImportType, CoreFuncType, CoreGlobalType, CoreInstanceType, CoreMemoryType,
+    CoreModuleType, CoreTableType, CoreType, GenericsReplaceDSL, Type,
 };
 use crate::component::ir::{
-    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, Func,
-    Instance, LocalIdx, ParsedExportName, ParsedImportName, TypeId,
+    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreTable, ExportName,
+    Func, ImportName, Instance, LocalIdx, ScopeId, TypeId,
 };
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -29,6 +29,24 @@ pub struct CoreTypeStore<R, T> {
     _phantom: PhantomData<R>,
 }
 
+impl<T> Clone for TypeStore<T> {
+    fn clone(&self) -> Self {
+        Self {
+            types: self.types.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<R, T: Clone> Clone for CoreTypeStore<R, T> {
+    fn clone(&self) -> Self {
+        Self {
+            types: self.types.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<R, T> Default for CoreTypeStore<R, T> {
     fn default() -> Self {
         Self {
@@ -46,20 +64,23 @@ impl<R, T> CoreTypeStore<R, T> {
     }
 
     pub fn get(&self, idx: LocalIdx<R>) -> ParseResult<&T> {
-        Ok(self.types.get(idx.get() as usize).unwrap())
+        self.types.get(idx.get() as usize).ok_or_else(|| {
+            crate::component::decoder::ComponentParseError::TypeIdxNotFound(idx.get())
+        })
     }
 }
 #[derive(Debug)]
 pub enum ExportInfo {
+    CoreModule(CoreModuleType),
     Component(TypeId),
     Instance(TypeId),
     Func(TypeId),
     TypeEq(TypeId),
-    TypeSub,
+    TypeSub(TypeId),
 }
 
-#[derive(Default)]
 pub struct ScopeGuard {
+    pub scope_id: ScopeId,
     // Types
     pub type_indexes: TypeStore<Type>,
     pub component_indexes: TypeStore<Component>,
@@ -72,11 +93,11 @@ pub struct ScopeGuard {
     pub core_tables: CoreTypeStore<CoreTable, CoreTableType>,
     pub core_globals: CoreTypeStore<CoreGlobal, CoreGlobalType>,
     pub core_funcs: CoreTypeStore<CoreFunc, CoreFuncType>,
-    pub imports: HashMap<String, Generic>,
+    pub imports: HashMap<String, ComponentImportType>,
     pub exports: HashMap<String, ExportInfo>,
     pub generics_replace_program: Vec<GenericsReplaceDSL>,
-    pub export_names: Vec<ParsedExportName>,
-    pub import_names: Vec<ParsedImportName>,
+    pub export_names: Vec<ExportName>,
+    pub import_names: Vec<ImportName>,
 }
 
 impl<T> TypeStore<T> {
@@ -87,12 +108,46 @@ impl<T> TypeStore<T> {
     }
 
     pub fn get(&self, idx: LocalIdx<T>) -> ParseResult<TypeId> {
-        Ok(self.types.get(idx.get() as usize).cloned().unwrap())
+        self.types.get(idx.get() as usize).copied().ok_or_else(|| {
+            crate::component::decoder::ComponentParseError::TypeIdxNotFound(idx.get())
+        })
     }
 }
 
 impl ScopeGuard {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(scope_id: ScopeId) -> Self {
+        Self {
+            scope_id,
+            type_indexes: Default::default(),
+            component_indexes: Default::default(),
+            instance_indexes: Default::default(),
+            func_indexes: Default::default(),
+            core_types: Default::default(),
+            core_modules: Default::default(),
+            core_instances: Default::default(),
+            core_memories: Default::default(),
+            core_tables: Default::default(),
+            core_globals: Default::default(),
+            core_funcs: Default::default(),
+            imports: Default::default(),
+            exports: Default::default(),
+            generics_replace_program: Default::default(),
+            export_names: Default::default(),
+            import_names: Default::default(),
+        }
+    }
+
+    pub fn inherit_type_scope_from(&mut self, parent: &Self) {
+        self.type_indexes = parent.type_indexes.clone();
+        self.component_indexes = parent.component_indexes.clone();
+        self.instance_indexes = parent.instance_indexes.clone();
+        self.func_indexes = parent.func_indexes.clone();
+        self.core_types = parent.core_types.clone();
+        self.core_modules = parent.core_modules.clone();
+        self.core_instances = parent.core_instances.clone();
+        self.core_memories = parent.core_memories.clone();
+        self.core_tables = parent.core_tables.clone();
+        self.core_globals = parent.core_globals.clone();
+        self.core_funcs = parent.core_funcs.clone();
     }
 }

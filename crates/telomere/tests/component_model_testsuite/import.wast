@@ -2,9 +2,9 @@
     (type (func (result u32)))
     (import "foo-bar" (func (type 0)))
     (import "foo-BAR2" (func (type 0)))
-    (import "hoge" (type (sub resource)))
-    (import "[constructor]hoge" (func (type 0)))
-    (import "[method]hoge.fuga" (func (type 0)))
+    (import "hoge" (type $hoge (sub resource)))
+    (import "[constructor]hoge" (func (result (own $hoge))))
+    (import "[method]hoge.fuga" (func (param "self" (borrow $hoge))))
     (import "[static]hoge.foo" (func (type 0)))
     (import "url=<https://mycdn.com/my-component.wasm>" (func (type 0)))
     (import "url=<./other-component.wasm>,integrity=<sha256-X9ArH3k...>" (func (type 0)))
@@ -42,7 +42,6 @@
 )
 
 (component
-    (type (func (param "ptr" s32)))
-    (import "a" (type (sub resource)))
-    (import "[constructor]a" (func (type 0)))
+    (import "a" (type $a (sub resource)))
+    (import "[constructor]a" (func (result (own $a))))
 )

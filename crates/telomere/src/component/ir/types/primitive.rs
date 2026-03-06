@@ -1,7 +1,5 @@
-use crate::parser::{
-    component_model::{ComponentParseError, ParseResult},
-    leb128::compile_i32,
-};
+use crate::component::decoder::{ComponentParseError, ParseResult};
+use crate::parser::leb128::compile_i32;
 use num_derive::FromPrimitive;
 
 #[derive(Debug, FromPrimitive, Clone, Hash, PartialEq, Eq)]
@@ -25,7 +23,7 @@ pub enum PrimValType {
 }
 impl PrimValType {
     pub fn assert_subtype_of(&self, parent: &Self) -> ParseResult<()> {
-        if self == parent {
+        if self != parent {
             Err(ComponentParseError::TypeMismatch(
                 "prim val type mismatch".to_owned(),
             ))?

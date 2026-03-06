@@ -25,6 +25,7 @@ impl ComponentEngine {
         crate::component::decoder::parse_component(&mut reader, &mut state, &mut validator)?;
 
         let scope = state.scope();
+        let root = scope.make_component();
 
         let mut imports = Vec::with_capacity(scope.imports.len());
         let mut callable_imports = Vec::new();
@@ -52,9 +53,6 @@ impl ComponentEngine {
             }
         }
 
-        // The decoder already validates type/index integrity. The runtime only needs
-        // compact op metadata for dispatch in this first implementation.
-        let _ = validator;
         let types = Vec::<ComponentTypeInfo>::new();
 
         Ok(ComponentProgram {
@@ -65,6 +63,18 @@ impl ComponentEngine {
             callable_exports,
             ops,
             bytes: bytes.to_vec(),
+            root,
+            type_map: validator.snapshot_types(),
+            component_store: state.component_store.snapshot(),
+            instance_store: state.instance_store.snapshot(),
+            func_store: state.func_store.snapshot(),
+            core_module_store: state.core_module_store.snapshot(),
+            core_type_store: state.core_type_store.snapshot(),
+            core_instance_store: state.core_instance_store.snapshot(),
+            core_func_store: state.core_func_store.snapshot(),
+            core_memory_store: state.core_memory_store.snapshot(),
+            core_global_store: state.core_global_store.snapshot(),
+            core_table_store: state.core_table_store.snapshot(),
         })
     }
 

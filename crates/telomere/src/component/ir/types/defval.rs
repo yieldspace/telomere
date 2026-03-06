@@ -12,24 +12,63 @@ pub enum DefValType {
     Borrow(TypeId),
 }
 impl DefValType {
-    pub fn assert_subtype_of(&self, parent: &Self, _validator: &Validator) -> ParseResult<()> {
+    pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
         use DefValType::*;
         match (self, parent) {
             (Primitive(a), Primitive(b)) => a.assert_subtype_of(b),
-            (Record(_), Record(_)) => {
-                todo!()
+            (Record(fields), Record(parent_fields)) => {
+                if fields.len() != parent_fields.len() {
+                    Err(ComponentParseError::TypeMismatch(
+                        "record arity mismatch".to_owned(),
+                    ))?;
+                }
+                for (field, parent_field) in fields.iter().zip(parent_fields.iter()) {
+                    field.assert_subtype_of(parent_field, validator)?;
+                }
+                Ok(())
             }
-            (Variant(_), Variant(_)) => {
-                todo!()
+            (Variant(cases), Variant(parent_cases)) => {
+                if cases.len() != parent_cases.len() {
+                    Err(ComponentParseError::TypeMismatch(
+                        "variant arity mismatch".to_owned(),
+                    ))?;
+                }
+                for (case, parent_case) in cases.iter().zip(parent_cases.iter()) {
+                    if case.label != parent_case.label {
+                        Err(ComponentParseError::TypeMismatch(
+                            "variant label mismatch".to_owned(),
+                        ))?;
+                    }
+                    match (&case.ty, &parent_case.ty) {
+                        (Some(ty), Some(parent_ty)) => {
+                            ty.assert_subtype_of(parent_ty, validator)?;
+                        }
+                        (None, None) => {}
+                        _ => {
+                            Err(ComponentParseError::TypeMismatch(
+                                "variant payload mismatch".to_owned(),
+                            ))?;
+                        }
+                    }
+                }
+                Ok(())
             }
-            (List(_, _), List(_, _)) => {
-                todo!()
+            (List(ty, len), List(parent_ty, parent_len)) => {
+                ty.assert_subtype_of(parent_ty, validator)?;
+                if len != parent_len {
+                    Err(ComponentParseError::TypeMismatch(
+                        "list length mismatch".to_owned(),
+                    ))?;
+                }
+                Ok(())
             }
-            (Own(_), Own(_)) => {
-                todo!()
+            (Own(id), Own(parent_id)) => {
+                id.assert_subtype_of(*parent_id, validator)?;
+                Ok(())
             }
-            (Borrow(_), Borrow(_)) => {
-                todo!()
+            (Borrow(id), Borrow(parent_id)) => {
+                id.assert_subtype_of(*parent_id, validator)?;
+                Ok(())
             }
             _ => Err(ComponentParseError::TypeMismatch(
                 "defvaltype mismatch".to_owned(),

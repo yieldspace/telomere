@@ -5,7 +5,7 @@ use crate::component::ir::types::InstanceType;
 
 pub fn parse_instance_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<InstanceType> {
     tracing::trace!("parse_instance_type");
-    ctx.validator.push_scope();
+    ctx.validator.push_nested_type_scope();
     for _ in parse_vec_range(ctx)? {
         parse_instance_decl(ctx)?;
     }

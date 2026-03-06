@@ -4,7 +4,7 @@ use crate::component::ir::Label;
 
 use super::{DefValType, Type};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ValType {
     Type(TypeId),
     Primitive(PrimValType),
@@ -36,7 +36,7 @@ impl ValType {
         Ok(())
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LabelValType {
     pub label: Label,
     pub ty: ValType,
@@ -47,7 +47,7 @@ impl LabelValType {
         Self { label, ty }
     }
     pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
-        if self.label == parent.label {
+        if self.label != parent.label {
             Err(ComponentParseError::TypeMismatch(
                 "label mismatch".to_owned(),
             ))?

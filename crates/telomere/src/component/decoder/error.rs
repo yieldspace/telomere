@@ -7,7 +7,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum ComponentParseError {
     /// Error occurring in the core WASM module.
-    #[error("error at core wasm module")]
+    #[error("error at core wasm module: {0}")]
     CoreWasmError(#[from] WasmParserError),
     /// Error from the underlying layer.
     #[error("error from underlying layer: {0:?}")]

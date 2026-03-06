@@ -102,3 +102,9 @@ impl<T> From<GlobalIdx<T>> for AnyGlobalIdx {
         Self(value.0)
     }
 }
+
+impl AnyGlobalIdx {
+    pub fn raw(self) -> usize {
+        self.0
+    }
+}

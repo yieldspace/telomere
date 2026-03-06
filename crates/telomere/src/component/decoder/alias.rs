@@ -26,7 +26,11 @@ pub fn parse_alias(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()>
             }
         }
         0x02 => parse_outer_export(ctx, sort)?,
-        _ => unreachable!("invalid"),
+        x => {
+            return Err(ComponentParseError::InvalidSignature(format!(
+                "invalid alias opcode: {x}"
+            )));
+        }
     };
     Ok(())
 }
@@ -48,6 +52,7 @@ fn parse_export_alias(
                     "alias type is mismatch".into(),
                 ));
             };
+            let id = ctx.validator.freshen_import_type_id(id)?;
             let gidx = ctx
                 .state
                 .component_store
@@ -82,6 +87,7 @@ fn parse_export_alias(
                     "alias type is mismatch".into(),
                 ));
             };
+            let id = ctx.validator.freshen_import_type_id(id)?;
             let gidx = ctx
                 .state
                 .instance_store
@@ -106,7 +112,11 @@ fn parse_export_alias(
                 )); // todo: rewrite
             }
         }
-        _ => panic!("invalid sort type"),
+        expected => {
+            return Err(ComponentParseError::Unsupported(format!(
+                "unsupported export alias sort: {expected:?}"
+            )));
+        }
     }
     Ok(())
 }
@@ -190,7 +200,19 @@ fn parse_core_export(
             }
         }
         CoreSortType::Type => {
-            unimplemented!("core type export proposal");
+            let gidx = ctx
+                .state
+                .core_type_store
+                .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
+            ctx.state.scope_mut().core_types.register(gidx);
+            if let CoreModuleExportType::Type(ty) = target_export_type {
+                ctx.validator.scope_mut().core_types.add(ty);
+            } else {
+                return Err(ComponentParseError::InvalidSortType(
+                    SortType::Core(CoreSortType::Type),
+                    SortType::Core(target_export_type.into()),
+                ));
+            }
         }
         CoreSortType::Module => {
             let gidx = ctx
@@ -198,7 +220,14 @@ fn parse_core_export(
                 .core_module_store
                 .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_modules.register(gidx);
-            unimplemented!("core module export proposal")
+            if let CoreModuleExportType::Module(ty) = target_export_type {
+                ctx.validator.scope_mut().core_modules.add(ty);
+            } else {
+                return Err(ComponentParseError::InvalidSortType(
+                    SortType::Core(CoreSortType::Module),
+                    SortType::Core(target_export_type.into()),
+                ));
+            }
         }
         CoreSortType::Instance => {
             let gidx = ctx
@@ -206,7 +235,14 @@ fn parse_core_export(
                 .core_instance_store
                 .register(CoreRelation::FromCoreExport(core_instance_gidx, name));
             ctx.state.scope_mut().core_instances.register(gidx);
-            unimplemented!("core instance export proposal")
+            if let CoreModuleExportType::Instance(ty) = target_export_type {
+                ctx.validator.scope_mut().core_instances.add(ty);
+            } else {
+                return Err(ComponentParseError::InvalidSortType(
+                    SortType::Core(CoreSortType::Instance),
+                    SortType::Core(target_export_type.into()),
+                ));
+            }
         }
     }
     Ok(())
@@ -228,11 +264,26 @@ fn parse_outer_export(
             ctx.state.scope_mut().core_modules.register(gidx);
             let ty = ctx
                 .validator
-                .outer_scope(ct)
+                .outer_scope(ct)?
                 .core_modules
                 .get(LocalIdx::new(idx))?
                 .clone();
             ctx.validator.scope_mut().core_modules.add(ty);
+        }
+        SortType::Core(CoreSortType::Type) => {
+            let gidx = ctx
+                .state
+                .outer_scope(ct)?
+                .core_types
+                .get(LocalIdx::new(idx))?;
+            ctx.state.scope_mut().core_types.register(gidx);
+            let ty = ctx
+                .validator
+                .outer_scope(ct)?
+                .core_types
+                .get(LocalIdx::new(idx))?
+                .clone();
+            ctx.validator.scope_mut().core_types.add(ty);
         }
         SortType::Component => {
             let gidx = ctx
@@ -241,13 +292,33 @@ fn parse_outer_export(
                 .components
                 .get(LocalIdx::new(idx))?;
             ctx.state.scope_mut().components.register(gidx);
+            let ty = ctx
+                .validator
+                .outer_scope(ct)?
+                .component_indexes
+                .get(LocalIdx::new(idx))?;
+            ctx.validator.scope_mut().component_indexes.add(ty);
         }
         SortType::Func => {
             let gidx = ctx.state.outer_scope(ct)?.funcs.get(LocalIdx::new(idx))?;
             ctx.state.scope_mut().funcs.register(gidx);
+            let ty = ctx
+                .validator
+                .outer_scope(ct)?
+                .func_indexes
+                .get(LocalIdx::new(idx))?;
+            ctx.validator.scope_mut().func_indexes.add(ty);
         }
         SortType::Type => {
-            todo!() // todo(type) add type
+            let ty = ctx
+                .validator
+                .outer_scope(ct)?
+                .type_indexes
+                .get(LocalIdx::new(idx))?;
+            if ctx.validator.in_concrete_scope() {
+                ctx.validator.validate_current_component_resources(ty)?;
+            }
+            ctx.validator.scope_mut().type_indexes.add(ty);
         }
         SortType::Instance => {
             let gidx = ctx
@@ -256,8 +327,18 @@ fn parse_outer_export(
                 .instances
                 .get(LocalIdx::new(idx))?;
             ctx.state.scope_mut().instances.register(gidx);
+            let ty = ctx
+                .validator
+                .outer_scope(ct)?
+                .instance_indexes
+                .get(LocalIdx::new(idx))?;
+            ctx.validator.scope_mut().instance_indexes.add(ty);
         }
-        _ => panic!("invalid sort type"),
+        SortType::Core(kind) => {
+            return Err(ComponentParseError::Unsupported(format!(
+                "unsupported outer alias sort: {kind:?}"
+            )));
+        }
     }
     Ok(())
 }

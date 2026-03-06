@@ -1,7 +1,8 @@
 use crate::binary::BinaryReader;
 use crate::component::decoder::context::ParseContext;
 use crate::component::decoder::ParseResult;
-use crate::component::ir::{CoreInstance, CoreModule, LocalIdx};
+use crate::component::ir::types::CoreType;
+use crate::component::ir::{CoreFunc, CoreInstance, CoreMemory, CoreModule, LocalIdx};
 use crate::parser::core::parse_u32;
 
 pub fn parse_core_module_local_idx(
@@ -14,6 +15,27 @@ pub fn parse_core_module_local_idx(
 pub fn parse_core_instance_local_idx(
     ctx: &mut ParseContext<impl BinaryReader>,
 ) -> ParseResult<LocalIdx<CoreInstance>> {
+    let (_, idx) = parse_u32(ctx.reader)?;
+    Ok(LocalIdx::new(idx))
+}
+
+pub fn parse_core_type_local_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> ParseResult<LocalIdx<CoreType>> {
+    let (_, idx) = parse_u32(ctx.reader)?;
+    Ok(LocalIdx::new(idx))
+}
+
+pub fn parse_core_func_local_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> ParseResult<LocalIdx<CoreFunc>> {
+    let (_, idx) = parse_u32(ctx.reader)?;
+    Ok(LocalIdx::new(idx))
+}
+
+pub fn parse_core_memory_local_idx(
+    ctx: &mut ParseContext<impl BinaryReader>,
+) -> ParseResult<LocalIdx<CoreMemory>> {
     let (_, idx) = parse_u32(ctx.reader)?;
     Ok(LocalIdx::new(idx))
 }

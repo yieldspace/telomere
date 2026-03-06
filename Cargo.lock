@@ -873,6 +873,8 @@ dependencies = [
  "once_cell",
  "regex",
  "semver",
+ "serde",
+ "serde_json",
  "telomere-macros",
  "thiserror",
  "tokio",

@@ -1,7 +1,8 @@
 use crate::binary::BinaryReader;
+use crate::component::decoder::parse_core_type;
 use crate::component::decoder::types::alias::parse_alias_type;
 use crate::component::decoder::types::{parse_export_decl, parse_type};
-use crate::component::decoder::{ParseContext, ParseResult};
+use crate::component::decoder::{ComponentParseError, ParseContext, ParseResult};
 
 pub fn parse_instance_decl(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()> {
     _parse_instance_decl(ctx, None)
@@ -18,9 +19,8 @@ pub fn _parse_instance_decl(
     };
     match b {
         0x00 => {
-            // let (_, t) = parse_core_type(ctx)?;
-            // InstanceDecl::CoreModuleType(t.try_into()?)
-            todo!()
+            let (_, ty) = parse_core_type(ctx)?;
+            ctx.validator.scope_mut().core_types.add(ty);
         }
         0x01 => {
             let t = parse_type(ctx)?;
@@ -33,7 +33,11 @@ pub fn _parse_instance_decl(
         0x04 => {
             parse_export_decl(ctx)?;
         }
-        _ => todo!(),
+        x => {
+            return Err(ComponentParseError::InvalidSignature(format!(
+                "invalid instance decl opcode: {x}"
+            )));
+        }
     };
     Ok(())
 }

@@ -1,11 +1,11 @@
-use crate::{
-    component_model::types::ValType,
-    parser::component_model::{ComponentParseError, ParseResult, Validator},
-};
+use crate::component::decoder::{ComponentParseError, ParseResult, Validator};
+use crate::component::ir::types::ValType;
+use crate::component::ir::Label;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
     pub params: Vec<ValType>,
+    pub param_names: Vec<Label>,
     pub result: Option<ValType>,
 }
 impl FuncType {
@@ -14,6 +14,15 @@ impl FuncType {
             Err(ComponentParseError::TypeMismatch(
                 "arity mismatch".to_owned(),
             ))?
+        }
+        if self.param_names.len() == parent.param_names.len() {
+            for (actual, expected) in self.param_names.iter().zip(parent.param_names.iter()) {
+                if actual != expected {
+                    Err(ComponentParseError::TypeMismatch(format!(
+                        "expected parameter named `{expected}`, found `{actual}`"
+                    )))?
+                }
+            }
         }
         for (a, b) in self.params.iter().zip(parent.params.iter()) {
             a.assert_subtype_of(b, validator)?

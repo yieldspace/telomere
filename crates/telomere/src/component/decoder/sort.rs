@@ -2,10 +2,10 @@ use crate::binary::BinaryReader;
 #[cfg(feature = "component-gated-feature-value-imports-exports")]
 use crate::component::decoder::parse_value_idx;
 use crate::component::decoder::{
-    parse_component_local_idx, parse_core_sort, parse_func_local_idx, parse_instance_local_idx,
-    parse_type_local_idx, ParseContext, ParseResult,
+    parse_component_local_idx, parse_core_module_local_idx, parse_core_sort, parse_func_local_idx,
+    parse_instance_local_idx, parse_type_local_idx, ParseContext, ParseResult,
 };
-use crate::component::ir::types::SortType;
+use crate::component::ir::types::{CoreSortType, SortType};
 use crate::component::ir::Sort;
 
 pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<SortType> {
@@ -15,13 +15,32 @@ pub fn parse_sort(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Sort
         0x03 => SortType::Type,
         0x04 => SortType::Component,
         0x05 => SortType::Instance,
-        _ => unreachable!(),
+        x => {
+            return Err(
+                crate::component::decoder::ComponentParseError::InvalidSignature(format!(
+                    "invalid sort: {x}"
+                )),
+            );
+        }
     };
     Ok(sort)
 }
 
 pub fn parse_sort_with_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Sort> {
     match ctx.reader.read_exact_one()? {
+        0x00 => match parse_core_sort(ctx)? {
+            CoreSortType::Module => {
+                let idx = parse_core_module_local_idx(ctx)?;
+                let ty = ctx.validator.scope().core_modules.get(idx)?.clone();
+                let idx = ctx.state.scope().core_modules.get(idx)?;
+                Ok(Sort::Module(idx, ty))
+            }
+            kind => Err(
+                crate::component::decoder::ComponentParseError::InvalidSignature(format!(
+                    "invalid sort-with-idx core sort: {kind:?}"
+                )),
+            ),
+        },
         0x01 => {
             let idx = parse_func_local_idx(ctx)?;
             let ty = ctx.validator.scope().func_indexes.get(idx)?;
@@ -45,6 +64,10 @@ pub fn parse_sort_with_idx(ctx: &mut ParseContext<impl BinaryReader>) -> ParseRe
             let idx = ctx.state.scope().instances.get(idx)?;
             Ok(Sort::Instance(idx, ty))
         }
-        x => todo!("{}", x),
+        x => Err(
+            crate::component::decoder::ComponentParseError::InvalidSignature(format!(
+                "invalid sort-with-idx: {x}"
+            )),
+        ),
     }
 }

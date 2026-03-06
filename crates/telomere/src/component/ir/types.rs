@@ -57,33 +57,51 @@ impl Type {
                 a.assert_subtype_of(b, validator)?;
                 Ok(())
             }
-            (Type::Generic(_), _) => {
-                todo!()
-            }
             (
-                a,
                 Type::Generic(Generic {
                     id: _,
-                    bound: GenericBound::Eq(b),
+                    bound: GenericBound::Eq(a),
                 }),
-            ) => a.assert_subtype_of(validator.get_type(*b)?, validator),
+                b,
+            ) => validator.get_type(*a)?.assert_subtype_of(b, validator),
             (
-                _a,
                 Type::Generic(Generic {
                     id: _,
                     bound: GenericBound::Sub,
                 }),
-            ) => {
-                tracing::warn!("should validate a is resource");
-                Ok(())
-            }
+                Type::Generic(Generic {
+                    id: _,
+                    bound: parent_bound,
+                }),
+            ) => GenericBound::Sub.assert_subtype_of(parent_bound, validator),
+            (
+                Type::Generic(Generic {
+                    id: _,
+                    bound: GenericBound::Sub,
+                }),
+                _,
+            ) => Err(ComponentParseError::TypeMismatch(
+                "generic resource cannot assign to concrete type".to_owned(),
+            )),
+            (a, Type::Generic(parent)) => match &parent.bound {
+                GenericBound::Eq(b) => a.assert_subtype_of(validator.get_type(*b)?, validator),
+                GenericBound::Sub => {
+                    if a.is_resource() {
+                        Ok(())
+                    } else {
+                        Err(ComponentParseError::TypeMismatch(
+                            "expected any resource".to_owned(),
+                        ))
+                    }
+                }
+            },
             (Type::Func(a), Type::Func(b)) => a.assert_subtype_of(b, validator),
             (Type::Resource(a), Type::Resource(b)) => {
                 if a == b {
                     Ok(())
                 } else {
                     Err(ComponentParseError::TypeMismatch(
-                        "resource id mismatch".to_owned(),
+                        "resource types are not the same".to_owned(),
                     ))
                 }
             }
@@ -120,6 +138,12 @@ pub enum GenericBound {
     Eq(TypeId),
     Sub,
 }
+
+#[derive(Clone, Debug)]
+pub enum ComponentImportType {
+    Type { type_id: TypeId, generic: Generic },
+    CoreModule(CoreModuleType),
+}
 impl GenericBound {
     pub fn assert_subtype_of(
         &self,
@@ -150,7 +174,8 @@ impl GenericBound {
 }
 #[derive(Clone, Debug)]
 pub struct ComponentType {
-    pub imports: HashMap<String, Generic>,
+    pub import_order: Vec<String>,
+    pub imports: HashMap<String, ComponentImportType>,
     pub exports: HashMap<String, ComponentExportType>,
     pub generics_replacing_program: Vec<GenericsReplaceDSL>,
 }
@@ -169,9 +194,25 @@ impl ComponentType {
             let parent_ty = parent.imports.get(child_entry_name).ok_or_else(|| {
                 ComponentParseError::TypeMismatch("import name mismatch".to_owned())
             })?;
-            child_ty
-                .bound
-                .assert_subtype_of(&parent_ty.bound, validator)?
+            match (child_ty, parent_ty) {
+                (
+                    ComponentImportType::Type {
+                        generic: child,
+                        type_id: _,
+                    },
+                    ComponentImportType::Type {
+                        generic: parent,
+                        type_id: _,
+                    },
+                ) => child.bound.assert_subtype_of(&parent.bound, validator)?,
+                (
+                    ComponentImportType::CoreModule(child),
+                    ComponentImportType::CoreModule(parent),
+                ) if child == parent => {}
+                _ => Err(ComponentParseError::TypeMismatch(
+                    "import kind mismatch".to_owned(),
+                ))?,
+            }
         }
         if parent.exports.len() > self.exports.len() {
             Err(ComponentParseError::TypeMismatch(
@@ -189,6 +230,7 @@ impl ComponentType {
 }
 #[derive(Clone, Debug)]
 pub enum ComponentExportType {
+    CoreModule(CoreModuleType),
     Component(TypeId),
     Instance(TypeId),
     Type(TypeId),
@@ -205,13 +247,22 @@ impl ComponentExportType {
     ) -> ParseResult<()> {
         use ComponentExportType::*;
         match (self, parent) {
+            (CoreModule(a), CoreModule(b)) => {
+                if a != b {
+                    Err(ComponentParseError::TypeMismatch(
+                        "core module export mismatch".to_owned(),
+                    ))?
+                }
+            }
             (Component(a), Component(b)) => {
                 validator
                     .get_component_type(*a)?
                     .assert_subtype_of(validator.get_component_type(*b)?, validator)?;
             }
-            (Instance(_a), Instance(_b)) => {
-                todo!()
+            (Instance(a), Instance(b)) => {
+                validator
+                    .get_instance_type(*a)?
+                    .assert_subtype_of(validator.get_instance_type(*b)?, validator)?;
             }
             (Type(a), Type(b)) => {
                 validator
@@ -266,6 +317,14 @@ impl InstanceExportType {
     pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
         use InstanceExportType::*;
         match (self, parent) {
+            (CoreModule(a), CoreModule(b)) => {
+                if a != b {
+                    Err(ComponentParseError::TypeMismatch(
+                        "core module export mismatch".to_owned(),
+                    ))?
+                }
+                Ok(())
+            }
             (Func(a), Func(b)) => validator
                 .get_func_type(*a)?
                 .assert_subtype_of(validator.get_func_type(*b)?, validator),

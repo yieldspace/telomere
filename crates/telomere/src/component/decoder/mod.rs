@@ -5,6 +5,7 @@ use std::ops::Range;
 use tracing::trace;
 
 use crate::component::ir::ComponentSection;
+pub use canon::parse_canon;
 pub use component::parse_component;
 pub use context::ParseContext;
 pub use core::*;
@@ -13,6 +14,7 @@ pub use idx::*;
 pub use validator::{ParseState, Validator};
 
 mod alias;
+mod canon;
 mod component;
 mod context;
 mod core;

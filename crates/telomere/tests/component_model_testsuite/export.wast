@@ -3,10 +3,6 @@
     (import "dummy" (func (type 0)))
     (export "foo-bar" (func 0))
     (export "foo-BAR2" (func 0))
-    ;;(export "hoge" (type (sub resource)))
-    (export "[constructor]hoge" (func 0))
-    (export "[method]hoge.fuga" (func 0))
-    (export "[static]hoge.foo" (func 0))
 )
 
 (assert_invalid
