@@ -1,7 +1,7 @@
 //mod core;
 #[macro_use]
 mod trace;
-pub mod component_model;
+pub(crate) mod component_model;
 pub(crate) mod instantiate;
 pub(crate) mod memory_effect;
 pub(crate) mod scheduler;

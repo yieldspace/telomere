@@ -1,10 +1,11 @@
-use telomere::parser::component_model::{ParseState, Validator};
+use telomere::component::ComponentEngine;
 use wast::parser::ParseBuffer;
 use wast::Wast;
 #[allow(dead_code)]
 pub fn run_component_wast(text: &str) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
+    let engine = ComponentEngine::new();
 
     for directive in wast.directives {
         use wast::WastDirective;
@@ -13,16 +14,7 @@ pub fn run_component_wast(text: &str) {
                 let name = m.name();
                 let span = m.span();
                 let source = m.encode().unwrap();
-                let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                let state_arena = typed_arena::Arena::new();
-                let mut state = ParseState::new(&state_arena);
-                let arena = typed_arena::Arena::new();
-                let mut validator = Validator::new(&arena);
-                if let Err(v) = telomere::parser::component_model::parse_component(
-                    &mut reader,
-                    &mut state,
-                    &mut validator,
-                ) {
+                if let Err(v) = engine.compile(&source) {
                     panic!("{:?} {:?}", span.linecol_in(text), v);
                 }
                 println!("Parsed component: {name:?}");
@@ -32,16 +24,7 @@ pub fn run_component_wast(text: &str) {
             } => {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 if let Ok(source) = module.encode() {
-                    let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
-                    let state_arena = typed_arena::Arena::new();
-                    let mut state = ParseState::new(&state_arena);
-                    let arena = typed_arena::Arena::new();
-                    let mut validator = Validator::new(&arena);
-                    let res = telomere::parser::component_model::parse_component(
-                        &mut reader,
-                        &mut state,
-                        &mut validator,
-                    );
+                    let res = engine.compile(&source);
 
                     match res {
                         Err(_err) => {
