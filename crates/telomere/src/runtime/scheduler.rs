@@ -49,6 +49,12 @@ pub(crate) struct AsyncResult {
     pub fp: *const Instr,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncRunError {
+    AsyncPending,
+    Stalled,
+}
+
 pub(crate) struct Notify {
     ready: AtomicBool,
     waker: Waker,
@@ -375,6 +381,90 @@ impl<'a> Scheduler<'a> {
             self.processing_effect(gc);
         }
     }
+
+    pub fn run_sync_with_gc(&mut self, gc: &mut MemoryPool) -> Result<(), SyncRunError> {
+        while !self.tasks.is_empty() {
+            while self.ready_count != 0 {
+                trace!("task ready count: {:?}", self.ready_count);
+
+                let task = self.tasks.pop_front().unwrap();
+                if task.ready_flag == ReadyFlag::NonReady {
+                    self.tasks.push_back(task);
+                    continue;
+                }
+                self.ready_count -= 1;
+                let Task {
+                    local_reference,
+                    fp,
+                    mut stack,
+                    task_id,
+                    mut pending_effects,
+                    ..
+                } = task;
+
+                let mut ec = ExecuteContext {
+                    gc,
+                    local_reference,
+                    stack: &mut stack,
+                    store: self.store,
+                    effect: EffectSupplier {
+                        pending_effects: &mut pending_effects,
+                        effects: &mut self.effects,
+                    },
+                    cont: fp,
+                    task_id,
+                };
+                let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
+                let cont = ec.cont;
+                let local_reference = ec.local_reference;
+                match res {
+                    VMResult::Success(()) => {
+                        if !cont.is_null() {
+                            trace!("continue task: {}", ec.task_id);
+                            let new_task = Task {
+                                local_reference,
+                                fp: cont,
+                                ready_flag: ReadyFlag::NonReady,
+                                task_id,
+                                stack,
+                                pending_effects,
+                            };
+                            self.tasks.push_back(new_task);
+                        } else {
+                            trace!("complte task: {}", ec.task_id);
+                            self.completed_tasks.push(CompletedTask {
+                                stack,
+                                result: VMResult::Success(()),
+                            })
+                        }
+                    }
+                    other => {
+                        trace!("trap task: {}", ec.task_id);
+                        self.completed_tasks.push(CompletedTask {
+                            stack,
+                            result: other,
+                        })
+                    }
+                }
+            }
+            self.processing_effect(gc);
+            if self.tasks.is_empty() {
+                break;
+            }
+            if self.ready_count != 0 {
+                continue;
+            }
+            #[cfg(feature = "async-runtime")]
+            if !self.async_tasks.is_empty() {
+                return Err(SyncRunError::AsyncPending);
+            }
+            if self.effects.is_empty() {
+                return Err(SyncRunError::Stalled);
+            }
+        }
+        Ok(())
+    }
+
     fn processing_effect(&mut self, gc: &mut MemoryPool) {
         while let Some(effect) = self.effects.pop_front() {
             match effect {

@@ -19,10 +19,14 @@ use crate::{
 use futures::executor::block_on;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::pin;
 use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 
 thread_local! {
     static HOST_BINDINGS: RefCell<HashMap<(u32, u32), Rc<HostBinding>>> = RefCell::new(HashMap::new());
+    static ACTIVE_COMPONENT_HOST_GC: Cell<*mut crate::common::gc::MemoryPool> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 #[derive(Clone)]
@@ -97,7 +101,7 @@ struct RuntimeCanonicalOptions {
     string_encoding: Option<CanonicalStringEncoding>,
     memory: Option<CoreExportRef>,
     realloc: Option<RuntimeCoreFunc>,
-    _post_return: Option<RuntimeCoreFunc>,
+    post_return: Option<RuntimeCoreFunc>,
 }
 
 #[derive(Clone)]
@@ -618,7 +622,7 @@ impl RuntimeEnv {
                 Some(realloc) => Some(self.resolve_core_func(realloc, store)?),
                 None => None,
             },
-            _post_return: match options.post_return {
+            post_return: match options.post_return {
                 Some(post_return) => Some(self.resolve_core_func(post_return, store)?),
                 None => None,
             },
@@ -791,7 +795,9 @@ impl ResolvedCallable {
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
         match self {
-            ResolvedCallable::Host(func) => block_on(func(store, args)),
+            ResolvedCallable::Host(func) => {
+                run_ready_future_sync(func(store, args), "host component call")?
+            }
             ResolvedCallable::Core(export) => {
                 let core_args = args
                     .iter()
@@ -816,7 +822,12 @@ impl ResolvedCallable {
             } => {
                 let core_args = lower_component_args(func_type, args, options, program, store)?;
                 let core_results = core.call_sync(store, &core_args)?;
-                lift_component_results(func_type, &core_results, options, program, store)
+                let lifted =
+                    lift_component_results(func_type, &core_results, options, program, store)?;
+                if let Some(post_return) = &options.post_return {
+                    post_return.call_sync(store, &core_results)?;
+                }
+                Ok(lifted)
             }
         }
     }
@@ -862,9 +873,10 @@ impl HostBinding {
                 program,
                 ..
             } => {
+                let result_area = lowered_indirect_result_area(func_type, args, program)?;
                 let component_args = lift_component_args(func_type, args, options, program, store)?;
                 let results = callable.call_sync(store, &component_args)?;
-                lower_component_results(func_type, &results, options, program, store)
+                lower_component_results(func_type, &results, options, program, store, result_area)
             }
             HostBinding::ResourceNew {
                 resource,
@@ -906,7 +918,7 @@ impl HostBinding {
                 };
                 let (rep, destructor) = shared.drop_resource(*resource, handle)?;
                 if let Some(dtor) = destructor {
-                    let _ = dtor.call_sync(store, &[WasmValue::I32(rep)]);
+                    dtor.call_sync(store, &[WasmValue::I32(rep)])?;
                 }
                 Ok(Vec::new())
             }
@@ -1082,10 +1094,11 @@ fn component_host_trampoline(ctx: &mut ExecuteContext) -> VMResult<*const Instr>
         Ok(args) => args,
         Err(_) => return VMResult::Unreachable,
     };
-    let results = match binding.call_sync(ctx.store, &args) {
-        Ok(results) => results,
-        Err(_) => return VMResult::Unreachable,
-    };
+    let results =
+        match with_active_component_host_gc(ctx.gc, || binding.call_sync(ctx.store, &args)) {
+            Ok(results) => results,
+            Err(_) => return VMResult::Unreachable,
+        };
     if push_core_results(ctx, &results).is_err() {
         return VMResult::Unreachable;
     }
@@ -1262,16 +1275,83 @@ fn call_core_export_sync(
     export_name: &str,
     args: &[WasmValue],
 ) -> Result<Vec<WasmValue>, ComponentError> {
-    let result = block_on(run_module_function(
-        instance,
-        store,
-        export_name,
-        &ResultValue::new(args.to_vec()),
-    ));
+    let result = with_active_component_host_gc_ptr(|gc| match gc {
+        Some(gc) => crate::runtime::vm::run_module_function_sync_with_gc(
+            instance,
+            store,
+            gc,
+            export_name,
+            &ResultValue::new(args.to_vec()),
+        )
+        .map_err(|error| {
+            ComponentError::Runtime(format!(
+                "core function `{export_name}` cannot suspend during sync execution: {error:?}"
+            ))
+        }),
+        None => Ok(block_on(run_module_function(
+            instance,
+            store,
+            export_name,
+            &ResultValue::new(args.to_vec()),
+        ))),
+    })?;
     match result {
         CoreVMResult::Success(values) => Ok(values.iter().copied().collect()),
         other => Err(vm_result_to_component_error(other, export_name)),
     }
+}
+
+fn run_ready_future_sync<F, T>(future: F, context: &str) -> Result<T, ComponentError>
+where
+    F: Future<Output = T>,
+{
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    let mut future = pin!(future);
+    match future.as_mut().poll(&mut cx) {
+        Poll::Ready(output) => Ok(output),
+        Poll::Pending => Err(ComponentError::Runtime(format!(
+            "{context} yielded in sync execution"
+        ))),
+    }
+}
+
+fn with_active_component_host_gc<T>(
+    gc: &mut crate::common::gc::MemoryPool,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct ResetGuard<'a> {
+        slot: &'a Cell<*mut crate::common::gc::MemoryPool>,
+        previous: *mut crate::common::gc::MemoryPool,
+    }
+
+    impl Drop for ResetGuard<'_> {
+        fn drop(&mut self) {
+            self.slot.set(self.previous);
+        }
+    }
+
+    ACTIVE_COMPONENT_HOST_GC.with(|slot| {
+        let previous = slot.replace(gc as *mut _);
+        let _guard = ResetGuard { slot, previous };
+        f()
+    })
+}
+
+fn with_active_component_host_gc_ptr<T>(
+    f: impl FnOnce(Option<&mut crate::common::gc::MemoryPool>) -> T,
+) -> T {
+    ACTIVE_COMPONENT_HOST_GC.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            f(None)
+        } else {
+            // SAFETY: the pointer is set only while the current thread is executing a
+            // synchronous host trampoline, so nested canonical ABI calls can reuse the same
+            // mutable GC borrow before control returns to the outer VM frame.
+            f(Some(unsafe { &mut *ptr }))
+        }
+    })
 }
 
 fn vm_result_to_component_error(result: CoreVMResult<impl Sized>, context: &str) -> ComponentError {
@@ -1407,6 +1487,7 @@ fn lower_component_results(
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
     store: &mut Store,
+    result_area: Option<u32>,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     let Some(result_ty) = &func_type.result else {
         if results.is_empty() {
@@ -1424,16 +1505,35 @@ fn lower_component_results(
         let memory = options.memory.clone().ok_or_else(|| {
             ComponentError::Runtime("canonical option `memory` is required".to_owned())
         })?;
-        let return_ptr = options.realloc.as_ref().ok_or_else(|| {
-            ComponentError::Runtime("canonical option `realloc` is required".to_owned())
-        })?;
+        let return_ptr = result_area
+            .ok_or_else(|| ComponentError::Runtime("indirect result area is missing".to_owned()))?;
         let flat = lower_value_to_flat(value, result_ty, options, program, store)?;
-        let area_size = flat.iter().map(wasm_value_size).sum::<usize>() as i32;
-        let area_ptr = call_realloc(return_ptr, store, 0, 0, 4, area_size)? as u32;
-        write_flat_values(store, &memory, area_ptr, &flat)?;
-        Ok(vec![WasmValue::I32(area_ptr as i32)])
+        write_flat_values(store, &memory, return_ptr, &flat)?;
+        Ok(Vec::new())
     } else {
         lower_value_to_flat(value, result_ty, options, program, store)
+    }
+}
+
+fn lowered_indirect_result_area(
+    func_type: &FuncType,
+    args: &[WasmValue],
+    program: &ComponentProgram,
+) -> Result<Option<u32>, ComponentError> {
+    let Some(result_ty) = &func_type.result else {
+        return Ok(None);
+    };
+    if value_flat_len(result_ty, program)? <= 1 {
+        return Ok(None);
+    }
+    match args.last() {
+        Some(WasmValue::I32(ptr)) => Ok(Some(*ptr as u32)),
+        Some(other) => Err(ComponentError::Runtime(format!(
+            "indirect result area must be an i32 pointer, got {other:?}"
+        ))),
+        None => Err(ComponentError::Runtime(
+            "indirect result area is missing".to_owned(),
+        )),
     }
 }
 
@@ -1713,17 +1813,23 @@ fn read_memory(
     ptr: u32,
     len: usize,
 ) -> Result<Vec<u8>, ComponentError> {
-    let mut gc = store.gc.borrow_mut();
-    let addr = memory_addr(memory, &mut gc)?;
-    let memory = unsafe { gc.get_memory(addr) };
-    let end = ptr
-        .checked_add(len as u32)
-        .ok_or_else(|| ComponentError::Trap("memory access overflow".to_owned()))?
-        as usize;
-    memory
-        .get(ptr as usize..end)
-        .map(|bytes| bytes.to_vec())
-        .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))
+    with_active_component_host_gc_ptr(|gc| {
+        let mut owned_gc = None;
+        let gc = match gc {
+            Some(gc) => gc,
+            None => owned_gc.get_or_insert_with(|| store.gc.borrow_mut()),
+        };
+        let addr = memory_addr(memory, gc)?;
+        let memory = unsafe { gc.get_memory(addr) };
+        let end = ptr
+            .checked_add(len as u32)
+            .ok_or_else(|| ComponentError::Trap("memory access overflow".to_owned()))?
+            as usize;
+        memory
+            .get(ptr as usize..end)
+            .map(|bytes| bytes.to_vec())
+            .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))
+    })
 }
 
 fn write_memory(
@@ -1732,18 +1838,24 @@ fn write_memory(
     ptr: u32,
     bytes: &[u8],
 ) -> Result<(), ComponentError> {
-    let mut gc = store.gc.borrow_mut();
-    let addr = memory_addr(memory, &mut gc)?;
-    let memory = unsafe { gc.get_memory(addr) };
-    let end = ptr
-        .checked_add(bytes.len() as u32)
-        .ok_or_else(|| ComponentError::Trap("memory access overflow".to_owned()))?
-        as usize;
-    let slot = memory
-        .get_mut(ptr as usize..end)
-        .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))?;
-    slot.copy_from_slice(bytes);
-    Ok(())
+    with_active_component_host_gc_ptr(|gc| {
+        let mut owned_gc = None;
+        let gc = match gc {
+            Some(gc) => gc,
+            None => owned_gc.get_or_insert_with(|| store.gc.borrow_mut()),
+        };
+        let addr = memory_addr(memory, gc)?;
+        let memory = unsafe { gc.get_memory(addr) };
+        let end = ptr
+            .checked_add(bytes.len() as u32)
+            .ok_or_else(|| ComponentError::Trap("memory access overflow".to_owned()))?
+            as usize;
+        let slot = memory
+            .get_mut(ptr as usize..end)
+            .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))?;
+        slot.copy_from_slice(bytes);
+        Ok(())
+    })
 }
 
 fn write_flat_values(
@@ -1805,16 +1917,6 @@ fn memory_addr(
         .get(idx.0 as usize)
         .copied()
         .ok_or_else(|| ComponentError::Trap("memory index is out of bounds".to_owned()))
-}
-
-fn wasm_value_size(value: &WasmValue) -> usize {
-    match value {
-        WasmValue::I32(_) | WasmValue::F32(_) | WasmValue::FuncRef(_) | WasmValue::ExternRef(_) => {
-            4
-        }
-        WasmValue::I64(_) | WasmValue::F64(_) => 8,
-        WasmValue::V128(_) => 16,
-    }
 }
 
 fn call_realloc(

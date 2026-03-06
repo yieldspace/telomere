@@ -767,10 +767,45 @@ fn run_precompiled_component_upstream_case(
                 }
             }
             "assert_malformed" => {
+                if command.module_type != "text" {
+                    report.failures.push(format!(
+                        "{} @ line {}: unsupported precompiled assert_malformed module_type `{}`",
+                        path.display(),
+                        command.line,
+                        command.module_type
+                    ));
+                    continue;
+                }
                 let text_path = root.join(&command.filename);
                 match std::fs::read_to_string(&text_path) {
-                    Ok(_) => {
-                        report.directives_checked += 1;
+                    Ok(text) => {
+                        let actual = match wat::parse_str(&text) {
+                            Ok(source) => match engine.compile(&source) {
+                                Ok(_) => None,
+                                Err(error) => Some(error.to_string()),
+                            },
+                            Err(error) => Some(error.to_string()),
+                        };
+                        match actual {
+                            Some(actual) => {
+                                if semantic_error_match(&command.text, &actual) {
+                                    report.directives_checked += 1;
+                                } else {
+                                    report.failures.push(format!(
+                                        "{} @ line {}: assert_malformed message mismatch: expected semantic match for `{}`, got `{actual}`",
+                                        path.display(),
+                                        command.line,
+                                        command.text
+                                    ));
+                                }
+                            }
+                            None => report.failures.push(format!(
+                                "{} @ line {}: assert_malformed expected an error containing `{}`, but decoding succeeded",
+                                path.display(),
+                                command.line,
+                                command.text
+                            )),
+                        }
                     }
                     Err(error) => report.failures.push(format!(
                         "{} @ line {}: failed to read precompiled text {}: {error}",
