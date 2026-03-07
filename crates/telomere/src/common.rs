@@ -1,7 +1,6 @@
 #[macro_use]
 mod vm_result;
-use std::fmt::Display;
-use std::sync::Arc;
+use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
 
@@ -99,6 +98,19 @@ impl ResultType {
         self.0.iter()
     }
 }
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResultValue(Vec<WasmValue>);
+impl ResultValue {
+    pub fn new(args: Vec<WasmValue>) -> Self {
+        Self(args)
+    }
+    pub fn iter(&self) -> impl Iterator<Item = &WasmValue> + use<'_> {
+        self.0.iter()
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableType {
     pub reftype: RefType,
@@ -155,6 +167,8 @@ impl ExportSection {
     }
 }
 pub type HostFunction = fn(ctx: &mut ExecuteContext) -> VMResult<*const Instr>;
+pub type AsyncHostFuture = Pin<Box<dyn Future<Output = VMResult<ResultValue>> + 'static>>;
+pub type AsyncHostFunction = fn(StoreState, ResultValue) -> AsyncHostFuture;
 #[derive(Clone)]
 pub enum FunctionBody {
     Wasm(Func),
@@ -239,8 +253,16 @@ pub struct HostFunctionDefinition {
     pub signature: FuncType,
     pub fp: HostFunction,
 }
+pub struct AsyncHostFunctionDefinition {
+    pub name: Option<String>,
+    pub signature: FuncType,
+    pub fp: AsyncHostFunction,
+}
 pub struct NativeModule {
     pub functions: Vec<HostFunctionDefinition>,
+}
+pub struct AsyncNativeModule {
+    pub functions: Vec<AsyncHostFunctionDefinition>,
 }
 pub const TABLE_UNINITIALIZED: u32 = 0x00;
 #[derive(Debug, Clone)]

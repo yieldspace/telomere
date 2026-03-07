@@ -184,6 +184,9 @@ impl Stack {
         self.memory
             .copy_within(self.top..self.top + size, reference.local_top + local_addr);
     }
+    pub fn local_bytes(&self, reference: &LocalReference, local_addr: usize, size: usize) -> &[u8] {
+        &self.memory[reference.local_top + local_addr..reference.local_top + local_addr + size]
+    }
     pub fn local_tee(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
         self.memory
             .copy_within(self.top - size..self.top, reference.local_top + local_addr);

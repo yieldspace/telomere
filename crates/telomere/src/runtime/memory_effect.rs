@@ -1,11 +1,9 @@
-use std::{future::Future, ops::Range, pin::Pin};
+use std::{fmt, future::Future, ops::Range, pin::Pin};
 
 use crate::{
-    common::{GcRef, Instr, StablePc},
-    Stack,
+    common::{GcRef, Instr, ResultValue, StablePc},
+    Stack, VMResult,
 };
-
-use super::scheduler::AsyncResult;
 #[derive(Debug)]
 pub enum Target {
     Memory(GcRef, Range<usize>),
@@ -46,27 +44,34 @@ pub struct MemoryEffect {
     pub atomic: AtomicFlag,
     pub operation: Operation,
 }
-pub type AsyncEffectOperationCallSignature =
-    fn(u32, StablePc) -> Pin<Box<dyn Future<Output = AsyncResult>>>;
-#[cfg(feature = "async-runtime")]
+pub type AsyncEffectFuture = Pin<Box<dyn Future<Output = AsyncResult>>>;
 #[derive(Debug)]
-pub enum AsyncEffectOperation {
-    // TODO:
-    #[allow(unused)]
-    Call(AsyncEffectOperationCallSignature),
+pub struct AsyncResult {
+    pub task_id: u32,
+    pub completion: AsyncCompletion,
+}
+#[derive(Debug)]
+pub enum AsyncCompletion {
+    #[allow(dead_code)]
+    Continue { fp: StablePc },
+    HostCall {
+        result: VMResult<ResultValue>,
+    },
 }
 #[cfg(feature = "async-runtime")]
-#[derive(Debug)]
 pub struct AsyncEffect {
-    pub task_id: u32,
-    pub operation: AsyncEffectOperation,
+    pub future: AsyncEffectFuture,
+}
+#[cfg(feature = "async-runtime")]
+impl fmt::Debug for AsyncEffect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AsyncEffect(..)")
+    }
 }
 
 #[derive(Debug)]
 pub enum Effect {
     MemoryEffect(MemoryEffect),
     #[cfg(feature = "async-runtime")]
-    // TODO:
-    #[allow(unused)]
     AsyncEffect(AsyncEffect),
 }

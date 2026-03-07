@@ -186,7 +186,7 @@ pub(crate) fn clear_active_root_slot_for_identity(identity: &Weak<()>, slot: u32
     true
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct StoreState(usize);
 
 impl StoreState {
