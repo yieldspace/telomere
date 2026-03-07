@@ -12,9 +12,7 @@ pub enum ValType {
 impl ValType {
     pub fn assert_subtype_of(&self, parent: &Self, validator: &Validator) -> ParseResult<()> {
         match (self, parent) {
-            (ValType::Type(a), ValType::Type(b)) => validator
-                .get_type(*a)?
-                .assert_subtype_of(validator.get_type(*b)?, validator)?,
+            (ValType::Type(a), ValType::Type(b)) => validator.assert_type_ids_subtype_of(*a, *b)?,
             (ValType::Type(a), ValType::Primitive(prim_val_type)) => {
                 validator.get_type(*a)?.assert_subtype_of(
                     &Type::DefVal(DefValType::Primitive(prim_val_type.clone())),

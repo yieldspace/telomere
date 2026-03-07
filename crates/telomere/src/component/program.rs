@@ -21,7 +21,7 @@ pub enum ComponentOp {
 
 #[derive(Clone, Debug)]
 pub struct ComponentProgram {
-    pub types: Vec<ComponentTypeInfo>,
+    pub type_infos: Vec<ComponentTypeInfo>,
     pub imports: Vec<String>,
     pub callable_imports: Vec<String>,
     pub exports: Vec<String>,
@@ -29,7 +29,7 @@ pub struct ComponentProgram {
     pub ops: Vec<ComponentOp>,
     pub bytes: Vec<u8>,
     pub root: Component,
-    pub type_map: HashMap<TypeId, Type>,
+    pub types: Box<[Type]>,
     pub component_store: HashMap<GlobalIdx<Component>, Relation<Component>>,
     pub instance_store: HashMap<GlobalIdx<Instance>, Relation<Instance>>,
     pub func_store: HashMap<GlobalIdx<Func>, Relation<Func>>,
@@ -40,4 +40,56 @@ pub struct ComponentProgram {
     pub core_memory_store: HashMap<GlobalIdx<CoreMemory>, CoreRelation<CoreMemory>>,
     pub core_global_store: HashMap<GlobalIdx<CoreGlobal>, CoreRelation<CoreGlobal>>,
     pub core_table_store: HashMap<GlobalIdx<CoreTable>, CoreRelation<CoreTable>>,
+}
+
+impl ComponentProgram {
+    pub fn get_type(&self, id: TypeId) -> Option<&Type> {
+        self.types.get(id.index() as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::component::ir::{Component, ResourceId};
+
+    #[test]
+    fn get_type_reads_dense_type_storage_by_index() {
+        let first = Type::Resource(ResourceId::synthetic());
+        let second = Type::Resource(ResourceId::synthetic());
+        let program = ComponentProgram {
+            type_infos: Vec::new(),
+            imports: Vec::new(),
+            callable_imports: Vec::new(),
+            exports: Vec::new(),
+            callable_exports: Vec::new(),
+            ops: Vec::new(),
+            bytes: Vec::new(),
+            root: Component {
+                imports: HashMap::new(),
+                exports: HashMap::new(),
+            },
+            types: vec![first.clone(), second.clone()].into_boxed_slice(),
+            component_store: HashMap::new(),
+            instance_store: HashMap::new(),
+            func_store: HashMap::new(),
+            core_module_store: HashMap::new(),
+            core_type_store: HashMap::new(),
+            core_instance_store: HashMap::new(),
+            core_func_store: HashMap::new(),
+            core_memory_store: HashMap::new(),
+            core_global_store: HashMap::new(),
+            core_table_store: HashMap::new(),
+        };
+
+        assert!(matches!(
+            program.get_type(TypeId::from_index(0)),
+            Some(Type::Resource(_))
+        ));
+        assert!(matches!(
+            program.get_type(TypeId::from_index(1)),
+            Some(Type::Resource(_))
+        ));
+        assert!(program.get_type(TypeId::from_index(2)).is_none());
+    }
 }

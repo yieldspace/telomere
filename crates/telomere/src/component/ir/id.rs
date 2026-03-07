@@ -1,9 +1,9 @@
 use crate::component::decoder::{ParseResult, Validator};
 use crate::component::ir::AnyGlobalIdx;
 use std::hash::Hash;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ScopeId(u32, u32);
 
 impl ScopeId {
@@ -61,27 +61,23 @@ impl ResourceId {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct TypeId(usize);
-
-impl Default for TypeId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, Default)]
+pub struct TypeId(u32);
 
 impl TypeId {
-    pub fn new() -> Self {
-        static TYPE_ID: AtomicUsize = AtomicUsize::new(0);
-        Self(TYPE_ID.fetch_add(1, Ordering::Relaxed))
+    pub(crate) fn from_index(index: u32) -> Self {
+        Self(index)
     }
+
+    pub fn index(self) -> u32 {
+        self.0
+    }
+
     pub fn assert_subtype_of(self, parent: TypeId, validator: &Validator) -> ParseResult<()> {
         if self == parent {
             Ok(())
         } else {
-            validator
-                .get_type(self)?
-                .assert_subtype_of(validator.get_type(parent)?, validator)
+            validator.assert_type_ids_subtype_of(self, parent)
         }
     }
 }

@@ -4,6 +4,7 @@ use crate::component::decoder::sort::parse_sort_with_idx;
 use crate::component::decoder::types::validate_annotated_export;
 use crate::component::decoder::{
     parse_component_local_idx, ComponentParseError, ParseContext, ParseResult, SizedResult,
+    TransformContext,
 };
 use crate::component::ir::types::{
     ComponentImportType, Generic, GenericBound, GenericsReplaceDSL, InstanceType, Type,
@@ -62,7 +63,7 @@ fn parse_instantiate(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<(
         .component_indexes
         .get(component_lid)?;
     let component_ty = ctx.validator.get_component_type(component_tid)?.clone();
-    let mut unified = HashMap::new();
+    let mut unified = ctx.validator.new_transform_context();
     if component_ty.imports.len() > args.len() {
         for expected_name in &component_ty.import_order {
             if !args.iter().any(|(name, _)| *name == *expected_name) {
@@ -241,7 +242,11 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
         .state
         .component_store
         .register(Relation::Defined(component));
-    let exports = GenericsReplaceDSL::evaluate(&program, ctx.validator, HashMap::new())?;
+    let exports = GenericsReplaceDSL::evaluate(
+        &program,
+        ctx.validator,
+        ctx.validator.new_transform_context(),
+    )?;
 
     let instance = Instance {
         component_idx: Some(component_gid),
@@ -434,7 +439,7 @@ fn seed_nested_type_mappings(
     formal_type_id: crate::component::ir::TypeId,
     actual_type_id: crate::component::ir::TypeId,
     validator: &mut crate::component::decoder::Validator,
-    unified: &mut HashMap<crate::component::ir::TypeId, crate::component::ir::TypeId>,
+    unified: &mut TransformContext,
 ) -> ParseResult<()> {
     use crate::component::ir::types::{
         ComponentExportType, ComponentImportType, DefValType, InstanceExportType, Type, ValType,
@@ -444,7 +449,7 @@ fn seed_nested_type_mappings(
         actual: &ValType,
         formal: &ValType,
         validator: &mut crate::component::decoder::Validator,
-        unified: &mut HashMap<crate::component::ir::TypeId, crate::component::ir::TypeId>,
+        unified: &mut TransformContext,
     ) -> ParseResult<()> {
         match (actual, formal) {
             (ValType::Type(actual), ValType::Type(formal)) => {
@@ -458,9 +463,9 @@ fn seed_nested_type_mappings(
         formal: crate::component::ir::TypeId,
         actual: crate::component::ir::TypeId,
         validator: &mut crate::component::decoder::Validator,
-        unified: &mut HashMap<crate::component::ir::TypeId, crate::component::ir::TypeId>,
+        unified: &mut TransformContext,
     ) -> ParseResult<()> {
-        if unified.get(&formal).copied() == Some(actual) {
+        if unified.get(formal) == Some(actual) {
             return Ok(());
         }
         unified.insert(formal, actual);

@@ -1594,8 +1594,7 @@ fn lower_defined_value(
     store: &mut Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     match program
-        .type_map
-        .get(&type_id)
+        .get_type(type_id)
         .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
     {
         Type::DefVal(DefValType::Primitive(prim)) => {
@@ -1655,8 +1654,7 @@ fn lift_defined_value(
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     match program
-        .type_map
-        .get(&type_id)
+        .get_type(type_id)
         .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
     {
         Type::DefVal(DefValType::Primitive(prim)) => lift_primitive(prim, options, store, cursor),
@@ -1948,7 +1946,7 @@ fn program_func_type(
     program: &ComponentProgram,
     type_id: TypeId,
 ) -> Result<FuncType, ComponentError> {
-    match program.type_map.get(&type_id) {
+    match program.get_type(type_id) {
         Some(Type::Func(func_type)) => Ok(func_type.clone()),
         _ => Err(ComponentError::Runtime(
             "function type is missing".to_owned(),
@@ -1960,7 +1958,7 @@ fn program_resource_id(
     program: &ComponentProgram,
     type_id: TypeId,
 ) -> Result<ResourceId, ComponentError> {
-    match program.type_map.get(&type_id) {
+    match program.get_type(type_id) {
         Some(Type::Resource(resource)) => Ok(*resource),
         Some(Type::DefVal(DefValType::Own(inner)))
         | Some(Type::DefVal(DefValType::Borrow(inner))) => program_resource_id(program, *inner),
@@ -1982,7 +1980,7 @@ fn value_flat_len(ty: &ValType, program: &ComponentProgram) -> Result<usize, Com
     match ty {
         ValType::Primitive(PrimValType::String) => Ok(2),
         ValType::Primitive(_) => Ok(1),
-        ValType::Type(type_id) => match program.type_map.get(type_id) {
+        ValType::Type(type_id) => match program.get_type(*type_id) {
             Some(Type::DefVal(DefValType::Primitive(PrimValType::String))) => Ok(2),
             Some(Type::DefVal(DefValType::Primitive(_))) => Ok(1),
             Some(Type::DefVal(DefValType::Own(_))) | Some(Type::DefVal(DefValType::Borrow(_))) => {

@@ -11,6 +11,7 @@ pub use context::ParseContext;
 pub use core::*;
 pub use error::ComponentParseError;
 pub use idx::*;
+pub(crate) use validator::TransformContext;
 pub use validator::{ParseState, Validator};
 
 mod alias;

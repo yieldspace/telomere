@@ -255,19 +255,13 @@ impl ComponentExportType {
                 }
             }
             (Component(a), Component(b)) => {
-                validator
-                    .get_component_type(*a)?
-                    .assert_subtype_of(validator.get_component_type(*b)?, validator)?;
+                validator.assert_component_type_ids_subtype_of(*a, *b)?;
             }
             (Instance(a), Instance(b)) => {
-                validator
-                    .get_instance_type(*a)?
-                    .assert_subtype_of(validator.get_instance_type(*b)?, validator)?;
+                validator.assert_instance_type_ids_subtype_of(*a, *b)?;
             }
             (Type(a), Type(b)) => {
-                validator
-                    .get_type(*a)?
-                    .assert_subtype_of(validator.get_type(*b)?, validator)?;
+                validator.assert_type_ids_subtype_of(*a, *b)?;
             }
             (Func(a), Func(b)) => validator
                 .get_func_type(*a)?
@@ -328,15 +322,9 @@ impl InstanceExportType {
             (Func(a), Func(b)) => validator
                 .get_func_type(*a)?
                 .assert_subtype_of(validator.get_func_type(*b)?, validator),
-            (Component(a), Component(b)) => validator
-                .get_component_type(*a)?
-                .assert_subtype_of(validator.get_component_type(*b)?, validator),
-            (Instance(a), Instance(b)) => validator
-                .get_instance_type(*a)?
-                .assert_subtype_of(validator.get_instance_type(*b)?, validator),
-            (Type(a), Type(b)) => validator
-                .get_type(*a)?
-                .assert_subtype_of(validator.get_type(*b)?, validator),
+            (Component(a), Component(b)) => validator.assert_component_type_ids_subtype_of(*a, *b),
+            (Instance(a), Instance(b)) => validator.assert_instance_type_ids_subtype_of(*a, *b),
+            (Type(a), Type(b)) => validator.assert_type_ids_subtype_of(*a, *b),
             _ => Err(ComponentParseError::TypeMismatch(
                 "export kind mismatch".to_owned(),
             ))?,

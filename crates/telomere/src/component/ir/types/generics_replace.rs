@@ -1,9 +1,9 @@
-use crate::component::decoder::ParseResult;
+use crate::component::decoder::{ParseResult, TransformContext, Validator};
 use crate::component::ir::types::CoreModuleType;
 use crate::component::ir::TypeId;
 use std::collections::HashMap;
 
-use super::{InstanceExportType, Validator};
+use super::InstanceExportType;
 
 #[derive(Debug, Clone)]
 pub enum GenericsReplaceDSL {
@@ -16,12 +16,12 @@ pub enum GenericsReplaceDSL {
 }
 pub struct GenericsReplaceDSLEnvironment {
     result: HashMap<String, InstanceExportType>,
-    unified: HashMap<TypeId, TypeId>,
+    unified: TransformContext,
 }
 fn resolve_generics(
     ty: TypeId,
     validator: &mut Validator,
-    unified: &mut HashMap<TypeId, TypeId>,
+    unified: &mut TransformContext,
 ) -> ParseResult<TypeId> {
     validator.instantiate_type_id(ty, unified)
 }
@@ -72,10 +72,10 @@ impl GenericsReplaceDSL {
         }
         Ok(())
     }
-    pub fn evaluate(
+    pub(crate) fn evaluate(
         program: &[GenericsReplaceDSL],
         validator: &mut Validator,
-        initial_unified: HashMap<TypeId, TypeId>,
+        initial_unified: TransformContext,
     ) -> ParseResult<HashMap<String, InstanceExportType>> {
         let mut env = GenericsReplaceDSLEnvironment {
             result: HashMap::new(),

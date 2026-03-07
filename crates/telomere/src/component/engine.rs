@@ -53,10 +53,10 @@ impl ComponentEngine {
             }
         }
 
-        let types = Vec::<ComponentTypeInfo>::new();
+        let type_infos = Vec::<ComponentTypeInfo>::new();
 
         Ok(ComponentProgram {
-            types,
+            type_infos,
             imports,
             callable_imports,
             exports,
@@ -64,7 +64,7 @@ impl ComponentEngine {
             ops,
             bytes: bytes.to_vec(),
             root,
-            type_map: validator.snapshot_types(),
+            types: validator.snapshot_types(),
             component_store: state.component_store.snapshot(),
             instance_store: state.instance_store.snapshot(),
             func_store: state.func_store.snapshot(),
