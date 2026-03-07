@@ -865,20 +865,16 @@ dependencies = [
 name = "telomere"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "criterion",
  "futures",
  "num-derive",
  "num-traits",
  "once_cell",
  "regex",
- "semver",
  "telomere-macros",
  "thiserror",
  "tokio",
  "tracing",
- "tracing-subscriber",
- "typed-arena",
  "union-find",
  "wast",
  "wat",
@@ -893,6 +889,28 @@ dependencies = [
  "clap",
  "telomere",
  "tokio",
+]
+
+[[package]]
+name = "telomere-component"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "criterion",
+ "futures",
+ "num-derive",
+ "num-traits",
+ "semver",
+ "serde",
+ "serde_json",
+ "telomere",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "typed-arena",
+ "wast",
+ "wat",
 ]
 
 [[package]]

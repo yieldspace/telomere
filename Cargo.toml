@@ -17,6 +17,7 @@ tokio.workspace = true
 resolver = "2"
 members = [
     "crates/telomere",
+    "crates/telomere-component",
     "crates/telomere-macros",
     "crates/union-find"
 ]
@@ -32,6 +33,7 @@ keywords = ["webassembly", "runtime"]
 
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }
+telomere-component = { path = "crates/telomere-component" }
 union-find = {path = "crates/union-find"}
 telomere-macros = { path = "crates/telomere-macros" }
 tokio = { version = "1.0", features = ["full"] }

@@ -155,6 +155,11 @@ impl MemoryPool {
         self.get_instance_unchecked(dst);
         self.write_header(dst, Header::new(ObjectType::Instance, size).initialized());
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that `addr` points to an allocated object in this
+    /// pool and that `offset` addresses a valid, properly aligned `T` within the
+    /// object's value region for the duration of the returned pointer use.
     pub unsafe fn get_value<T>(&self, addr: GcRef, offset: usize) -> *const T {
         self.memory
             .as_ptr()

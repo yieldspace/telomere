@@ -3,7 +3,6 @@ use crate::parser::error::ParseError;
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
-pub mod component_model;
 pub(crate) mod core;
 mod error;
 pub(crate) mod leb128;

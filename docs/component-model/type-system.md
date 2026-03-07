@@ -14,3 +14,13 @@ instanceが実体化され、型が環境に導入されるとき、そのパタ
 ここでinstanceの型を表現するときに`instantiate`で与えられる型パラメータを、どのように表現するかということが課題になる。
 ここで、アプローチが二種類あり、一つは、instanceの型は型環境を持つというアプローチであり、もう一つは、type termを型パラメータで置換してしまうというアプローチである。
 前者では、instanceからexportされている型パラメータに依存する型がどの型環境に属しているか結局のところ管理しておかなければならないため、ここでは後者のアプローチをとる。具体的にどのように置換していくかというと、WASM Component Modelにおいては、依存する型はその型が現れるよりまえに環境に持ち込まれている必要があるため、単純に型パラメータの定義と使用を見つけた時に、といっても複合型の場合その内部の型まで検査する必要があるが、それを環境に定義し、それを置換すればよい。
+
+# 現在の実装戦略
+意味論は上記の置換ベースを維持しているが、実装は `HashMap<TypeId, Type>` を都度再帰 walk する形ではなく、compile-local な `TypeId` を index に使う dense arena へ寄せている。
+
+- 型本体は arena に連続配置し、`TypeId` から直接参照する
+- effective size、resource 可視性、surface 可視性は type metadata に memoize する
+- import/export surface の比較は名前を intern した sorted vector 上の merge walk で行う
+- import freshening / instantiate は置換環境ごとの transform cache を使うが、fresh resource の一意性は top-level session 単位で維持する
+
+この構成により、型環境モデルへ戻さずに、embedded Linux 向けの compile/validate コストを抑える。

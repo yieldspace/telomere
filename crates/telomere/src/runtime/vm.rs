@@ -11,7 +11,7 @@ use crate::{
         ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, Stack,
         VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
-    runtime::scheduler::{ReadyFlag, Scheduler, Task},
+    runtime::scheduler::{ReadyFlag, Scheduler, SyncRunError, Task},
     Store,
 };
 
@@ -2097,6 +2097,151 @@ pub async fn run_module_function(
     result.reverse();
     VMResult::Success(ResultValue(result))
 }
+
+pub(crate) fn run_module_function_sync_with_gc(
+    instance: &InstanceHandle,
+    store: &mut Store,
+    gc: &mut crate::common::gc::MemoryPool,
+    name: &str,
+    args: &ResultValue,
+) -> Result<VMResult<ResultValue>, SyncRunError> {
+    let mut scheduler: Scheduler<'_> = Scheduler::new(store);
+
+    let ft = {
+        let InstanceData {
+            module_addr, funcs, ..
+        } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(gc)) };
+        let module_inst = unsafe { gc.get_module(module_addr) };
+        trace!("{:?}", module_inst.exports);
+        let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
+            let code_addr = funcs.as_slice(gc)[idx.0 as usize];
+            let funcinst = unsafe { gc.get_func(code_addr) };
+            let mut stack = Stack::new(128 * 1024);
+            let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
+            let ft = module_inst
+                .function_types
+                .get(tidx.0 as usize)
+                .unwrap()
+                .clone();
+
+            let mut param_size = 0usize;
+            for t in ft.0.iter() {
+                param_size += t.stack_size().usize();
+            }
+
+            let (locals_data, code_offset) = funcinst.locals_and_code_offset(gc);
+            let local_size = locals_data.byte_size();
+            for arg in args.iter() {
+                match arg {
+                    WasmValue::I32(i32) => match stack.push_i32(*i32) {
+                        VMResult::Success(()) => {}
+                        other => return Ok(vm_result_err_into_result_value(other)),
+                    },
+                    WasmValue::I64(i64) => match stack.push_i64(*i64) {
+                        VMResult::Success(()) => {}
+                        other => return Ok(vm_result_err_into_result_value(other)),
+                    },
+                    WasmValue::F32(v) => match stack.push_f32(*v) {
+                        VMResult::Success(()) => {}
+                        other => return Ok(vm_result_err_into_result_value(other)),
+                    },
+                    WasmValue::F64(v) => match stack.push_f64(*v) {
+                        VMResult::Success(()) => {}
+                        other => return Ok(vm_result_err_into_result_value(other)),
+                    },
+                    WasmValue::V128(v) => match stack.push_u128(*v) {
+                        VMResult::Success(()) => {}
+                        other => return Ok(vm_result_err_into_result_value(other)),
+                    },
+                    WasmValue::ExternRef(v) => match stack.push_u32(*v) {
+                        VMResult::Success(()) => {}
+                        other => return Ok(vm_result_err_into_result_value(other)),
+                    },
+                    WasmValue::FuncRef(v) => match stack.push_u32(*v) {
+                        VMResult::Success(()) => {}
+                        other => return Ok(vm_result_err_into_result_value(other)),
+                    },
+                }
+            }
+
+            tracing::trace!("run_module_function: {name} {local_size}");
+            let local_reference = match stack.function_call(
+                param_size,
+                local_size,
+                code_addr,
+                LocalReference {
+                    local_size: 0,
+                    local_top: 0,
+                },
+                &VM_END as *const Instr,
+            ) {
+                VMResult::Success(local_reference) => local_reference,
+                other => return Ok(vm_result_err_into_result_value(other)),
+            };
+
+            let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
+
+            scheduler.push(Task {
+                fp: ptr,
+                task_id: 0,
+                stack,
+                local_reference,
+                ready_flag: ReadyFlag::Ready,
+                pending_effects: 0,
+            });
+            ft
+        } else {
+            unimplemented!()
+        };
+        ft
+    };
+
+    scheduler.run_sync_with_gc(gc)?;
+    let ct = scheduler.completed_tasks.pop().unwrap();
+    match ct.result {
+        VMResult::Success(()) => {
+            let mut stack = ct.stack;
+
+            let mut result =
+                ft.1.stack_pop_iter()
+                    .map(|t| match t {
+                        ValType::I32 => WasmValue::I32(stack.pop_i32()),
+                        ValType::I64 => WasmValue::I64(stack.pop_i64()),
+                        ValType::F32 => WasmValue::F32(stack.pop_f32()),
+                        ValType::F64 => WasmValue::F64(stack.pop_f64()),
+                        ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
+                        ValType::ExternRef => WasmValue::ExternRef(stack.pop_u32()),
+                        ValType::V128 => WasmValue::V128(stack.pop_u128()),
+                    })
+                    .collect::<Vec<_>>();
+            result.reverse();
+            Ok(VMResult::Success(ResultValue(result)))
+        }
+        VMResult::Unreachable => Ok(VMResult::Unreachable),
+        VMResult::StackOverflow => Ok(VMResult::StackOverflow),
+        VMResult::MemoryIndexOutOfRange => Ok(VMResult::MemoryIndexOutOfRange),
+        VMResult::TableIndexOutOfRange => Ok(VMResult::TableIndexOutOfRange),
+        VMResult::CallIndirectInvalidType => Ok(VMResult::CallIndirectInvalidType),
+        VMResult::TableUninitialized => Ok(VMResult::TableUninitialized),
+        VMResult::Unlinkable => Ok(VMResult::Unlinkable),
+        VMResult::InvalidOperand => Ok(VMResult::InvalidOperand),
+    }
+}
+
+fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultValue> {
+    match result {
+        VMResult::Success(_) => unreachable!(),
+        VMResult::Unreachable => VMResult::Unreachable,
+        VMResult::StackOverflow => VMResult::StackOverflow,
+        VMResult::MemoryIndexOutOfRange => VMResult::MemoryIndexOutOfRange,
+        VMResult::TableIndexOutOfRange => VMResult::TableIndexOutOfRange,
+        VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
+        VMResult::TableUninitialized => VMResult::TableUninitialized,
+        VMResult::Unlinkable => VMResult::Unlinkable,
+        VMResult::InvalidOperand => VMResult::InvalidOperand,
+    }
+}
+
 pub fn get_global(instance: &InstanceHandle, store: &mut Store, name: &str) -> VMResult<WasmValue> {
     let gc = store.gc.borrow();
 

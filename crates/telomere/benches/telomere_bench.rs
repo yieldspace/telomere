@@ -1,8 +1,6 @@
-use std::{
-    fs,
-    hint::black_box,
-    time::{Duration, Instant},
-};
+use std::fs;
+use std::hint::black_box;
+use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use telomere::{ResultValue, WasmValue};

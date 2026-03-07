@@ -1,0 +1,127 @@
+use crate::ir::types::SortType;
+use crate::ir::TypeId;
+use telomere::WasmParserError;
+use thiserror::Error;
+
+/// `ComponentParseError` represents the possible errors that can occur in the component model parser.
+#[derive(Error, Debug)]
+pub enum ComponentParseError {
+    /// Error occurring in the core WASM module.
+    #[error("error at core wasm module: {0}")]
+    CoreWasmError(#[from] WasmParserError),
+    /// Error from the underlying layer.
+    #[error("error from underlying layer: {0:?}")]
+    IoError(#[from] std::io::Error),
+    /// Error for invalid magic number with expected and actual values.
+    #[error("invalid {2} magic: {0:?} != {1:?}")]
+    InvalidMagic(Box<[u8]>, Box<[u8]>, String),
+    /// Error for invalid magic number with a single byte.
+    #[error("invalid {1} magic: {0:?}")]
+    WrongMagic(u8, String),
+    /// Error for invalid version.
+    #[error("invalid version: {0:?}")]
+    InvalidVersion([u8; 2]),
+    /// Error for invalid layer.
+    #[error("invalid layer: {0:?}")]
+    InvalidLayer([u8; 2]),
+    /// Error for invalid section type.
+    #[error("invalid section type: {0:?}")]
+    InvalidSectionType(u8),
+    /// Error for invalid core sort.
+    #[error("invalid core sort: {0:?}")]
+    InvalidCoreSort(u8),
+    #[error("invalid signature: {0:?}")]
+    InvalidSignature(String),
+    #[error("export `{0:?}` not found")]
+    ExportNotFound(String),
+    #[error("core export `{0:?}` not found")]
+    CoreExportNotFound(String),
+    // #[error("Sort with idx `{0:?}` is invalid (expected {1})")]
+    // InvalidSortWithIdx(SortWithIdx, String),
+    // #[error("Sort `{0:?}` is invalid (expected {1})")]
+    // InvalidSort(Sort, String),
+    #[error("Index `{0:?}` is not found in {1}")]
+    InvalidIdx(usize, String),
+    #[error("{0}")]
+    InvalidType(String),
+    // #[error("Invalid core export `{0}` type: {1:?} != {2:?}")]
+    // InvalidExportType(String, CoreModuleExportType, CoreSort),
+    #[error("Unsupported: {0}")]
+    Unsupported(String),
+    #[error("{0}")]
+    TypeMismatch(String),
+    #[error("Invalid label: {0}")]
+    InvalidLabel(String),
+    #[error("Invalid import name: {0}")]
+    InvalidImportName(String),
+    #[error("Invalid export name: {0}")]
+    InvalidExportName(String),
+    #[error("import is redundant defined")]
+    RedundantImport,
+    #[error("{0}")]
+    InvalidImport(String),
+    #[error("Annotated function can use only for func import and export")]
+    InvalidAnnotatedFn,
+    #[error("Annotated function must have their resource type import or export")]
+    NotFoundPreDefinedResource,
+    #[error("export is redundant defined")]
+    RedundantExport,
+    #[error("enum variant name is redundant defined")]
+    RedundantEnumVariantName,
+    #[error("enum has variants at least one")]
+    EmptyEnum,
+    #[error("flags variant name is redundant defined")]
+    RedundantFlagsVariantName,
+    #[error("flags has names at least one")]
+    EmptyFlags,
+    #[error("flags variant name is too many")]
+    TooManyFlagNames,
+    #[error("variant has cases at least one")]
+    EmptyVariant,
+    #[error("variant case name is redundant defined")]
+    RedundantVariantCaseName,
+    #[error("record has fields at least one")]
+    EmptyRecord,
+    #[error("record field name is redundant defined")]
+    RedundantRecordFieldName,
+    #[error("id is invalid")]
+    InvalidId,
+    #[error("type not found {0:?}")]
+    TypeNotFound(TypeId),
+    #[error("type idx not found {0:?}")]
+    TypeIdxNotFound(u32),
+    #[error("type data not found {0:?}")]
+    DataNotFound(TypeId),
+    #[error("sort type is invalid: expected {0:?}, found {1:?}")]
+    InvalidSortType(SortType, SortType),
+    #[error("the sort scope is invalid")]
+    InvalidScope,
+}
+
+impl ComponentParseError {
+    /// Asserts that the provided `magic` array matches the expected `expected` array.
+    ///
+    /// # Parameters
+    /// - `magic`: The actual magic number array.
+    /// - `expected`: The expected magic number array.
+    /// - `name`: A string representing the name of the magic number being checked.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the magic number matches the expected value.
+    /// - `Err(ComponentParseError::InvalidMagic)` if the magic number does not match the expected value.
+    pub fn assert_magic<const N: usize>(
+        magic: [u8; N],
+        expected: [u8; N],
+        name: &str,
+    ) -> std::result::Result<(), Self> {
+        if magic == expected {
+            Ok(())
+        } else {
+            Err(Self::InvalidMagic(
+                Box::new(expected),
+                Box::new(magic),
+                name.to_string(),
+            ))
+        }
+    }
+}

@@ -531,7 +531,7 @@ pub fn aliasing(
                 let new_funcidx = functions.len();
                 function_types.push(ft.clone());
                 functions.push(TypeIdx(new_tidx as u32));
-                let addr = ext_instance.funcs.as_slice(&store.gc.borrow())[idx.0 as usize];
+                let addr = ext_instance.funcs.as_slice(gc)[idx.0 as usize];
                 function_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -542,7 +542,7 @@ pub fn aliasing(
                 let gt = ext_module.globals[idx.0 as usize];
                 let new_gidx = globals.len();
                 globals.push(gt);
-                let addr = ext_instance.globals.as_slice(&store.gc.borrow())[idx.0 as usize];
+                let addr = ext_instance.globals.as_slice(gc)[idx.0 as usize];
                 global_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -553,11 +553,7 @@ pub fn aliasing(
                 let mt = ext_module.mems[idx.0 as usize];
                 let new_memidx = memories.len();
                 memories.push(mt);
-                mem_addr = ext_instance
-                    .mems
-                    .as_slice(&store.gc.borrow())
-                    .first()
-                    .copied();
+                mem_addr = Some(ext_instance.mems.as_slice(gc)[idx.0 as usize]);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Mem(MemIdx(new_memidx as u32)),
@@ -567,7 +563,7 @@ pub fn aliasing(
                 let tt = ext_module.tables[idx.0 as usize];
                 let new_tableidx = tables.len();
                 tables.push(tt);
-                table_addrs.push(ext_instance.tables.as_slice(&store.gc.borrow())[idx.0 as usize]);
+                table_addrs.push(ext_instance.tables.as_slice(gc)[idx.0 as usize]);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Table(TableIdx(new_tableidx as u32)),
@@ -592,8 +588,9 @@ pub fn aliasing(
         instance_id: inst_id,
     });
 
-    VMResult::Success(InstanceHandle(Rc::new(GcRootHandle::new(
+    VMResult::Success(InstanceHandle(Rc::new(GcRootHandle::new_with_ref(
         inst_addr,
+        gc,
         store.gc.clone(),
     ))))
 }
