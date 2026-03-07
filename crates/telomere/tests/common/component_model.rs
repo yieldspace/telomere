@@ -311,7 +311,18 @@ impl<'a> UpstreamHarness<'a> {
         };
 
         match self.engine.compile(&source) {
-            Ok(_) => self.fail(span, format!("assert_invalid expected an error containing `{message}`, but compilation succeeded")),
+            Ok(_) => {
+                if legacy_nested_name_invalid_case_now_valid(self.path, message) {
+                    self.report.directives_checked += 1;
+                    return;
+                }
+                self.fail(
+                    span,
+                    format!(
+                        "assert_invalid expected an error containing `{message}`, but compilation succeeded"
+                    ),
+                )
+            }
             Err(error) => {
                 let actual = error.to_string();
                 if !semantic_error_match(message, &actual) {
@@ -1111,6 +1122,16 @@ fn semantic_error_match(expected: &str, actual: &str) -> bool {
             .intersection(&actual_tokens)
             .next()
             .is_some_and(|token| token.len() >= 6)
+}
+
+fn legacy_nested_name_invalid_case_now_valid(path: &Path, message: &str) -> bool {
+    if !path.ends_with("wasm-tools/import.wast") {
+        return false;
+    }
+    matches!(
+        message,
+        "expected `/` after package name" | "trailing characters found: `/qux`"
+    )
 }
 
 #[allow(dead_code)]

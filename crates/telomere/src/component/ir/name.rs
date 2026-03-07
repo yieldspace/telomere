@@ -246,7 +246,7 @@ impl Display for PlainName {
 pub struct InterfaceName {
     pub namespace: String,
     pub label: Label,
-    pub projection: Label,
+    pub projection: String,
     pub version: Option<Version>,
 }
 

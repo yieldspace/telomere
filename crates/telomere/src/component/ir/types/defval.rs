@@ -7,6 +7,7 @@ pub enum DefValType {
     Primitive(PrimValType),
     Record(Vec<LabelValType>),
     Variant(Vec<Case>),
+    Flags(Vec<Label>),
     List(ValType, Option<usize>),
     Own(TypeId),
     Borrow(TypeId),
@@ -49,6 +50,21 @@ impl DefValType {
                                 "variant payload mismatch".to_owned(),
                             ))?;
                         }
+                    }
+                }
+                Ok(())
+            }
+            (Flags(labels), Flags(parent_labels)) => {
+                if labels.len() != parent_labels.len() {
+                    Err(ComponentParseError::TypeMismatch(
+                        "flags arity mismatch".to_owned(),
+                    ))?;
+                }
+                for (label, parent_label) in labels.iter().zip(parent_labels.iter()) {
+                    if label != parent_label {
+                        Err(ComponentParseError::TypeMismatch(
+                            "flag label mismatch".to_owned(),
+                        ))?;
                     }
                 }
                 Ok(())

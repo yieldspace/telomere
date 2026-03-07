@@ -227,7 +227,13 @@ fn parse_inlineexport(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<
                 GenericsReplaceDSL::ExportInstance(name.original.clone(), type_id)
             }
             Sort::Func(global_idx, type_id) => {
-                component_exports.insert(name.original.clone(), ComponentExport::Func(global_idx));
+                component_exports.insert(
+                    name.original.clone(),
+                    ComponentExport::Func {
+                        idx: global_idx,
+                        type_id,
+                    },
+                );
                 GenericsReplaceDSL::ExportFunc(name.original.clone(), type_id)
             }
             Sort::Type(type_id) => GenericsReplaceDSL::ExportTypeEq(name.original.clone(), type_id),

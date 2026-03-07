@@ -168,7 +168,9 @@ pub fn parse_type(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<Type
             } else if labels.len() > 32 {
                 return Err(ComponentParseError::TooManyFlagNames);
             }
-            Type::DefVal(DefValType::Record(labels))
+            Type::DefVal(DefValType::Flags(
+                labels.into_iter().map(|entry| entry.label).collect(),
+            ))
         }
         DEFVALTYPE_ENUM => {
             let mut name_set = HashSet::new();
@@ -360,6 +362,7 @@ fn type_contains_borrow(ctx: &ParseContext<impl BinaryReader>, ty: &Type) -> Par
                         valtype_contains_borrow(ctx, ty)
                     }
                 })?,
+            DefValType::Flags(_) => false,
             DefValType::List(ty, _) => valtype_contains_borrow(ctx, ty)?,
         },
         Type::Generic(_)

@@ -1,3 +1,4 @@
+use crate::component::func::{ComponentParams, ComponentReturn};
 use crate::component::{ComponentError, ComponentFuture, ComponentValue};
 use crate::{common::InstanceHandle, Store};
 use std::collections::HashMap;
@@ -79,6 +80,43 @@ impl ComponentLinker {
             + 'static,
     ) {
         self.register_export_async(name, move |store, args| Box::pin(ready(func(store, args))));
+    }
+
+    pub fn register_import_typed_async<P, R>(
+        &mut self,
+        name: impl Into<String>,
+        func: impl for<'a> Fn(&'a mut Store, P) -> ComponentFuture<'a, Result<R, ComponentError>>
+            + 'static,
+    ) where
+        P: ComponentParams + 'static,
+        R: ComponentReturn + 'static,
+    {
+        let func = Arc::new(func);
+        self.register_import_async(name, move |store, args| {
+            match P::from_component_args(args) {
+                Ok(params) => {
+                    let func = Arc::clone(&func);
+                    Box::pin(async move {
+                        let result = (func)(store, params).await?;
+                        result.into_component_results()
+                    })
+                }
+                Err(error) => Box::pin(ready(Err(error))),
+            }
+        });
+    }
+
+    pub fn register_import_typed<P, R>(
+        &mut self,
+        name: impl Into<String>,
+        func: impl Fn(&mut Store, P) -> Result<R, ComponentError> + 'static,
+    ) where
+        P: ComponentParams + 'static,
+        R: ComponentReturn + 'static,
+    {
+        self.register_import_typed_async(name, move |store, params| {
+            Box::pin(ready(func(store, params)))
+        });
     }
 
     pub fn register_import_core(

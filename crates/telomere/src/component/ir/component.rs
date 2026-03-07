@@ -1,5 +1,5 @@
 use crate::component::ir::{
-    CoreModule, ExportNameString, Func, GlobalIdx, ImportNameString, Instance, ResourceId,
+    CoreModule, ExportNameString, Func, GlobalIdx, ImportNameString, Instance, ResourceId, TypeId,
 };
 use std::collections::HashMap;
 
@@ -15,7 +15,7 @@ pub enum ComponentImport {
     Module,
     Component,
     Instance,
-    Func,
+    Func(TypeId),
     Resource,
 }
 
@@ -24,6 +24,9 @@ pub enum ComponentExport {
     Module(GlobalIdx<CoreModule>),
     Component(GlobalIdx<Component>),
     Instance(GlobalIdx<Instance>),
-    Func(GlobalIdx<Func>),
+    Func {
+        idx: GlobalIdx<Func>,
+        type_id: TypeId,
+    },
     Resource(ResourceId),
 }

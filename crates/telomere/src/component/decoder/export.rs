@@ -178,9 +178,13 @@ pub fn parse_export(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResult<()
                     "export kind mismatch".to_owned(),
                 ))?,
             };
-            ctx.state
-                .scope_mut()
-                .add_export(&name, ComponentExport::Func(idx));
+            ctx.state.scope_mut().add_export(
+                &name,
+                ComponentExport::Func {
+                    idx,
+                    type_id: export_type_id,
+                },
+            );
             ctx.state.scope_mut().funcs.register(idx);
             let focus = ctx.validator.scope_mut();
             focus.exports.insert(

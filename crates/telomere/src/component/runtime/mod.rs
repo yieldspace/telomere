@@ -2,7 +2,9 @@ use crate::common::{
     ExecuteContext, ExportDesc, FuncType as CoreFuncType, HostFunctionDefinition, Instr,
     NativeModule, VMResult, ValType as CoreValType, WasmValue,
 };
-use crate::component::ir::types::{DefValType, FuncType, PrimValType, Type, ValType};
+use crate::component::ir::types::{
+    Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType,
+};
 use crate::component::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
     CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
@@ -28,6 +30,9 @@ thread_local! {
     static HOST_BINDINGS: RefCell<HashMap<(u32, u32), Rc<HostBinding>>> = RefCell::new(HashMap::new());
     static ACTIVE_COMPONENT_HOST_GC: Cell<*mut crate::common::gc::MemoryPool> = const { Cell::new(std::ptr::null_mut()) };
 }
+
+const MAX_FLAT_PARAMS: usize = 16;
+const MAX_FLAT_RESULTS: usize = 1;
 
 #[derive(Clone)]
 pub(crate) struct RuntimeInstance {
@@ -759,7 +764,7 @@ impl RuntimeComponentInstance {
             Some(ComponentExport::Instance(idx)) => {
                 RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
             }
-            Some(ComponentExport::Func(idx)) => {
+            Some(ComponentExport::Func { idx, .. }) => {
                 if self.env.parent.is_none() {
                     if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx) {
                         if let Some(binding) = self.env.linker.resolve_export(name) {
@@ -1434,14 +1439,33 @@ fn lower_component_args(
             args.len()
         )));
     }
+    let total_flat_len = function_params_flat_len(func_type, program)?;
+    if total_flat_len > MAX_FLAT_PARAMS {
+        options.memory.clone().ok_or_else(|| {
+            ComponentError::Runtime("canonical option `memory` is required".to_owned())
+        })?;
+        let realloc = options.realloc.as_ref().ok_or_else(|| {
+            ComponentError::Runtime("canonical option `realloc` is required".to_owned())
+        })?;
+        let offsets = function_param_offsets(func_type, program)?;
+        let total_size = function_param_size(func_type, program)?;
+        let ptr = if total_size == 0 {
+            0
+        } else {
+            call_realloc(realloc, store, 0, 0, 4, total_size as i32)? as u32
+        };
+        for ((value, ty), offset) in args
+            .iter()
+            .zip(func_type.params.iter())
+            .zip(offsets.iter().copied())
+        {
+            write_value_to_memory(value, ty, options, program, store, ptr + offset)?;
+        }
+        return Ok(vec![WasmValue::I32(ptr as i32)]);
+    }
     let mut lowered = Vec::new();
     for (value, ty) in args.iter().zip(func_type.params.iter()) {
         lower_value(value, ty, options, program, store, &mut lowered)?;
-    }
-    if lowered.len() > 16 {
-        return Err(ComponentError::Unsupported(
-            "indirect canonical parameter passing is not implemented yet".to_owned(),
-        ));
     }
     Ok(lowered)
 }
@@ -1453,6 +1477,33 @@ fn lift_component_args(
     program: &ComponentProgram,
     store: &mut Store,
 ) -> Result<Vec<ComponentValue>, ComponentError> {
+    if function_params_flat_len(func_type, program)? > MAX_FLAT_PARAMS {
+        let memory = options.memory.clone().ok_or_else(|| {
+            ComponentError::Runtime("canonical option `memory` is required".to_owned())
+        })?;
+        let ptr = match args.first() {
+            Some(WasmValue::I32(ptr)) => *ptr as u32,
+            Some(other) => {
+                return Err(ComponentError::Runtime(format!(
+                    "indirect canonical parameter area must be an i32 pointer, got {other:?}"
+                )))
+            }
+            None => {
+                return Err(ComponentError::Runtime(
+                    "indirect canonical parameter area is missing".to_owned(),
+                ))
+            }
+        };
+        let offsets = function_param_offsets(func_type, program)?;
+        return func_type
+            .params
+            .iter()
+            .zip(offsets.iter().copied())
+            .map(|(ty, offset)| {
+                read_value_from_memory(ty, options, program, store, &memory, ptr + offset)
+            })
+            .collect();
+    }
     let mut cursor = CoreValueCursor::new(args);
     func_type
         .params
@@ -1472,9 +1523,12 @@ fn lift_component_results(
         return Ok(Vec::new());
     };
     let mut cursor = CoreValueCursor::new(results);
-    let result = if value_flat_len(result_ty, program)? > 1 {
+    let result = if value_flat_len(result_ty, program)? > MAX_FLAT_RESULTS {
         let pointer = cursor.next_i32()? as u32;
-        lift_indirect_result(result_ty, options, program, store, pointer)?
+        let memory = options.memory.clone().ok_or_else(|| {
+            ComponentError::Runtime("canonical option `memory` is required".to_owned())
+        })?;
+        read_value_from_memory(result_ty, options, program, store, &memory, pointer)?
     } else {
         lift_value(result_ty, options, program, store, &mut cursor)?
     };
@@ -1501,14 +1555,13 @@ fn lower_component_results(
         .first()
         .ok_or_else(|| ComponentError::InvalidArgument("function result is missing".to_owned()))?;
     let flat_len = value_flat_len(result_ty, program)?;
-    if flat_len > 1 {
-        let memory = options.memory.clone().ok_or_else(|| {
+    if flat_len > MAX_FLAT_RESULTS {
+        options.memory.clone().ok_or_else(|| {
             ComponentError::Runtime("canonical option `memory` is required".to_owned())
         })?;
         let return_ptr = result_area
             .ok_or_else(|| ComponentError::Runtime("indirect result area is missing".to_owned()))?;
-        let flat = lower_value_to_flat(value, result_ty, options, program, store)?;
-        write_flat_values(store, &memory, return_ptr, &flat)?;
+        write_value_to_memory(value, result_ty, options, program, store, return_ptr)?;
         Ok(Vec::new())
     } else {
         lower_value_to_flat(value, result_ty, options, program, store)
@@ -1523,7 +1576,7 @@ fn lowered_indirect_result_area(
     let Some(result_ty) = &func_type.result else {
         return Ok(None);
     };
-    if value_flat_len(result_ty, program)? <= 1 {
+    if value_flat_len(result_ty, program)? <= MAX_FLAT_RESULTS {
         return Ok(None);
     }
     match args.last() {
@@ -1600,6 +1653,16 @@ fn lower_defined_value(
         Type::DefVal(DefValType::Primitive(prim)) => {
             lower_primitive(value, prim, options, store, program)
         }
+        Type::DefVal(DefValType::Record(fields)) => {
+            lower_record_value(value, fields, options, program, store)
+        }
+        Type::DefVal(DefValType::Variant(cases)) => {
+            lower_variant_value(value, cases, options, program, store)
+        }
+        Type::DefVal(DefValType::Flags(labels)) => lower_flags_value(value, labels),
+        Type::DefVal(DefValType::List(elem, maybe_len)) => {
+            lower_list_value(value, elem, *maybe_len, options, program, store)
+        }
         Type::DefVal(DefValType::Own(resource)) | Type::DefVal(DefValType::Borrow(resource)) => {
             let _ = program_resource_id(program, *resource)?;
             Ok(vec![WasmValue::I32(expect_handle(value)? as i32)])
@@ -1624,28 +1687,6 @@ fn lift_value(
     }
 }
 
-fn lift_indirect_result(
-    ty: &ValType,
-    options: &RuntimeCanonicalOptions,
-    _program: &ComponentProgram,
-    store: &mut Store,
-    pointer: u32,
-) -> Result<ComponentValue, ComponentError> {
-    match ty {
-        ValType::Primitive(PrimValType::String) => {
-            let memory = options.memory.clone().ok_or_else(|| {
-                ComponentError::Runtime("canonical option `memory` is required".to_owned())
-            })?;
-            let (data_ptr, len) = read_string_pointer_pair(store, &memory, pointer)?;
-            read_string_from_memory(store, &memory, data_ptr, len, options.string_encoding)
-                .map(ComponentValue::String)
-        }
-        _ => Err(ComponentError::Unsupported(
-            "indirect canonical results are not implemented yet".to_owned(),
-        )),
-    }
-}
-
 fn lift_defined_value(
     type_id: TypeId,
     options: &RuntimeCanonicalOptions,
@@ -1658,6 +1699,16 @@ fn lift_defined_value(
         .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
     {
         Type::DefVal(DefValType::Primitive(prim)) => lift_primitive(prim, options, store, cursor),
+        Type::DefVal(DefValType::Record(fields)) => {
+            lift_record_value(fields, options, program, store, cursor)
+        }
+        Type::DefVal(DefValType::Variant(cases)) => {
+            lift_variant_value(cases, options, program, store, cursor)
+        }
+        Type::DefVal(DefValType::Flags(labels)) => lift_flags_value(labels, cursor),
+        Type::DefVal(DefValType::List(elem, maybe_len)) => {
+            lift_list_value(elem, *maybe_len, options, program, store, cursor)
+        }
         Type::DefVal(DefValType::Own(resource)) => {
             let _ = program_resource_id(program, *resource)?;
             Ok(ComponentValue::Own(cursor.next_i32()? as u32))
@@ -1760,6 +1811,692 @@ fn encode_string(value: &str, encoding: CanonicalStringEncoding) -> Vec<u8> {
     }
 }
 
+fn function_params_flat_len(
+    func_type: &FuncType,
+    program: &ComponentProgram,
+) -> Result<usize, ComponentError> {
+    func_type
+        .params
+        .iter()
+        .try_fold(0usize, |len, ty| Ok(len + value_flat_len(ty, program)?))
+}
+
+fn function_param_offsets(
+    func_type: &FuncType,
+    program: &ComponentProgram,
+) -> Result<Vec<u32>, ComponentError> {
+    let mut offsets = Vec::with_capacity(func_type.params.len());
+    let mut cursor = 0u32;
+    for ty in &func_type.params {
+        offsets.push(cursor);
+        cursor = cursor.saturating_add(flat_byte_len_for_valtype(ty, program)?);
+    }
+    Ok(offsets)
+}
+
+fn function_param_size(
+    func_type: &FuncType,
+    program: &ComponentProgram,
+) -> Result<u32, ComponentError> {
+    Ok(function_param_offsets(func_type, program)?
+        .last()
+        .copied()
+        .unwrap_or(0)
+        + func_type
+            .params
+            .last()
+            .map(|ty| flat_byte_len_for_valtype(ty, program))
+            .transpose()?
+            .unwrap_or(0))
+}
+
+fn flat_byte_len_for_valtype(
+    ty: &ValType,
+    program: &ComponentProgram,
+) -> Result<u32, ComponentError> {
+    Ok(flat_byte_len(&flat_types_for_valtype(ty, program)?))
+}
+
+fn flat_byte_len(types: &[CoreValType]) -> u32 {
+    types
+        .iter()
+        .map(|ty| match ty {
+            CoreValType::I32 | CoreValType::F32 | CoreValType::FuncRef | CoreValType::ExternRef => {
+                4
+            }
+            CoreValType::I64 | CoreValType::F64 => 8,
+            CoreValType::V128 => 16,
+        })
+        .sum()
+}
+
+fn flat_types_for_valtype(
+    ty: &ValType,
+    program: &ComponentProgram,
+) -> Result<Vec<CoreValType>, ComponentError> {
+    match ty {
+        ValType::Primitive(prim) => Ok(flat_types_for_primitive(prim)),
+        ValType::Type(type_id) => flat_types_for_type(*type_id, program),
+    }
+}
+
+fn flat_types_for_type(
+    type_id: TypeId,
+    program: &ComponentProgram,
+) -> Result<Vec<CoreValType>, ComponentError> {
+    match program
+        .get_type(type_id)
+        .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
+    {
+        Type::DefVal(def) => flat_types_for_defval(def, program),
+        Type::Resource(_) | Type::Generic(_) => Ok(vec![CoreValType::I32]),
+        _ => Err(ComponentError::Unsupported(
+            "flat types for this component type are not implemented yet".to_owned(),
+        )),
+    }
+}
+
+fn flat_types_for_defval(
+    def: &DefValType,
+    program: &ComponentProgram,
+) -> Result<Vec<CoreValType>, ComponentError> {
+    Ok(match def {
+        DefValType::Primitive(prim) => flat_types_for_primitive(prim),
+        DefValType::Record(fields) => {
+            let mut types = Vec::new();
+            for field in fields {
+                types.extend(flat_types_for_valtype(&field.ty, program)?);
+            }
+            types
+        }
+        DefValType::Variant(cases) => {
+            let mut payload = Vec::new();
+            for case in cases {
+                if let Some(ty) = &case.ty {
+                    for (index, flat_ty) in
+                        flat_types_for_valtype(ty, program)?.into_iter().enumerate()
+                    {
+                        if let Some(current) = payload.get_mut(index) {
+                            *current = join_component_flat_types(*current, flat_ty);
+                        } else {
+                            payload.push(flat_ty);
+                        }
+                    }
+                }
+            }
+            let mut types = Vec::with_capacity(1 + payload.len());
+            types.push(CoreValType::I32);
+            types.extend(payload);
+            types
+        }
+        DefValType::Flags(labels) => vec![CoreValType::I32; labels.len().div_ceil(32).max(1)],
+        DefValType::List(_, _) => vec![CoreValType::I32, CoreValType::I32],
+        DefValType::Own(_) | DefValType::Borrow(_) => vec![CoreValType::I32],
+    })
+}
+
+fn flat_types_for_primitive(prim: &PrimValType) -> Vec<CoreValType> {
+    match prim {
+        PrimValType::Bool
+        | PrimValType::S8
+        | PrimValType::U8
+        | PrimValType::S16
+        | PrimValType::U16
+        | PrimValType::S32
+        | PrimValType::U32
+        | PrimValType::Char => vec![CoreValType::I32],
+        PrimValType::S64 | PrimValType::U64 => vec![CoreValType::I64],
+        PrimValType::F32 => vec![CoreValType::F32],
+        PrimValType::F64 => vec![CoreValType::F64],
+        PrimValType::String => vec![CoreValType::I32, CoreValType::I32],
+    }
+}
+
+fn join_component_flat_types(lhs: CoreValType, rhs: CoreValType) -> CoreValType {
+    if lhs == rhs {
+        lhs
+    } else if matches!(
+        (lhs, rhs),
+        (CoreValType::I32, CoreValType::F32) | (CoreValType::F32, CoreValType::I32)
+    ) {
+        CoreValType::I32
+    } else {
+        CoreValType::I64
+    }
+}
+
+fn write_value_to_memory(
+    value: &ComponentValue,
+    ty: &ValType,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    ptr: u32,
+) -> Result<(), ComponentError> {
+    let memory = options.memory.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    let flat = lower_value_to_flat(value, ty, options, program, store)?;
+    write_flat_values(store, memory, ptr, &flat)
+}
+
+fn read_value_from_memory(
+    ty: &ValType,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<ComponentValue, ComponentError> {
+    let flat_types = flat_types_for_valtype(ty, program)?;
+    let values = read_flat_values_from_memory(store, memory, ptr, &flat_types)?;
+    let mut cursor = CoreValueCursor::new(&values);
+    lift_value(ty, options, program, store, &mut cursor)
+}
+
+fn read_flat_values_from_memory(
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+    flat_types: &[CoreValType],
+) -> Result<Vec<WasmValue>, ComponentError> {
+    let bytes = read_memory(store, memory, ptr, flat_byte_len(flat_types) as usize)?;
+    let mut offset = 0usize;
+    let mut values = Vec::with_capacity(flat_types.len());
+    for ty in flat_types {
+        let value = match ty {
+            CoreValType::I32 | CoreValType::FuncRef | CoreValType::ExternRef => {
+                let raw = i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                if matches!(ty, CoreValType::FuncRef) {
+                    WasmValue::FuncRef(raw as u32)
+                } else if matches!(ty, CoreValType::ExternRef) {
+                    WasmValue::ExternRef(raw as u32)
+                } else {
+                    WasmValue::I32(raw)
+                }
+            }
+            CoreValType::F32 => {
+                let raw = f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                offset += 4;
+                WasmValue::F32(raw)
+            }
+            CoreValType::I64 => {
+                let raw = i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                WasmValue::I64(raw)
+            }
+            CoreValType::F64 => {
+                let raw = f64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+                offset += 8;
+                WasmValue::F64(raw)
+            }
+            CoreValType::V128 => {
+                let raw = u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap());
+                offset += 16;
+                WasmValue::V128(raw)
+            }
+        };
+        values.push(value);
+    }
+    Ok(values)
+}
+
+fn lower_record_value(
+    value: &ComponentValue,
+    fields: &[LabelValType],
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+) -> Result<Vec<WasmValue>, ComponentError> {
+    let values = if is_tuple_fields(fields) {
+        match value {
+            ComponentValue::Tuple(values) => values.clone(),
+            ComponentValue::Record(entries) => fields
+                .iter()
+                .map(|field| {
+                    entries
+                        .iter()
+                        .find(|(name, _)| name == &field.label.0)
+                        .map(|(_, value)| value.clone())
+                        .ok_or_else(|| {
+                            ComponentError::InvalidArgument(format!(
+                                "record field '{}' is missing",
+                                field.label
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            other => {
+                return Err(ComponentError::InvalidArgument(format!(
+                    "expected tuple value, got {other:?}"
+                )))
+            }
+        }
+    } else {
+        match value {
+            ComponentValue::Record(entries) => fields
+                .iter()
+                .map(|field| {
+                    entries
+                        .iter()
+                        .find(|(name, _)| name == &field.label.0)
+                        .map(|(_, value)| value.clone())
+                        .ok_or_else(|| {
+                            ComponentError::InvalidArgument(format!(
+                                "record field '{}' is missing",
+                                field.label
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            other => {
+                return Err(ComponentError::InvalidArgument(format!(
+                    "expected record value, got {other:?}"
+                )))
+            }
+        }
+    };
+    let mut lowered = Vec::new();
+    for (value, field) in values.iter().zip(fields.iter()) {
+        lowered.extend(lower_value_to_flat(
+            value, &field.ty, options, program, store,
+        )?);
+    }
+    Ok(lowered)
+}
+
+fn lift_record_value(
+    fields: &[LabelValType],
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    cursor: &mut CoreValueCursor<'_>,
+) -> Result<ComponentValue, ComponentError> {
+    let mut values = Vec::with_capacity(fields.len());
+    for field in fields {
+        values.push((
+            field.label.0.clone(),
+            lift_value(&field.ty, options, program, store, cursor)?,
+        ));
+    }
+    if is_tuple_fields(fields) {
+        Ok(ComponentValue::Tuple(
+            values.into_iter().map(|(_, value)| value).collect(),
+        ))
+    } else {
+        Ok(ComponentValue::Record(values))
+    }
+}
+
+fn lower_variant_value(
+    value: &ComponentValue,
+    cases: &[Case],
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+) -> Result<Vec<WasmValue>, ComponentError> {
+    let (case_name, payload) = match value {
+        ComponentValue::Variant { case, value } => (case.as_str(), value.as_deref()),
+        ComponentValue::Enum(case) => (case.as_str(), None),
+        ComponentValue::Option(value) if is_option_cases(cases) => match value {
+            Some(value) => ("some", Some(value.as_ref())),
+            None => ("none", None),
+        },
+        ComponentValue::Result { ok, err } if is_result_cases(cases) => match (ok, err) {
+            (Some(value), None) => ("ok", Some(value.as_ref())),
+            (None, Some(value)) => ("err", Some(value.as_ref())),
+            (None, None) => ("ok", None),
+            _ => {
+                return Err(ComponentError::InvalidArgument(
+                    "result value must set exactly one branch".to_owned(),
+                ))
+            }
+        },
+        other => {
+            return Err(ComponentError::InvalidArgument(format!(
+                "expected variant-compatible value, got {other:?}"
+            )))
+        }
+    };
+    let case_index = cases
+        .iter()
+        .position(|case| case.label.0 == case_name)
+        .ok_or_else(|| {
+            ComponentError::InvalidArgument(format!("unknown variant case '{case_name}'"))
+        })?;
+    let payload_types = variant_payload_flat_types(cases, program)?;
+    let mut lowered = Vec::with_capacity(1 + payload_types.len());
+    lowered.push(WasmValue::I32(case_index as i32));
+    let case = &cases[case_index];
+    let (case_flat, case_flat_types) = if let Some(ty) = &case.ty {
+        let payload = payload.ok_or_else(|| {
+            ComponentError::InvalidArgument(format!(
+                "variant case '{}' expects a payload",
+                case.label
+            ))
+        })?;
+        (
+            lower_value_to_flat(payload, ty, options, program, store)?,
+            flat_types_for_valtype(ty, program)?,
+        )
+    } else {
+        if payload.is_some() {
+            return Err(ComponentError::InvalidArgument(format!(
+                "variant case '{}' does not accept a payload",
+                case.label
+            )));
+        }
+        (Vec::new(), Vec::new())
+    };
+    for (index, payload_ty) in payload_types.iter().enumerate() {
+        if let Some(value) = case_flat.get(index) {
+            lowered.push(coerce_flat_value(
+                *value,
+                case_flat_types[index],
+                *payload_ty,
+            )?);
+        } else {
+            lowered.push(zero_wasm_value(*payload_ty));
+        }
+    }
+    Ok(lowered)
+}
+
+fn lift_variant_value(
+    cases: &[Case],
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    cursor: &mut CoreValueCursor<'_>,
+) -> Result<ComponentValue, ComponentError> {
+    let case_index = cursor.next_i32()? as usize;
+    let case = cases
+        .get(case_index)
+        .ok_or_else(|| ComponentError::Trap("variant discriminant is out of bounds".to_owned()))?;
+    let payload_types = variant_payload_flat_types(cases, program)?;
+    let raw_payload = payload_types
+        .iter()
+        .map(|ty| cursor.next_for_type(*ty))
+        .collect::<Result<Vec<_>, _>>()?;
+    let payload = if let Some(ty) = &case.ty {
+        let expected_types = flat_types_for_valtype(ty, program)?;
+        let values = expected_types
+            .iter()
+            .enumerate()
+            .map(|(index, expected)| {
+                coerce_flat_value(raw_payload[index], payload_types[index], *expected)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Some(Box::new(lift_value_from_flat_values(
+            ty, options, program, store, &values,
+        )?))
+    } else {
+        None
+    };
+    if is_option_cases(cases) {
+        return Ok(ComponentValue::Option(payload));
+    }
+    if is_result_cases(cases) {
+        return Ok(match case.label.0.as_str() {
+            "ok" => ComponentValue::Result {
+                ok: payload,
+                err: None,
+            },
+            "err" => ComponentValue::Result {
+                ok: None,
+                err: payload,
+            },
+            _ => unreachable!(),
+        });
+    }
+    if is_enum_cases(cases) {
+        return Ok(ComponentValue::Enum(case.label.0.clone()));
+    }
+    Ok(ComponentValue::Variant {
+        case: case.label.0.clone(),
+        value: payload,
+    })
+}
+
+fn lower_flags_value(
+    value: &ComponentValue,
+    labels: &[crate::component::ir::Label],
+) -> Result<Vec<WasmValue>, ComponentError> {
+    let selected = match value {
+        ComponentValue::Flags(flags) => flags.as_slice(),
+        other => {
+            return Err(ComponentError::InvalidArgument(format!(
+                "expected flags value, got {other:?}"
+            )))
+        }
+    };
+    let mut words = vec![0u32; labels.len().div_ceil(32).max(1)];
+    for flag in selected {
+        let index = labels
+            .iter()
+            .position(|label| &label.0 == flag)
+            .ok_or_else(|| ComponentError::InvalidArgument(format!("unknown flag '{flag}'")))?;
+        words[index / 32] |= 1 << (index % 32);
+    }
+    Ok(words
+        .into_iter()
+        .map(|word| WasmValue::I32(word as i32))
+        .collect())
+}
+
+fn lift_flags_value(
+    labels: &[crate::component::ir::Label],
+    cursor: &mut CoreValueCursor<'_>,
+) -> Result<ComponentValue, ComponentError> {
+    let mut selected = Vec::new();
+    for chunk_start in (0..labels.len()).step_by(32) {
+        let bits = cursor.next_i32()? as u32;
+        for bit in 0..32 {
+            let index = chunk_start + bit;
+            if index >= labels.len() {
+                break;
+            }
+            if bits & (1 << bit) != 0 {
+                selected.push(labels[index].0.clone());
+            }
+        }
+    }
+    Ok(ComponentValue::Flags(selected))
+}
+
+fn lower_list_value(
+    value: &ComponentValue,
+    elem: &ValType,
+    fixed_len: Option<usize>,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+) -> Result<Vec<WasmValue>, ComponentError> {
+    let values = match value {
+        ComponentValue::List(values) => values,
+        other => {
+            return Err(ComponentError::InvalidArgument(format!(
+                "expected list value, got {other:?}"
+            )))
+        }
+    };
+    if let Some(expected) = fixed_len {
+        if values.len() != expected {
+            return Err(ComponentError::InvalidArgument(format!(
+                "expected list length {expected}, got {}",
+                values.len()
+            )));
+        }
+    }
+    let memory = options.memory.clone().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    let realloc = options.realloc.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `realloc` is required".to_owned())
+    })?;
+    let stride = flat_byte_len_for_valtype(elem, program)?;
+    let total_len = stride.saturating_mul(values.len() as u32);
+    let ptr = if total_len == 0 {
+        0
+    } else {
+        call_realloc(realloc, store, 0, 0, 4, total_len as i32)? as u32
+    };
+    for (index, value) in values.iter().enumerate() {
+        let flat = lower_value_to_flat(value, elem, options, program, store)?;
+        write_flat_values(store, &memory, ptr + stride * index as u32, &flat)?;
+    }
+    Ok(vec![
+        WasmValue::I32(ptr as i32),
+        WasmValue::I32(values.len() as i32),
+    ])
+}
+
+fn lift_list_value(
+    elem: &ValType,
+    fixed_len: Option<usize>,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    cursor: &mut CoreValueCursor<'_>,
+) -> Result<ComponentValue, ComponentError> {
+    let memory = options.memory.clone().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    let ptr = cursor.next_i32()? as u32;
+    let len = cursor.next_i32()? as usize;
+    if let Some(expected) = fixed_len {
+        if len != expected {
+            return Err(ComponentError::Trap(format!(
+                "fixed-length list expected {expected} elements, got {len}"
+            )));
+        }
+    }
+    let stride = flat_byte_len_for_valtype(elem, program)?;
+    let mut values = Vec::with_capacity(len);
+    for index in 0..len {
+        values.push(read_value_from_memory(
+            elem,
+            options,
+            program,
+            store,
+            &memory,
+            ptr + stride * index as u32,
+        )?);
+    }
+    Ok(ComponentValue::List(values))
+}
+
+fn lift_value_from_flat_values(
+    ty: &ValType,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    values: &[WasmValue],
+) -> Result<ComponentValue, ComponentError> {
+    let mut cursor = CoreValueCursor::new(values);
+    lift_value(ty, options, program, store, &mut cursor)
+}
+
+fn variant_payload_flat_types(
+    cases: &[Case],
+    program: &ComponentProgram,
+) -> Result<Vec<CoreValType>, ComponentError> {
+    let mut payload = Vec::new();
+    for case in cases {
+        if let Some(ty) = &case.ty {
+            for (index, flat_ty) in flat_types_for_valtype(ty, program)?.into_iter().enumerate() {
+                if let Some(current) = payload.get_mut(index) {
+                    *current = join_component_flat_types(*current, flat_ty);
+                } else {
+                    payload.push(flat_ty);
+                }
+            }
+        }
+    }
+    Ok(payload)
+}
+
+fn zero_wasm_value(ty: CoreValType) -> WasmValue {
+    match ty {
+        CoreValType::I32 => WasmValue::I32(0),
+        CoreValType::I64 => WasmValue::I64(0),
+        CoreValType::F32 => WasmValue::F32(0.0),
+        CoreValType::F64 => WasmValue::F64(0.0),
+        CoreValType::FuncRef => WasmValue::FuncRef(0),
+        CoreValType::ExternRef => WasmValue::ExternRef(0),
+        CoreValType::V128 => WasmValue::V128(0),
+    }
+}
+
+fn coerce_flat_value(
+    value: WasmValue,
+    from: CoreValType,
+    to: CoreValType,
+) -> Result<WasmValue, ComponentError> {
+    if from == to {
+        return Ok(value);
+    }
+    Ok(match (value, from, to) {
+        (WasmValue::I32(value), CoreValType::I32, CoreValType::I64) => {
+            WasmValue::I64((value as u32 as u64) as i64)
+        }
+        (WasmValue::F32(value), CoreValType::F32, CoreValType::I32) => {
+            WasmValue::I32(value.to_bits() as i32)
+        }
+        (WasmValue::I32(value), CoreValType::I32, CoreValType::F32) => {
+            WasmValue::F32(f32::from_bits(value as u32))
+        }
+        (WasmValue::F32(value), CoreValType::F32, CoreValType::I64) => {
+            WasmValue::I64(value.to_bits() as u64 as i64)
+        }
+        (WasmValue::I64(value), CoreValType::I64, CoreValType::I32) => {
+            WasmValue::I32(value as u32 as i32)
+        }
+        (WasmValue::I64(value), CoreValType::I64, CoreValType::F32) => {
+            WasmValue::F32(f32::from_bits(value as u32))
+        }
+        (WasmValue::F64(value), CoreValType::F64, CoreValType::I64) => {
+            WasmValue::I64(value.to_bits() as i64)
+        }
+        (WasmValue::I64(value), CoreValType::I64, CoreValType::F64) => {
+            WasmValue::F64(f64::from_bits(value as u64))
+        }
+        (other, _, _) => {
+            return Err(ComponentError::Trap(format!(
+                "cannot coerce canonical value {other:?} from {from:?} to {to:?}"
+            )))
+        }
+    })
+}
+
+fn is_tuple_fields(fields: &[LabelValType]) -> bool {
+    !fields.is_empty()
+        && fields
+            .iter()
+            .enumerate()
+            .all(|(index, field)| field.label.0 == index.to_string())
+}
+
+fn is_option_cases(cases: &[Case]) -> bool {
+    matches!(
+        cases,
+        [Case { label, ty: None }, Case { label: some, ty: Some(_) }]
+            if label.0 == "none" && some.0 == "some"
+    )
+}
+
+fn is_result_cases(cases: &[Case]) -> bool {
+    matches!(
+        cases,
+        [Case { label: ok, .. }, Case { label: err, .. }] if ok.0 == "ok" && err.0 == "err"
+    )
+}
+
+fn is_enum_cases(cases: &[Case]) -> bool {
+    !cases.is_empty() && cases.iter().all(|case| case.ty.is_none())
+}
+
 fn read_string_from_memory(
     store: &mut Store,
     memory: &CoreExportRef,
@@ -1791,18 +2528,6 @@ fn read_string_from_memory(
             String::from_utf16(&units).map_err(|error| ComponentError::Trap(error.to_string()))
         }
     }
-}
-
-fn read_string_pointer_pair(
-    store: &mut Store,
-    memory: &CoreExportRef,
-    pair_ptr: u32,
-) -> Result<(u32, u32), ComponentError> {
-    let bytes = read_memory(store, memory, pair_ptr, 8)?;
-    Ok((
-        u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
-        u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
-    ))
 }
 
 fn read_memory(
@@ -1978,20 +2703,11 @@ fn program_resource_id(
 
 fn value_flat_len(ty: &ValType, program: &ComponentProgram) -> Result<usize, ComponentError> {
     match ty {
-        ValType::Primitive(PrimValType::String) => Ok(2),
-        ValType::Primitive(_) => Ok(1),
-        ValType::Type(type_id) => match program.get_type(*type_id) {
-            Some(Type::DefVal(DefValType::Primitive(PrimValType::String))) => Ok(2),
-            Some(Type::DefVal(DefValType::Primitive(_))) => Ok(1),
-            Some(Type::DefVal(DefValType::Own(_))) | Some(Type::DefVal(DefValType::Borrow(_))) => {
-                Ok(1)
-            }
-            Some(Type::Resource(_)) => Ok(1),
-            Some(Type::Generic(_)) => Ok(1),
-            _ => Err(ComponentError::Unsupported(
-                "flat length for this type is not implemented yet".to_owned(),
-            )),
-        },
+        ValType::Primitive(prim) => Ok(flat_types_for_primitive(prim).len()),
+        ValType::Type(type_id) => program
+            .get_type_info(*type_id)
+            .map(|info| info.flat_len)
+            .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned())),
     }
 }
 
@@ -2039,6 +2755,30 @@ impl<'a> CoreValueCursor<'a> {
         match self.next()? {
             WasmValue::F64(v) => Ok(v),
             other => Err(ComponentError::Trap(format!("expected f64, got {other:?}"))),
+        }
+    }
+
+    fn next_for_type(&mut self, ty: CoreValType) -> Result<WasmValue, ComponentError> {
+        match ty {
+            CoreValType::I32 => self.next().and_then(|value| match value {
+                WasmValue::I32(_) => Ok(value),
+                other => Err(ComponentError::Trap(format!("expected i32, got {other:?}"))),
+            }),
+            CoreValType::I64 => self.next().and_then(|value| match value {
+                WasmValue::I64(_) => Ok(value),
+                other => Err(ComponentError::Trap(format!("expected i64, got {other:?}"))),
+            }),
+            CoreValType::F32 => self.next().and_then(|value| match value {
+                WasmValue::F32(_) => Ok(value),
+                other => Err(ComponentError::Trap(format!("expected f32, got {other:?}"))),
+            }),
+            CoreValType::F64 => self.next().and_then(|value| match value {
+                WasmValue::F64(_) => Ok(value),
+                other => Err(ComponentError::Trap(format!("expected f64, got {other:?}"))),
+            }),
+            other => Err(ComponentError::Unsupported(format!(
+                "core cursor does not support {other:?}"
+            ))),
         }
     }
 }

@@ -947,6 +947,7 @@ impl<'a> Validator<'a> {
                     })
                     .collect::<ParseResult<Vec<_>>>()?,
             ),
+            DefValType::Flags(labels) => DefValType::Flags(labels.clone()),
             DefValType::List(ty, len) => {
                 DefValType::List(self.instantiate_valtype(ty, context)?, *len)
             }
@@ -991,6 +992,7 @@ impl<'a> Validator<'a> {
                     })
                     .collect::<ParseResult<Vec<_>>>()?,
             ),
+            DefValType::Flags(labels) => DefValType::Flags(labels.clone()),
             DefValType::List(ty, len) => {
                 DefValType::List(self.freshen_import_valtype(ty, context)?, *len)
             }
@@ -1443,6 +1445,42 @@ impl<'a> Validator<'a> {
         }
     }
 
+    fn validate_nested_valtype_ref(
+        &self,
+        val_ty: &ValType,
+        visible: &[TypeId],
+        seen: &mut VisitTracker,
+    ) -> ParseResult<()> {
+        match val_ty {
+            ValType::Primitive(_) => Ok(()),
+            ValType::Type(type_id) => self.validate_nested_type_ref(*type_id, visible, seen),
+        }
+    }
+
+    fn validate_nested_type_ref(
+        &self,
+        type_id: TypeId,
+        visible: &[TypeId],
+        seen: &mut VisitTracker,
+    ) -> ParseResult<()> {
+        let ty = self.get_type(type_id)?.clone();
+        let mut visiting = VisitTracker::new(self.types.len());
+        if self.type_requires_nested_name(&ty, &mut visiting)? {
+            if contains_type_id(visible, type_id)
+                || self.resource_visible_by_identity(type_id, visible)?
+                || self.defval_visible_by_structure(type_id, visible)?
+            {
+                Ok(())
+            } else {
+                Err(ComponentParseError::TypeMismatch(format!(
+                    "surface type requires exported/imported name: {type_id:?} => {ty:?}"
+                )))
+            }
+        } else {
+            self.validate_type_definition(type_id, visible, seen)
+        }
+    }
+
     fn validate_defval_definition(
         &self,
         def: &DefValType,
@@ -1453,19 +1491,20 @@ impl<'a> Validator<'a> {
             DefValType::Primitive(_) => Ok(()),
             DefValType::Record(fields) => {
                 for field in fields {
-                    self.validate_valtype_ref(&field.ty, visible, seen)?;
+                    self.validate_nested_valtype_ref(&field.ty, visible, seen)?;
                 }
                 Ok(())
             }
             DefValType::Variant(cases) => {
                 for case in cases {
                     if let Some(ty) = &case.ty {
-                        self.validate_valtype_ref(ty, visible, seen)?;
+                        self.validate_nested_valtype_ref(ty, visible, seen)?;
                     }
                 }
                 Ok(())
             }
-            DefValType::List(ty, _) => self.validate_valtype_ref(ty, visible, seen),
+            DefValType::Flags(_) => Ok(()),
+            DefValType::List(ty, _) => self.validate_nested_valtype_ref(ty, visible, seen),
             DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
                 self.validate_type_ref(*type_id, visible, seen)
             }
@@ -1498,9 +1537,98 @@ impl<'a> Validator<'a> {
                 .enumerate()
                 .all(|(index, field)| field.label.0 == index.to_string()),
             DefValType::Variant(cases) => !self.variant_is_inline(cases),
+            DefValType::Flags(_) => false,
             DefValType::List(_, _) => false,
             DefValType::Own(_) | DefValType::Borrow(_) => false,
         }
+    }
+
+    fn type_requires_nested_name(
+        &self,
+        ty: &Type,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        match ty {
+            Type::DefVal(def) => self.defval_requires_nested_name(def, visiting),
+            Type::Generic(Generic {
+                bound: GenericBound::Sub,
+                ..
+            })
+            | Type::Resource(_)
+            | Type::Func(_)
+            | Type::Component(_)
+            | Type::Instance(_) => Ok(true),
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(_),
+                ..
+            }) => Ok(false),
+        }
+    }
+
+    fn defval_requires_nested_name(
+        &self,
+        def: &DefValType,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        match def {
+            DefValType::Primitive(_) => Ok(false),
+            DefValType::Record(fields) => {
+                if !fields
+                    .iter()
+                    .enumerate()
+                    .all(|(index, field)| field.label.0 == index.to_string())
+                {
+                    return Ok(true);
+                }
+                for field in fields {
+                    if self.nested_valtype_requires_name(&field.ty, visiting)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            DefValType::Variant(cases) => {
+                if !self.variant_is_inline(cases) {
+                    return Ok(true);
+                }
+                for case in cases {
+                    if let Some(ty) = &case.ty {
+                        if self.nested_valtype_requires_name(ty, visiting)? {
+                            return Ok(true);
+                        }
+                    }
+                }
+                Ok(false)
+            }
+            DefValType::Flags(_) => Ok(true),
+            DefValType::List(ty, _) => self.nested_valtype_requires_name(ty, visiting),
+            DefValType::Own(_) | DefValType::Borrow(_) => Ok(false),
+        }
+    }
+
+    fn nested_valtype_requires_name(
+        &self,
+        ty: &ValType,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        match ty {
+            ValType::Primitive(_) => Ok(false),
+            ValType::Type(type_id) => self.type_id_requires_nested_name(*type_id, visiting),
+        }
+    }
+
+    fn type_id_requires_nested_name(
+        &self,
+        type_id: TypeId,
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        if !visiting.enter(type_id) {
+            return Ok(false);
+        }
+        let ty = self.get_type(type_id)?.clone();
+        let result = self.type_requires_nested_name(&ty, visiting)?;
+        visiting.leave(type_id);
+        Ok(result)
     }
 
     fn collect_component_visible_types(
@@ -1714,6 +1842,7 @@ impl<'a> Validator<'a> {
                     Ok(false)
                 }
             }),
+            DefValType::Flags(_) => Ok(false),
             DefValType::List(ty, _) => self.valtype_contains_resource_handle(ty, visiting),
             DefValType::Own(_) | DefValType::Borrow(_) => Ok(true),
         }
@@ -1831,6 +1960,7 @@ impl<'a> Validator<'a> {
                 }
                 Ok(summary)
             }
+            DefValType::Flags(_) => Ok(ResourceOwnerSummary::default()),
             DefValType::List(ty, _) => self.valtype_resource_owner_summary(ty, visiting),
             DefValType::Own(type_id) | DefValType::Borrow(type_id) => {
                 self.resource_owner_summary(*type_id, visiting)
@@ -2023,6 +2153,7 @@ impl<'a> Validator<'a> {
                 }
                 Ok(total)
             }
+            DefValType::Flags(labels) => Ok((labels.len() as u64).div_ceil(32).max(1)),
             DefValType::List(ty, maybe_len) => {
                 let elem = self.compute_valtype_size(ty, visiting)?;
                 Ok(match maybe_len {
@@ -2104,6 +2235,7 @@ mod tests {
                         })
                         .unwrap_or(false)
                 }),
+                DefValType::Flags(_) => false,
                 DefValType::List(ty, _) => {
                     naive_val_contains_resource_handle(validator, ty, visiting)?
                 }
@@ -2160,6 +2292,7 @@ mod tests {
                         })
                         .unwrap_or(false)
                 }),
+                DefValType::Flags(_) => false,
                 DefValType::List(ty, _) => {
                     naive_val_refs_foreign_resource(validator, ty, owner, visiting)?
                 }
@@ -2339,6 +2472,7 @@ mod tests {
                 }
                 Ok(total)
             }
+            DefValType::Flags(labels) => Ok((labels.len() as u64).div_ceil(32).max(1)),
             DefValType::List(ty, maybe_len) => {
                 let elem = naive_val_size(validator, ty, visiting)?;
                 Ok(match maybe_len {

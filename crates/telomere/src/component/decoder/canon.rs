@@ -385,6 +385,7 @@ fn defval_needs_memory(def: &DefValType, ctx: &ParseContext<impl BinaryReader>) 
             .iter()
             .filter_map(|case| case.ty.as_ref())
             .any(|ty| type_needs_memory(ty, ctx)),
+        DefValType::Flags(_) => false,
         DefValType::List(elem, maybe_len) => maybe_len.is_none() || type_needs_memory(elem, ctx),
         DefValType::Own(_) | DefValType::Borrow(_) => false,
     }
@@ -516,6 +517,12 @@ fn flatten_defval(
             }
             out.push(CoreValType::I32);
             out.extend(payload);
+            Ok(())
+        }
+        DefValType::Flags(labels) => {
+            for _ in 0..labels.len().div_ceil(32) {
+                out.push(CoreValType::I32);
+            }
             Ok(())
         }
         DefValType::List(_, _) => {

@@ -6,18 +6,8 @@ use crate::component::ir::{
     VersionRange,
 };
 use crate::parser::core::parse_name;
-use once_cell::sync::Lazy;
-use regex::Regex;
 use semver::Version;
 use tracing::trace;
-
-static LABEL: Lazy<Regex> =
-    Lazy::new(|| Regex::new("^(?:[A-Za-z][A-Za-z0-9]*)(?:-[A-Za-z0-9]+)*$").unwrap());
-static WORDS: Lazy<Regex> =
-    Lazy::new(|| Regex::new("^[a-z][0-9a-z]*(?:-[a-z][0-9a-z]*)*$").unwrap());
-static INTERFACE_NAME: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?<namespace>[a-z][0-9a-z-]*):(?<label>[a-zA-Z][a-zA-Z0-9-]*)/(?<projection>[a-zA-Z][a-zA-Z0-9-]*)(|@(?<version>[0-9A-Za-z.+<>=\-]+))$").unwrap()
-});
 
 pub fn parse_import_name_dash(
     ctx: &mut ParseContext<impl BinaryReader>,
@@ -55,8 +45,8 @@ pub fn parse_export_name(ctx: &mut ParseContext<impl BinaryReader>) -> ParseResu
             parsed: ParsedExportName::Plain(parsed),
         });
     }
-    if let Some(parsed) =
-        parse_interface_name(name.as_str()).map_err(ComponentParseError::InvalidExportName)?
+    if let Some(parsed) = parse_interface_name_string(name.as_str())
+        .map_err(ComponentParseError::InvalidExportName)?
     {
         return Ok(ExportName {
             original: name,
@@ -189,7 +179,7 @@ fn parse_plain_name_string(text: &str) -> ParseResult<Option<PlainName>> {
                 "async static names are not supported".to_owned(),
             ))
         }
-        _ if LABEL.is_match(text) => Ok(Some(PlainName::Plain(Label::new(text)))),
+        _ if is_general_label(text) => Ok(Some(PlainName::Plain(Label::new(text)))),
         _ => Ok(None),
     }
 }
@@ -265,12 +255,35 @@ fn parse_version_range(text: &str) -> Result<VersionRange, String> {
 }
 
 fn parse_label(text: &str) -> Result<Label, String> {
-    if LABEL.is_match(text) {
+    if is_general_label(text) {
         // valid label
         Ok(Label::new(text.to_string()))
     } else {
         Err(format!("Invalid label: {}", text))
     }
+}
+
+fn is_general_label(text: &str) -> bool {
+    let mut segments = text.split('-');
+    let Some(first) = segments.next() else {
+        return false;
+    };
+    is_general_label_segment(first, false)
+        && segments.all(|segment| is_general_label_segment(segment, true))
+}
+
+fn is_general_label_segment(segment: &str, allow_leading_digit: bool) -> bool {
+    if segment.is_empty() {
+        return false;
+    }
+    let mut chars = segment.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || (allow_leading_digit && first.is_ascii_digit())) {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_alphanumeric())
 }
 
 pub(crate) fn is_kebab_label(text: &str) -> bool {
@@ -310,57 +323,66 @@ fn parse_interface_name_string(text: &str) -> Result<Option<InterfaceName>, Stri
     if !text.contains(':') && !text.contains('/') {
         return Ok(None);
     }
-    let Some((namespace, after_namespace)) = text.split_once(':') else {
-        return Ok(None);
-    };
-    let namespace = parse_words(namespace)?;
-    let (path, version) = match after_namespace.split_once('@') {
+    let (path, version) = match text.split_once('@') {
         Some((_path, "")) => return Err("empty string".to_owned()),
         Some((path, version)) => (path, Some(parse_semver(version)?)),
-        None => (after_namespace, None),
+        None => (text, None),
     };
-    let Some((label, projection)) = path.split_once('/') else {
+    let Some((head, projection)) = path.split_once('/') else {
         return Err("expected `/` after package name".to_owned());
     };
-    if let Some((_, trailing)) = projection.split_once('/') {
-        return Err(format!("trailing characters found: `/{trailing}`"));
-    }
+    let Some(split) = head.rfind(':') else {
+        return Ok(None);
+    };
+    let namespace = parse_words_path(&head[..split], ':')?;
+    let label = parse_words(&head[split + 1..])?;
+    let projection = parse_words_path(projection, '/')?;
     Ok(Some(InterfaceName {
         namespace,
-        label: Label::new(parse_words(label)?),
-        projection: Label::new(parse_words(projection)?),
+        label: Label::new(label),
         version,
+        projection,
     }))
 }
 
-fn parse_interface_name(text: &str) -> Result<Option<InterfaceName>, String> {
-    let captures = INTERFACE_NAME.captures(text);
-    if let Some(captures) = captures {
-        let namespace = parse_words(captures.name("namespace").unwrap().as_str())?;
-        let label = Label::new(parse_words(captures.name("label").unwrap().as_str())?);
-        let projection = Label::new(parse_words(captures.name("projection").unwrap().as_str())?);
-        let version = captures
-            .name("version")
-            .map(|v| Version::parse(v.as_str()))
-            .map_or(Ok(None), |v| v.map(Some))
-            .map_err(|x| format!("semver error: {}", x))?;
-        Ok(Some(InterfaceName {
-            namespace,
-            label,
-            projection,
-            version,
-        }))
-    } else {
-        Ok(None)
-    }
-}
-
 fn parse_words(text: &str) -> Result<String, String> {
-    if WORDS.is_match(text) {
+    if is_lowercase_kebab(text) {
         // valid words
         Ok(text.to_string())
     } else {
         Err(format!("Invalid words: {}", text))
+    }
+}
+
+fn parse_words_path(text: &str, separator: char) -> Result<String, String> {
+    if text.is_empty() {
+        return Err("empty string".to_owned());
+    }
+    for segment in text.split(separator) {
+        parse_words(segment)?;
+    }
+    Ok(text.to_owned())
+}
+
+fn is_lowercase_kebab(text: &str) -> bool {
+    let mut segments = text.split('-');
+    let Some(first) = segments.next() else {
+        return false;
+    };
+    is_lowercase_kebab_segment(first, false)
+        && segments.all(|segment| is_lowercase_kebab_segment(segment, true))
+}
+
+fn is_lowercase_kebab_segment(segment: &str, allow_numeric_only: bool) -> bool {
+    if segment.is_empty() || !segment.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return false;
+    }
+    let has_lower = segment.chars().any(|ch| ch.is_ascii_lowercase());
+    let has_upper = segment.chars().any(|ch| ch.is_ascii_uppercase());
+    match (has_lower, has_upper) {
+        (true, false) => true,
+        (false, false) => allow_numeric_only,
+        _ => false,
     }
 }
 
@@ -437,14 +459,14 @@ fn parse_locked_dependency(rest: &str) -> Result<LockedDependency, String> {
 }
 
 fn parse_package_path(rest: &str) -> Result<(PackagePath, &str), String> {
-    let Some((namespace, rest)) = rest.split_once(':') else {
+    let end = rest.find(['@', '>']).unwrap_or(rest.len());
+    let path = &rest[..end];
+    let trailing = &rest[end..];
+    let Some(split) = path.rfind(':') else {
         return Err("expected `/` after package name".to_owned());
     };
-    let namespace = parse_words(namespace)?;
-    let end = rest.find(['@', '>']).unwrap_or(rest.len());
-    let name = &rest[..end];
-    let trailing = &rest[end..];
-    let name = parse_words(name)?;
+    let namespace = parse_words_path(&path[..split], ':')?;
+    let name = parse_words_path(&path[split + 1..], '/')?;
     Ok((PackagePath { namespace, name }, trailing))
 }
 
@@ -528,7 +550,7 @@ fn is_valid_integrity_digest(digest: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_interface_name, parse_plain_name_string};
+    use super::{parse_interface_name_string, parse_package_path, parse_plain_name_string};
     use crate::component::ir::{InterfaceName, Label, PlainName};
     use semver::Version;
 
@@ -578,16 +600,34 @@ mod tests {
     #[test]
     fn test_export_name_interface() -> anyhow::Result<()> {
         let name = "foo:bar/baz@1.0.0";
-        let export_name = parse_interface_name(name).unwrap();
+        let export_name = parse_interface_name_string(name).unwrap();
         assert_eq!(
             export_name,
             Some(InterfaceName {
                 namespace: "foo".to_string(),
                 label: Label::new("bar".to_string()),
-                projection: Label::new("baz".to_string()),
+                projection: "baz".to_string(),
                 version: Some(Version::parse("1.0.0").unwrap()),
             })
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_nested_interface_name() {
+        let name = "a:b-c:d-e:f-g/h-i/j-k/l-m/n/o/p@1.0.0";
+        let export_name = parse_interface_name_string(name).unwrap().unwrap();
+        assert_eq!(export_name.namespace, "a:b-c:d-e");
+        assert_eq!(export_name.label, Label::new("f-g"));
+        assert_eq!(export_name.projection, "h-i/j-k/l-m/n/o/p");
+        assert_eq!(export_name.version, Some(Version::parse("1.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_nested_package_path() {
+        let (path, trailing) = parse_package_path("a:b:c:d/e/f/g@1.2.3").unwrap();
+        assert_eq!(path.namespace, "a:b:c");
+        assert_eq!(path.name, "d/e/f/g");
+        assert_eq!(trailing, "@1.2.3");
     }
 }

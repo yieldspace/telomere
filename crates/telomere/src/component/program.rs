@@ -1,13 +1,17 @@
 use crate::component::ir::types::{CoreType, Type};
 use crate::component::ir::{
-    Component, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule, CoreRelation, CoreTable,
-    Func, GlobalIdx, Instance, Relation, TypeId,
+    Component, ComponentExport, CoreFunc, CoreGlobal, CoreInstance, CoreMemory, CoreModule,
+    CoreRelation, CoreTable, Func, GlobalIdx, Instance, Relation, TypeId,
 };
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
 pub struct ComponentTypeInfo {
     pub id: u32,
+    pub flat_len: usize,
+    pub indirect_size: u32,
+    pub indirect_align: u32,
+    pub fixed_length: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +50,24 @@ impl ComponentProgram {
     pub fn get_type(&self, id: TypeId) -> Option<&Type> {
         self.types.get(id.index() as usize)
     }
+
+    pub fn get_type_info(&self, id: TypeId) -> Option<&ComponentTypeInfo> {
+        self.type_infos.get(id.index() as usize)
+    }
+
+    pub fn get_root_func_type_id(&self, name: &str) -> Option<TypeId> {
+        match self.root.exports.get(name) {
+            Some(ComponentExport::Func { type_id, .. }) => Some(*type_id),
+            _ => None,
+        }
+    }
+
+    pub fn get_root_func(&self, name: &str) -> Option<(GlobalIdx<Func>, TypeId)> {
+        match self.root.exports.get(name) {
+            Some(ComponentExport::Func { idx, type_id }) => Some((*idx, *type_id)),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -58,7 +80,22 @@ mod tests {
         let first = Type::Resource(ResourceId::synthetic());
         let second = Type::Resource(ResourceId::synthetic());
         let program = ComponentProgram {
-            type_infos: Vec::new(),
+            type_infos: vec![
+                ComponentTypeInfo {
+                    id: 0,
+                    flat_len: 0,
+                    indirect_size: 0,
+                    indirect_align: 1,
+                    fixed_length: None,
+                },
+                ComponentTypeInfo {
+                    id: 1,
+                    flat_len: 0,
+                    indirect_size: 0,
+                    indirect_align: 1,
+                    fixed_length: None,
+                },
+            ],
             imports: Vec::new(),
             callable_imports: Vec::new(),
             exports: Vec::new(),
@@ -86,6 +123,7 @@ mod tests {
             program.get_type(TypeId::from_index(0)),
             Some(Type::Resource(_))
         ));
+        assert_eq!(program.get_type_info(TypeId::from_index(0)).unwrap().id, 0);
         assert!(matches!(
             program.get_type(TypeId::from_index(1)),
             Some(Type::Resource(_))

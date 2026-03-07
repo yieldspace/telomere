@@ -43,6 +43,8 @@ impl ComponentValue {
 
     pub fn as_u32(&self) -> Option<u32> {
         match self {
+            Self::U8(v) => Some(u32::from(*v)),
+            Self::U16(v) => Some(u32::from(*v)),
             Self::U32(v) => Some(*v),
             Self::Own(v) => Some(*v),
             Self::Borrow(v) => Some(*v),
@@ -52,6 +54,8 @@ impl ComponentValue {
 
     pub fn as_i32(&self) -> Option<i32> {
         match self {
+            Self::S8(v) => Some(i32::from(*v)),
+            Self::S16(v) => Some(i32::from(*v)),
             Self::I32(v) => Some(*v),
             Self::S32(v) => Some(*v),
             _ => None,

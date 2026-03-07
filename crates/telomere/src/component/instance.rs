@@ -1,18 +1,19 @@
 use crate::component::runtime::RuntimeInstance;
 use crate::component::{ComponentError, ComponentProgram, ComponentValue};
 use crate::Store;
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub struct ComponentInstance {
-    runtime: RuntimeInstance,
-    pub(crate) _program: ComponentProgram,
+    pub(crate) runtime: RuntimeInstance,
+    pub(crate) _program: Rc<ComponentProgram>,
 }
 
 impl ComponentInstance {
     pub(crate) fn new(program: ComponentProgram, runtime: RuntimeInstance) -> Self {
         Self {
             runtime,
-            _program: program,
+            _program: Rc::new(program),
         }
     }
 

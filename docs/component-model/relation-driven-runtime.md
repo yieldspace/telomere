@@ -17,7 +17,7 @@ relation 駆動とは、component バイナリをその場で何度も読んだ�
 flowchart LR
     A["component binary"] --> B["decoder\nparse_component"]
     B --> C["validator\n型検証 / canonical option 検証"]
-    C --> D["ComponentProgram\nroot + type_map + relation stores"]
+    C --> D["ComponentProgram\nroot + types + type_infos + relation stores"]
     D --> E["instantiate\nRuntimeEnv / RuntimeComponentInstance"]
     E --> F["call(name, args)"]
     F --> G["resolve_* by GlobalIdx"]
@@ -40,7 +40,7 @@ flowchart TD
     B --> F["ValueStore<Instance>"]
     B --> G["ValueStore<Func>"]
     B --> H["ValueStore<CoreModule/CoreInstance/CoreFunc/...>"]
-    C --> I["type_map\nTypeId -> Type"]
+    C --> I["types + type_infos\nTypeId -> {Type, ABI metadata}"]
     D --> J["root Component"]
     E --> K["component_store snapshot"]
     F --> L["instance_store snapshot"]
@@ -65,13 +65,14 @@ flowchart TD
 
 ## 3. ComponentProgram の relation snapshot
 
-現在の `ComponentProgram` は、単なる `bytes` のラッパーではない。root component と type map に加えて、kind ごとの relation store snapshot を持つ。
+現在の `ComponentProgram` は、単なる `bytes` のラッパーではない。root component と dense type table に加えて、kind ごとの relation store snapshot を持つ。
 
 ```mermaid
 flowchart TD
     P["ComponentProgram"]
     P --> R0["root: Component"]
-    P --> R1["type_map"]
+    P --> R1["types"]
+    P --> R1A["type_infos"]
     P --> R2["component_store"]
     P --> R3["instance_store"]
     P --> R4["func_store"]
@@ -223,15 +224,40 @@ sequenceDiagram
 
 - scalar
 - `string`
+- `list`
+- `record`
+- `tuple`
+- `variant`
+- `enum`
+- `flags`
+- `option`
+- `result`
 - `own` / `borrow`
 
-`ComponentValue` 自体は `List`、`Record`、`Variant`、`Flags`、`Option`、`Result` まで持つが、runtime の flattening はまだそこまで広げていない。ここは API 面と runtime 面で境界がある。
+flat 値数が `MAX_FLAT_PARAMS` / `MAX_FLAT_RESULTS` を超える場合は、type metadata に基づいて indirect area を確保し、memory + realloc 経由で受け渡す。
+
+追加した typed API はこの canonical ABI 実装の薄い上位層である。
+
+- `ComponentInstance::get_func`
+- `ComponentInstance::get_typed_func`
+- `TypedComponentFunc::call`
+- `ComponentLinker::register_import_typed_async`
+- `ComponentLinker::register_import_typed`
+
+対応する Rust 型は軽量な built-in だけに絞っている。
+
+- scalar / `bool` / `char`
+- `String` / `&str`
+- `Vec<T>`
+- tuple `0..=8`
+- `Option<T>`
+- `Result<T, E>`
 
 ## 6. string と resource はなぜ別扱いか
 
 embedded Linux 向け runtime では、string と resource handle が最も実運用に効くため、ここを優先して実装している。
 
-### 6.1 string
+### 6.1 string と複合値
 
 string は `CanonicalOptions` に入っている次の情報に依存する。
 
@@ -251,7 +277,9 @@ flowchart LR
     H --> I["ComponentValue::String"]
 ```
 
-重要なのは、string が `memory` と `realloc` を必須にする点だ。component 関数の型だけでは完結せず、canonical option が揃って初めて lift/lower できる。
+重要なのは、string と indirect passing を使う複合値が `memory` と `realloc` を必須にする点だ。component 関数の型だけでは完結せず、canonical option が揃って初めて lift/lower できる。
+
+`list` / `record` / `tuple` / `variant` / `enum` / `flags` / `option` / `result` は compile 時に `type_infos` に flatten 長、indirect size、alignment、fixed-length list 長を落としておき、runtime では再計算しない。
 
 ### 6.2 resource
 
@@ -313,7 +341,8 @@ relation 駆動の実利は、仕様上きれいだからではなく、軽量 r
 - compile 時の validator による型検証
 - relation store snapshot
 - kind ごとの runtime cache
-- string / resource を含む最小 canonical ABI
+- sync dynamic values を通す canonical ABI
+- typed function layer
 - core wasm runtime の既存実装再利用
 
 ### 8.3 実装上のトレードオフ
@@ -333,13 +362,17 @@ relation 駆動の実利は、仕様上きれいだからではなく、軽量 r
 | nested component / inline instance / alias / `instantiate (with ...)` | 実装済み |
 | `canon lift` / `canon lower` for scalar | 実装済み |
 | `canon lift` / `canon lower` for `string` | 実装済み |
+| `canon lift` / `canon lower` for `list` / `record` / `tuple` / `variant` / `enum` / `flags` / `option` / `result` | 実装済み |
+| fixed-length list | 実装済み |
+| nested names | 実装済み |
+| typed funcs (`get_func` / `get_typed_func`) | 実装済み |
 | `canon resource.new/drop/rep` | 実装済み |
-| lists / records / variants / flags / option / result の full runtime flattening | 未実装 |
 | async canonical ABI / post-return | 非対象 |
+| `CM_VALUES` / `CM_MAP` / `CM_GC` | 非対象 |
 | `memory64` / `tags` | 非対象 |
 | `wasmtime/*` 固有拡張 | 非対象 |
 
-そのため、relation 駆動という言葉は「すべての型を完全実装した」という意味ではなく、「runtime の解決経路が relation snapshot を正本としている」という意味で使っている。
+そのため、relation 駆動という言葉は「Wasmtime の同期 API 境界に必要な機能を relation snapshot で駆動している」という意味で使っている。async proposal 群や post-return まで含めた完全互換を意味しない。
 
 ## 10. 読む順番
 
@@ -351,5 +384,6 @@ relation 駆動の実利は、仕様上きれいだからではなく、軽量 r
 4. `crates/telomere/src/component/ir/relation.rs`
 5. `crates/telomere/src/component/runtime/mod.rs`
 6. `crates/telomere/src/component/linker.rs`
+7. `crates/telomere/src/component/func.rs`
 
 これで `compile -> snapshot -> instantiate -> resolve -> canon -> core runtime` の流れを一通り追える。
