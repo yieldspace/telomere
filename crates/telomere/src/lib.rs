@@ -1,8 +1,7 @@
 pub mod binary;
 #[macro_use]
 pub mod common;
-pub mod component;
-pub(crate) mod component_model;
+pub mod component_support;
 pub mod parser;
 pub mod runtime;
 

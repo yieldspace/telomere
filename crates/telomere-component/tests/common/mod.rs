@@ -1,3 +1,5 @@
+pub mod component_model;
+
 use telomere::{
     common::InstanceHandle, get_global, instantiate, IoReadBinaryReader, Registry, ResultValue,
     Store, VMResult, WasmParser, WasmValue,

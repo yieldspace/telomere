@@ -15,10 +15,10 @@
 - `ComponentLinker::register_import` / `register_export` は `ready` future へ包む同期ラッパーとして維持する
 
 ## Internal Layout
-- `component/decoder`: 独自 decoder + validator
-- `component/validate`: validator 再公開
-- `component/ir`: component intermediate data model
-- `component/runtime`: 実行ディスパッチ
+- `crates/telomere-component/src/decoder`: 独自 decoder + validator
+- `crates/telomere-component/src/validate`: validator 再公開
+- `crates/telomere-component/src/ir`: component intermediate data model
+- `crates/telomere-component/src/runtime`: 実行ディスパッチ
 
 ## IR
 - `ComponentProgram` は次を保持する。
@@ -95,13 +95,13 @@
 
 ## Upstream Testsuite Snapshot
 - 追加した snapshot:
-  - `crates/telomere/tests/component_model_upstream/c7176a512c0bbe4654849f4ba221c1a71c7cf514/`
+  - `crates/telomere-component/tests/component_model_upstream/c7176a512c0bbe4654849f4ba221c1a71c7cf514/`
 - pin:
   - upstream commit `c7176a512c0bbe4654849f4ba221c1a71c7cf514`
 - manifest:
-  - `crates/telomere/tests/component_model_upstream/manifest.txt`
+  - `crates/telomere-component/tests/component_model_upstream/manifest.txt`
 - harness:
-  - `crates/telomere/tests/component_model_upstream.rs`
+  - `crates/telomere-component/tests/component_model_upstream.rs`
 - 実行方針:
   - vendored subset は manifest の `mode` に従って走らせる
   - `compile-only`: component/module directive の compile/validate を検証し、runtime directive は skip
@@ -138,7 +138,7 @@
 | `wasmtime/*` | exclude | wasmtime 固有 harness / extension で telomere acceptance 外 |
 
 ## Local Parity Tests
-Wasmtime の同期 component tests をそのまま vendoring すると async / host harness 依存が混ざるため、Telomere では `crates/telomere/tests/component_wasmtime_sync_parity.rs` に同期 parity 用のローカル test を置く。
+Wasmtime の同期 component tests をそのまま vendoring すると async / host harness 依存が混ざるため、Telomere では `crates/telomere-component/tests/component_wasmtime_sync_parity.rs` に同期 parity 用のローカル test を置く。
 
 この test では次を検証する。
 
@@ -168,3 +168,10 @@ Wasmtime の同期 component tests をそのまま vendoring すると async / h
 - `very-nested.wast` の size-limit / malformed stress は precompiled sidecar で実行する。binary decoder と invalid 判定は維持しつつ、text-side expansion のオーバーヘッドだけ外している。
 - 失敗判定は「compile/validate が通るべきものは通る」「invalid/malformed は適切な category の error を返す」を優先し、spec 文言との完全一致は要求しない。
 - current boundary は Wasmtime の同期 API 面を揃えることであり、async canonical ABI や proposal 拡張までは含めない。
+
+## Validation Commands
+- `cargo test -p telomere-component --test component_model_wast -- --nocapture`
+- `cargo test -p telomere-component --test component_runtime_e2e -- --nocapture`
+- `cargo test -p telomere-component --test component_model_upstream -- --nocapture`
+- `cargo test -p telomere-component --test component_wasmtime_sync_parity -- --nocapture`
+- `cargo test --workspace --release`

@@ -1,6 +1,6 @@
 # Relation-Driven Component Runtime
 
-このドキュメントは `crates/telomere/src/component` の実装を、relation 駆動の観点から図で説明する。
+このドキュメントは `crates/telomere-component/src` の実装を、relation 駆動の観点から図で説明する。
 
 前提は次のとおり。
 
@@ -378,12 +378,12 @@ relation 駆動の実利は、仕様上きれいだからではなく、軽量 r
 
 コードを追うときは次の順で見ると速い。
 
-1. `crates/telomere/src/component/engine.rs`
-2. `crates/telomere/src/component/program.rs`
-3. `crates/telomere/src/component/decoder/validator/state.rs`
-4. `crates/telomere/src/component/ir/relation.rs`
-5. `crates/telomere/src/component/runtime/mod.rs`
-6. `crates/telomere/src/component/linker.rs`
-7. `crates/telomere/src/component/func.rs`
+1. `crates/telomere-component/src/engine.rs`
+2. `crates/telomere-component/src/program.rs`
+3. `crates/telomere-component/src/decoder/validator/state.rs`
+4. `crates/telomere-component/src/ir/relation.rs`
+5. `crates/telomere-component/src/runtime/mod.rs`
+6. `crates/telomere-component/src/linker.rs`
+7. `crates/telomere-component/src/func.rs`
 
 これで `compile -> snapshot -> instantiate -> resolve -> canon -> core runtime` の流れを一通り追える。
