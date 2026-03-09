@@ -112,7 +112,6 @@ impl Store {
             "{api_name} is unsupported while the same store GC is already active on this thread"
         );
     }
-
     fn lock_gc_unchecked(&self) -> StoreGcGuard<'_> {
         StoreGcGuard::new(&self.identity, self.gc.lock())
     }

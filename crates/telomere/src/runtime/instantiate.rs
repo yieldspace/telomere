@@ -387,9 +387,9 @@ pub async fn instantiate(
                 }
             };
 
-            funcs.push(func_addr);
-            tracing::trace!("linking: {funcidx} => {func_addr:?}");
-        }
+                    funcs.push(func_addr);
+                    tracing::trace!("linking: {funcidx} => {func_addr:?}");
+                }
 
         for init in &global_init {
             globals.push(vm_try!(init_global(&mut gc, init, &globals, &funcs)));

@@ -6,10 +6,13 @@ use std::sync::{
     Mutex,
 };
 use telomere::{
-    common::{AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, FuncType, ValType},
+    common::{
+        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, FuncType,
+        ValType,
+    },
     get_global, instantiate_native_async_module, link_async_host_function_with_export_name,
-    link_async_host_function_with_function_idx, Registry, ResultValue, Store, StoreState, VMResult,
-    WasmValue,
+    link_async_host_function_with_function_idx, link_host_function_with_function_idx, vm_try,
+    Registry, ResultValue, Store, StoreState, VMResult, WasmValue,
 };
 
 struct ScalarState {
@@ -91,6 +94,16 @@ fn async_fail(_state: StoreState, _args: ResultValue) -> AsyncHostFuture {
         tokio::task::yield_now().await;
         VMResult::InvalidOperand
     })
+}
+
+fn sync_add_two(ctx: &mut ExecuteContext) -> VMResult<*const telomere::common::Instr> {
+    vm_try!(ctx.stack.local_get(&ctx.local_reference(), 0, 4));
+    let value = ctx.stack.pop_i32();
+    vm_try!(ctx.stack.push_i32(value + 2));
+    let (prev_local_ref, return_addr) =
+        ctx.stack.function_return(&ctx.local_reference, 4, ctx.gc);
+    ctx.local_reference = prev_local_ref;
+    VMResult::Success(return_addr)
 }
 
 #[tokio::test]
@@ -293,6 +306,63 @@ async fn async_import_supports_call_indirect_after_linking() {
         &mut registry,
     )
     .await;
+    assert_eq!(state.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn host_link_can_switch_from_async_to_sync() {
+    let state = Box::leak(Box::new(ScalarState {
+        calls: AtomicUsize::new(0),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let mut registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+        (module
+          (func (export "flip") (param i32) (result i32)
+            unreachable))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    link_async_host_function_with_export_name(&host, "flip", async_add_one, &store);
+    registry.register("host", host.clone());
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "flip" (func $flip (param i32) (result i32)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $flip))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    let first = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(40)]),
+    )
+    .await;
+    assert!(matches!(
+        first,
+        VMResult::Success(ref result) if result == &ResultValue::new(vec![WasmValue::I32(41)])
+    ));
+    link_host_function_with_function_idx(&host, 0, sync_add_two, &store);
+    let second = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(40)]),
+    )
+    .await;
+    assert!(matches!(
+        second,
+        VMResult::Success(ref result) if result == &ResultValue::new(vec![WasmValue::I32(42)])
+    ));
     assert_eq!(state.calls.load(Ordering::SeqCst), 1);
 }
 
