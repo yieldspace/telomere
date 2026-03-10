@@ -306,8 +306,11 @@ impl<'a> Scheduler<'a> {
                 self.ready_count += 1;
                 self.notify.wake();
             }
-            AsyncCompletion::HostCall { result } => match result {
-                VMResult::Success(result) => {
+            AsyncCompletion::HostCall {
+                result,
+                return_size,
+            } => match result {
+                VMResult::Success(()) => {
                     let mut gc = self.store.lock_gc();
                     let resume = {
                         let task = self.tasks.get_mut(task_index).unwrap();
@@ -315,7 +318,7 @@ impl<'a> Scheduler<'a> {
                             &mut task.stack,
                             &mut task.local_reference,
                             &mut gc,
-                            result,
+                            return_size,
                         )
                     };
                     match resume {

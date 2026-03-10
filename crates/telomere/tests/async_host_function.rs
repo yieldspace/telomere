@@ -19,16 +19,17 @@ struct ScalarState {
     calls: AtomicUsize,
 }
 
-fn async_add_one(state: StoreState, args: ResultValue) -> AsyncHostFuture {
+fn async_add_one(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let state = ctx.store.state;
+    let value = i32::from_le_bytes(
+        ctx.stack.local_bytes(&ctx.local_reference(), 0, 4).try_into().unwrap(),
+    );
+    let slot = ctx.async_return_slot();
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<ScalarState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
-        let value = match args.iter().collect::<Vec<_>>().as_slice() {
-            [WasmValue::I32(value)] => *value,
-            _ => return VMResult::InvalidOperand,
-        };
-        VMResult::Success(ResultValue::new(vec![WasmValue::I32(value + 1)]))
+        VMResult::Success(slot.write(&(value + 1).to_le_bytes()))
     })
 }
 
@@ -37,20 +38,26 @@ struct RoundTripState {
     seen: Mutex<Vec<(i32, i64)>>,
 }
 
-fn async_swap_results(state: StoreState, args: ResultValue) -> AsyncHostFuture {
+fn async_swap_results(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let state = ctx.store.state;
+    let local_ref = ctx.local_reference();
+    let lhs = i32::from_le_bytes(
+        ctx.stack.local_bytes(&local_ref, 0, 4).try_into().unwrap(),
+    );
+    let rhs = i64::from_le_bytes(
+        ctx.stack.local_bytes(&local_ref, 4, 8).try_into().unwrap(),
+    );
+    let slot = ctx.async_return_slot();
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<RoundTripState>() }.unwrap();
-        let (lhs, rhs) = match args.iter().collect::<Vec<_>>().as_slice() {
-            [WasmValue::I32(lhs), WasmValue::I64(rhs)] => (*lhs, *rhs),
-            _ => return VMResult::InvalidOperand,
-        };
         state.calls.fetch_add(1, Ordering::SeqCst);
         state.seen.lock().unwrap().push((lhs, rhs));
-        VMResult::Success(ResultValue::new(vec![
-            WasmValue::I64(rhs),
-            WasmValue::I32(lhs),
-        ]))
+        let mut result = [0u8; 12];
+        result[0..8].copy_from_slice(&rhs.to_le_bytes());
+        result[8..12].copy_from_slice(&lhs.to_le_bytes());
+        slot.write(&result);
+        VMResult::Success(())
     })
 }
 
@@ -58,17 +65,15 @@ struct StartState {
     calls: AtomicUsize,
 }
 
-fn async_init(state: StoreState, args: ResultValue) -> AsyncHostFuture {
+fn async_init(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let state = ctx.store.state;
     Box::pin(async move {
         tokio::task::yield_now().await;
-        if args.len() != 0 {
-            return VMResult::InvalidOperand;
-        }
         unsafe { state.get::<StartState>() }
             .unwrap()
             .calls
             .fetch_add(1, Ordering::SeqCst);
-        VMResult::Success(ResultValue::new(vec![]))
+        VMResult::Success(())
     })
 }
 
@@ -76,20 +81,22 @@ struct CallIndirectState {
     calls: AtomicUsize,
 }
 
-fn async_double(state: StoreState, args: ResultValue) -> AsyncHostFuture {
+fn async_double(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let state = ctx.store.state;
+    let value = i32::from_le_bytes(
+        ctx.stack.local_bytes(&ctx.local_reference(), 0, 4).try_into().unwrap(),
+    );
+    let slot = ctx.async_return_slot();
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<CallIndirectState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
-        let value = match args.iter().collect::<Vec<_>>().as_slice() {
-            [WasmValue::I32(value)] => *value,
-            _ => return VMResult::InvalidOperand,
-        };
-        VMResult::Success(ResultValue::new(vec![WasmValue::I32(value * 2)]))
+        slot.write(&(value * 2).to_le_bytes());
+        VMResult::Success(())
     })
 }
 
-fn async_fail(_state: StoreState, _args: ResultValue) -> AsyncHostFuture {
+fn async_fail(_ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
     Box::pin(async move {
         tokio::task::yield_now().await;
         VMResult::InvalidOperand

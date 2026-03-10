@@ -73,64 +73,6 @@ fn push_result_values(stack: &mut Stack, types: &ResultType, values: &ResultValu
     VMResult::Success(())
 }
 
-fn decode_local_value(
-    stack: &Stack,
-    reference: &LocalReference,
-    offset: usize,
-    ty: ValType,
-) -> WasmValue {
-    match ty {
-        ValType::I32 => {
-            let mut bytes = [0u8; 4];
-            bytes.copy_from_slice(stack.local_bytes(reference, offset, 4));
-            WasmValue::I32(i32::from_le_bytes(bytes))
-        }
-        ValType::I64 => {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(stack.local_bytes(reference, offset, 8));
-            WasmValue::I64(i64::from_le_bytes(bytes))
-        }
-        ValType::F32 => {
-            let mut bytes = [0u8; 4];
-            bytes.copy_from_slice(stack.local_bytes(reference, offset, 4));
-            WasmValue::F32(f32::from_le_bytes(bytes))
-        }
-        ValType::F64 => {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(stack.local_bytes(reference, offset, 8));
-            WasmValue::F64(f64::from_le_bytes(bytes))
-        }
-        ValType::V128 => {
-            let mut bytes = [0u8; 16];
-            bytes.copy_from_slice(stack.local_bytes(reference, offset, 16));
-            WasmValue::V128(u128::from_le_bytes(bytes))
-        }
-        ValType::FuncRef => {
-            let mut bytes = [0u8; 4];
-            bytes.copy_from_slice(stack.local_bytes(reference, offset, 4));
-            WasmValue::FuncRef(u32::from_le_bytes(bytes))
-        }
-        ValType::ExternRef => {
-            let mut bytes = [0u8; 4];
-            bytes.copy_from_slice(stack.local_bytes(reference, offset, 4));
-            WasmValue::ExternRef(u32::from_le_bytes(bytes))
-        }
-    }
-}
-
-fn decode_result_values(
-    stack: &Stack,
-    reference: &LocalReference,
-    types: &ResultType,
-) -> VMResult<ResultValue> {
-    let mut offset = 0usize;
-    let mut values = Vec::with_capacity(types.0.len());
-    for ty in types.iter() {
-        values.push(decode_local_value(stack, reference, offset, *ty));
-        offset += ty.stack_size().usize();
-    }
-    VMResult::Success(ResultValue::new(values))
-}
 
 fn pop_result_values(stack: &mut Stack, ty: &ResultType) -> ResultValue {
     let mut result = ty
@@ -164,18 +106,15 @@ fn start_async_host_call(
     ctx: &mut ExecuteContext,
 ) -> VMResult<CallOutcome> {
     let async_host = ctx.func().async_host_code_pointer(ctx.gc);
-    let params = vm_try!(decode_result_values(
-        ctx.stack,
-        &ctx.local_reference(),
-        &func_type.0,
-    ));
     let task_id = ctx.task_id;
-    let state = ctx.store.state;
+    let return_size = result_type_size(&func_type.1);
+    let future = async_host(ctx);
     ctx.effect.push_async_effect(Box::pin(async move {
         AsyncResult {
             task_id,
             completion: AsyncCompletion::HostCall {
-                result: async_host(state, params).await,
+                result: future.await,
+                return_size,
             },
         }
     }));
@@ -201,12 +140,10 @@ pub(crate) fn resume_async_host_call(
     stack: &mut Stack,
     local_reference: &mut LocalReference,
     gc: &mut MemoryPool,
-    result: ResultValue,
+    return_size: usize,
 ) -> VMResult<StablePc> {
-    let func_type = current_func_type(gc, stack, local_reference);
-    vm_try!(push_result_values(stack, &func_type.1, &result));
     let (prev_local_reference, return_addr) =
-        stack.function_return(local_reference, result_type_size(&func_type.1), gc);
+        stack.function_return_in_place(local_reference, return_size, gc);
     *local_reference = prev_local_reference;
     VMResult::Success(StablePc::from_raw_in_frame(
         gc,

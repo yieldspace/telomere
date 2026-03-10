@@ -1,7 +1,7 @@
 use std::{fmt, future::Future, ops::Range, pin::Pin};
 
 use crate::{
-    common::{GcRef, Instr, ResultValue, StablePc},
+    common::{GcRef, Instr, StablePc},
     Stack, VMResult,
 };
 #[derive(Debug)]
@@ -55,7 +55,8 @@ pub enum AsyncCompletion {
     #[allow(dead_code)]
     Continue { fp: StablePc },
     HostCall {
-        result: VMResult<ResultValue>,
+        result: VMResult<()>,
+        return_size: usize,
     },
 }
 #[cfg(feature = "async-runtime")]

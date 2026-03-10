@@ -187,6 +187,11 @@ impl Stack {
     pub fn local_bytes(&self, reference: &LocalReference, local_addr: usize, size: usize) -> &[u8] {
         &self.memory[reference.local_top + local_addr..reference.local_top + local_addr + size]
     }
+    /// # Safety
+    /// Caller must ensure the returned pointer is not used after the stack is dropped or reallocated.
+    pub unsafe fn local_area_mut_ptr(&mut self, reference: &LocalReference) -> *mut u8 {
+        self.memory.as_mut_ptr().add(reference.local_top)
+    }
     pub fn local_tee(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
         self.memory
             .copy_within(self.top - size..self.top, reference.local_top + local_addr);
@@ -257,6 +262,30 @@ impl Stack {
 
         self.memory
             .copy_within(self.top - return_size..self.top, reference.local_top);
+        self.top = reference.local_top + return_size;
+        (
+            prev_local_reference,
+            return_pc.resolve(gc, self, prev_local_reference),
+        )
+    }
+    /// Like `function_return` but assumes the return data is already written at `local_top`.
+    pub fn function_return_in_place(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+        gc: &MemoryPool,
+    ) -> (LocalReference, *const Instr) {
+        let CallStackInfo {
+            return_pc,
+            prev_local_reference_top,
+            prev_local_reference_size,
+            ..
+        } = *self.call_stack_info(reference);
+
+        let prev_local_reference = LocalReference {
+            local_size: prev_local_reference_size,
+            local_top: prev_local_reference_top,
+        };
         self.top = reference.local_top + return_size;
         (
             prev_local_reference,
