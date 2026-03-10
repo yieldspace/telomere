@@ -55,8 +55,7 @@ pub enum AsyncCompletion {
     #[allow(dead_code)]
     Continue { fp: StablePc },
     HostCall {
-        result: VMResult<()>,
-        return_size: usize,
+        result: VMResult<*const Instr>,
     },
 }
 #[cfg(feature = "async-runtime")]

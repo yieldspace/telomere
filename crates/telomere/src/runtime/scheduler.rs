@@ -7,7 +7,6 @@ use super::{
 };
 use crate::{
     common::{gc::MemoryPool, ExecuteContext, GcRef, LocalReference, MemArg, StablePc},
-    runtime::vm,
     Stack, Store, VMResult,
 };
 use futures::{future::FusedFuture, stream::FuturesUnordered};
@@ -306,38 +305,19 @@ impl<'a> Scheduler<'a> {
                 self.ready_count += 1;
                 self.notify.wake();
             }
-            AsyncCompletion::HostCall {
-                result,
-                return_size,
-            } => match result {
-                VMResult::Success(()) => {
+            AsyncCompletion::HostCall { result } => match result {
+                VMResult::Success(fp) => {
                     let mut gc = self.store.lock_gc();
-                    let resume = {
+                    let fp = {
                         let task = self.tasks.get_mut(task_index).unwrap();
-                        vm::resume_async_host_call(
-                            &mut task.stack,
-                            &mut task.local_reference,
-                            &mut gc,
-                            return_size,
-                        )
+                        StablePc::from_raw_in_frame(&mut gc, &task.stack, task.local_reference, fp)
                     };
-                    match resume {
-                        VMResult::Success(fp) => {
-                            let task = self.tasks.get_mut(task_index).unwrap();
-                            task.pending_effects -= 1;
-                            task.ready_flag = ReadyFlag::Ready;
-                            task.fp = fp;
-                            self.ready_count += 1;
-                            self.notify.wake();
-                        }
-                        other => {
-                            let task = self.tasks.remove(task_index).unwrap();
-                            self.completed_tasks.push(CompletedTask {
-                                stack: task.stack,
-                                result: vm_result_to_unit(other),
-                            });
-                        }
-                    }
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    task.pending_effects -= 1;
+                    task.ready_flag = ReadyFlag::Ready;
+                    task.fp = fp;
+                    self.ready_count += 1;
+                    self.notify.wake();
                 }
                 other => {
                     let task = self.tasks.remove(task_index).unwrap();

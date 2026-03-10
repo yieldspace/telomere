@@ -7,8 +7,8 @@ use std::ops::BitXor;
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{GcRef, InstanceData, MemoryPool},
-        ElemInit, ExecuteContext, ExportDesc, FuncType, InstanceHandle, Instr, LocalReference,
+        gc::{GcRef, InstanceData},
+        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference,
         ResultType, ResultValue, Stack, StablePc, VMResult, ValType, WasmValue,
         TABLE_UNINITIALIZED,
     },
@@ -91,30 +91,18 @@ fn pop_result_values(stack: &mut Stack, ty: &ResultType) -> ResultValue {
     ResultValue::new(result)
 }
 
-fn current_func_type(gc: &MemoryPool, stack: &Stack, reference: &LocalReference) -> FuncType {
-    let func_addr = stack.code_addr(reference);
-    let func = unsafe { gc.get_func(func_addr) };
-    let instance = unsafe { &*gc.get_instance_unchecked(func.instance_addr) };
-    let module = unsafe { gc.get_module(instance.module_addr) };
-    let type_idx = module.functions[func.funcidx as usize];
-    module.function_types[type_idx.0 as usize].clone()
-}
-
 fn start_async_host_call(
     return_addr: *const Instr,
-    func_type: &FuncType,
     ctx: &mut ExecuteContext,
 ) -> VMResult<CallOutcome> {
     let async_host = ctx.func().async_host_code_pointer(ctx.gc);
     let task_id = ctx.task_id;
-    let return_size = result_type_size(&func_type.1);
     let future = async_host(ctx);
     ctx.effect.push_async_effect(Box::pin(async move {
         AsyncResult {
             task_id,
             completion: AsyncCompletion::HostCall {
                 result: future.await,
-                return_size,
             },
         }
     }));
@@ -126,31 +114,13 @@ fn invoke_host_function(
     return_addr: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<CallOutcome> {
-    let func_type = current_func_type(ctx.gc, ctx.stack, &ctx.local_reference());
     if ctx.func().is_async_host_func() {
-        start_async_host_call(return_addr, &func_type, ctx)
+        start_async_host_call(return_addr, ctx)
     } else {
         let fp = ctx.func().host_code_pointer(ctx.gc);
         let return_addr = vm_try!(fp(ctx));
         VMResult::Success(CallOutcome::Immediate(return_addr))
     }
-}
-
-pub(crate) fn resume_async_host_call(
-    stack: &mut Stack,
-    local_reference: &mut LocalReference,
-    gc: &mut MemoryPool,
-    return_size: usize,
-) -> VMResult<StablePc> {
-    let (prev_local_reference, return_addr) =
-        stack.function_return_in_place(local_reference, return_size, gc);
-    *local_reference = prev_local_reference;
-    VMResult::Success(StablePc::from_raw_in_frame(
-        gc,
-        stack,
-        *local_reference,
-        return_addr,
-    ))
 }
 pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = (*tail_code).operand.i32;

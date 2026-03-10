@@ -167,14 +167,17 @@ impl ExportSection {
     }
 }
 pub type HostFunction = fn(ctx: &mut ExecuteContext) -> VMResult<*const Instr>;
-pub type AsyncHostFuture = Pin<Box<dyn Future<Output = VMResult<()>> + 'static>>;
+pub type AsyncHostFuture = Pin<Box<dyn Future<Output = VMResult<*const Instr>> + 'static>>;
 pub type AsyncHostFunction = fn(&mut ExecuteContext<'_>) -> AsyncHostFuture;
 
-pub struct AsyncReturnSlot(*mut u8);
-unsafe impl Send for AsyncReturnSlot {}
-impl AsyncReturnSlot {
+pub struct ReturnSlot(*mut u8);
+unsafe impl Send for ReturnSlot {}
+impl ReturnSlot {
     pub fn write(&self, data: &[u8]) {
         unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.0, data.len()) };
+    }
+    pub fn as_mut_ptr(&self) -> *mut u8 {
+        self.0
     }
 }
 #[derive(Clone)]
@@ -569,9 +572,9 @@ impl ExecuteContext<'_> {
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.memory_addr().map(|v| unsafe { self.gc.get_memory(v) })
     }
-    pub fn async_return_slot(&mut self) -> AsyncReturnSlot {
+    pub fn return_slot(&mut self) -> ReturnSlot {
         let local_ref = self.local_reference();
-        AsyncReturnSlot(unsafe { self.stack.local_area_mut_ptr(&local_ref) })
+        ReturnSlot(unsafe { self.stack.local_area_mut_ptr(&local_ref) })
     }
 }
 
