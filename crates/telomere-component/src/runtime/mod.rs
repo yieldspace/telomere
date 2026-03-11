@@ -4,7 +4,7 @@ use crate::ir::{
     CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
     InstanceImport, Relation, ResourceId, TypeId,
 };
-use crate::linker::LinkerBinding;
+use crate::linker::{ComponentLinkerInstance, LinkerBinding};
 use crate::support::common::InstanceHandle;
 use crate::support::common::{
     ExecuteContext, FuncType as CoreFuncType, HostFunctionDefinition, Instr, NativeModule,
@@ -59,9 +59,15 @@ struct RuntimeComponentDef {
 }
 
 struct RuntimeComponentInstance {
-    component: Component,
+    source: RuntimeComponentSource,
     env: Rc<RuntimeEnv>,
     exports: RefCell<HashMap<String, RuntimeExport>>,
+}
+
+#[derive(Clone)]
+enum RuntimeComponentSource {
+    Component(Component),
+    LinkerInstance(ComponentLinkerInstance),
 }
 
 struct RuntimeEnv {
@@ -177,7 +183,10 @@ fn instantiate_sync(
         HashMap::new(),
         shared,
     ));
-    let root = Rc::new(RuntimeComponentInstance::new(program.root.clone(), env));
+    let root = Rc::new(RuntimeComponentInstance::new_component(
+        program.root.clone(),
+        env,
+    ));
 
     for name in &program.callable_exports {
         let export = root.resolve_export(name, store)?;
@@ -199,19 +208,46 @@ impl RuntimeInstance {
         name: &str,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
-        self.call_sync(store, name, args)
+        self.call_path(store, &[], name, args).await
     }
 
-    fn call_sync(
+    pub(crate) async fn call_path(
         &self,
         store: &mut Store,
+        path: &[String],
         name: &str,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
-        match self.root.resolve_export(name, store)? {
+        self.call_path_sync(store, path, name, args)
+    }
+
+    fn call_path_sync(
+        &self,
+        store: &mut Store,
+        path: &[String],
+        name: &str,
+        args: &[ComponentValue],
+    ) -> Result<Vec<ComponentValue>, ComponentError> {
+        let namespace = self.resolve_namespace(store, path)?;
+        match namespace.resolve_export(name, store)? {
             RuntimeExport::Func(callable) => callable.call_sync(store, args),
             _ => Err(ComponentError::ExportNotFound(name.to_owned())),
         }
+    }
+
+    fn resolve_namespace(
+        &self,
+        store: &mut Store,
+        path: &[String],
+    ) -> Result<Rc<RuntimeComponentInstance>, ComponentError> {
+        let mut current = self.root.clone();
+        for segment in path {
+            current = match current.resolve_export(segment, store)? {
+                RuntimeExport::Instance(instance) => instance,
+                _ => return Err(ComponentError::ExportNotFound(segment.clone())),
+            };
+        }
+        Ok(current)
     }
 }
 
@@ -315,7 +351,7 @@ impl RuntimeEnv {
                     imports,
                     self.shared.clone(),
                 ));
-                Rc::new(RuntimeComponentInstance::new(
+                Rc::new(RuntimeComponentInstance::new_component(
                     component.component.clone(),
                     env,
                 ))
@@ -680,14 +716,24 @@ impl RuntimeEnv {
                 name
             ))),
             None => self
-                .parent
-                .as_ref()
-                .map(|parent| parent.lookup_import_instance(name))
-                .unwrap_or_else(|| {
-                    Err(ComponentError::Unsupported(format!(
+                .linker
+                .resolve_import_instance(name)
+                .map(|instance| {
+                    Rc::new(RuntimeComponentInstance::new_linker(
+                        instance,
+                        Rc::new(self.clone_shallow()),
+                    ))
+                })
+                .or_else(|| {
+                    self.parent
+                        .as_ref()
+                        .and_then(|parent| parent.lookup_import_instance(name).ok())
+                })
+                .ok_or_else(|| {
+                    ComponentError::Unsupported(format!(
                         "instance import '{}' is not supported by linker",
                         name
-                    )))
+                    ))
                 }),
         }
     }
@@ -738,9 +784,17 @@ impl RuntimeEnv {
 }
 
 impl RuntimeComponentInstance {
-    fn new(component: Component, env: Rc<RuntimeEnv>) -> Self {
+    fn new_component(component: Component, env: Rc<RuntimeEnv>) -> Self {
         Self {
-            component,
+            source: RuntimeComponentSource::Component(component),
+            env,
+            exports: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn new_linker(instance: ComponentLinkerInstance, env: Rc<RuntimeEnv>) -> Self {
+        Self {
+            source: RuntimeComponentSource::LinkerInstance(instance),
             env,
             exports: RefCell::new(HashMap::new()),
         }
@@ -754,33 +808,42 @@ impl RuntimeComponentInstance {
         if let Some(export) = self.exports.borrow().get(name).cloned() {
             return Ok(export);
         }
-        let export = match self.component.exports.get(name) {
-            Some(ComponentExport::Component(idx)) => {
-                RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
-            }
-            Some(ComponentExport::Instance(idx)) => {
-                RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
-            }
-            Some(ComponentExport::Func { idx, .. }) => {
-                if self.env.parent.is_none() {
-                    if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx) {
-                        if let Some(binding) = self.env.linker.resolve_export(name) {
-                            let export =
-                                RuntimeExport::Func(Rc::new(linker_binding_to_callable(binding)));
-                            self.exports
-                                .borrow_mut()
-                                .insert(name.to_owned(), export.clone());
-                            return Ok(export);
+        let export = match &self.source {
+            RuntimeComponentSource::Component(component) => match component.exports.get(name) {
+                Some(ComponentExport::Component(idx)) => {
+                    RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
+                }
+                Some(ComponentExport::Instance(idx)) => {
+                    RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
+                }
+                Some(ComponentExport::Func { idx, .. }) => {
+                    if self.env.parent.is_none() {
+                        if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx) {
+                            if let Some(binding) = self.env.linker.resolve_export(name) {
+                                let export = RuntimeExport::Func(Rc::new(
+                                    linker_binding_to_callable(binding),
+                                ));
+                                self.exports
+                                    .borrow_mut()
+                                    .insert(name.to_owned(), export.clone());
+                                return Ok(export);
+                            }
                         }
                     }
+                    RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
                 }
-                RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
-            }
-            Some(ComponentExport::Module(idx)) => {
-                RuntimeExport::CoreModule(Box::new(self.env.resolve_core_module(*idx, store)?))
-            }
-            Some(ComponentExport::Resource(_)) | None => {
-                return Err(ComponentError::ExportNotFound(name.to_owned()))
+                Some(ComponentExport::Module(idx)) => {
+                    RuntimeExport::CoreModule(Box::new(self.env.resolve_core_module(*idx, store)?))
+                }
+                Some(ComponentExport::Resource(_)) | None => {
+                    return Err(ComponentError::ExportNotFound(name.to_owned()))
+                }
+            },
+            RuntimeComponentSource::LinkerInstance(instance) => {
+                let Some(binding) = instance.resolve_export(name) else {
+                    return Err(ComponentError::ExportNotFound(name.to_owned()));
+                };
+                RuntimeExport::Func(Rc::new(linker_binding_to_callable(binding)))
             }
         };
         self.exports

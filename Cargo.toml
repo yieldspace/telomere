@@ -18,6 +18,7 @@ resolver = "2"
 members = [
     "crates/telomere",
     "crates/telomere-component",
+    "crates/telomere-component-bindgen",
     "crates/telomere-macros",
     "crates/union-find"
 ]

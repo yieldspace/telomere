@@ -27,9 +27,85 @@ pub(crate) enum LinkerBinding {
 }
 
 #[derive(Default, Clone)]
+pub struct ComponentLinkerInstance {
+    exports: HashMap<String, LinkerBinding>,
+}
+
+impl ComponentLinkerInstance {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register_func_async(
+        &mut self,
+        name: impl Into<String>,
+        func: impl for<'a> Fn(
+                &'a mut Store,
+                &'a [ComponentValue],
+            )
+                -> ComponentFuture<'a, Result<Vec<ComponentValue>, ComponentError>>
+            + 'static,
+    ) {
+        self.exports
+            .insert(name.into(), LinkerBinding::Host(Arc::new(func)));
+    }
+
+    pub fn register_func(
+        &mut self,
+        name: impl Into<String>,
+        func: impl Fn(&mut Store, &[ComponentValue]) -> Result<Vec<ComponentValue>, ComponentError>
+            + 'static,
+    ) {
+        self.register_func_async(name, move |store, args| Box::pin(ready(func(store, args))));
+    }
+
+    pub fn register_func_typed_async<P, R>(
+        &mut self,
+        name: impl Into<String>,
+        func: impl for<'a> Fn(&'a mut Store, P) -> ComponentFuture<'a, Result<R, ComponentError>>
+            + 'static,
+    ) where
+        P: ComponentParams + 'static,
+        R: ComponentReturn + 'static,
+    {
+        let func = Arc::new(func);
+        self.register_func_async(name, move |store, args| {
+            match P::from_component_args(args) {
+                Ok(params) => {
+                    let func = Arc::clone(&func);
+                    Box::pin(async move {
+                        let result = (func)(store, params).await?;
+                        result.into_component_results()
+                    })
+                }
+                Err(error) => Box::pin(ready(Err(error))),
+            }
+        });
+    }
+
+    pub fn register_func_typed<P, R>(
+        &mut self,
+        name: impl Into<String>,
+        func: impl Fn(&mut Store, P) -> Result<R, ComponentError> + 'static,
+    ) where
+        P: ComponentParams + 'static,
+        R: ComponentReturn + 'static,
+    {
+        self.register_func_typed_async(name, move |store, params| {
+            Box::pin(ready(func(store, params)))
+        });
+    }
+
+    pub(crate) fn resolve_export(&self, name: &str) -> Option<LinkerBinding> {
+        self.exports.get(name).cloned()
+    }
+}
+
+#[derive(Default, Clone)]
 pub struct ComponentLinker {
     imports: HashMap<String, LinkerBinding>,
     exports: HashMap<String, LinkerBinding>,
+    import_instances: HashMap<String, ComponentLinkerInstance>,
 }
 
 impl ComponentLinker {
@@ -135,6 +211,14 @@ impl ComponentLinker {
         );
     }
 
+    pub fn register_import_instance(
+        &mut self,
+        name: impl Into<String>,
+        instance: ComponentLinkerInstance,
+    ) {
+        self.import_instances.insert(name.into(), instance);
+    }
+
     pub fn register_export_core(
         &mut self,
         name: impl Into<String>,
@@ -156,5 +240,9 @@ impl ComponentLinker {
 
     pub(crate) fn resolve_import(&self, name: &str) -> Option<LinkerBinding> {
         self.imports.get(name).cloned()
+    }
+
+    pub(crate) fn resolve_import_instance(&self, name: &str) -> Option<ComponentLinkerInstance> {
+        self.import_instances.get(name).cloned()
     }
 }
