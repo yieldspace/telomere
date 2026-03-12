@@ -79,6 +79,44 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Own<T> {
+    handle: u32,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T> Own<T> {
+    pub fn new(handle: u32) -> Self {
+        Self {
+            handle,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn handle(self) -> u32 {
+        self.handle
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Borrow<T> {
+    handle: u32,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T> Borrow<T> {
+    pub fn new(handle: u32) -> Self {
+        Self {
+            handle,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn handle(self) -> u32 {
+        self.handle
+    }
+}
+
 pub trait LowerComponent: Sized {
     fn lower_component(self) -> Result<ComponentValue, ComponentError>;
 
@@ -107,6 +145,17 @@ pub trait ComponentReturn: Sized {
     fn into_component_results(self) -> Result<Vec<ComponentValue>, ComponentError>;
     fn matches_result(
         result: Option<&ValType>,
+        program: &ComponentProgram,
+    ) -> Result<(), ComponentError>;
+}
+
+trait ResultPayload: Sized {
+    fn lower_result_payload(self) -> Result<Option<Box<ComponentValue>>, ComponentError>;
+
+    fn lift_result_payload(value: Option<Box<ComponentValue>>) -> Result<Self, ComponentError>;
+
+    fn matches_result_payload(
+        ty: Option<&ValType>,
         program: &ComponentProgram,
     ) -> Result<(), ComponentError>;
 }
@@ -293,46 +342,94 @@ where
     }
 }
 
+impl<T> ResultPayload for T
+where
+    T: LowerComponent + LiftComponent,
+{
+    fn lower_result_payload(self) -> Result<Option<Box<ComponentValue>>, ComponentError> {
+        Ok(Some(Box::new(self.lower_component()?)))
+    }
+
+    fn lift_result_payload(value: Option<Box<ComponentValue>>) -> Result<Self, ComponentError> {
+        let value = value
+            .ok_or_else(|| ComponentError::InvalidArgument("result payload missing".to_owned()))?;
+        T::lift_component(*value)
+    }
+
+    fn matches_result_payload(
+        ty: Option<&ValType>,
+        program: &ComponentProgram,
+    ) -> Result<(), ComponentError> {
+        let ty = ty.ok_or_else(|| {
+            ComponentError::Link("typed component binding expects result payload".to_owned())
+        })?;
+        <T as LowerComponent>::matches_type(ty, program)
+    }
+}
+
+impl ResultPayload for () {
+    fn lower_result_payload(self) -> Result<Option<Box<ComponentValue>>, ComponentError> {
+        Ok(Some(Box::new(ComponentValue::Tuple(Vec::new()))))
+    }
+
+    fn lift_result_payload(value: Option<Box<ComponentValue>>) -> Result<Self, ComponentError> {
+        match value.as_deref() {
+            None => Ok(()),
+            Some(ComponentValue::Tuple(values)) if values.is_empty() => Ok(()),
+            _ => Err(ComponentError::InvalidArgument(
+                "unexpected result payload".to_owned(),
+            )),
+        }
+    }
+
+    fn matches_result_payload(
+        ty: Option<&ValType>,
+        _program: &ComponentProgram,
+    ) -> Result<(), ComponentError> {
+        if ty.is_none() {
+            Ok(())
+        } else {
+            Err(ComponentError::Link(
+                "typed component binding expects payloadless result case".to_owned(),
+            ))
+        }
+    }
+}
+
 impl<T, E> LowerComponent for Result<T, E>
 where
-    T: LowerComponent,
-    E: LowerComponent,
+    T: ResultPayload,
+    E: ResultPayload,
 {
     fn lower_component(self) -> Result<ComponentValue, ComponentError> {
         Ok(match self {
             Ok(value) => ComponentValue::Result {
-                ok: Some(Box::new(value.lower_component()?)),
+                ok: value.lower_result_payload()?,
                 err: None,
             },
             Err(error) => ComponentValue::Result {
                 ok: None,
-                err: Some(Box::new(error.lower_component()?)),
+                err: error.lower_result_payload()?,
             },
         })
     }
 
     fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
         let (ok, err) = extract_result_payload_types(ty, program)?;
-        T::matches_type(ok, program)?;
-        E::matches_type(err, program)
+        T::matches_result_payload(ok, program)?;
+        E::matches_result_payload(err, program)
     }
 }
 
 impl<T, E> LiftComponent for Result<T, E>
 where
-    T: LiftComponent,
-    E: LiftComponent,
+    T: ResultPayload,
+    E: ResultPayload,
 {
     fn lift_component(value: ComponentValue) -> Result<Self, ComponentError> {
         match value {
-            ComponentValue::Result {
-                ok: Some(value),
-                err: None,
-            } => Ok(Ok(T::lift_component(*value)?)),
-            ComponentValue::Result {
-                ok: None,
-                err: Some(error),
-            } => Ok(Err(E::lift_component(*error)?)),
+            ComponentValue::Result { ok, err: None } => Ok(Ok(T::lift_result_payload(ok)?)),
+            ComponentValue::Result { ok: None, err } => Ok(Err(E::lift_result_payload(err)?)),
             other => Err(ComponentError::InvalidArgument(format!(
                 "expected result value, got {other:?}"
             ))),
@@ -341,8 +438,68 @@ where
 
     fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
         let (ok, err) = extract_result_payload_types(ty, program)?;
-        T::matches_type(ok, program)?;
-        E::matches_type(err, program)
+        T::matches_result_payload(ok, program)?;
+        E::matches_result_payload(err, program)
+    }
+}
+
+impl<T> LowerComponent for Own<T> {
+    fn lower_component(self) -> Result<ComponentValue, ComponentError> {
+        Ok(ComponentValue::Own(self.handle))
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        match extract_resource_handle_type(ty, program)? {
+            ResourceHandleKind::Own => Ok(()),
+            ResourceHandleKind::Borrow => Err(ComponentError::Link(
+                "typed component binding expects own resource".to_owned(),
+            )),
+        }
+    }
+}
+
+impl<T> LiftComponent for Own<T> {
+    fn lift_component(value: ComponentValue) -> Result<Self, ComponentError> {
+        match value {
+            ComponentValue::Own(handle) => Ok(Self::new(handle)),
+            other => Err(ComponentError::InvalidArgument(format!(
+                "expected own resource result, got {other:?}"
+            ))),
+        }
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        <Self as LowerComponent>::matches_type(ty, program)
+    }
+}
+
+impl<T> LowerComponent for Borrow<T> {
+    fn lower_component(self) -> Result<ComponentValue, ComponentError> {
+        Ok(ComponentValue::Borrow(self.handle))
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        match extract_resource_handle_type(ty, program)? {
+            ResourceHandleKind::Borrow => Ok(()),
+            ResourceHandleKind::Own => Err(ComponentError::Link(
+                "typed component binding expects borrow resource".to_owned(),
+            )),
+        }
+    }
+}
+
+impl<T> LiftComponent for Borrow<T> {
+    fn lift_component(value: ComponentValue) -> Result<Self, ComponentError> {
+        match value {
+            ComponentValue::Borrow(handle) => Ok(Self::new(handle)),
+            other => Err(ComponentError::InvalidArgument(format!(
+                "expected borrow resource result, got {other:?}"
+            ))),
+        }
+    }
+
+    fn matches_type(ty: &ValType, program: &ComponentProgram) -> Result<(), ComponentError> {
+        <Self as LowerComponent>::matches_type(ty, program)
     }
 }
 
@@ -571,6 +728,12 @@ enum TypeExpectation {
     String,
 }
 
+#[derive(Clone, Copy)]
+enum ResourceHandleKind {
+    Own,
+    Borrow,
+}
+
 fn ensure_matches_type<T>(
     ty: &ValType,
     program: &ComponentProgram,
@@ -688,23 +851,31 @@ fn extract_option_payload_type<'a>(
 fn extract_result_payload_types<'a>(
     ty: &'a ValType,
     program: &'a ComponentProgram,
-) -> Result<(&'a ValType, &'a ValType), ComponentError> {
+) -> Result<(Option<&'a ValType>, Option<&'a ValType>), ComponentError> {
     let Type::DefVal(DefValType::Variant(cases)) = resolve_defined_type(ty, program)? else {
         return Err(ComponentError::Link(
             "typed component binding expects result".to_owned(),
         ));
     };
     match cases.as_slice() {
-        [ok, err] if ok.label.0 == "ok" && err.label.0 == "err" => Ok((
-            ok.ty.as_ref().ok_or_else(|| {
-                ComponentError::Link("typed component binding expects ok payload".to_owned())
-            })?,
-            err.ty.as_ref().ok_or_else(|| {
-                ComponentError::Link("typed component binding expects err payload".to_owned())
-            })?,
-        )),
+        [ok, err] if ok.label.0 == "ok" && err.label.0 == "err" => {
+            Ok((ok.ty.as_ref(), err.ty.as_ref()))
+        }
         _ => Err(ComponentError::Link(
             "typed component binding expects result".to_owned(),
+        )),
+    }
+}
+
+fn extract_resource_handle_type(
+    ty: &ValType,
+    program: &ComponentProgram,
+) -> Result<ResourceHandleKind, ComponentError> {
+    match resolve_defined_type(ty, program)? {
+        Type::DefVal(DefValType::Own(_)) | Type::Resource(_) => Ok(ResourceHandleKind::Own),
+        Type::DefVal(DefValType::Borrow(_)) => Ok(ResourceHandleKind::Borrow),
+        _ => Err(ComponentError::Link(
+            "typed component binding expects resource handle".to_owned(),
         )),
     }
 }

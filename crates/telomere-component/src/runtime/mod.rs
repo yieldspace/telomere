@@ -1,10 +1,11 @@
 use crate::ir::types::{Case, DefValType, FuncType, LabelValType, PrimValType, Type, ValType};
+use crate::ir::AnyGlobalIdx;
 use crate::ir::{
     CanonicalOptions, CanonicalStringEncoding, Component, ComponentExport, CoreFunc, CoreInstance,
     CoreInstanceInlineExport, CoreMemory, CoreRelation, CoreTable, Func, GlobalIdx, Instance,
     InstanceImport, Relation, ResourceId, TypeId,
 };
-use crate::linker::LinkerBinding;
+use crate::linker::{ComponentLinkerInstance, LinkerBinding};
 use crate::support::common::InstanceHandle;
 use crate::support::common::{
     ExecuteContext, FuncType as CoreFuncType, HostFunctionDefinition, Instr, NativeModule,
@@ -59,9 +60,15 @@ struct RuntimeComponentDef {
 }
 
 struct RuntimeComponentInstance {
-    component: Component,
+    source: RuntimeComponentSource,
     env: Rc<RuntimeEnv>,
     exports: RefCell<HashMap<String, RuntimeExport>>,
+}
+
+#[derive(Clone)]
+enum RuntimeComponentSource {
+    Component(Component),
+    LinkerInstance(ComponentLinkerInstance),
 }
 
 struct RuntimeEnv {
@@ -84,6 +91,7 @@ struct RuntimeEnv {
 struct SharedState {
     next_resource_handle: Cell<u32>,
     resources: RefCell<HashMap<ResourceId, HashMap<u32, ResourceRecord>>>,
+    generic_resources: RefCell<HashMap<TypeId, ResourceId>>,
 }
 
 #[derive(Clone)]
@@ -177,7 +185,12 @@ fn instantiate_sync(
         HashMap::new(),
         shared,
     ));
-    let root = Rc::new(RuntimeComponentInstance::new(program.root.clone(), env));
+    let root = Rc::new(RuntimeComponentInstance::new_component(
+        program.root.clone(),
+        env,
+    ));
+
+    materialize_defined_core_instances(root.env.as_ref(), store)?;
 
     for name in &program.callable_exports {
         let export = root.resolve_export(name, store)?;
@@ -192,6 +205,25 @@ fn instantiate_sync(
     Ok(RuntimeInstance { root })
 }
 
+fn materialize_defined_core_instances(
+    env: &RuntimeEnv,
+    store: &mut Store,
+) -> Result<(), ComponentError> {
+    let mut pending = env
+        .program
+        .core_instance_store
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
+    pending.sort_by_key(|idx| AnyGlobalIdx::from(*idx).raw());
+
+    for idx in pending {
+        env.resolve_core_instance(idx, store)?;
+    }
+
+    Ok(())
+}
+
 impl RuntimeInstance {
     pub(crate) async fn call(
         &self,
@@ -199,19 +231,46 @@ impl RuntimeInstance {
         name: &str,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
-        self.call_sync(store, name, args)
+        self.call_path(store, &[], name, args).await
     }
 
-    fn call_sync(
+    pub(crate) async fn call_path(
         &self,
         store: &mut Store,
+        path: &[String],
         name: &str,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
-        match self.root.resolve_export(name, store)? {
+        self.call_path_sync(store, path, name, args)
+    }
+
+    fn call_path_sync(
+        &self,
+        store: &mut Store,
+        path: &[String],
+        name: &str,
+        args: &[ComponentValue],
+    ) -> Result<Vec<ComponentValue>, ComponentError> {
+        let namespace = self.resolve_namespace(store, path)?;
+        match namespace.resolve_export(name, store)? {
             RuntimeExport::Func(callable) => callable.call_sync(store, args),
             _ => Err(ComponentError::ExportNotFound(name.to_owned())),
         }
+    }
+
+    fn resolve_namespace(
+        &self,
+        store: &mut Store,
+        path: &[String],
+    ) -> Result<Rc<RuntimeComponentInstance>, ComponentError> {
+        let mut current = self.root.clone();
+        for segment in path {
+            current = match current.resolve_export(segment, store)? {
+                RuntimeExport::Instance(instance) => instance,
+                _ => return Err(ComponentError::ExportNotFound(segment.clone())),
+            };
+        }
+        Ok(current)
     }
 }
 
@@ -315,7 +374,7 @@ impl RuntimeEnv {
                     imports,
                     self.shared.clone(),
                 ));
-                Rc::new(RuntimeComponentInstance::new(
+                Rc::new(RuntimeComponentInstance::new_component(
                     component.component.clone(),
                     env,
                 ))
@@ -507,7 +566,7 @@ impl RuntimeEnv {
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceNew { type_id })) => {
-                let resource = program_resource_id(&self.program, *type_id)?;
+                let resource = runtime_resource_id(&self.program, &self.shared, *type_id)?;
                 let destructor = match resource.dtor() {
                     Some(dtor) => Some(self.resolve_core_func(dtor.into(), store)?),
                     None => None,
@@ -520,7 +579,7 @@ impl RuntimeEnv {
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceDrop { type_id })) => {
-                let resource = program_resource_id(&self.program, *type_id)?;
+                let resource = runtime_resource_id(&self.program, &self.shared, *type_id)?;
                 RuntimeCoreFunc::Host(Rc::new(HostBinding::ResourceDrop {
                     resource,
                     signature: CoreFuncType::new(vec![CoreValType::I32], vec![]),
@@ -528,7 +587,7 @@ impl RuntimeEnv {
                 }))
             }
             Some(CoreRelation::Defined(CoreFunc::CanonResourceRep { type_id })) => {
-                let resource = program_resource_id(&self.program, *type_id)?;
+                let resource = runtime_resource_id(&self.program, &self.shared, *type_id)?;
                 RuntimeCoreFunc::Host(Rc::new(HostBinding::ResourceRep {
                     resource,
                     signature: CoreFuncType::new(vec![CoreValType::I32], vec![CoreValType::I32]),
@@ -680,14 +739,24 @@ impl RuntimeEnv {
                 name
             ))),
             None => self
-                .parent
-                .as_ref()
-                .map(|parent| parent.lookup_import_instance(name))
-                .unwrap_or_else(|| {
-                    Err(ComponentError::Unsupported(format!(
+                .linker
+                .resolve_import_instance(name)
+                .map(|instance| {
+                    Rc::new(RuntimeComponentInstance::new_linker(
+                        instance,
+                        Rc::new(self.clone_shallow()),
+                    ))
+                })
+                .or_else(|| {
+                    self.parent
+                        .as_ref()
+                        .and_then(|parent| parent.lookup_import_instance(name).ok())
+                })
+                .ok_or_else(|| {
+                    ComponentError::Unsupported(format!(
                         "instance import '{}' is not supported by linker",
                         name
-                    )))
+                    ))
                 }),
         }
     }
@@ -738,9 +807,17 @@ impl RuntimeEnv {
 }
 
 impl RuntimeComponentInstance {
-    fn new(component: Component, env: Rc<RuntimeEnv>) -> Self {
+    fn new_component(component: Component, env: Rc<RuntimeEnv>) -> Self {
         Self {
-            component,
+            source: RuntimeComponentSource::Component(component),
+            env,
+            exports: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn new_linker(instance: ComponentLinkerInstance, env: Rc<RuntimeEnv>) -> Self {
+        Self {
+            source: RuntimeComponentSource::LinkerInstance(instance),
             env,
             exports: RefCell::new(HashMap::new()),
         }
@@ -754,33 +831,42 @@ impl RuntimeComponentInstance {
         if let Some(export) = self.exports.borrow().get(name).cloned() {
             return Ok(export);
         }
-        let export = match self.component.exports.get(name) {
-            Some(ComponentExport::Component(idx)) => {
-                RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
-            }
-            Some(ComponentExport::Instance(idx)) => {
-                RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
-            }
-            Some(ComponentExport::Func { idx, .. }) => {
-                if self.env.parent.is_none() {
-                    if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx) {
-                        if let Some(binding) = self.env.linker.resolve_export(name) {
-                            let export =
-                                RuntimeExport::Func(Rc::new(linker_binding_to_callable(binding)));
-                            self.exports
-                                .borrow_mut()
-                                .insert(name.to_owned(), export.clone());
-                            return Ok(export);
+        let export = match &self.source {
+            RuntimeComponentSource::Component(component) => match component.exports.get(name) {
+                Some(ComponentExport::Component(idx)) => {
+                    RuntimeExport::Component(self.env.resolve_component(*idx, store)?)
+                }
+                Some(ComponentExport::Instance(idx)) => {
+                    RuntimeExport::Instance(self.env.resolve_instance(*idx, store)?)
+                }
+                Some(ComponentExport::Func { idx, .. }) => {
+                    if self.env.parent.is_none() {
+                        if let Some(Relation::Import(_)) = self.env.program.func_store.get(idx) {
+                            if let Some(binding) = self.env.linker.resolve_export(name) {
+                                let export = RuntimeExport::Func(Rc::new(
+                                    linker_binding_to_callable(binding),
+                                ));
+                                self.exports
+                                    .borrow_mut()
+                                    .insert(name.to_owned(), export.clone());
+                                return Ok(export);
+                            }
                         }
                     }
+                    RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
                 }
-                RuntimeExport::Func(self.env.resolve_func(*idx, store)?)
-            }
-            Some(ComponentExport::Module(idx)) => {
-                RuntimeExport::CoreModule(Box::new(self.env.resolve_core_module(*idx, store)?))
-            }
-            Some(ComponentExport::Resource(_)) | None => {
-                return Err(ComponentError::ExportNotFound(name.to_owned()))
+                Some(ComponentExport::Module(idx)) => {
+                    RuntimeExport::CoreModule(Box::new(self.env.resolve_core_module(*idx, store)?))
+                }
+                Some(ComponentExport::Resource(_)) | None => {
+                    return Err(ComponentError::ExportNotFound(name.to_owned()))
+                }
+            },
+            RuntimeComponentSource::LinkerInstance(instance) => {
+                let Some(binding) = instance.resolve_export(name) else {
+                    return Err(ComponentError::ExportNotFound(name.to_owned()));
+                };
+                RuntimeExport::Func(Rc::new(linker_binding_to_callable(binding)))
             }
         };
         self.exports
@@ -1661,7 +1747,7 @@ fn lower_defined_value(
             lower_list_value(value, elem, *maybe_len, options, program, store)
         }
         Type::DefVal(DefValType::Own(resource)) | Type::DefVal(DefValType::Borrow(resource)) => {
-            let _ = program_resource_id(program, *resource)?;
+            validate_resource_type(program, *resource)?;
             Ok(vec![WasmValue::I32(expect_handle(value)? as i32)])
         }
         Type::Resource(_resource) => Ok(vec![WasmValue::I32(expect_handle(value)? as i32)]),
@@ -1707,11 +1793,11 @@ fn lift_defined_value(
             lift_list_value(elem, *maybe_len, options, program, store, cursor)
         }
         Type::DefVal(DefValType::Own(resource)) => {
-            let _ = program_resource_id(program, *resource)?;
+            validate_resource_type(program, *resource)?;
             Ok(ComponentValue::Own(cursor.next_i32()? as u32))
         }
         Type::DefVal(DefValType::Borrow(resource)) => {
-            let _ = program_resource_id(program, *resource)?;
+            validate_resource_type(program, *resource)?;
             Ok(ComponentValue::Borrow(cursor.next_i32()? as u32))
         }
         Type::Resource(_resource) => Ok(ComponentValue::Own(cursor.next_i32()? as u32)),
@@ -1808,6 +1894,102 @@ fn encode_string(value: &str, encoding: CanonicalStringEncoding) -> Vec<u8> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MemoryAbiInfo {
+    size: u32,
+    align: u32,
+}
+
+fn variant_discriminant_size(case_count: usize) -> Result<u32, ComponentError> {
+    if case_count <= (1 << 8) {
+        Ok(1)
+    } else if case_count <= (1 << 16) {
+        Ok(2)
+    } else if (case_count as u64) <= (1 << 32) {
+        Ok(4)
+    } else {
+        Err(ComponentError::Unsupported(
+            "variants with more than 2^32 cases are not supported".to_owned(),
+        ))
+    }
+}
+
+fn flags_memory_abi(count: usize) -> MemoryAbiInfo {
+    if count == 0 {
+        MemoryAbiInfo { size: 0, align: 1 }
+    } else if count <= 8 {
+        MemoryAbiInfo { size: 1, align: 1 }
+    } else if count <= 16 {
+        MemoryAbiInfo { size: 2, align: 2 }
+    } else {
+        MemoryAbiInfo {
+            size: 4 * count.div_ceil(32) as u32,
+            align: 4,
+        }
+    }
+}
+
+fn memory_abi_for_primitive(prim: &PrimValType) -> MemoryAbiInfo {
+    match prim {
+        PrimValType::Bool | PrimValType::S8 | PrimValType::U8 => {
+            MemoryAbiInfo { size: 1, align: 1 }
+        }
+        PrimValType::S16 | PrimValType::U16 => MemoryAbiInfo { size: 2, align: 2 },
+        PrimValType::S32 | PrimValType::U32 | PrimValType::Char | PrimValType::F32 => {
+            MemoryAbiInfo { size: 4, align: 4 }
+        }
+        PrimValType::S64 | PrimValType::U64 | PrimValType::F64 => {
+            MemoryAbiInfo { size: 8, align: 8 }
+        }
+        PrimValType::String => MemoryAbiInfo { size: 8, align: 4 },
+    }
+}
+
+fn memory_abi_for_type(
+    type_id: TypeId,
+    program: &ComponentProgram,
+) -> Result<MemoryAbiInfo, ComponentError> {
+    program
+        .get_type_info(type_id)
+        .map(|info| MemoryAbiInfo {
+            size: info.indirect_size,
+            align: info.indirect_align.max(1),
+        })
+        .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))
+}
+
+fn memory_abi_for_valtype(
+    ty: &ValType,
+    program: &ComponentProgram,
+) -> Result<MemoryAbiInfo, ComponentError> {
+    match ty {
+        ValType::Primitive(prim) => Ok(memory_abi_for_primitive(prim)),
+        ValType::Type(type_id) => memory_abi_for_type(*type_id, program),
+    }
+}
+
+fn value_area_layout(
+    values: &[ValType],
+    program: &ComponentProgram,
+) -> Result<(Vec<u32>, u32), ComponentError> {
+    let mut offsets = Vec::with_capacity(values.len());
+    let mut cursor = 0u32;
+    let mut max_align = 1u32;
+    for ty in values {
+        let abi = memory_abi_for_valtype(ty, program)?;
+        max_align = max_align.max(abi.align.max(1));
+        cursor = align_to(cursor, abi.align.max(1));
+        offsets.push(cursor);
+        cursor = cursor.saturating_add(abi.size);
+    }
+    Ok((offsets, align_to(cursor, max_align)))
+}
+
+fn element_stride(elem: &ValType, program: &ComponentProgram) -> Result<u32, ComponentError> {
+    let abi = memory_abi_for_valtype(elem, program)?;
+    Ok(align_to(abi.size, abi.align.max(1)))
+}
+
 fn function_params_flat_len(
     func_type: &FuncType,
     program: &ComponentProgram,
@@ -1822,49 +2004,14 @@ fn function_param_offsets(
     func_type: &FuncType,
     program: &ComponentProgram,
 ) -> Result<Vec<u32>, ComponentError> {
-    let mut offsets = Vec::with_capacity(func_type.params.len());
-    let mut cursor = 0u32;
-    for ty in &func_type.params {
-        offsets.push(cursor);
-        cursor = cursor.saturating_add(flat_byte_len_for_valtype(ty, program)?);
-    }
-    Ok(offsets)
+    Ok(value_area_layout(&func_type.params, program)?.0)
 }
 
 fn function_param_size(
     func_type: &FuncType,
     program: &ComponentProgram,
 ) -> Result<u32, ComponentError> {
-    Ok(function_param_offsets(func_type, program)?
-        .last()
-        .copied()
-        .unwrap_or(0)
-        + func_type
-            .params
-            .last()
-            .map(|ty| flat_byte_len_for_valtype(ty, program))
-            .transpose()?
-            .unwrap_or(0))
-}
-
-fn flat_byte_len_for_valtype(
-    ty: &ValType,
-    program: &ComponentProgram,
-) -> Result<u32, ComponentError> {
-    Ok(flat_byte_len(&flat_types_for_valtype(ty, program)?))
-}
-
-fn flat_byte_len(types: &[CoreValType]) -> u32 {
-    types
-        .iter()
-        .map(|ty| match ty {
-            CoreValType::I32 | CoreValType::F32 | CoreValType::FuncRef | CoreValType::ExternRef => {
-                4
-            }
-            CoreValType::I64 | CoreValType::F64 => 8,
-            CoreValType::V128 => 16,
-        })
-        .sum()
+    Ok(value_area_layout(&func_type.params, program)?.1)
 }
 
 fn flat_types_for_valtype(
@@ -1926,7 +2073,16 @@ fn flat_types_for_defval(
             types.extend(payload);
             types
         }
-        DefValType::Flags(labels) => vec![CoreValType::I32; labels.len().div_ceil(32).max(1)],
+        DefValType::Flags(labels) => {
+            let flat_len = if labels.is_empty() {
+                0
+            } else if labels.len() <= 16 {
+                1
+            } else {
+                labels.len().div_ceil(32)
+            };
+            vec![CoreValType::I32; flat_len]
+        }
         DefValType::List(_, _) => vec![CoreValType::I32, CoreValType::I32],
         DefValType::Own(_) | DefValType::Borrow(_) => vec![CoreValType::I32],
     })
@@ -1970,11 +2126,14 @@ fn write_value_to_memory(
     store: &mut Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
-    let memory = options.memory.as_ref().ok_or_else(|| {
-        ComponentError::Runtime("canonical option `memory` is required".to_owned())
-    })?;
-    let flat = lower_value_to_flat(value, ty, options, program, store)?;
-    write_flat_values(store, memory, ptr, &flat)
+    match ty {
+        ValType::Primitive(prim) => {
+            write_primitive_to_memory(value, prim, options, program, store, ptr)
+        }
+        ValType::Type(type_id) => {
+            write_defined_value_to_memory(value, *type_id, options, program, store, ptr)
+        }
+    }
 }
 
 fn read_value_from_memory(
@@ -1985,58 +2144,668 @@ fn read_value_from_memory(
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
-    let flat_types = flat_types_for_valtype(ty, program)?;
-    let values = read_flat_values_from_memory(store, memory, ptr, &flat_types)?;
-    let mut cursor = CoreValueCursor::new(&values);
-    lift_value(ty, options, program, store, &mut cursor)
+    match ty {
+        ValType::Primitive(prim) => {
+            read_primitive_from_memory(prim, options, program, store, memory, ptr)
+        }
+        ValType::Type(type_id) => {
+            read_defined_value_from_memory(*type_id, options, program, store, memory, ptr)
+        }
+    }
 }
 
-fn read_flat_values_from_memory(
+fn write_defined_value_to_memory(
+    value: &ComponentValue,
+    type_id: TypeId,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    ptr: u32,
+) -> Result<(), ComponentError> {
+    let memory = options.memory.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    match program
+        .get_type(type_id)
+        .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
+    {
+        Type::DefVal(DefValType::Primitive(prim)) => {
+            write_primitive_to_memory(value, prim, options, program, store, ptr)
+        }
+        Type::DefVal(DefValType::Record(fields)) => {
+            write_record_value_to_memory(value, fields, options, program, store, ptr)
+        }
+        Type::DefVal(DefValType::Variant(cases)) => {
+            write_variant_value_to_memory(value, cases, options, program, store, ptr)
+        }
+        Type::DefVal(DefValType::Flags(labels)) => {
+            write_flags_value_to_memory(value, labels, options, program, store, ptr)
+        }
+        Type::DefVal(DefValType::List(elem, maybe_len)) => {
+            let flat = lower_list_value(value, elem, *maybe_len, options, program, store)?;
+            write_flat_values(store, memory, ptr, &flat)
+        }
+        Type::DefVal(DefValType::Own(resource)) => {
+            validate_resource_type(program, *resource)?;
+            write_memory(
+                store,
+                memory,
+                ptr,
+                &(expect_handle(value)? as i32).to_le_bytes(),
+            )
+        }
+        Type::DefVal(DefValType::Borrow(resource)) => {
+            validate_resource_type(program, *resource)?;
+            write_memory(
+                store,
+                memory,
+                ptr,
+                &(expect_handle(value)? as i32).to_le_bytes(),
+            )
+        }
+        Type::Resource(_) | Type::Generic(_) => write_memory(
+            store,
+            memory,
+            ptr,
+            &(expect_handle(value)? as i32).to_le_bytes(),
+        ),
+        _ => Err(ComponentError::Unsupported(
+            "canonical ABI for this type is not implemented yet".to_owned(),
+        )),
+    }
+}
+
+fn read_defined_value_from_memory(
+    type_id: TypeId,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
     store: &mut Store,
     memory: &CoreExportRef,
     ptr: u32,
-    flat_types: &[CoreValType],
-) -> Result<Vec<WasmValue>, ComponentError> {
-    let bytes = read_memory(store, memory, ptr, flat_byte_len(flat_types) as usize)?;
-    let mut offset = 0usize;
-    let mut values = Vec::with_capacity(flat_types.len());
-    for ty in flat_types {
-        let value = match ty {
-            CoreValType::I32 | CoreValType::FuncRef | CoreValType::ExternRef => {
-                let raw = i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-                offset += 4;
-                if matches!(ty, CoreValType::FuncRef) {
-                    WasmValue::FuncRef(raw as u32)
-                } else if matches!(ty, CoreValType::ExternRef) {
-                    WasmValue::ExternRef(raw as u32)
-                } else {
-                    WasmValue::I32(raw)
-                }
-            }
-            CoreValType::F32 => {
-                let raw = f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-                offset += 4;
-                WasmValue::F32(raw)
-            }
-            CoreValType::I64 => {
-                let raw = i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
-                offset += 8;
-                WasmValue::I64(raw)
-            }
-            CoreValType::F64 => {
-                let raw = f64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
-                offset += 8;
-                WasmValue::F64(raw)
-            }
-            CoreValType::V128 => {
-                let raw = u128::from_le_bytes(bytes[offset..offset + 16].try_into().unwrap());
-                offset += 16;
-                WasmValue::V128(raw)
-            }
-        };
-        values.push(value);
+) -> Result<ComponentValue, ComponentError> {
+    match program
+        .get_type(type_id)
+        .ok_or_else(|| ComponentError::Runtime("type id not found".to_owned()))?
+    {
+        Type::DefVal(DefValType::Primitive(prim)) => {
+            read_primitive_from_memory(prim, options, program, store, memory, ptr)
+        }
+        Type::DefVal(DefValType::Record(fields)) => {
+            read_record_value_from_memory(fields, options, program, store, memory, ptr)
+        }
+        Type::DefVal(DefValType::Variant(cases)) => {
+            read_variant_value_from_memory(cases, options, program, store, memory, ptr)
+        }
+        Type::DefVal(DefValType::Flags(labels)) => {
+            read_flags_value_from_memory(labels, memory, store, ptr)
+        }
+        Type::DefVal(DefValType::List(elem, maybe_len)) => {
+            read_list_value_from_memory(elem, *maybe_len, options, program, store, memory, ptr)
+        }
+        Type::DefVal(DefValType::Own(resource)) => {
+            validate_resource_type(program, *resource)?;
+            Ok(ComponentValue::Own(
+                read_i32_from_memory(store, memory, ptr)? as u32,
+            ))
+        }
+        Type::DefVal(DefValType::Borrow(resource)) => {
+            validate_resource_type(program, *resource)?;
+            Ok(ComponentValue::Borrow(
+                read_i32_from_memory(store, memory, ptr)? as u32,
+            ))
+        }
+        Type::Resource(_) | Type::Generic(_) => Ok(ComponentValue::Own(read_i32_from_memory(
+            store, memory, ptr,
+        )? as u32)),
+        _ => Err(ComponentError::Unsupported(
+            "canonical ABI for this type is not implemented yet".to_owned(),
+        )),
     }
-    Ok(values)
+}
+
+fn write_primitive_to_memory(
+    value: &ComponentValue,
+    prim: &PrimValType,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    ptr: u32,
+) -> Result<(), ComponentError> {
+    let memory = options.memory.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    match prim {
+        PrimValType::Bool => write_memory(store, memory, ptr, &[u8::from(expect_bool(value)?)]),
+        PrimValType::S8 => write_memory(store, memory, ptr, &[(expect_i32(value)? as i8) as u8]),
+        PrimValType::U8 => write_memory(store, memory, ptr, &[expect_u32(value)? as u8]),
+        PrimValType::S16 => write_memory(
+            store,
+            memory,
+            ptr,
+            &(expect_i32(value)? as i16).to_le_bytes(),
+        ),
+        PrimValType::U16 => write_memory(
+            store,
+            memory,
+            ptr,
+            &(expect_u32(value)? as u16).to_le_bytes(),
+        ),
+        PrimValType::S32 => write_memory(store, memory, ptr, &expect_i32(value)?.to_le_bytes()),
+        PrimValType::U32 => write_memory(store, memory, ptr, &expect_u32(value)?.to_le_bytes()),
+        PrimValType::S64 => write_memory(store, memory, ptr, &expect_i64(value)?.to_le_bytes()),
+        PrimValType::U64 => write_memory(store, memory, ptr, &expect_u64(value)?.to_le_bytes()),
+        PrimValType::F32 => write_memory(store, memory, ptr, &expect_f32(value)?.to_le_bytes()),
+        PrimValType::F64 => write_memory(store, memory, ptr, &expect_f64(value)?.to_le_bytes()),
+        PrimValType::Char => write_memory(
+            store,
+            memory,
+            ptr,
+            &(expect_char(value)? as u32).to_le_bytes(),
+        ),
+        PrimValType::String => {
+            let flat = lower_string(value, options, program, store)?;
+            write_flat_values(store, memory, ptr, &flat)
+        }
+    }
+}
+
+fn read_primitive_from_memory(
+    prim: &PrimValType,
+    options: &RuntimeCanonicalOptions,
+    _program: &ComponentProgram,
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<ComponentValue, ComponentError> {
+    Ok(match prim {
+        PrimValType::Bool => ComponentValue::Bool(read_u8_from_memory(store, memory, ptr)? != 0),
+        PrimValType::S8 => ComponentValue::S8(read_u8_from_memory(store, memory, ptr)? as i8),
+        PrimValType::U8 => ComponentValue::U8(read_u8_from_memory(store, memory, ptr)?),
+        PrimValType::S16 => ComponentValue::S16(read_u16_from_memory(store, memory, ptr)? as i16),
+        PrimValType::U16 => ComponentValue::U16(read_u16_from_memory(store, memory, ptr)?),
+        PrimValType::S32 => ComponentValue::S32(read_i32_from_memory(store, memory, ptr)?),
+        PrimValType::U32 => ComponentValue::U32(read_i32_from_memory(store, memory, ptr)? as u32),
+        PrimValType::S64 => ComponentValue::S64(read_i64_from_memory(store, memory, ptr)?),
+        PrimValType::U64 => ComponentValue::U64(read_i64_from_memory(store, memory, ptr)? as u64),
+        PrimValType::F32 => ComponentValue::F32(f32::from_le_bytes(
+            read_memory(store, memory, ptr, 4)?
+                .try_into()
+                .expect("f32 bytes"),
+        )),
+        PrimValType::F64 => ComponentValue::F64(f64::from_le_bytes(
+            read_memory(store, memory, ptr, 8)?
+                .try_into()
+                .expect("f64 bytes"),
+        )),
+        PrimValType::Char => ComponentValue::Char(
+            char::from_u32(read_i32_from_memory(store, memory, ptr)? as u32)
+                .ok_or_else(|| ComponentError::Trap("invalid char scalar".to_owned()))?,
+        ),
+        PrimValType::String => {
+            let string_ptr = read_i32_from_memory(store, memory, ptr)? as u32;
+            let len = read_i32_from_memory(store, memory, ptr + 4)? as u32;
+            ComponentValue::String(read_string_from_memory(
+                store,
+                memory,
+                string_ptr,
+                len,
+                options.string_encoding,
+            )?)
+        }
+    })
+}
+
+fn write_record_value_to_memory(
+    value: &ComponentValue,
+    fields: &[LabelValType],
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    ptr: u32,
+) -> Result<(), ComponentError> {
+    let values = if is_tuple_fields(fields) {
+        match value {
+            ComponentValue::Tuple(values) => values.clone(),
+            ComponentValue::Record(entries) => fields
+                .iter()
+                .map(|field| {
+                    entries
+                        .iter()
+                        .find(|(name, _)| name == &field.label.0)
+                        .map(|(_, value)| value.clone())
+                        .ok_or_else(|| {
+                            ComponentError::InvalidArgument(format!(
+                                "record field '{}' is missing",
+                                field.label
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            other => {
+                return Err(ComponentError::InvalidArgument(format!(
+                    "expected tuple value, got {other:?}"
+                )))
+            }
+        }
+    } else {
+        match value {
+            ComponentValue::Record(entries) => fields
+                .iter()
+                .map(|field| {
+                    entries
+                        .iter()
+                        .find(|(name, _)| name == &field.label.0)
+                        .map(|(_, value)| value.clone())
+                        .ok_or_else(|| {
+                            ComponentError::InvalidArgument(format!(
+                                "record field '{}' is missing",
+                                field.label
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            other => {
+                return Err(ComponentError::InvalidArgument(format!(
+                    "expected record value, got {other:?}"
+                )))
+            }
+        }
+    };
+
+    let mut cursor = 0u32;
+    for (field_value, field) in values.iter().zip(fields.iter()) {
+        let abi = memory_abi_for_valtype(&field.ty, program)?;
+        cursor = align_to(cursor, abi.align.max(1));
+        write_value_to_memory(
+            field_value,
+            &field.ty,
+            options,
+            program,
+            store,
+            ptr + cursor,
+        )?;
+        cursor = cursor.saturating_add(abi.size);
+    }
+    Ok(())
+}
+
+fn read_record_value_from_memory(
+    fields: &[LabelValType],
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<ComponentValue, ComponentError> {
+    let mut values = Vec::with_capacity(fields.len());
+    let mut cursor = 0u32;
+    for field in fields {
+        let abi = memory_abi_for_valtype(&field.ty, program)?;
+        cursor = align_to(cursor, abi.align.max(1));
+        values.push((
+            field.label.0.clone(),
+            read_value_from_memory(&field.ty, options, program, store, memory, ptr + cursor)?,
+        ));
+        cursor = cursor.saturating_add(abi.size);
+    }
+    if is_tuple_fields(fields) {
+        Ok(ComponentValue::Tuple(
+            values.into_iter().map(|(_, value)| value).collect(),
+        ))
+    } else {
+        Ok(ComponentValue::Record(values))
+    }
+}
+
+fn write_variant_value_to_memory(
+    value: &ComponentValue,
+    cases: &[Case],
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    ptr: u32,
+) -> Result<(), ComponentError> {
+    let (case_name, payload) = match value {
+        ComponentValue::Variant { case, value } => (case.as_str(), value.as_deref()),
+        ComponentValue::Enum(case) => (case.as_str(), None),
+        ComponentValue::Option(value) if is_option_cases(cases) => match value {
+            Some(value) => ("some", Some(value.as_ref())),
+            None => ("none", None),
+        },
+        ComponentValue::Result { ok, err } if is_result_cases(cases) => match (ok, err) {
+            (Some(value), None) => ("ok", Some(value.as_ref())),
+            (None, Some(value)) => ("err", Some(value.as_ref())),
+            _ => {
+                return Err(ComponentError::InvalidArgument(
+                    "result value must set exactly one branch".to_owned(),
+                ))
+            }
+        },
+        other => {
+            return Err(ComponentError::InvalidArgument(format!(
+                "expected variant-compatible value, got {other:?}"
+            )))
+        }
+    };
+    let case_index = cases
+        .iter()
+        .position(|case| case.label.0 == case_name)
+        .ok_or_else(|| {
+            ComponentError::InvalidArgument(format!("unknown variant case '{case_name}'"))
+        })?;
+    write_variant_discriminant_to_memory(store, options, ptr, cases.len(), case_index)?;
+
+    let (payload_offset, payload_size) = variant_payload_offset_and_size(cases, program)?;
+    if payload_size != 0 {
+        write_memory(
+            store,
+            options.memory.as_ref().expect("memory already checked"),
+            ptr + payload_offset,
+            &vec![0; payload_size as usize],
+        )?;
+    }
+
+    let case = &cases[case_index];
+    if let Some(ty) = &case.ty {
+        let payload = payload.ok_or_else(|| {
+            ComponentError::InvalidArgument(format!(
+                "variant case '{}' expects a payload",
+                case.label
+            ))
+        })?;
+        write_value_to_memory(payload, ty, options, program, store, ptr + payload_offset)?;
+    } else {
+        let payloadless_result_case = is_result_cases(cases)
+            && matches!(
+                payload,
+                Some(ComponentValue::Tuple(values)) if values.is_empty()
+            );
+        if payload.is_some() && !payloadless_result_case {
+            return Err(ComponentError::InvalidArgument(format!(
+                "variant case '{}' does not accept a payload",
+                case.label
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn read_variant_value_from_memory(
+    cases: &[Case],
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<ComponentValue, ComponentError> {
+    let discriminant = read_variant_discriminant_from_memory(store, memory, ptr, cases.len())?;
+    let case = cases
+        .get(discriminant)
+        .ok_or_else(|| ComponentError::Trap("variant discriminant is out of bounds".to_owned()))?;
+    let (payload_offset, _) = variant_payload_offset_and_size(cases, program)?;
+    let payload = if let Some(ty) = &case.ty {
+        Some(Box::new(read_value_from_memory(
+            ty,
+            options,
+            program,
+            store,
+            memory,
+            ptr + payload_offset,
+        )?))
+    } else {
+        None
+    };
+
+    if is_option_cases(cases) {
+        return Ok(ComponentValue::Option(payload));
+    }
+    if is_result_cases(cases) {
+        let payload = if case.ty.is_none() {
+            Some(Box::new(ComponentValue::Tuple(Vec::new())))
+        } else {
+            payload
+        };
+        return Ok(match case.label.0.as_str() {
+            "ok" => ComponentValue::Result {
+                ok: payload,
+                err: None,
+            },
+            "err" => ComponentValue::Result {
+                ok: None,
+                err: payload,
+            },
+            _ => unreachable!(),
+        });
+    }
+    if is_enum_cases(cases) {
+        return Ok(ComponentValue::Enum(case.label.0.clone()));
+    }
+    Ok(ComponentValue::Variant {
+        case: case.label.0.clone(),
+        value: payload,
+    })
+}
+
+fn write_flags_value_to_memory(
+    value: &ComponentValue,
+    labels: &[crate::ir::Label],
+    options: &RuntimeCanonicalOptions,
+    _program: &ComponentProgram,
+    store: &mut Store,
+    ptr: u32,
+) -> Result<(), ComponentError> {
+    let memory = options.memory.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    let words = lower_flags_value(value, labels)?
+        .into_iter()
+        .map(|word| match word {
+            WasmValue::I32(bits) => Ok(bits as u32),
+            other => Err(ComponentError::Runtime(format!(
+                "flags lowered to unexpected flat value {other:?}"
+            ))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let abi = flags_memory_abi(labels.len());
+    match abi.size {
+        0 => Ok(()),
+        1 => write_memory(
+            store,
+            memory,
+            ptr,
+            &[words.first().copied().unwrap_or(0) as u8],
+        ),
+        2 => write_memory(
+            store,
+            memory,
+            ptr,
+            &(words.first().copied().unwrap_or(0) as u16).to_le_bytes(),
+        ),
+        _ => {
+            for (index, word) in words.iter().enumerate() {
+                write_memory(store, memory, ptr + (index as u32) * 4, &word.to_le_bytes())?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn read_flags_value_from_memory(
+    labels: &[crate::ir::Label],
+    memory: &CoreExportRef,
+    store: &mut Store,
+    ptr: u32,
+) -> Result<ComponentValue, ComponentError> {
+    let abi = flags_memory_abi(labels.len());
+    let words = match abi.size {
+        0 => Vec::new(),
+        1 => vec![read_u8_from_memory(store, memory, ptr)? as u32],
+        2 => vec![read_u16_from_memory(store, memory, ptr)? as u32],
+        _ => {
+            let mut words = Vec::with_capacity(labels.len().div_ceil(32));
+            for index in 0..labels.len().div_ceil(32) {
+                words.push(read_i32_from_memory(store, memory, ptr + (index as u32) * 4)? as u32);
+            }
+            words
+        }
+    };
+    let mut selected = Vec::new();
+    for chunk_start in (0..labels.len()).step_by(32) {
+        let bits = words.get(chunk_start / 32).copied().unwrap_or(0);
+        for bit in 0..32 {
+            let index = chunk_start + bit;
+            if index >= labels.len() {
+                break;
+            }
+            if bits & (1 << bit) != 0 {
+                selected.push(labels[index].0.clone());
+            }
+        }
+    }
+    Ok(ComponentValue::Flags(selected))
+}
+
+fn read_list_value_from_memory(
+    elem: &ValType,
+    fixed_len: Option<usize>,
+    options: &RuntimeCanonicalOptions,
+    program: &ComponentProgram,
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<ComponentValue, ComponentError> {
+    let list_ptr = read_i32_from_memory(store, memory, ptr)? as u32;
+    let len = read_i32_from_memory(store, memory, ptr + 4)? as usize;
+    if let Some(expected) = fixed_len {
+        if len != expected {
+            return Err(ComponentError::Trap(format!(
+                "fixed-length list expected {expected} elements, got {len}"
+            )));
+        }
+    }
+    let stride = element_stride(elem, program)?;
+    let mut values = Vec::with_capacity(len);
+    for index in 0..len {
+        values.push(read_value_from_memory(
+            elem,
+            options,
+            program,
+            store,
+            memory,
+            list_ptr + stride * index as u32,
+        )?);
+    }
+    Ok(ComponentValue::List(values))
+}
+
+fn variant_payload_offset_and_size(
+    cases: &[Case],
+    program: &ComponentProgram,
+) -> Result<(u32, u32), ComponentError> {
+    let discriminant_size = variant_discriminant_size(cases.len())?;
+    let mut payload_size = 0u32;
+    let mut payload_align = discriminant_size;
+    for case in cases {
+        if let Some(ty) = &case.ty {
+            let abi = memory_abi_for_valtype(ty, program)?;
+            payload_size = payload_size.max(abi.size);
+            payload_align = payload_align.max(abi.align.max(1));
+        }
+    }
+    Ok((
+        align_to(discriminant_size, payload_align.max(1)),
+        payload_size,
+    ))
+}
+
+fn write_variant_discriminant_to_memory(
+    store: &mut Store,
+    options: &RuntimeCanonicalOptions,
+    ptr: u32,
+    case_count: usize,
+    discriminant: usize,
+) -> Result<(), ComponentError> {
+    let memory = options.memory.as_ref().ok_or_else(|| {
+        ComponentError::Runtime("canonical option `memory` is required".to_owned())
+    })?;
+    match variant_discriminant_size(case_count)? {
+        1 => write_memory(store, memory, ptr, &[discriminant as u8]),
+        2 => write_memory(store, memory, ptr, &(discriminant as u16).to_le_bytes()),
+        4 => write_memory(store, memory, ptr, &(discriminant as u32).to_le_bytes()),
+        _ => unreachable!(),
+    }
+}
+
+fn read_variant_discriminant_from_memory(
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+    case_count: usize,
+) -> Result<usize, ComponentError> {
+    Ok(match variant_discriminant_size(case_count)? {
+        1 => read_u8_from_memory(store, memory, ptr)? as usize,
+        2 => read_u16_from_memory(store, memory, ptr)? as usize,
+        4 => read_i32_from_memory(store, memory, ptr)? as usize,
+        _ => unreachable!(),
+    })
+}
+
+fn read_u8_from_memory(
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<u8, ComponentError> {
+    Ok(read_memory(store, memory, ptr, 1)?[0])
+}
+
+fn read_u16_from_memory(
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<u16, ComponentError> {
+    Ok(u16::from_le_bytes(
+        read_memory(store, memory, ptr, 2)?
+            .try_into()
+            .expect("u16 bytes"),
+    ))
+}
+
+fn read_i32_from_memory(
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<i32, ComponentError> {
+    Ok(i32::from_le_bytes(
+        read_memory(store, memory, ptr, 4)?
+            .try_into()
+            .expect("i32 bytes"),
+    ))
+}
+
+fn read_i64_from_memory(
+    store: &mut Store,
+    memory: &CoreExportRef,
+    ptr: u32,
+) -> Result<i64, ComponentError> {
+    Ok(i64::from_le_bytes(
+        read_memory(store, memory, ptr, 8)?
+            .try_into()
+            .expect("i64 bytes"),
+    ))
+}
+
+fn align_to(value: u32, align: u32) -> u32 {
+    if align <= 1 {
+        value
+    } else {
+        let rem = value % align;
+        if rem == 0 {
+            value
+        } else {
+            value + (align - rem)
+        }
+    }
 }
 
 fn lower_record_value(
@@ -2143,7 +2912,6 @@ fn lower_variant_value(
         ComponentValue::Result { ok, err } if is_result_cases(cases) => match (ok, err) {
             (Some(value), None) => ("ok", Some(value.as_ref())),
             (None, Some(value)) => ("err", Some(value.as_ref())),
-            (None, None) => ("ok", None),
             _ => {
                 return Err(ComponentError::InvalidArgument(
                     "result value must set exactly one branch".to_owned(),
@@ -2178,7 +2946,12 @@ fn lower_variant_value(
             flat_types_for_valtype(ty, program)?,
         )
     } else {
-        if payload.is_some() {
+        let payloadless_result_case = is_result_cases(cases)
+            && matches!(
+                payload,
+                Some(ComponentValue::Tuple(values)) if values.is_empty()
+            );
+        if payload.is_some() && !payloadless_result_case {
             return Err(ComponentError::InvalidArgument(format!(
                 "variant case '{}' does not accept a payload",
                 case.label
@@ -2235,6 +3008,11 @@ fn lift_variant_value(
         return Ok(ComponentValue::Option(payload));
     }
     if is_result_cases(cases) {
+        let payload = if case.ty.is_none() {
+            Some(Box::new(ComponentValue::Tuple(Vec::new())))
+        } else {
+            payload
+        };
         return Ok(match case.label.0.as_str() {
             "ok" => ComponentValue::Result {
                 ok: payload,
@@ -2268,7 +3046,16 @@ fn lower_flags_value(
             )))
         }
     };
-    let mut words = vec![0u32; labels.len().div_ceil(32).max(1)];
+    let mut words = vec![
+        0u32;
+        if labels.is_empty() {
+            0
+        } else if labels.len() <= 16 {
+            1
+        } else {
+            labels.len().div_ceil(32)
+        }
+    ];
     for flag in selected {
         let index = labels
             .iter()
@@ -2326,13 +3113,10 @@ fn lower_list_value(
             )));
         }
     }
-    let memory = options.memory.clone().ok_or_else(|| {
-        ComponentError::Runtime("canonical option `memory` is required".to_owned())
-    })?;
     let realloc = options.realloc.as_ref().ok_or_else(|| {
         ComponentError::Runtime("canonical option `realloc` is required".to_owned())
     })?;
-    let stride = flat_byte_len_for_valtype(elem, program)?;
+    let stride = element_stride(elem, program)?;
     let total_len = stride.saturating_mul(values.len() as u32);
     let ptr = if total_len == 0 {
         0
@@ -2340,8 +3124,14 @@ fn lower_list_value(
         call_realloc(realloc, store, 0, 0, 4, total_len as i32)? as u32
     };
     for (index, value) in values.iter().enumerate() {
-        let flat = lower_value_to_flat(value, elem, options, program, store)?;
-        write_flat_values(store, &memory, ptr + stride * index as u32, &flat)?;
+        write_value_to_memory(
+            value,
+            elem,
+            options,
+            program,
+            store,
+            ptr + stride * index as u32,
+        )?;
     }
     Ok(vec![
         WasmValue::I32(ptr as i32),
@@ -2369,7 +3159,7 @@ fn lift_list_value(
             )));
         }
     }
-    let stride = flat_byte_len_for_valtype(elem, program)?;
+    let stride = element_stride(elem, program)?;
     let mut values = Vec::with_capacity(len);
     for index in 0..len {
         values.push(read_value_from_memory(
@@ -2651,19 +3441,45 @@ fn program_func_type(
     }
 }
 
-fn program_resource_id(
+fn validate_resource_type(
     program: &ComponentProgram,
+    type_id: TypeId,
+) -> Result<(), ComponentError> {
+    match program.get_type(type_id) {
+        Some(Type::Resource(_)) => Ok(()),
+        Some(Type::DefVal(DefValType::Own(inner)))
+        | Some(Type::DefVal(DefValType::Borrow(inner))) => validate_resource_type(program, *inner),
+        Some(Type::Generic(generic)) => match generic.bound {
+            crate::ir::types::GenericBound::Eq(inner) => validate_resource_type(program, inner),
+            crate::ir::types::GenericBound::Sub => Ok(()),
+        },
+        _ => Err(ComponentError::Runtime(
+            "resource type is missing".to_owned(),
+        )),
+    }
+}
+
+fn runtime_resource_id(
+    program: &ComponentProgram,
+    shared: &SharedState,
     type_id: TypeId,
 ) -> Result<ResourceId, ComponentError> {
     match program.get_type(type_id) {
         Some(Type::Resource(resource)) => Ok(*resource),
         Some(Type::DefVal(DefValType::Own(inner)))
-        | Some(Type::DefVal(DefValType::Borrow(inner))) => program_resource_id(program, *inner),
+        | Some(Type::DefVal(DefValType::Borrow(inner))) => {
+            runtime_resource_id(program, shared, *inner)
+        }
         Some(Type::Generic(generic)) => match generic.bound {
-            crate::ir::types::GenericBound::Eq(inner) => program_resource_id(program, inner),
-            crate::ir::types::GenericBound::Sub => Err(ComponentError::Unsupported(
-                "sub resource resolution is not implemented at runtime".to_owned(),
-            )),
+            crate::ir::types::GenericBound::Eq(inner) => {
+                runtime_resource_id(program, shared, inner)
+            }
+            crate::ir::types::GenericBound::Sub => {
+                let mut resources = shared.generic_resources.borrow_mut();
+                Ok(*resources
+                    .entry(type_id)
+                    .or_insert_with(ResourceId::synthetic))
+            }
         },
         _ => Err(ComponentError::Runtime(
             "resource type is missing".to_owned(),

@@ -105,34 +105,63 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
         }
     }
 
+    fn variant_discriminant_size(case_count: usize) -> Result<u32, ComponentError> {
+        if case_count <= (1 << 8) {
+            Ok(1)
+        } else if case_count <= (1 << 16) {
+            Ok(2)
+        } else if (case_count as u64) <= (1 << 32) {
+            Ok(4)
+        } else {
+            Err(ComponentError::Unsupported(
+                "variants with more than 2^32 cases are not supported".to_owned(),
+            ))
+        }
+    }
+
+    fn flags_info(count: usize) -> (usize, u32, u32) {
+        if count == 0 {
+            (0, 0, 1)
+        } else if count <= 8 {
+            (1, 1, 1)
+        } else if count <= 16 {
+            (1, 2, 2)
+        } else {
+            let words = count.div_ceil(32);
+            (words, 4 * words as u32, 4)
+        }
+    }
+
     fn primitive_info(prim: &PrimValType) -> ComponentTypeInfo {
         match prim {
-            PrimValType::Bool
-            | PrimValType::S8
-            | PrimValType::U8
-            | PrimValType::S16
-            | PrimValType::U16
-            | PrimValType::S32
-            | PrimValType::U32
-            | PrimValType::Char => ComponentTypeInfo {
+            PrimValType::Bool | PrimValType::S8 | PrimValType::U8 => ComponentTypeInfo {
                 id: 0,
                 flat_len: 1,
-                indirect_size: 4,
-                indirect_align: 4,
+                indirect_size: 1,
+                indirect_align: 1,
                 fixed_length: None,
             },
+            PrimValType::S16 | PrimValType::U16 => ComponentTypeInfo {
+                id: 0,
+                flat_len: 1,
+                indirect_size: 2,
+                indirect_align: 2,
+                fixed_length: None,
+            },
+            PrimValType::S32 | PrimValType::U32 | PrimValType::Char | PrimValType::F32 => {
+                ComponentTypeInfo {
+                    id: 0,
+                    flat_len: 1,
+                    indirect_size: 4,
+                    indirect_align: 4,
+                    fixed_length: None,
+                }
+            }
             PrimValType::S64 | PrimValType::U64 | PrimValType::F64 => ComponentTypeInfo {
                 id: 0,
                 flat_len: 1,
                 indirect_size: 8,
                 indirect_align: 8,
-                fixed_length: None,
-            },
-            PrimValType::F32 => ComponentTypeInfo {
-                id: 0,
-                flat_len: 1,
-                indirect_size: 4,
-                indirect_align: 4,
                 fixed_length: None,
             },
             PrimValType::String => ComponentTypeInfo {
@@ -201,9 +230,10 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
                 }
             }
             Type::DefVal(DefValType::Variant(cases)) => {
+                let discriminant_size = variant_discriminant_size(cases.len())?;
                 let mut flat_len = 1usize;
                 let mut payload_size = 0u32;
-                let mut payload_align = 1u32;
+                let mut payload_align = discriminant_size;
                 let mut payload_flat = 0usize;
                 for case in cases {
                     if let Some(ty) = &case.ty {
@@ -214,8 +244,8 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
                     }
                 }
                 flat_len += payload_flat;
-                let payload_offset = align_to(4, payload_align.max(1));
-                let align = payload_align.max(4);
+                let align = payload_align.max(1);
+                let payload_offset = align_to(discriminant_size, align);
                 ComponentTypeInfo {
                     id: type_id.index(),
                     flat_len,
@@ -224,13 +254,16 @@ fn build_type_infos(types: &[Type]) -> Result<Vec<ComponentTypeInfo>, ComponentE
                     fixed_length: None,
                 }
             }
-            Type::DefVal(DefValType::Flags(labels)) => ComponentTypeInfo {
-                id: type_id.index(),
-                flat_len: labels.len().div_ceil(32).max(1),
-                indirect_size: 4 * (labels.len() as u32).div_ceil(32).max(1),
-                indirect_align: 4,
-                fixed_length: Some(labels.len() as u32),
-            },
+            Type::DefVal(DefValType::Flags(labels)) => {
+                let (flat_len, indirect_size, indirect_align) = flags_info(labels.len());
+                ComponentTypeInfo {
+                    id: type_id.index(),
+                    flat_len,
+                    indirect_size,
+                    indirect_align,
+                    fixed_length: Some(labels.len() as u32),
+                }
+            }
             Type::DefVal(DefValType::List(elem, maybe_len)) => {
                 let elem_info = valtype_info(elem, types, memo, visiting)?;
                 let _stride = align_to(elem_info.indirect_size, elem_info.indirect_align.max(1));

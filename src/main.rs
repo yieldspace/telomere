@@ -1,9 +1,10 @@
 use clap::Parser;
-use cli::Cli;
-use std::env::current_dir;
+use cli::{Cli, Command};
+use std::process::ExitCode;
 use telomere::WasmValue;
 
 mod cli;
+mod component_cli;
 
 /// The main entry point of the application.
 ///
@@ -11,38 +12,52 @@ mod cli;
 ///
 /// * `anyhow::Result<()>` - Returns `Ok(())` if the program executes successfully, or an error otherwise.
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Parse command-line arguments using the `Cli` struct.
+async fn main() -> ExitCode {
+    match try_main().await {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("{error:?}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn try_main() -> anyhow::Result<ExitCode> {
     let args = Cli::parse();
 
-    // Get the current working directory and append the provided module name to the path.
-    let path = current_dir()?.join(args.name);
+    if let Some(Command::Component(command)) = args.command {
+        return component_cli::run(command).await;
+    }
 
-    // Load and parse the WebAssembly module.
+    run_core_module(args).await?;
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn run_core_module(args: Cli) -> anyhow::Result<()> {
+    let name = args
+        .name
+        .ok_or_else(|| anyhow::anyhow!("module path is required"))?;
+    let func = args
+        .func
+        .ok_or_else(|| anyhow::anyhow!("function name is required"))?;
+
     let module = {
-        // Read the module file into a byte array.
-        let bytes = std::fs::read(path)?;
+        let bytes = std::fs::read(&name)?;
 
-        // Create a binary reader for the module bytes.
         let mut reader = telomere::IoReadBinaryReader::from(&bytes[..]);
 
-        // Parse the WebAssembly module using the `WasmParser`.
         let mut parser = telomere::WasmParser::new(&mut reader);
         parser.parse_module()?
     };
 
-    // Create a new WebAssembly store to manage module state.
     let mut store = telomere::Store::new();
 
-    // Create a new registry for managing imports and exports.
     let registry = telomere::Registry::new();
 
-    // Instantiate the WebAssembly module with the store and registry.
     let instance = telomere::instantiate(module, &mut store, &registry)
         .await
         .unwrap();
 
-    // Prepare the arguments for the WebAssembly function as `WasmValue`s.
     let wasm_args = telomere::ResultValue::new(
         args.args
             .iter()
@@ -50,12 +65,10 @@ async fn main() -> anyhow::Result<()> {
             .collect(),
     );
 
-    // Run the specified WebAssembly function with the provided arguments.
-    let ret = telomere::run_module_function(&instance, &mut store, &args.func, &wasm_args)
+    let ret = telomere::run_module_function(&instance, &mut store, &func, &wasm_args)
         .await
         .unwrap();
 
-    // Convert the return values from the WebAssembly function to strings.
     let ret = ret
         .iter()
         .map(|x| match x {
@@ -70,9 +83,6 @@ async fn main() -> anyhow::Result<()> {
         .collect::<Vec<_>>()
         .join(", ");
 
-    // Print the return values to the console.
     println!("{ret}");
-
-    // Indicate successful execution.
     Ok(())
 }

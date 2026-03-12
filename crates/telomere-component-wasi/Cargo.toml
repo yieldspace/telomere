@@ -1,0 +1,20 @@
+[package]
+name = "telomere-component-wasi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+keywords.workspace = true
+build = "build.rs"
+
+[dependencies]
+getrandom.workspace = true
+libc.workspace = true
+telomere.workspace = true
+telomere-component.workspace = true
+telomere-component-bindgen.workspace = true
+
+[dev-dependencies]
+anyhow = { version = "1.0.98", features = ["backtrace"] }
+tokio.workspace = true
+wat = "1.243.0"
