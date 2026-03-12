@@ -98,6 +98,43 @@
     )
     (instance (instantiate 1 (with "a" (component 0))))
 )
+
+(component definition
+    (import "a" (core module $m))
+    (core instance $a (instantiate $m))
+)
+
+(component
+    (component
+        (import "a" (func $i))
+        (import "b" (component $c (import "a" (func))))
+        (instance (instantiate $c (with "a" (func $i))))
+    )
+)
+
+(assert_invalid
+    (component
+        (core instance (instantiate 0))
+    )
+    "unknown module"
+)
+
+(assert_invalid
+    (component
+        (instance (instantiate 0))
+    )
+    "unknown component"
+)
+
+(assert_invalid
+    (component
+        (import "a" (component $m
+            (import "a" (func))
+        ))
+        (instance (instantiate $m))
+    )
+    "missing import named `a`"
+)
 (assert_invalid
     (component
         (type 
@@ -141,4 +178,3 @@
     )
     (instance (instantiate 1 (with "a" (component 0))))
 )
-

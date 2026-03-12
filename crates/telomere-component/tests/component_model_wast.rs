@@ -1,62 +1,49 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod common;
-fn run_test_file(name: &str) {
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    d.push("tests/component_model_testsuite");
-    d.push(format!("{name}.wast"));
-    let wast = std::fs::read_to_string(d).unwrap();
-    common::component_model::run_component_wast(&wast);
+fn testsuite_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/component_model_testsuite")
 }
 
-#[test]
-fn component_basic() {
-    run_test_file("basic");
-}
-
-#[test]
-fn component_import() {
-    run_test_file("import");
-}
-#[test]
-fn component_export() {
-    run_test_file("export");
-}
-#[test]
-fn component_variant() {
-    run_test_file("variant");
+fn suite_files(root: &Path) -> Vec<PathBuf> {
+    let mut files = std::fs::read_dir(root)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", root.display()))
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "wast"))
+        .collect::<Vec<_>>();
+    files.sort();
+    files
 }
 
 #[test]
-fn component_valtype() {
-    run_test_file("valtype");
-}
+fn component_model_testsuite() {
+    let root = testsuite_dir();
+    let files = suite_files(&root);
+    assert!(
+        !files.is_empty(),
+        "expected at least one testsuite file in {}",
+        root.display()
+    );
 
-#[test]
-fn component_resource() {
-    run_test_file("resource");
-}
+    let mut checked = 0usize;
+    let mut failures = Vec::new();
 
-#[test]
-fn component_instance_type() {
-    run_test_file("instancetype");
-}
+    for path in files {
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let report = common::component_model::run_component_testsuite_case(&path, &text);
+        checked += report.directives_checked;
+        failures.extend(report.failures);
+    }
 
-#[test]
-fn component_instance() {
-    run_test_file("instance");
-}
+    if !failures.is_empty() {
+        panic!(
+            "component_model_testsuite failures (checked={})\n\n{}",
+            checked,
+            failures.join("\n\n")
+        );
+    }
 
-#[test]
-fn component_core() {
-    run_test_file("core");
-}
-#[test]
-fn component_subtyping() {
-    run_test_file("subtyping");
-}
-#[test]
-fn component_inlineexport() {
-    run_test_file("inlineexport");
+    println!("component_model_testsuite completed: checked={checked}");
 }

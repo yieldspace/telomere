@@ -901,8 +901,6 @@ dependencies = [
  "num-derive",
  "num-traits",
  "semver",
- "serde",
- "serde_json",
  "telomere",
  "thiserror",
  "tokio",

@@ -45,3 +45,47 @@
     (import "a" (type $a (sub resource)))
     (import "[constructor]a" (func (result (own $a))))
 )
+
+(component
+    (component
+        (import "a" (func))
+        (import "b" (instance))
+        (import "c" (instance
+            (export "a" (func))
+        ))
+        (import "d" (component
+            (import "a" (core module))
+            (export "b" (func))
+        ))
+    )
+)
+
+(assert_invalid
+    (component
+        (type $f (func))
+        (import "a" (instance (type $f)))
+    )
+    "type index 0 is not an instance type"
+)
+
+(assert_invalid
+    (component
+        (core module
+            (import "" "a" (func))
+            (import "" "a" (func))
+        )
+    )
+    "duplicate import name `:a`"
+)
+
+(component definition
+    (import "wasi:http/types@1.0.0" (func))
+    (import "a:b/c@1.2.3" (func))
+)
+
+(assert_invalid
+    (component
+        (import "wasi:http/types@" (func))
+    )
+    "empty string"
+)

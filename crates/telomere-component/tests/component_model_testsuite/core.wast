@@ -53,3 +53,12 @@
     )
     "import name not found"
 )
+
+(component
+    (core type (module
+        (type $empty (func))
+        (import "" "a" (func (type $empty)))
+        (export "a" (func (type $empty)))
+        (export "b" (memory 1))
+    ))
+)
