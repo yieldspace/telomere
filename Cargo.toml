@@ -45,6 +45,7 @@ telomere-component-bindgen = { path = "crates/telomere-component-bindgen" }
 union-find = {path = "crates/union-find"}
 telomere-macros = { path = "crates/telomere-macros" }
 tokio = { version = "1.0", features = ["full"] }
+getrandom = "0.3.3"
 
 regex = "1.11.1"
 

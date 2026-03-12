@@ -646,17 +646,32 @@ fn resolve_guest_path(
     follow_symlink: bool,
 ) -> Result<PathBuf, WasiFilesystemTypesErrorCode> {
     let candidate = lexical_join(base, guest_path)?;
+    let canonical_base = base.canonicalize().map_err(|error| map_io_error(&error))?;
     if follow_symlink {
-        let base = base.canonicalize().map_err(|error| map_io_error(&error))?;
         let resolved = candidate
             .canonicalize()
             .map_err(|error| map_io_error(&error))?;
-        if !resolved.starts_with(&base) {
-            return Err(WasiFilesystemTypesErrorCode::NotPermitted);
-        }
+        ensure_within_preopen(&canonical_base, &resolved)?;
         Ok(resolved)
     } else {
+        let resolved_parent = candidate
+            .parent()
+            .unwrap_or(base)
+            .canonicalize()
+            .map_err(|error| map_io_error(&error))?;
+        ensure_within_preopen(&canonical_base, &resolved_parent)?;
         Ok(candidate)
+    }
+}
+
+fn ensure_within_preopen(
+    canonical_base: &Path,
+    resolved_path: &Path,
+) -> Result<(), WasiFilesystemTypesErrorCode> {
+    if resolved_path.starts_with(canonical_base) {
+        Ok(())
+    } else {
+        Err(WasiFilesystemTypesErrorCode::NotPermitted)
     }
 }
 

@@ -8,6 +8,7 @@ keywords.workspace = true
 build = "build.rs"
 
 [dependencies]
+getrandom.workspace = true
 telomere.workspace = true
 telomere-component.workspace = true
 telomere-component-bindgen.workspace = true

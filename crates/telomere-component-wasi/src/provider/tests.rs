@@ -149,3 +149,39 @@ fn provider_preopen_open_and_read_work() {
 
     fs::remove_dir_all(dir).expect("temp dir should be removed");
 }
+
+#[cfg(unix)]
+#[test]
+fn provider_rejects_symlink_escape_when_not_following() {
+    use std::os::unix::fs::symlink;
+
+    let dir = temp_sandbox();
+    let outside = temp_sandbox();
+    fs::write(outside.join("secret.txt"), b"outside").expect("fixture file should be written");
+    symlink(&outside, dir.join("escape")).expect("symlink should be created");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let host = WasiHost::new(state);
+    let mut store = telomere::Store::new();
+
+    let preopens =
+        <WasiHost as filesystem_preopens::Host>::get_directories(&host, &mut store).unwrap();
+    let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
+    let result = <WasiHost as filesystem_types::Host>::descriptor_open_at(
+        &host,
+        &mut store,
+        root,
+        empty_path_flags(),
+        "escape/secret.txt".to_owned(),
+        empty_open_flags(),
+        read_only_flags(),
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        Err(crate::bindings::types::WasiFilesystemTypesErrorCode::NotPermitted)
+    );
+
+    fs::remove_dir_all(dir).expect("temp dir should be removed");
+    fs::remove_dir_all(outside).expect("temp dir should be removed");
+}

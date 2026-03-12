@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Clone)]
 pub struct WasiState {
@@ -127,6 +127,7 @@ impl WasiState {
 
 impl WasiStateBuilder {
     pub fn new() -> Self {
+        let monotonic_origin = Instant::now();
         Self {
             args: Vec::new(),
             env: HashMap::new(),
@@ -136,7 +137,7 @@ impl WasiStateBuilder {
             inherit_stdio: false,
             preopens: Vec::new(),
             wall_clock: Rc::new(SystemTime::now),
-            monotonic_clock: Rc::new(|| Duration::from_nanos(0)),
+            monotonic_clock: Rc::new(move || monotonic_origin.elapsed()),
             random_seed: 0x5eed_u64,
         }
     }
@@ -265,5 +266,26 @@ fn read_only_descriptor_flags() -> WasiFilesystemTypesDescriptorFlags {
         data_integrity_sync: false,
         requested_write_sync: false,
         mutate_directory: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WasiState;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn default_monotonic_clock_advances() {
+        let state = WasiState::builder().build();
+        let clock = state.inner.borrow().monotonic_clock.clone();
+        let first = clock();
+        for _ in 0..10 {
+            thread::sleep(Duration::from_millis(1));
+            if clock() > first {
+                return;
+            }
+        }
+        panic!("default monotonic clock did not advance");
     }
 }

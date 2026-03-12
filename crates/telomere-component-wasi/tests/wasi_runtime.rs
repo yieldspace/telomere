@@ -25,10 +25,19 @@ fn compile_component() -> Vec<u8> {
   (import "wasi:random/random@0.2.6" (instance $random-instance (type $random)))
   (alias export $random-instance "get-random-u64" (func $get-random-u64))
 
+  (type $insecure-random
+    (instance
+      (export "get-insecure-random-u64" (func (result u64)))
+    )
+  )
+  (import "wasi:random/insecure@0.2.6" (instance $insecure-random-instance (type $insecure-random)))
+  (alias export $insecure-random-instance "get-insecure-random-u64" (func $get-insecure-random-u64))
+
   (export "get-environment" (func $get-environment))
   (export "get-arguments" (func $get-arguments))
   (export "initial-cwd" (func $initial-cwd))
   (export "get-random-u64" (func $get-random-u64))
+  (export "get-insecure-random-u64" (func $get-insecure-random-u64))
 )
 "#,
     )
@@ -52,13 +61,15 @@ fn expected_random(seed: u64) -> u64 {
 }
 
 fn assert_snapshot(
-    random: &ComponentValue,
+    secure_random: &ComponentValue,
+    insecure_random: &ComponentValue,
     args: &[ComponentValue],
     env: &[ComponentValue],
     cwd: &ComponentValue,
 ) {
+    assert!(matches!(secure_random, ComponentValue::U64(_)));
     assert_eq!(
-        random,
+        insecure_random,
         &ComponentValue::U64(expected_random(0x1234_5678_u64))
     );
     assert_eq!(
@@ -117,6 +128,10 @@ async fn run_runtime(
         .call(&mut store, "get-random-u64", &[])
         .await
         .expect("random call should succeed");
+    let insecure_random = instance
+        .call(&mut store, "get-insecure-random-u64", &[])
+        .await
+        .expect("insecure random call should succeed");
     let args = instance
         .call(&mut store, "get-arguments", &[])
         .await
@@ -132,6 +147,7 @@ async fn run_runtime(
 
     assert_snapshot(
         &random[0],
+        &insecure_random[0],
         &match &args[0] {
             ComponentValue::List(values) => values.clone(),
             other => panic!("expected list, got {other:?}"),
