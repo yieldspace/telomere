@@ -9,6 +9,7 @@ build = "build.rs"
 
 [dependencies]
 getrandom.workspace = true
+libc.workspace = true
 telomere.workspace = true
 telomere-component.workspace = true
 telomere-component-bindgen.workspace = true

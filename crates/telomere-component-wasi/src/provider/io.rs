@@ -17,6 +17,38 @@ use std::thread;
 use std::time::Duration;
 use telomere_component::{ComponentError, ComponentFuture, ComponentLinker, Store};
 
+#[cfg(unix)]
+const HOST_STDIN_FD: libc::c_int = libc::STDIN_FILENO;
+#[cfg(not(unix))]
+const HOST_STDIN_FD: i32 = 0;
+
+#[cfg(unix)]
+fn poll_fd(fd: libc::c_int, timeout_ms: libc::c_int) -> Result<bool, ComponentError> {
+    let mut descriptor = libc::pollfd {
+        fd,
+        events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+        revents: 0,
+    };
+    loop {
+        let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+        if ready >= 0 {
+            return Ok(ready > 0);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(ComponentError::Trap(format!(
+            "failed to poll fd {fd}: {error}"
+        )));
+    }
+}
+
+#[cfg(not(unix))]
+fn poll_fd(_fd: i32, _timeout_ms: i32) -> Result<bool, ComponentError> {
+    Ok(true)
+}
+
 pub(super) fn add_to_linker_sync(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
     io_error::add_to_linker(linker, Rc::clone(&host));
     io_poll::add_to_linker(linker, Rc::clone(&host));
@@ -48,6 +80,7 @@ impl WasiHost {
             .ok_or_else(|| ComponentError::Trap(format!("unknown pollable handle {handle}")))?;
         Ok(match entry {
             PollableEntry::Ready => true,
+            PollableEntry::InputStream(stream) => self.input_stream_ready(stream)?,
             PollableEntry::MonotonicDeadline(deadline) => {
                 (self.state.inner.borrow().monotonic_clock)() >= deadline
             }
@@ -59,20 +92,24 @@ impl WasiHost {
             if self.pollable_ready(handle)? {
                 return Ok(());
             }
-            let sleep = match self.state.inner.borrow().pollables.get(&handle).cloned() {
+            match self.state.inner.borrow().pollables.get(&handle).cloned() {
+                Some(PollableEntry::InputStream(stream)) => {
+                    self.block_input_stream(stream)?;
+                    return Ok(());
+                }
                 Some(PollableEntry::MonotonicDeadline(deadline)) => {
                     let now = (self.state.inner.borrow().monotonic_clock)();
-                    deadline.saturating_sub(now).min(Duration::from_millis(5))
+                    let sleep = deadline.saturating_sub(now).min(Duration::from_millis(5));
+                    if !sleep.is_zero() {
+                        thread::sleep(sleep);
+                    }
                 }
-                Some(PollableEntry::Ready) => Duration::from_millis(0),
+                Some(PollableEntry::Ready) => {}
                 None => {
                     return Err(ComponentError::Trap(format!(
                         "unknown pollable handle {handle}"
                     )));
                 }
-            };
-            if !sleep.is_zero() {
-                thread::sleep(sleep);
             }
         }
     }
@@ -125,6 +162,40 @@ impl WasiHost {
         )
     }
 
+    fn input_stream_state(&self, handle: u32) -> Result<(InputStreamSource, bool), ComponentError> {
+        let inner = self.state.inner.borrow();
+        let entry = inner
+            .input_streams
+            .get(&handle)
+            .ok_or_else(|| ComponentError::Trap(format!("unknown input-stream handle {handle}")))?;
+        Ok((entry.source.clone(), entry.closed))
+    }
+
+    fn input_stream_ready(&self, handle: u32) -> Result<bool, ComponentError> {
+        let (source, closed) = self.input_stream_state(handle)?;
+        if closed {
+            return Ok(true);
+        }
+        match source {
+            InputStreamSource::Buffer(_) | InputStreamSource::File(_) => Ok(true),
+            InputStreamSource::HostStdin => poll_fd(HOST_STDIN_FD, 0),
+        }
+    }
+
+    fn block_input_stream(&self, handle: u32) -> Result<(), ComponentError> {
+        let (source, closed) = self.input_stream_state(handle)?;
+        if closed {
+            return Ok(());
+        }
+        match source {
+            InputStreamSource::Buffer(_) | InputStreamSource::File(_) => Ok(()),
+            InputStreamSource::HostStdin => {
+                poll_fd(HOST_STDIN_FD, -1)?;
+                Ok(())
+            }
+        }
+    }
+
     fn input_stream_read(
         &self,
         stream: WasiIoStreamsInputStreamBorrow,
@@ -152,9 +223,15 @@ impl WasiHost {
                 (bytes[start..end].to_vec(), end as u64)
             }
             InputStreamSource::File(path) => {
-                let bytes = fs::read(&path).map_err(|error| {
-                    ComponentError::Trap(format!("failed to read `{}`: {error}", path.display()))
-                })?;
+                let bytes = match fs::read(&path) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        return Ok(Err(self.stream_error(
+                            format!("failed to read `{}`: {error}", path.display()),
+                            Some(map_io_error(&error)),
+                        )));
+                    }
+                };
                 let start = usize::try_from(position)
                     .unwrap_or(usize::MAX)
                     .min(bytes.len());
@@ -163,9 +240,16 @@ impl WasiHost {
             }
             InputStreamSource::HostStdin => {
                 let mut chunk = vec![0; read_len];
-                let bytes_read = std::io::stdin().read(&mut chunk).map_err(|error| {
-                    ComponentError::Trap(format!("failed to read stdin: {error}"))
-                })?;
+                let stdin = std::io::stdin();
+                let mut handle = stdin.lock();
+                let bytes_read = match handle.read(&mut chunk) {
+                    Ok(bytes_read) => bytes_read,
+                    Err(error) => {
+                        return Ok(Err(
+                            self.stream_error(format!("failed to read stdin: {error}"), None)
+                        ));
+                    }
+                };
                 chunk.truncate(bytes_read);
                 (chunk, position.saturating_add(bytes_read as u64))
             }
@@ -205,7 +289,7 @@ impl WasiHost {
             )));
         }
         drop(inner);
-        Ok(self.allocate_pollable(PollableEntry::Ready))
+        Ok(self.allocate_pollable(PollableEntry::InputStream(stream.handle())))
     }
 
     fn output_stream_check_write(
@@ -674,5 +758,40 @@ impl io_streams::HostAsync for WasiHost {
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<u64, WasiIoStreamsStreamError>, ComponentError>> {
         Box::pin(async move { self.output_stream_splice(self_, src, len) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::poll_fd;
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_fd_reports_pipe_readiness() {
+        let mut fds = [0; 2];
+        let create = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(create, 0, "pipe should be created");
+
+        let read_fd = fds[0];
+        let write_fd = fds[1];
+
+        assert!(!poll_fd(read_fd, 0).expect("empty pipe should not be ready"));
+
+        let payload = [0x41_u8];
+        let written = unsafe {
+            libc::write(
+                write_fd,
+                payload.as_ptr().cast::<libc::c_void>(),
+                payload.len(),
+            )
+        };
+        assert_eq!(written, 1, "pipe write should succeed");
+
+        assert!(poll_fd(read_fd, 0).expect("pipe with data should be ready"));
+
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
     }
 }

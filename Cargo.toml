@@ -46,6 +46,7 @@ union-find = {path = "crates/union-find"}
 telomere-macros = { path = "crates/telomere-macros" }
 tokio = { version = "1.0", features = ["full"] }
 getrandom = "0.3.3"
+libc = "0.2.175"
 
 regex = "1.11.1"
 

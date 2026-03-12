@@ -2,14 +2,15 @@ use super::WasiHost;
 use crate::bindings::imports::{
     wasi_cli_exit as cli_exit, wasi_cli_stdin as cli_stdin, wasi_cli_stdout as cli_stdout,
     wasi_filesystem_preopens as filesystem_preopens, wasi_filesystem_types as filesystem_types,
-    wasi_io_streams as io_streams,
+    wasi_io_error as io_error, wasi_io_poll as io_poll, wasi_io_streams as io_streams,
 };
 use crate::bindings::types::{
     WasiFilesystemTypesDescriptorBorrow, WasiFilesystemTypesDescriptorFlags,
     WasiFilesystemTypesDescriptorType, WasiFilesystemTypesErrorCode, WasiFilesystemTypesOpenFlags,
-    WasiFilesystemTypesPathFlags, WasiIoStreamsInputStreamBorrow, WasiIoStreamsOutputStreamBorrow,
+    WasiFilesystemTypesPathFlags, WasiIoErrorErrorBorrow, WasiIoPollPollableBorrow,
+    WasiIoStreamsInputStreamBorrow, WasiIoStreamsOutputStreamBorrow, WasiIoStreamsStreamError,
 };
-use crate::state::{InputStreamSource, WasiState};
+use crate::state::{InputStreamSource, PollableEntry, WasiState};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -101,6 +102,50 @@ fn provider_inherit_stdin_uses_live_host_source() {
 }
 
 #[test]
+fn provider_buffered_input_stream_subscribe_is_ready() {
+    let state = WasiState::builder().stdin(b"abc".to_vec()).build();
+    let host = WasiHost::new(state);
+    let mut store = telomere::Store::new();
+
+    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &mut store).unwrap();
+    let pollable = <WasiHost as io_streams::Host>::input_stream_subscribe(
+        &host,
+        &mut store,
+        WasiIoStreamsInputStreamBorrow::new(stdin.handle()),
+    )
+    .unwrap();
+
+    let ready = <WasiHost as io_poll::Host>::pollable_ready(
+        &host,
+        &mut store,
+        WasiIoPollPollableBorrow::new(pollable.handle()),
+    )
+    .unwrap();
+    assert!(ready, "buffered stdin should be immediately readable");
+}
+
+#[test]
+fn provider_host_stdin_subscribe_registers_input_stream_pollable() {
+    let state = WasiState::builder().inherit_stdin().build();
+    let host = WasiHost::new(state);
+    let mut store = telomere::Store::new();
+
+    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &mut store).unwrap();
+    let pollable = <WasiHost as io_streams::Host>::input_stream_subscribe(
+        &host,
+        &mut store,
+        WasiIoStreamsInputStreamBorrow::new(stdin.handle()),
+    )
+    .unwrap();
+
+    let inner = host.state.inner.borrow();
+    assert!(matches!(
+        inner.pollables.get(&pollable.handle()),
+        Some(PollableEntry::InputStream(handle)) if *handle == stdin.handle()
+    ));
+}
+
+#[test]
 fn provider_preopen_open_and_read_work() {
     let dir = temp_sandbox();
     let file = dir.join("hello.txt");
@@ -161,6 +206,73 @@ fn provider_preopen_open_and_read_work() {
             .unwrap()
             .unwrap();
     assert_eq!(remainder, b"wasi");
+
+    fs::remove_dir_all(dir).expect("temp dir should be removed");
+}
+
+#[test]
+fn provider_stream_read_failure_returns_last_operation_failed() {
+    let dir = temp_sandbox();
+    let file = dir.join("hello.txt");
+    fs::write(&file, b"hello wasi").expect("fixture file should be written");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let host = WasiHost::new(state);
+    let mut store = telomere::Store::new();
+
+    let preopens =
+        <WasiHost as filesystem_preopens::Host>::get_directories(&host, &mut store).unwrap();
+    let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
+    let descriptor = <WasiHost as filesystem_types::Host>::descriptor_open_at(
+        &host,
+        &mut store,
+        root,
+        empty_path_flags(),
+        "hello.txt".to_owned(),
+        empty_open_flags(),
+        read_only_flags(),
+    )
+    .unwrap()
+    .unwrap();
+    let descriptor_borrow = WasiFilesystemTypesDescriptorBorrow::new(descriptor.handle());
+    let stream = <WasiHost as filesystem_types::Host>::descriptor_read_via_stream(
+        &host,
+        &mut store,
+        descriptor_borrow,
+        0,
+    )
+    .unwrap()
+    .unwrap();
+    fs::remove_file(&file).expect("fixture file should be removed before read");
+
+    let error = <WasiHost as io_streams::Host>::input_stream_read(
+        &host,
+        &mut store,
+        WasiIoStreamsInputStreamBorrow::new(stream.handle()),
+        8,
+    )
+    .unwrap()
+    .expect_err("deleted file should surface a stream error");
+    let handle = match error {
+        WasiIoStreamsStreamError::LastOperationFailed(error) => error.handle(),
+        other => panic!("unexpected stream error: {other:?}"),
+    };
+
+    let debug = <WasiHost as io_error::Host>::error_to_debug_string(
+        &host,
+        &mut store,
+        WasiIoErrorErrorBorrow::new(handle),
+    )
+    .unwrap();
+    assert!(debug.contains("failed to read"));
+
+    let code = <WasiHost as filesystem_types::Host>::filesystem_error_code(
+        &host,
+        &mut store,
+        WasiIoErrorErrorBorrow::new(handle),
+    )
+    .unwrap();
+    assert_eq!(code, Some(WasiFilesystemTypesErrorCode::NoEntry));
 
     fs::remove_dir_all(dir).expect("temp dir should be removed");
 }

@@ -53,6 +53,7 @@ pub(crate) struct OutputStreamEntry {
 #[derive(Clone)]
 pub(crate) enum PollableEntry {
     Ready,
+    InputStream(u32),
     MonotonicDeadline(Duration),
 }
 
