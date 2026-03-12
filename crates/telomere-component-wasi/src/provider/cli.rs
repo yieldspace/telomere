@@ -1,13 +1,11 @@
 use super::common::next_handle;
 use super::WasiHost;
 use crate::bindings::imports::{
-    wasi_cli_environment_0_2_6 as cli_environment, wasi_cli_exit_0_2_6 as cli_exit,
-    wasi_cli_stderr_0_2_6 as cli_stderr, wasi_cli_stdin_0_2_6 as cli_stdin,
-    wasi_cli_stdout_0_2_6 as cli_stdout, wasi_cli_terminal_input_0_2_6 as cli_terminal_input,
-    wasi_cli_terminal_output_0_2_6 as cli_terminal_output,
-    wasi_cli_terminal_stderr_0_2_6 as cli_terminal_stderr,
-    wasi_cli_terminal_stdin_0_2_6 as cli_terminal_stdin,
-    wasi_cli_terminal_stdout_0_2_6 as cli_terminal_stdout,
+    wasi_cli_environment as cli_environment, wasi_cli_exit as cli_exit,
+    wasi_cli_stderr as cli_stderr, wasi_cli_stdin as cli_stdin, wasi_cli_stdout as cli_stdout,
+    wasi_cli_terminal_input as cli_terminal_input, wasi_cli_terminal_output as cli_terminal_output,
+    wasi_cli_terminal_stderr as cli_terminal_stderr, wasi_cli_terminal_stdin as cli_terminal_stdin,
+    wasi_cli_terminal_stdout as cli_terminal_stdout,
 };
 use crate::bindings::types::{
     WasiCliTerminalInputTerminalInput, WasiCliTerminalOutputTerminalOutput,

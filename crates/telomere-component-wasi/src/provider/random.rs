@@ -1,8 +1,7 @@
 use super::WasiHost;
 use crate::bindings::imports::{
-    wasi_random_insecure_0_2_6 as random_insecure,
-    wasi_random_insecure_seed_0_2_6 as random_insecure_seed,
-    wasi_random_random_0_2_6 as random_random,
+    wasi_random_insecure as random_insecure, wasi_random_insecure_seed as random_insecure_seed,
+    wasi_random_random as random_random,
 };
 use std::rc::Rc;
 use telomere_component::{ComponentError, ComponentFuture, ComponentLinker, Store};

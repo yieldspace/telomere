@@ -30,7 +30,8 @@ macro_rules! bindgen {{
         ::telomere_component_bindgen::bindgen!({{
             $($body)*,
             deps: [{deps_literals}],
-            adopt: {{ "wasi:" => ::telomere_component_wasi::bindings }}
+            adopt: {{ "wasi:" => ::telomere_component_wasi::bindings }},
+            strip_interface_version: true
         }});
     }};
 }}

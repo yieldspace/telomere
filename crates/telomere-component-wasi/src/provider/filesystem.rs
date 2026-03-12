@@ -1,8 +1,7 @@
 use super::common::next_handle;
 use super::WasiHost;
 use crate::bindings::imports::{
-    wasi_filesystem_preopens_0_2_6 as filesystem_preopens,
-    wasi_filesystem_types_0_2_6 as filesystem_types,
+    wasi_filesystem_preopens as filesystem_preopens, wasi_filesystem_types as filesystem_types,
 };
 use crate::bindings::types::{
     WasiClocksWallClockDatetime, WasiFilesystemTypesDescriptor,

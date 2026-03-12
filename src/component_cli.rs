@@ -36,7 +36,7 @@ async fn run_component_bytes(
         .with_context(|| format!("failed to instantiate component `{}`", path.display()))?;
 
     let exports = bindings::Exports::new(instance);
-    let result = exports.wasi_cli_run_0_2_6().run(&mut store).await;
+    let result = exports.wasi_cli_run().run(&mut store).await;
     if let Some(code) = state.exit_code() {
         return Ok(ExitCode::from(code));
     }

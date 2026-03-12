@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 use syn::parse::{Parse, ParseStream};
-use syn::{braced, bracketed, parse_quote, Error, LitStr, Path, Result, Token};
+use syn::{braced, bracketed, parse_quote, Error, LitBool, LitStr, Path, Result, Token};
 use wit_parser::{
     Function, FunctionKind, Handle, InterfaceId, PackageId, Resolve, Type, TypeDefKind, TypeId,
     TypeOwner, WorldId, WorldItem,
@@ -43,6 +43,7 @@ pub struct BindgenInput {
     module: Option<LitStr>,
     host_mode: HostMode,
     adopt: Vec<AdoptMapping>,
+    strip_interface_version: bool,
 }
 
 impl Parse for BindgenInput {
@@ -57,6 +58,7 @@ impl Parse for BindgenInput {
         let mut module = None;
         let mut host_mode = None;
         let mut adopt = Vec::new();
+        let mut strip_interface_version = None;
 
         while !content.is_empty() {
             let key = content.parse::<Ident>()?;
@@ -125,6 +127,15 @@ impl Parse for BindgenInput {
                         adopt_content.parse::<Token![,]>()?;
                     }
                 }
+                "strip_interface_version" => {
+                    let value = content.parse::<LitBool>()?;
+                    if strip_interface_version.replace(value.value).is_some() {
+                        return Err(Error::new(
+                            value.span(),
+                            "`strip_interface_version` specified more than once",
+                        ));
+                    }
+                }
                 other => {
                     return Err(Error::new(
                         key.span(),
@@ -155,6 +166,7 @@ impl Parse for BindgenInput {
             module,
             host_mode: host_mode.unwrap_or(HostMode::Sync),
             adopt,
+            strip_interface_version: strip_interface_version.unwrap_or(false),
         })
     }
 }
@@ -186,6 +198,7 @@ pub fn expand(input: BindgenInput) -> Result<TokenStream2> {
         runtime_path,
         input.host_mode,
         input.adopt,
+        input.strip_interface_version,
     )?;
     let body = generator.generate()?;
     Ok(quote! {
@@ -278,6 +291,7 @@ struct Generator {
     runtime_path: syn::Path,
     host_mode: HostMode,
     adopt_mappings: Vec<AdoptMapping>,
+    strip_interface_version: bool,
     direct_imports: Vec<FunctionBinding>,
     direct_exports: Vec<FunctionBinding>,
     import_interfaces: Vec<InterfaceNamespace>,
@@ -298,6 +312,7 @@ impl Generator {
         runtime_path: syn::Path,
         host_mode: HostMode,
         adopt_mappings: Vec<AdoptMapping>,
+        strip_interface_version: bool,
     ) -> Result<Self> {
         let import_items = {
             let world = &resolve.worlds[world_id];
@@ -322,6 +337,7 @@ impl Generator {
             runtime_path,
             host_mode,
             adopt_mappings,
+            strip_interface_version,
             direct_imports: Vec::new(),
             direct_exports: Vec::new(),
             import_interfaces: Vec::new(),
@@ -340,6 +356,9 @@ impl Generator {
         }
         for (name, item) in export_items {
             generator.collect_world_item(name, item, false)?;
+        }
+        if generator.strip_interface_version {
+            generator.validate_stripped_interface_name_collisions()?;
         }
 
         let mut named = generator
@@ -466,11 +485,57 @@ impl Generator {
 
         Ok(InterfaceNamespace {
             wit_name: wit_name.to_owned(),
-            module_ident: snake_ident(wit_name),
+            module_ident: interface_module_ident(wit_name, self.strip_interface_version),
             location,
             functions,
             adopt_path,
         })
+    }
+
+    fn validate_stripped_interface_name_collisions(&self) -> Result<()> {
+        self.validate_interface_namespace_group("import", &self.import_interfaces)?;
+        self.validate_interface_namespace_group("export", &self.export_interfaces)?;
+
+        let direct_exports = self
+            .direct_exports
+            .iter()
+            .map(|binding| (binding.method_ident.to_string(), binding.wit_name.as_str()))
+            .collect::<HashMap<_, _>>();
+        for namespace in &self.export_interfaces {
+            let stripped = namespace.module_ident.to_string();
+            if let Some(function) = direct_exports.get(&stripped) {
+                return Err(Error::new(
+                    Span::call_site(),
+                    format!(
+                        "stripping interface version produced export accessor `{stripped}` for `{}` that conflicts with direct export `{function}`",
+                        namespace.wit_name
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_interface_namespace_group(
+        &self,
+        kind: &str,
+        namespaces: &[InterfaceNamespace],
+    ) -> Result<()> {
+        let mut seen = HashMap::<String, &str>::new();
+        for namespace in namespaces {
+            let stripped = namespace.module_ident.to_string();
+            if let Some(previous) = seen.insert(stripped.clone(), namespace.wit_name.as_str()) {
+                return Err(Error::new(
+                    Span::call_site(),
+                    format!(
+                        "stripping interface version produced conflicting {kind} module `{stripped}` for `{previous}` and `{}`",
+                        namespace.wit_name
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn assign_type_names(&mut self) {
@@ -2260,6 +2325,19 @@ fn last_segment(text: &str) -> &str {
         .unwrap_or(text)
 }
 
+fn interface_module_ident(wit_name: &str, strip_interface_version: bool) -> Ident {
+    let wit_name = if strip_interface_version {
+        strip_interface_version_suffix(wit_name)
+    } else {
+        wit_name
+    };
+    snake_ident(wit_name)
+}
+
+fn strip_interface_version_suffix(wit_name: &str) -> &str {
+    wit_name.split('@').next().unwrap_or(wit_name)
+}
+
 fn camel_ident(text: &str) -> Ident {
     let mut candidate = sanitize(text).to_upper_camel_case();
     if candidate.is_empty() {
@@ -2275,6 +2353,11 @@ fn camel_ident(text: &str) -> Ident {
 }
 
 fn snake_ident(text: &str) -> Ident {
+    let candidate = snake_name(text);
+    Ident::new(&candidate, Span::call_site())
+}
+
+fn snake_name(text: &str) -> String {
     let mut candidate = sanitize(text).to_snake_case();
     if candidate.is_empty() {
         candidate = "generated".to_owned();
@@ -2285,7 +2368,7 @@ fn snake_ident(text: &str) -> Ident {
     if is_reserved(&candidate) {
         candidate.push('_');
     }
-    Ident::new(&candidate, Span::call_site())
+    candidate
 }
 
 fn sanitize(text: &str) -> String {
@@ -2345,4 +2428,102 @@ fn is_reserved(text: &str) -> bool {
             | "where"
             | "while"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{expand, BindgenInput};
+
+    #[test]
+    fn strip_interface_version_is_opt_in() {
+        let input: BindgenInput = syn::parse_str(
+            r##"{
+                inline: r#"
+                    package ex:counterdemo@1.2.3;
+
+                    interface service {
+                        ping: func();
+                    }
+
+                    interface runner {
+                        run: func();
+                    }
+
+                    world demo {
+                        import service;
+                        export runner;
+                    }
+                "#,
+                world: "demo",
+                module: "bindings"
+            }"##,
+        )
+        .expect("bindgen input should parse");
+
+        let tokens = expand(input).expect("bindgen should expand").to_string();
+        assert!(tokens.contains("ex_counterdemo_service_1_2_3"));
+        assert!(tokens.contains("ex_counterdemo_runner_1_2_3"));
+    }
+
+    #[test]
+    fn strip_interface_version_removes_version_suffix_from_interface_modules() {
+        let input: BindgenInput = syn::parse_str(
+            r##"{
+                inline: r#"
+                    package ex:counterdemo@1.2.3;
+
+                    interface service {
+                        ping: func();
+                    }
+
+                    interface runner {
+                        run: func();
+                    }
+
+                    world demo {
+                        import service;
+                        export runner;
+                    }
+                "#,
+                world: "demo",
+                module: "bindings",
+                strip_interface_version: true
+            }"##,
+        )
+        .expect("bindgen input should parse");
+
+        let tokens = expand(input).expect("bindgen should expand").to_string();
+        assert!(tokens.contains("pub mod ex_counterdemo_service"));
+        assert!(!tokens.contains("ex_counterdemo_service_1_2_3"));
+        assert!(tokens.contains("pub fn ex_counterdemo_runner"));
+        assert!(!tokens.contains("ex_counterdemo_runner_1_2_3"));
+    }
+
+    #[test]
+    fn strip_interface_version_rejects_export_accessor_collisions() {
+        let input: BindgenInput = syn::parse_str(
+            r##"{
+                inline: r#"
+                    package ex:counterdemo@1.2.3;
+
+                    interface runner {
+                        run: func();
+                    }
+
+                    world demo {
+                        export runner;
+                        export ex-counterdemo-runner: func();
+                    }
+                "#,
+                world: "demo",
+                strip_interface_version: true
+            }"##,
+        )
+        .expect("bindgen input should parse");
+
+        let error = expand(input).expect_err("colliding export names must fail");
+        assert!(error
+            .to_string()
+            .contains("conflicts with direct export `ex-counterdemo-runner`"));
+    }
 }

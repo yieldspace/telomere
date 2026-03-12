@@ -1,11 +1,9 @@
 use super::WasiHost;
 use crate::bindings::imports::{
-    wasi_sockets_instance_network_0_2_6 as sockets_instance_network,
-    wasi_sockets_ip_name_lookup_0_2_6 as sockets_ip_name_lookup,
-    wasi_sockets_network_0_2_6 as sockets_network, wasi_sockets_tcp_0_2_6 as sockets_tcp,
-    wasi_sockets_tcp_create_socket_0_2_6 as sockets_tcp_create_socket,
-    wasi_sockets_udp_0_2_6 as sockets_udp,
-    wasi_sockets_udp_create_socket_0_2_6 as sockets_udp_create_socket,
+    wasi_sockets_instance_network as sockets_instance_network,
+    wasi_sockets_ip_name_lookup as sockets_ip_name_lookup, wasi_sockets_network as sockets_network,
+    wasi_sockets_tcp as sockets_tcp, wasi_sockets_tcp_create_socket as sockets_tcp_create_socket,
+    wasi_sockets_udp as sockets_udp, wasi_sockets_udp_create_socket as sockets_udp_create_socket,
 };
 use std::rc::Rc;
 use telomere_component::ComponentLinker;

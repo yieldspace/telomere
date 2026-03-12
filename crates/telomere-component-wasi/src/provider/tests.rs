@@ -1,8 +1,8 @@
 use super::WasiHost;
 use crate::bindings::imports::{
-    wasi_cli_exit_0_2_6 as cli_exit, wasi_cli_stdin_0_2_6 as cli_stdin,
-    wasi_cli_stdout_0_2_6 as cli_stdout, wasi_filesystem_preopens_0_2_6 as filesystem_preopens,
-    wasi_filesystem_types_0_2_6 as filesystem_types, wasi_io_streams_0_2_6 as io_streams,
+    wasi_cli_exit as cli_exit, wasi_cli_stdin as cli_stdin, wasi_cli_stdout as cli_stdout,
+    wasi_filesystem_preopens as filesystem_preopens, wasi_filesystem_types as filesystem_types,
+    wasi_io_streams as io_streams,
 };
 use crate::bindings::types::{
     WasiFilesystemTypesDescriptorBorrow, WasiFilesystemTypesDescriptorFlags,

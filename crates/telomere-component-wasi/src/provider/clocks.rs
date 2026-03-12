@@ -1,7 +1,6 @@
 use super::WasiHost;
 use crate::bindings::imports::{
-    wasi_clocks_monotonic_clock_0_2_6 as clocks_monotonic,
-    wasi_clocks_wall_clock_0_2_6 as clocks_wall,
+    wasi_clocks_monotonic_clock as clocks_monotonic, wasi_clocks_wall_clock as clocks_wall,
 };
 use crate::bindings::types::{WasiClocksWallClockDatetime, WasiIoPollPollable};
 use crate::state::PollableEntry;

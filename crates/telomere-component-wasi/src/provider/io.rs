@@ -2,8 +2,7 @@ use super::common::next_handle;
 use super::filesystem::map_io_error;
 use super::WasiHost;
 use crate::bindings::imports::{
-    wasi_io_error_0_2_6 as io_error, wasi_io_poll_0_2_6 as io_poll,
-    wasi_io_streams_0_2_6 as io_streams,
+    wasi_io_error as io_error, wasi_io_poll as io_poll, wasi_io_streams as io_streams,
 };
 use crate::bindings::types::{
     WasiFilesystemTypesErrorCode, WasiIoErrorError, WasiIoErrorErrorBorrow, WasiIoPollPollable,
