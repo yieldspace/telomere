@@ -84,12 +84,12 @@ impl<'a> Validator<'a> {
             }
             let Some(child_export) = child.exports.get(child_index) else {
                 Err(ComponentParseError::TypeMismatch(
-                    "import name mismatch".to_owned(),
+                    "export name mismatch".to_owned(),
                 ))?
             };
             if child_export.name != parent_export.name {
                 Err(ComponentParseError::TypeMismatch(
-                    "import name mismatch".to_owned(),
+                    "export name mismatch".to_owned(),
                 ))?
             }
             parent_export
