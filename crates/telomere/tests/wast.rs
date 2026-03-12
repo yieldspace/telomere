@@ -563,3 +563,83 @@ async fn simd_i32x4_trunc_sat_f32x4() {
 async fn simd_i32x4_trunc_sat_f64x2() {
     run_test_file("simd_i32x4_trunc_sat_f64x2").await;
 }
+#[test]
+async fn simd_i64x2_arith() {
+    run_test_file("simd_i64x2_arith").await;
+}
+#[test]
+async fn simd_i64x2_arith2() {
+    run_test_file("simd_i64x2_arith2").await;
+}
+#[test]
+async fn simd_i64x2_cmp() {
+    run_test_file("simd_i64x2_cmp").await;
+}
+#[test]
+async fn simd_i64x2_extmul_i32x4() {
+    run_test_file("simd_i64x2_extmul_i32x4").await;
+}
+#[test]
+async fn simd_int_to_int_extend() {
+    run_test_file("simd_int_to_int_extend").await;
+}
+#[test]
+async fn simd_lane() {
+    run_test_file("simd_lane").await;
+}
+#[test]
+async fn simd_linking() {
+    run_test_file("simd_linking").await;
+}
+#[test]
+async fn simd_load8_lane() {
+    run_test_file("simd_load8_lane").await;
+}
+#[test]
+async fn simd_load16_lane() {
+    run_test_file("simd_load16_lane").await;
+}
+#[test]
+async fn simd_load32_lane() {
+    run_test_file("simd_load32_lane").await;
+}
+#[test]
+async fn simd_load64_lane() {
+    run_test_file("simd_load64_lane").await;
+}
+#[test]
+async fn simd_load_extend() {
+    run_test_file("simd_load_extend").await;
+}
+#[test]
+async fn simd_load_splat() {
+    run_test_file("simd_load_splat").await;
+}
+#[test]
+async fn simd_load_zero() {
+    run_test_file("simd_load_zero").await;
+}
+#[test]
+async fn simd_splat() {
+    run_test_file("simd_splat").await;
+}
+#[test]
+async fn simd_store() {
+    run_test_file("simd_store").await;
+}
+#[test]
+async fn simd_store8_lane() {
+    run_test_file("simd_store8_lane").await;
+}
+#[test]
+async fn simd_store16_lane() {
+    run_test_file("simd_store16_lane").await;
+}
+#[test]
+async fn simd_store32_lane() {
+    run_test_file("simd_store32_lane").await;
+}
+#[test]
+async fn simd_store64_lane() {
+    run_test_file("simd_store64_lane").await;
+}

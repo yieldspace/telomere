@@ -22,14 +22,14 @@ pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 pub unsafe fn v128_load8x8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     load_internal::<8>(tail_code, ctx, |stack, data, next| {
         let extended = [
-            data[0] as i16,
-            data[1] as i16,
-            data[2] as i16,
-            data[3] as i16,
-            data[4] as i16,
-            data[5] as i16,
-            data[6] as i16,
-            data[7] as i16,
+            data[0] as i8 as i16,
+            data[1] as i8 as i16,
+            data[2] as i8 as i16,
+            data[3] as i8 as i16,
+            data[4] as i8 as i16,
+            data[5] as i8 as i16,
+            data[6] as i8 as i16,
+            data[7] as i8 as i16,
         ];
         trap_func!(stack.push(i16x8::from(extended)));
         next
@@ -74,10 +74,10 @@ pub unsafe fn v128_load16x4_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 pub unsafe fn v128_load16x4_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     load_internal::<8>(tail_code, ctx, |stack, data, next| {
         let u16s = [
-            i16::from_le_bytes([data[0], data[1]]),
-            i16::from_le_bytes([data[2], data[3]]),
-            i16::from_le_bytes([data[4], data[5]]),
-            i16::from_le_bytes([data[6], data[7]]),
+            u16::from_le_bytes([data[0], data[1]]),
+            u16::from_le_bytes([data[2], data[3]]),
+            u16::from_le_bytes([data[4], data[5]]),
+            u16::from_le_bytes([data[6], data[7]]),
         ];
 
         let extended = [
@@ -151,7 +151,7 @@ pub unsafe fn v128_load32_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
 }
 
 pub unsafe fn v128_load64_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<4>(tail_code, ctx, |stack, bytes, next| {
+    load_internal::<8>(tail_code, ctx, |stack, bytes, next| {
         let v = i64x2::from(i64::from_le_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]));
@@ -171,6 +171,139 @@ pub unsafe fn v128_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
     call_next(tail_code, 2, ctx)
 }
 
+fn replace_lane_bytes<const N: usize>(bytes: &mut [u8; 16], lane: usize, value: [u8; N]) {
+    let start = lane * N;
+    bytes[start..start + N].copy_from_slice(&value);
+}
+
+unsafe fn load_lane_read_handler<const N: usize>(
+    stack: &mut Stack,
+    data: &[u8],
+    next: *const Instr,
+) -> *const Instr {
+    let lane = (*next.sub(1)).operand.u32 as usize;
+    let mut bytes = stack.pop_u128().to_le_bytes();
+    replace_lane_bytes::<N>(&mut bytes, lane, data.try_into().unwrap());
+    trap_func!(stack.push_u128(u128::from_le_bytes(bytes)));
+    next
+}
+
+unsafe fn load_lane_internal<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let vector = ctx.stack.pop_u128();
+    let offset = ctx.stack.pop_u32();
+    let mem_addr = vm_try!(VMResult::from_option(ctx.memory_addr(), || {
+        VMResult::MemoryIndexOutOfRange
+    }));
+    vm_try!(ctx.stack.push_u128(vector));
+    vm_try!(ctx.effect.push_non_atomic_memory_read_effect(
+        ctx.task_id,
+        mem_addr,
+        (*tail_code).operand.memarg,
+        offset,
+        N as u32,
+        load_lane_read_handler::<N>,
+    ));
+    ctx.cont = tail_code.add(2);
+    VMResult::Success(())
+}
+
+unsafe fn store_lane_internal<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code.add(1)).operand.u32 as usize;
+    let bytes = ctx.stack.pop_u128().to_le_bytes();
+    let start = lane * N;
+    let offset = ctx.stack.pop_u32();
+    let mem_addr = vm_try!(VMResult::from_option(ctx.memory_addr(), || {
+        VMResult::MemoryIndexOutOfRange
+    }));
+    let operation = match N {
+        1 => WriteOperation::Write1([bytes[start]]),
+        2 => WriteOperation::Write2([bytes[start], bytes[start + 1]]),
+        4 => WriteOperation::Write4([
+            bytes[start],
+            bytes[start + 1],
+            bytes[start + 2],
+            bytes[start + 3],
+        ]),
+        8 => WriteOperation::Write8([
+            bytes[start],
+            bytes[start + 1],
+            bytes[start + 2],
+            bytes[start + 3],
+            bytes[start + 4],
+            bytes[start + 5],
+            bytes[start + 6],
+            bytes[start + 7],
+        ]),
+        _ => unreachable!(),
+    };
+    vm_try!(ctx.effect.push_non_atomic_memory_write_effect(
+        ctx.task_id,
+        mem_addr,
+        (*tail_code).operand.memarg,
+        offset,
+        ctx.gc,
+        operation,
+    ));
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn i8x16_shuffle(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let mut lanes = [0u8; 16];
+    lanes[0..8].copy_from_slice(&(*tail_code).operand.encoded);
+    lanes[8..16].copy_from_slice(&(*tail_code.add(1)).operand.encoded);
+    let b = ctx.stack.pop_u128().to_le_bytes();
+    let a = ctx.stack.pop_u128().to_le_bytes();
+    let mut result = [0u8; 16];
+    for (i, lane) in lanes.into_iter().enumerate() {
+        let lane = lane as usize;
+        result[i] = if lane < 16 { a[lane] } else { b[lane - 16] };
+    }
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn i8x16_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = ctx.stack.pop_i32() as i8;
+    vm_try!(ctx.stack.push(i8x16::from(value)));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i16x8_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = ctx.stack.pop_i32() as i16;
+    vm_try!(ctx.stack.push(i16x8::from(value)));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i32x4_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = ctx.stack.pop_i32();
+    vm_try!(ctx.stack.push(i32x4::from(value)));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i64x2_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = ctx.stack.pop_i64();
+    vm_try!(ctx.stack.push(i64x2::from(value)));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn f32x4_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = ctx.stack.pop_f32();
+    vm_try!(ctx.stack.push(f32x4::from(value)));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn f64x2_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = ctx.stack.pop_f64();
+    vm_try!(ctx.stack.push(f64x2::from(value)));
+    call_next(tail_code, 0, ctx)
+}
+
 pub unsafe fn op_i8x16_extract_lane_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -181,6 +314,230 @@ pub unsafe fn op_i8x16_extract_lane_s(
     let value = bytes[lane as usize] as i8 as i32;
     vm_try!(ctx.stack.push_i32(value));
     call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i8x16_extract_lane_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize;
+    let bytes = ctx.stack.pop_u128().to_le_bytes();
+    vm_try!(ctx.stack.push_i32(bytes[lane] as i32));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i8x16_replace_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize;
+    let value = (ctx.stack.pop_i32() as i8).to_le_bytes();
+    let mut bytes = ctx.stack.pop_u128().to_le_bytes();
+    replace_lane_bytes(&mut bytes, lane, value);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i16x8_extract_lane_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize * 2;
+    let bytes = ctx.stack.pop_u128().to_le_bytes();
+    vm_try!(ctx
+        .stack
+        .push_i32(i16::from_le_bytes([bytes[lane], bytes[lane + 1]]) as i32));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i16x8_extract_lane_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize * 2;
+    let bytes = ctx.stack.pop_u128().to_le_bytes();
+    vm_try!(ctx
+        .stack
+        .push_i32(u16::from_le_bytes([bytes[lane], bytes[lane + 1]]) as i32));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i16x8_replace_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize;
+    let value = (ctx.stack.pop_i32() as i16).to_le_bytes();
+    let mut bytes = ctx.stack.pop_u128().to_le_bytes();
+    replace_lane_bytes(&mut bytes, lane, value);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i32x4_extract_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize * 4;
+    let bytes = ctx.stack.pop_u128().to_le_bytes();
+    vm_try!(ctx.stack.push_i32(i32::from_le_bytes([
+        bytes[lane],
+        bytes[lane + 1],
+        bytes[lane + 2],
+        bytes[lane + 3],
+    ])));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i32x4_replace_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize;
+    let value = ctx.stack.pop_i32().to_le_bytes();
+    let mut bytes = ctx.stack.pop_u128().to_le_bytes();
+    replace_lane_bytes(&mut bytes, lane, value);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i64x2_extract_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize * 8;
+    let bytes = ctx.stack.pop_u128().to_le_bytes();
+    vm_try!(ctx.stack.push_i64(i64::from_le_bytes([
+        bytes[lane],
+        bytes[lane + 1],
+        bytes[lane + 2],
+        bytes[lane + 3],
+        bytes[lane + 4],
+        bytes[lane + 5],
+        bytes[lane + 6],
+        bytes[lane + 7],
+    ])));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn i64x2_replace_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize;
+    let value = ctx.stack.pop_i64().to_le_bytes();
+    let mut bytes = ctx.stack.pop_u128().to_le_bytes();
+    replace_lane_bytes(&mut bytes, lane, value);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn f32x4_extract_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize * 4;
+    let bytes = ctx.stack.pop_u128().to_le_bytes();
+    vm_try!(ctx.stack.push_f32(f32::from_le_bytes([
+        bytes[lane],
+        bytes[lane + 1],
+        bytes[lane + 2],
+        bytes[lane + 3],
+    ])));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn f32x4_replace_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize;
+    let value = ctx.stack.pop_f32().to_le_bytes();
+    let mut bytes = ctx.stack.pop_u128().to_le_bytes();
+    replace_lane_bytes(&mut bytes, lane, value);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn f64x2_extract_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize * 8;
+    let bytes = ctx.stack.pop_u128().to_le_bytes();
+    vm_try!(ctx.stack.push_f64(f64::from_le_bytes([
+        bytes[lane],
+        bytes[lane + 1],
+        bytes[lane + 2],
+        bytes[lane + 3],
+        bytes[lane + 4],
+        bytes[lane + 5],
+        bytes[lane + 6],
+        bytes[lane + 7],
+    ])));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn f64x2_replace_lane(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lane = (*tail_code).operand.u32 as usize;
+    let value = ctx.stack.pop_f64().to_le_bytes();
+    let mut bytes = ctx.stack.pop_u128().to_le_bytes();
+    replace_lane_bytes(&mut bytes, lane, value);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn v128_load8_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    load_lane_internal::<1>(tail_code, ctx)
+}
+
+pub unsafe fn v128_load16_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    load_lane_internal::<2>(tail_code, ctx)
+}
+
+pub unsafe fn v128_load32_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    load_lane_internal::<4>(tail_code, ctx)
+}
+
+pub unsafe fn v128_load64_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    load_lane_internal::<8>(tail_code, ctx)
+}
+
+pub unsafe fn v128_store8_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    store_lane_internal::<1>(tail_code, ctx)
+}
+
+pub unsafe fn v128_store16_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    store_lane_internal::<2>(tail_code, ctx)
+}
+
+pub unsafe fn v128_store32_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    store_lane_internal::<4>(tail_code, ctx)
+}
+
+pub unsafe fn v128_store64_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    store_lane_internal::<8>(tail_code, ctx)
+}
+
+pub unsafe fn v128_load32_zero(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    load_internal::<4>(tail_code, ctx, |stack, bytes, next| {
+        let mut result = [0u8; 16];
+        result[0..4].copy_from_slice(bytes);
+        trap_func!(stack.push_u128(u128::from_le_bytes(result)));
+        next
+    })
+}
+
+pub unsafe fn v128_load64_zero(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    load_internal::<8>(tail_code, ctx, |stack, bytes, next| {
+        let mut result = [0u8; 16];
+        result[0..8].copy_from_slice(bytes);
+        trap_func!(stack.push_u128(u128::from_le_bytes(result)));
+        next
+    })
 }
 
 pub unsafe fn v128_not(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -539,6 +896,10 @@ extend_instruction!(i32x4_extend_low_i16x8_s, i16x8, i32x4, 0, 1, 2, 3);
 extend_instruction!(i32x4_extend_high_i16x8_s, i16x8, i32x4, 4, 5, 6, 7);
 extend_instruction!(i32x4_extend_low_i16x8_u, u16x8, u32x4, 0, 1, 2, 3);
 extend_instruction!(i32x4_extend_high_i16x8_u, u16x8, u32x4, 4, 5, 6, 7);
+extend_instruction!(i64x2_extend_low_i32x4_s, i32x4, i64x2, 0, 1);
+extend_instruction!(i64x2_extend_high_i32x4_s, i32x4, i64x2, 2, 3);
+extend_instruction!(i64x2_extend_low_i32x4_u, u32x4, u64x2, 0, 1);
+extend_instruction!(i64x2_extend_high_i32x4_u, u32x4, u64x2, 2, 3);
 
 #[inline]
 unsafe fn handle_unary_op<T>(
@@ -849,6 +1210,25 @@ define_binary_simd_operation!(nearest, [f64x2], |a| {
     let arr = a.to_array();
     f64x2::from([arr[0].round_ties_even(), arr[1].round_ties_even()])
 });
+
+pub unsafe fn i64x2_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let v: i64x2 = ctx.stack.pop();
+    let [a, b] = v.to_array();
+    vm_try!(ctx
+        .stack
+        .push(i64x2::from([a.wrapping_abs(), b.wrapping_abs()])));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let v: i64x2 = ctx.stack.pop();
+    let [a, b] = v.to_array();
+    vm_try!(ctx
+        .stack
+        .push(i64x2::from([a.wrapping_neg(), b.wrapping_neg()])));
+    call_next(tail_code, 0, ctx)
+}
+
 pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v: f32x4 = ctx.stack.pop();
     let [a, b, c, d] = v.to_array();
@@ -915,17 +1295,23 @@ macro_rules! define_simd_cmp_operation {
 define_unary_simd_operation!(eq, [f32x4, f64x2, i8x16, i16x8, i32x4], |a, b| a.cmp_eq(b));
 define_unary_simd_operation!(ne, [f32x4, f64x2], |a, b| a.cmp_ne(b));
 define_unary_simd_operation!(ne, [i8x16, i16x8, i32x4], |a, b| a.cmp_eq(b).not());
+define_simd_cmp_operation!(eq, [i64x2], |a, b| a == b);
+define_simd_cmp_operation!(ne, [i64x2], |a, b| a != b);
 define_unary_simd_operation!(lt, [f32x4, f64x2], |a, b| a.cmp_lt(b));
 define_simd_cmp_operation!(lt, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a < b);
+define_simd_cmp_operation!(lt, [i64x2], |a, b| a < b);
 
 define_unary_simd_operation!(gt, [f32x4, f64x2], |a, b| a.cmp_gt(b));
 define_simd_cmp_operation!(gt, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a > b);
+define_simd_cmp_operation!(gt, [i64x2], |a, b| a > b);
 define_unary_simd_operation!(le, [f32x4, f64x2], |a, b| a.cmp_le(b));
 define_simd_cmp_operation!(le, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
     <= b);
+define_simd_cmp_operation!(le, [i64x2], |a, b| a <= b);
 define_unary_simd_operation!(ge, [f32x4, f64x2], |a, b| a.cmp_ge(b));
 define_simd_cmp_operation!(ge, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
     >= b);
+define_simd_cmp_operation!(ge, [i64x2], |a, b| a >= b);
 pub unsafe fn i16x8_extadd_pairwise_i8x16(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1029,6 +1415,26 @@ fn extend_high_u16x8_to_u32x4(input: u16x8) -> u32x4 {
     u32x4::from(extended)
 }
 
+fn extend_low_i32x4_to_i64x2(input: i32x4) -> i64x2 {
+    let arr = input.to_array();
+    i64x2::from([arr[0] as i64, arr[1] as i64])
+}
+
+fn extend_high_i32x4_to_i64x2(input: i32x4) -> i64x2 {
+    let arr = input.to_array();
+    i64x2::from([arr[2] as i64, arr[3] as i64])
+}
+
+fn extend_low_u32x4_to_u64x2(input: u32x4) -> u64x2 {
+    let arr = input.to_array();
+    u64x2::from([arr[0] as u64, arr[1] as u64])
+}
+
+fn extend_high_u32x4_to_u64x2(input: u32x4) -> u64x2 {
+    let arr = input.to_array();
+    u64x2::from([arr[2] as u64, arr[3] as u64])
+}
+
 pub unsafe fn i16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: i8x16 = ctx.stack.pop();
     let b: i8x16 = ctx.stack.pop();
@@ -1084,6 +1490,28 @@ pub unsafe fn i32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
     vm_try!(ctx.stack.push(a * b));
     call_next(tail_code, 0, ctx)
 }
+
+pub unsafe fn i64x2_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b: i64x2 = ctx.stack.pop();
+    let a: i64x2 = ctx.stack.pop();
+    let [b0, b1] = b.to_array();
+    let [a0, a1] = a.to_array();
+    vm_try!(ctx
+        .stack
+        .push(i64x2::from([a0.wrapping_sub(b0), a1.wrapping_sub(b1),])));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i64x2_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let b: i64x2 = ctx.stack.pop();
+    let a: i64x2 = ctx.stack.pop();
+    let [b0, b1] = b.to_array();
+    let [a0, a1] = a.to_array();
+    vm_try!(ctx
+        .stack
+        .push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    call_next(tail_code, 0, ctx)
+}
 pub unsafe fn u32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: u16x8 = ctx.stack.pop();
     let b: u16x8 = ctx.stack.pop();
@@ -1100,6 +1528,62 @@ pub unsafe fn u32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
     let a = extend_high_u16x8_to_u32x4(a);
     let b = extend_high_u16x8_to_u32x4(b);
     vm_try!(ctx.stack.push(a * b));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i64x2_extmul_low_i32x4_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a: i32x4 = ctx.stack.pop();
+    let b: i32x4 = ctx.stack.pop();
+    let [a0, a1] = extend_low_i32x4_to_i64x2(a).to_array();
+    let [b0, b1] = extend_low_i32x4_to_i64x2(b).to_array();
+    vm_try!(ctx
+        .stack
+        .push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i64x2_extmul_high_i32x4_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a: i32x4 = ctx.stack.pop();
+    let b: i32x4 = ctx.stack.pop();
+    let [a0, a1] = extend_high_i32x4_to_i64x2(a).to_array();
+    let [b0, b1] = extend_high_i32x4_to_i64x2(b).to_array();
+    vm_try!(ctx
+        .stack
+        .push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i64x2_extmul_low_i32x4_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a: u32x4 = ctx.stack.pop();
+    let b: u32x4 = ctx.stack.pop();
+    let [a0, a1] = extend_low_u32x4_to_u64x2(a).to_array();
+    let [b0, b1] = extend_low_u32x4_to_u64x2(b).to_array();
+    vm_try!(ctx
+        .stack
+        .push(u64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    call_next(tail_code, 0, ctx)
+}
+
+pub unsafe fn i64x2_extmul_high_i32x4_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let a: u32x4 = ctx.stack.pop();
+    let b: u32x4 = ctx.stack.pop();
+    let [a0, a1] = extend_high_u32x4_to_u64x2(a).to_array();
+    let [b0, b1] = extend_high_u32x4_to_u64x2(b).to_array();
+    vm_try!(ctx
+        .stack
+        .push(u64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
     call_next(tail_code, 0, ctx)
 }
 

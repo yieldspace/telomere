@@ -1,4 +1,5 @@
 use crate::binary::BinaryReader;
+use crate::WasmParserError;
 
 use super::{instruction_generator::InstructionGenerator, type_checker::TypeChecker};
 
@@ -58,6 +59,132 @@ macro_rules! shift_instruction_parser {
                     .op(&[ValType::V128, ValType::I32], &[ValType::V128])?;
                 ctx.instrs.push_instr1(vm::simd::$name);
                 Ok(0)
+            }
+        }
+    };
+}
+
+fn validate_lane(code: u32, lane: u8, lane_count: u8) -> Result<(), WasmParserError> {
+    if lane >= lane_count {
+        Err(WasmParserError::InvalidInstruction([
+            0xFD, code as u8, lane, 0,
+        ]))?
+    }
+    Ok(())
+}
+
+macro_rules! splat_instruction_parser {
+    ($name: ident,$code: expr,$input: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                ctx.checker.op(&[$input], &[ValType::V128])?;
+                ctx.instrs.push_instr1(vm::simd::$name);
+                Ok(0)
+            }
+        }
+    };
+}
+
+macro_rules! extract_lane_parser {
+    ($name: ident,$code: expr,$output: expr,$lane_count: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                let (len, lane) = values::parse_byte(ctx.reader)?;
+                super::validate_lane(CODE, lane, $lane_count)?;
+                ctx.checker.op(&[ValType::V128], &[$output])?;
+                ctx.instrs
+                    .push_with_operand(vm::simd::$name, &[Operand { u32: lane as u32 }]);
+                Ok(len)
+            }
+        }
+    };
+}
+
+macro_rules! replace_lane_parser {
+    ($name: ident,$code: expr,$input: expr,$lane_count: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                let (len, lane) = values::parse_byte(ctx.reader)?;
+                super::validate_lane(CODE, lane, $lane_count)?;
+                ctx.checker.op(&[ValType::V128, $input], &[ValType::V128])?;
+                ctx.instrs
+                    .push_with_operand(vm::simd::$name, &[Operand { u32: lane as u32 }]);
+                Ok(len)
+            }
+        }
+    };
+}
+
+macro_rules! load_lane_parser {
+    ($name: ident,$code: expr,$natural_align: expr,$lane_count: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                let (len, memarg) = values::parse_memarg(ctx.reader, $natural_align)?;
+                let (len2, lane) = values::parse_byte(ctx.reader)?;
+                super::validate_lane(CODE, lane, $lane_count)?;
+                ctx.checker
+                    .op(&[ValType::I32, ValType::V128], &[ValType::V128])?;
+                ctx.instrs.push_with_operand(
+                    vm::simd::$name,
+                    &[Operand { memarg }, Operand { u32: lane as u32 }],
+                );
+                Ok(len + len2)
+            }
+        }
+    };
+}
+
+macro_rules! store_lane_parser {
+    ($name: ident,$code: expr,$natural_align: expr,$lane_count: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                let (len, memarg) = values::parse_memarg(ctx.reader, $natural_align)?;
+                let (len2, lane) = values::parse_byte(ctx.reader)?;
+                super::validate_lane(CODE, lane, $lane_count)?;
+                ctx.checker.op(&[ValType::I32, ValType::V128], &[])?;
+                ctx.instrs.push_with_operand(
+                    vm::simd::$name,
+                    &[Operand { memarg }, Operand { u32: lane as u32 }],
+                );
+                Ok(len + len2)
+            }
+        }
+    };
+}
+
+macro_rules! load_zero_parser {
+    ($name: ident,$code: expr,$natural_align: expr) => {
+        pub(crate) mod $name {
+            use super::prelude::*;
+            pub(crate) const CODE: u32 = $code;
+            pub(crate) fn parse<R: BinaryReader>(
+                ctx: &mut SimdParserContext<R>,
+            ) -> Result<usize, WasmParserError> {
+                let (len, memarg) = values::parse_memarg(ctx.reader, $natural_align)?;
+                ctx.checker.load_op(ValType::V128)?;
+                ctx.instrs
+                    .push_with_operand(vm::simd::$name, &[Operand { memarg }]);
+                Ok(len)
             }
         }
     };
@@ -254,7 +381,36 @@ pub(crate) mod v128_const {
     }
 }
 
+pub(crate) mod i8x16_shuffle {
+    use super::prelude::*;
+    pub(crate) const CODE: u32 = 13;
+    pub(crate) fn parse<R: BinaryReader>(
+        ctx: &mut SimdParserContext<R>,
+    ) -> Result<usize, WasmParserError> {
+        let lanes = ctx.reader.read_exact::<16>()?;
+        for lane in lanes {
+            super::validate_lane(CODE, lane, 32)?;
+        }
+        let mut left = [0u8; 8];
+        let mut right = [0u8; 8];
+        left.copy_from_slice(&lanes[0..8]);
+        right.copy_from_slice(&lanes[8..16]);
+        ctx.checker
+            .op(&[ValType::V128, ValType::V128], &[ValType::V128])?;
+        ctx.instrs.push_with_operand(
+            vm::simd::i8x16_shuffle,
+            &[Operand { encoded: left }, Operand { encoded: right }],
+        );
+        Ok(16)
+    }
+}
 unary_op_simd_parser!(i8x16_swizzle, 14);
+splat_instruction_parser!(i8x16_splat, 15, ValType::I32);
+splat_instruction_parser!(i16x8_splat, 16, ValType::I32);
+splat_instruction_parser!(i32x4_splat, 17, ValType::I32);
+splat_instruction_parser!(i64x2_splat, 18, ValType::I64);
+splat_instruction_parser!(f32x4_splat, 19, ValType::F32);
+splat_instruction_parser!(f64x2_splat, 20, ValType::F64);
 
 pub(crate) mod i8x16_extract_lane_s {
     use super::prelude::*;
@@ -263,6 +419,7 @@ pub(crate) mod i8x16_extract_lane_s {
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
         let (len, lane) = values::parse_byte(ctx.reader)?;
+        super::validate_lane(CODE, lane, 16)?;
         ctx.checker.op(&[ValType::V128], &[ValType::I32])?;
 
         ctx.instrs.push_with_operand(
@@ -272,6 +429,19 @@ pub(crate) mod i8x16_extract_lane_s {
         Ok(len)
     }
 }
+extract_lane_parser!(i8x16_extract_lane_u, 22, ValType::I32, 16);
+replace_lane_parser!(i8x16_replace_lane, 23, ValType::I32, 16);
+extract_lane_parser!(i16x8_extract_lane_s, 24, ValType::I32, 8);
+extract_lane_parser!(i16x8_extract_lane_u, 25, ValType::I32, 8);
+replace_lane_parser!(i16x8_replace_lane, 26, ValType::I32, 8);
+extract_lane_parser!(i32x4_extract_lane, 27, ValType::I32, 4);
+replace_lane_parser!(i32x4_replace_lane, 28, ValType::I32, 4);
+extract_lane_parser!(i64x2_extract_lane, 29, ValType::I64, 2);
+replace_lane_parser!(i64x2_replace_lane, 30, ValType::I64, 2);
+extract_lane_parser!(f32x4_extract_lane, 31, ValType::F32, 4);
+replace_lane_parser!(f32x4_replace_lane, 32, ValType::F32, 4);
+extract_lane_parser!(f64x2_extract_lane, 33, ValType::F64, 2);
+replace_lane_parser!(f64x2_replace_lane, 34, ValType::F64, 2);
 unary_op_simd_parser!(i8x16_eq, 35);
 unary_op_simd_parser!(i8x16_ne, 36);
 unary_op_simd_parser!(i8x16_lt, 37);
@@ -345,6 +515,16 @@ pub(crate) mod v128_any_true {
         Ok(0)
     }
 }
+load_lane_parser!(v128_load8_lane, 84, 0, 16);
+load_lane_parser!(v128_load16_lane, 85, 1, 8);
+load_lane_parser!(v128_load32_lane, 86, 2, 4);
+load_lane_parser!(v128_load64_lane, 87, 3, 2);
+store_lane_parser!(v128_store8_lane, 88, 0, 16);
+store_lane_parser!(v128_store16_lane, 89, 1, 8);
+store_lane_parser!(v128_store32_lane, 90, 2, 4);
+store_lane_parser!(v128_store64_lane, 91, 3, 2);
+load_zero_parser!(v128_load32_zero, 92, 2);
+load_zero_parser!(v128_load64_zero, 93, 3);
 
 binary_op_simd_parser!(f32x4_demote_f64x2_zero, 94);
 binary_op_simd_parser!(f64x2_promote_low_f32x4, 95);
@@ -500,6 +680,8 @@ unary_op_simd_parser!(i32x4_extmul_low, 188);
 unary_op_simd_parser!(i32x4_extmul_high, 189);
 unary_op_simd_parser!(u32x4_extmul_low, 190);
 unary_op_simd_parser!(u32x4_extmul_high, 191);
+binary_op_simd_parser!(i64x2_abs, 192);
+binary_op_simd_parser!(i64x2_neg, 193);
 
 pub(crate) mod i64x2_all_true {
     use super::prelude::*;
@@ -529,6 +711,22 @@ shift_instruction_parser!(i64x2_shl, 203);
 shift_instruction_parser!(i64x2_shr, 204);
 shift_instruction_parser!(u64x2_shr, 205);
 unary_op_simd_parser!(i64x2_add, 206);
+binary_op_simd_parser!(i64x2_extend_low_i32x4_s, 199);
+binary_op_simd_parser!(i64x2_extend_high_i32x4_s, 200);
+binary_op_simd_parser!(i64x2_extend_low_i32x4_u, 201);
+binary_op_simd_parser!(i64x2_extend_high_i32x4_u, 202);
+unary_op_simd_parser!(i64x2_sub, 209);
+unary_op_simd_parser!(i64x2_mul, 213);
+unary_op_simd_parser!(i64x2_eq, 214);
+unary_op_simd_parser!(i64x2_ne, 215);
+unary_op_simd_parser!(i64x2_lt, 216);
+unary_op_simd_parser!(i64x2_gt, 217);
+unary_op_simd_parser!(i64x2_le, 218);
+unary_op_simd_parser!(i64x2_ge, 219);
+unary_op_simd_parser!(i64x2_extmul_low_i32x4_s, 220);
+unary_op_simd_parser!(i64x2_extmul_high_i32x4_s, 221);
+unary_op_simd_parser!(i64x2_extmul_low_i32x4_u, 222);
+unary_op_simd_parser!(i64x2_extmul_high_i32x4_u, 223);
 
 binary_op_simd_parser!(f32x4_abs, 224);
 binary_op_simd_parser!(f32x4_neg, 225);

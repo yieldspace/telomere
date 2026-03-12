@@ -17,3 +17,4 @@ target/
 .idea/
 
 *.wat
+!crates/telomere-component/tests/component_model_upstream/precompiled/**/*.wat
