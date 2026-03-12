@@ -11,7 +11,7 @@ use crate::bindings::types::{
 };
 use crate::state::{ErrorEntry, InputStreamSource, OutputStreamKind, PollableEntry};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
@@ -160,6 +160,14 @@ impl WasiHost {
                     .min(bytes.len());
                 let end = start.saturating_add(read_len).min(bytes.len());
                 (bytes[start..end].to_vec(), end as u64)
+            }
+            InputStreamSource::HostStdin => {
+                let mut chunk = vec![0; read_len];
+                let bytes_read = std::io::stdin().read(&mut chunk).map_err(|error| {
+                    ComponentError::Trap(format!("failed to read stdin: {error}"))
+                })?;
+                chunk.truncate(bytes_read);
+                (chunk, position.saturating_add(bytes_read as u64))
             }
         };
 

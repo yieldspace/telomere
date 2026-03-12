@@ -7,6 +7,11 @@ use std::process::ExitCode;
 use telomere_component::{ComponentEngine, ComponentLinker};
 use telomere_component_wasi::{add_to_linker_sync, bindings, WasiState};
 
+enum StdinSource {
+    InheritHost,
+    Buffer(Vec<u8>),
+}
+
 pub async fn run(command: ComponentCommand) -> anyhow::Result<ExitCode> {
     let path = command.name.clone();
     let bytes = std::fs::read(&path)
@@ -50,15 +55,20 @@ async fn run_component_bytes(
 
 fn build_wasi_state(path: &Path, command: &ComponentCommand) -> anyhow::Result<WasiState> {
     let env = collect_env(command)?;
-    let stdin = read_piped_stdin().context("failed to read piped stdin")?;
+    let stdin = read_stdin_source().context("failed to prepare stdin")?;
     let guest_args = guest_args(path, &command.args);
 
     let mut builder = WasiState::builder()
         .args(guest_args)
         .env(env)
         .inherit_stdio();
-    if !stdin.is_empty() {
-        builder = builder.stdin(stdin);
+    match stdin {
+        StdinSource::InheritHost => {
+            builder = builder.inherit_stdin();
+        }
+        StdinSource::Buffer(stdin) => {
+            builder = builder.stdin(stdin);
+        }
     }
     for spec in &command.preopens {
         let (host, guest) = parse_preopen(spec)?;
@@ -133,14 +143,22 @@ fn windows_drive_prefix_len(spec: &str) -> usize {
     }
 }
 
-fn read_piped_stdin() -> anyhow::Result<Vec<u8>> {
+fn read_stdin_source() -> anyhow::Result<StdinSource> {
     let stdin = std::io::stdin();
-    if stdin.is_terminal() {
-        return Ok(Vec::new());
+    let mut handle = stdin.lock();
+    capture_stdin(&mut handle, stdin.is_terminal())
+}
+
+fn capture_stdin<R>(reader: &mut R, is_terminal: bool) -> anyhow::Result<StdinSource>
+where
+    R: Read,
+{
+    if is_terminal {
+        return Ok(StdinSource::InheritHost);
     }
     let mut bytes = Vec::new();
-    stdin.lock().read_to_end(&mut bytes)?;
-    Ok(bytes)
+    reader.read_to_end(&mut bytes)?;
+    Ok(StdinSource::Buffer(bytes))
 }
 
 #[cfg(test)]
@@ -194,6 +212,20 @@ mod tests {
             parse_preopen(r"C:\tmp:sandbox").expect("preopen should parse with guest path");
         assert_eq!(host, PathBuf::from(r"C:\tmp"));
         assert_eq!(guest, "sandbox");
+    }
+
+    #[test]
+    fn capture_stdin_preserves_live_terminal_input() {
+        let mut input = std::io::Cursor::new(b"prompt");
+        let source = capture_stdin(&mut input, true).expect("stdin capture should succeed");
+        assert!(matches!(source, StdinSource::InheritHost));
+    }
+
+    #[test]
+    fn capture_stdin_reads_piped_bytes_even_when_empty() {
+        let mut input = std::io::Cursor::new(Vec::<u8>::new());
+        let source = capture_stdin(&mut input, false).expect("stdin capture should succeed");
+        assert!(matches!(source, StdinSource::Buffer(bytes) if bytes.is_empty()));
     }
 
     #[tokio::test]

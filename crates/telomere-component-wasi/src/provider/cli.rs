@@ -73,12 +73,16 @@ impl WasiHost {
 
     fn input_stream_from_stdin(&self) -> WasiIoStreamsInputStream {
         let mut inner = self.state.inner.borrow_mut();
-        let stdin = inner.stdin.clone();
+        let source = if inner.inherit_stdin {
+            InputStreamSource::HostStdin
+        } else {
+            InputStreamSource::Buffer(inner.stdin.clone())
+        };
         let handle = next_handle(&mut inner.next_handle);
         inner.input_streams.insert(
             handle,
             InputStreamEntry {
-                source: InputStreamSource::Buffer(stdin),
+                source,
                 position: 0,
                 closed: false,
             },

@@ -6,10 +6,10 @@ use crate::bindings::imports::{
 };
 use crate::bindings::types::{
     WasiFilesystemTypesDescriptorBorrow, WasiFilesystemTypesDescriptorFlags,
-    WasiFilesystemTypesDescriptorType, WasiFilesystemTypesOpenFlags, WasiFilesystemTypesPathFlags,
-    WasiIoStreamsInputStreamBorrow, WasiIoStreamsOutputStreamBorrow,
+    WasiFilesystemTypesDescriptorType, WasiFilesystemTypesErrorCode, WasiFilesystemTypesOpenFlags,
+    WasiFilesystemTypesPathFlags, WasiIoStreamsInputStreamBorrow, WasiIoStreamsOutputStreamBorrow,
 };
-use crate::state::WasiState;
+use crate::state::{InputStreamSource, WasiState};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -86,6 +86,21 @@ fn provider_stdio_and_exit_are_recorded() {
 }
 
 #[test]
+fn provider_inherit_stdin_uses_live_host_source() {
+    let state = WasiState::builder().inherit_stdin().build();
+    let host = WasiHost::new(state);
+    let mut store = telomere::Store::new();
+
+    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &mut store).unwrap();
+    let inner = host.state.inner.borrow();
+    let entry = inner
+        .input_streams
+        .get(&stdin.handle())
+        .expect("stdin handle should be registered");
+    assert!(matches!(entry.source, InputStreamSource::HostStdin));
+}
+
+#[test]
 fn provider_preopen_open_and_read_work() {
     let dir = temp_sandbox();
     let file = dir.join("hello.txt");
@@ -146,6 +161,56 @@ fn provider_preopen_open_and_read_work() {
             .unwrap()
             .unwrap();
     assert_eq!(remainder, b"wasi");
+
+    fs::remove_dir_all(dir).expect("temp dir should be removed");
+}
+
+#[test]
+fn provider_rejects_reads_when_descriptor_lacks_read_rights() {
+    let dir = temp_sandbox();
+    let file = dir.join("hello.txt");
+    fs::write(&file, b"hello wasi").expect("fixture file should be written");
+
+    let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
+    let host = WasiHost::new(state);
+    let mut store = telomere::Store::new();
+
+    let preopens =
+        <WasiHost as filesystem_preopens::Host>::get_directories(&host, &mut store).unwrap();
+    let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
+    let mut no_read_flags = read_only_flags();
+    no_read_flags.read = false;
+    let descriptor = <WasiHost as filesystem_types::Host>::descriptor_open_at(
+        &host,
+        &mut store,
+        root,
+        empty_path_flags(),
+        "hello.txt".to_owned(),
+        empty_open_flags(),
+        no_read_flags,
+    )
+    .unwrap()
+    .unwrap();
+    let descriptor_borrow = WasiFilesystemTypesDescriptorBorrow::new(descriptor.handle());
+
+    let read = <WasiHost as filesystem_types::Host>::descriptor_read(
+        &host,
+        &mut store,
+        descriptor_borrow,
+        5,
+        0,
+    )
+    .unwrap();
+    assert_eq!(read, Err(WasiFilesystemTypesErrorCode::NotPermitted));
+
+    let stream = <WasiHost as filesystem_types::Host>::descriptor_read_via_stream(
+        &host,
+        &mut store,
+        descriptor_borrow,
+        0,
+    )
+    .unwrap();
+    assert_eq!(stream, Err(WasiFilesystemTypesErrorCode::NotPermitted));
 
     fs::remove_dir_all(dir).expect("temp dir should be removed");
 }

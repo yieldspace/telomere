@@ -181,6 +181,9 @@ impl WasiHost {
             Ok(entry) => entry,
             Err(error) => return Ok(Err(error)),
         };
+        if !entry.flags.read {
+            return Ok(Err(WasiFilesystemTypesErrorCode::NotPermitted));
+        }
         if entry.descriptor_type != WasiFilesystemTypesDescriptorType::RegularFile {
             return Ok(Err(WasiFilesystemTypesErrorCode::BadDescriptor));
         }
@@ -208,6 +211,9 @@ impl WasiHost {
             Ok(entry) => entry,
             Err(error) => return Ok(Err(error)),
         };
+        if !entry.flags.read {
+            return Ok(Err(WasiFilesystemTypesErrorCode::NotPermitted));
+        }
         if entry.descriptor_type != WasiFilesystemTypesDescriptorType::RegularFile {
             return Ok(Err(WasiFilesystemTypesErrorCode::BadDescriptor));
         }
@@ -225,6 +231,9 @@ impl WasiHost {
             Ok(entry) => entry,
             Err(error) => return Ok(Err(error)),
         };
+        if !entry.flags.read {
+            return Ok(Err(WasiFilesystemTypesErrorCode::NotPermitted));
+        }
         if entry.descriptor_type != WasiFilesystemTypesDescriptorType::Directory {
             return Ok(Err(WasiFilesystemTypesErrorCode::NotDirectory));
         }

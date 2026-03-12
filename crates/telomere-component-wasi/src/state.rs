@@ -30,6 +30,7 @@ pub(crate) struct DescriptorEntry {
 pub(crate) enum InputStreamSource {
     Buffer(Vec<u8>),
     File(PathBuf),
+    HostStdin,
 }
 
 pub(crate) struct InputStreamEntry {
@@ -70,6 +71,7 @@ pub(crate) struct WasiStateInner {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub stdin: Vec<u8>,
+    pub inherit_stdin: bool,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub inherit_stdio: bool,
@@ -92,6 +94,7 @@ pub struct WasiStateBuilder {
     args: Vec<String>,
     env: HashMap<String, String>,
     stdin: Vec<u8>,
+    inherit_stdin: bool,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     inherit_stdio: bool,
@@ -132,6 +135,7 @@ impl WasiStateBuilder {
             args: Vec::new(),
             env: HashMap::new(),
             stdin: Vec::new(),
+            inherit_stdin: false,
             stdout: Vec::new(),
             stderr: Vec::new(),
             inherit_stdio: false,
@@ -166,6 +170,11 @@ impl WasiStateBuilder {
 
     pub fn inherit_stdio(mut self) -> Self {
         self.inherit_stdio = true;
+        self
+    }
+
+    pub fn inherit_stdin(mut self) -> Self {
+        self.inherit_stdin = true;
         self
     }
 
@@ -218,6 +227,7 @@ impl WasiStateBuilder {
             args: self.args,
             env: self.env,
             stdin: self.stdin,
+            inherit_stdin: self.inherit_stdin,
             stdout: self.stdout,
             stderr: self.stderr,
             inherit_stdio: self.inherit_stdio,
