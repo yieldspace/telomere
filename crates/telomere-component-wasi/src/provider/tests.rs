@@ -87,6 +87,27 @@ fn provider_stdio_and_exit_are_recorded() {
 }
 
 #[test]
+fn provider_write_zeroes_honors_requested_length() {
+    let state = WasiState::builder().build();
+    let host = WasiHost::new(state.clone());
+    let mut store = telomere::Store::new();
+
+    let stdout = <WasiHost as cli_stdout::Host>::get_stdout(&host, &mut store).unwrap();
+    let stdout_borrow = WasiIoStreamsOutputStreamBorrow::new(stdout.handle());
+
+    <WasiHost as io_streams::Host>::output_stream_write_zeroes(
+        &host,
+        &mut store,
+        stdout_borrow,
+        (1 << 20) as u64 + 33,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(state.stdout().len(), (1 << 20) + 33);
+}
+
+#[test]
 fn provider_inherit_stdin_uses_live_host_source() {
     let state = WasiState::builder().inherit_stdin().build();
     let host = WasiHost::new(state);

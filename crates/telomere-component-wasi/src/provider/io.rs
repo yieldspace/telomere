@@ -11,7 +11,7 @@ use crate::bindings::types::{
 };
 use crate::state::{ErrorEntry, InputStreamSource, OutputStreamKind, PollableEntry};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Write};
 use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
@@ -49,6 +49,70 @@ fn poll_fd(_fd: i32, _timeout_ms: i32) -> Result<bool, ComponentError> {
     Ok(true)
 }
 
+#[cfg(unix)]
+fn read_fd(fd: libc::c_int, len: usize, blocking: bool) -> Result<Vec<u8>, std::io::Error> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+
+    if !blocking
+        && unsafe {
+            let mut descriptor = libc::pollfd {
+                fd,
+                events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+                revents: 0,
+            };
+            libc::poll(&mut descriptor, 1, 0)
+        } == 0
+    {
+        return Ok(Vec::new());
+    }
+
+    if blocking {
+        loop {
+            let mut descriptor = libc::pollfd {
+                fd,
+                events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+                revents: 0,
+            };
+            let ready = unsafe { libc::poll(&mut descriptor, 1, -1) };
+            if ready >= 0 {
+                break;
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+
+    let mut chunk = vec![0; len];
+    loop {
+        let bytes_read = unsafe { libc::read(fd, chunk.as_mut_ptr().cast::<libc::c_void>(), len) };
+        if bytes_read >= 0 {
+            chunk.truncate(bytes_read as usize);
+            return Ok(chunk);
+        }
+
+        let error = std::io::Error::last_os_error();
+        match error.kind() {
+            ErrorKind::Interrupted => continue,
+            ErrorKind::WouldBlock if !blocking => return Ok(Vec::new()),
+            _ => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn read_fd(_fd: i32, len: usize, _blocking: bool) -> Result<Vec<u8>, std::io::Error> {
+    let mut chunk = vec![0; len];
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    let bytes_read = std::io::Read::read(&mut handle, &mut chunk)?;
+    chunk.truncate(bytes_read);
+    Ok(chunk)
+}
+
 pub(super) fn add_to_linker_sync(linker: &mut ComponentLinker, host: Rc<WasiHost>) {
     io_error::add_to_linker(linker, Rc::clone(&host));
     io_poll::add_to_linker(linker, Rc::clone(&host));
@@ -62,6 +126,14 @@ pub(super) fn add_to_linker_async(linker: &mut ComponentLinker, host: Rc<WasiHos
 }
 
 impl WasiHost {
+    fn requested_len(len: u64, context: &str) -> Result<usize, ComponentError> {
+        usize::try_from(len).map_err(|_| {
+            ComponentError::Trap(format!(
+                "{context} length {len} exceeds host addressable memory"
+            ))
+        })
+    }
+
     pub(super) fn allocate_pollable(&self, pollable: PollableEntry) -> WasiIoPollPollable {
         let mut inner = self.state.inner.borrow_mut();
         let handle = next_handle(&mut inner.next_handle);
@@ -201,6 +273,15 @@ impl WasiHost {
         stream: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError> {
+        self.input_stream_read_impl(stream, len, false)
+    }
+
+    fn input_stream_read_impl(
+        &self,
+        stream: WasiIoStreamsInputStreamBorrow,
+        len: u64,
+        blocking: bool,
+    ) -> Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError> {
         let (source, position, closed) = {
             let inner = self.state.inner.borrow();
             let entry = inner.input_streams.get(&stream.handle()).ok_or_else(|| {
@@ -213,7 +294,7 @@ impl WasiHost {
             return Ok(Err(WasiIoStreamsStreamError::Closed));
         }
 
-        let read_len = usize::try_from(len).unwrap_or(usize::MAX).min(1 << 20);
+        let read_len = Self::requested_len(len, "input-stream.read")?;
         let (chunk, next_position) = match source {
             InputStreamSource::Buffer(bytes) => {
                 let start = usize::try_from(position)
@@ -239,19 +320,16 @@ impl WasiHost {
                 (bytes[start..end].to_vec(), end as u64)
             }
             InputStreamSource::HostStdin => {
-                let mut chunk = vec![0; read_len];
-                let stdin = std::io::stdin();
-                let mut handle = stdin.lock();
-                let bytes_read = match handle.read(&mut chunk) {
-                    Ok(bytes_read) => bytes_read,
+                let chunk = match read_fd(HOST_STDIN_FD, read_len, blocking) {
+                    Ok(bytes) => bytes,
                     Err(error) => {
                         return Ok(Err(
                             self.stream_error(format!("failed to read stdin: {error}"), None)
                         ));
                     }
                 };
-                chunk.truncate(bytes_read);
-                (chunk, position.saturating_add(bytes_read as u64))
+                let next_position = position.saturating_add(chunk.len() as u64);
+                (chunk, next_position)
             }
         };
 
@@ -273,7 +351,24 @@ impl WasiHost {
         stream: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> Result<Result<u64, WasiIoStreamsStreamError>, ComponentError> {
-        let read = self.input_stream_read(stream, len)?;
+        let read = self.input_stream_read_impl(stream, len, false)?;
+        Ok(read.map(|bytes| bytes.len() as u64))
+    }
+
+    fn input_stream_blocking_read(
+        &self,
+        stream: WasiIoStreamsInputStreamBorrow,
+        len: u64,
+    ) -> Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError> {
+        self.input_stream_read_impl(stream, len, true)
+    }
+
+    fn input_stream_blocking_skip(
+        &self,
+        stream: WasiIoStreamsInputStreamBorrow,
+        len: u64,
+    ) -> Result<Result<u64, WasiIoStreamsStreamError>, ComponentError> {
+        let read = self.input_stream_read_impl(stream, len, true)?;
         Ok(read.map(|bytes| bytes.len() as u64))
     }
 
@@ -491,7 +586,7 @@ impl io_streams::Host for WasiHost {
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError> {
-        self.input_stream_read(self_, len)
+        self.input_stream_blocking_read(self_, len)
     }
 
     fn input_stream_skip(
@@ -509,7 +604,7 @@ impl io_streams::Host for WasiHost {
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> Result<Result<u64, WasiIoStreamsStreamError>, ComponentError> {
-        self.input_stream_skip(self_, len)
+        self.input_stream_blocking_skip(self_, len)
     }
 
     fn input_stream_subscribe(
@@ -578,7 +673,7 @@ impl io_streams::Host for WasiHost {
         self_: WasiIoStreamsOutputStreamBorrow,
         len: u64,
     ) -> Result<Result<(), WasiIoStreamsStreamError>, ComponentError> {
-        let len = usize::try_from(len).unwrap_or(usize::MAX).min(1 << 20);
+        let len = Self::requested_len(len, "output-stream.write-zeroes")?;
         self.output_stream_write_bytes(self_, &vec![0; len])
     }
 
@@ -588,7 +683,7 @@ impl io_streams::Host for WasiHost {
         self_: WasiIoStreamsOutputStreamBorrow,
         len: u64,
     ) -> Result<Result<(), WasiIoStreamsStreamError>, ComponentError> {
-        let len = usize::try_from(len).unwrap_or(usize::MAX).min(1 << 20);
+        let len = Self::requested_len(len, "output-stream.write-zeroes")?;
         self.output_stream_write_bytes(self_, &vec![0; len])
     }
 
@@ -631,7 +726,7 @@ impl io_streams::HostAsync for WasiHost {
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError>>
     {
-        Box::pin(async move { self.input_stream_read(self_, len) })
+        Box::pin(async move { self.input_stream_blocking_read(self_, len) })
     }
 
     fn input_stream_skip<'a>(
@@ -649,7 +744,7 @@ impl io_streams::HostAsync for WasiHost {
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<u64, WasiIoStreamsStreamError>, ComponentError>> {
-        Box::pin(async move { self.input_stream_skip(self_, len) })
+        Box::pin(async move { self.input_stream_blocking_skip(self_, len) })
     }
 
     fn input_stream_subscribe<'a>(
@@ -723,7 +818,7 @@ impl io_streams::HostAsync for WasiHost {
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<(), WasiIoStreamsStreamError>, ComponentError>> {
         Box::pin(async move {
-            let len = usize::try_from(len).unwrap_or(usize::MAX).min(1 << 20);
+            let len = Self::requested_len(len, "output-stream.write-zeroes")?;
             self.output_stream_write_bytes(self_, &vec![0; len])
         })
     }
@@ -735,7 +830,7 @@ impl io_streams::HostAsync for WasiHost {
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<(), WasiIoStreamsStreamError>, ComponentError>> {
         Box::pin(async move {
-            let len = usize::try_from(len).unwrap_or(usize::MAX).min(1 << 20);
+            let len = Self::requested_len(len, "output-stream.write-zeroes")?;
             self.output_stream_write_bytes(self_, &vec![0; len])
         })
     }
@@ -763,7 +858,7 @@ impl io_streams::HostAsync for WasiHost {
 
 #[cfg(test)]
 mod tests {
-    use super::poll_fd;
+    use super::{poll_fd, read_fd};
 
     #[cfg(unix)]
     #[test]
@@ -792,6 +887,25 @@ mod tests {
         unsafe {
             libc::close(read_fd);
             libc::close(write_fd);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_fd_returns_prompt_empty_result_when_pipe_not_ready() {
+        let mut fds = [0; 2];
+        let create = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(create, 0, "pipe should be created");
+
+        let read_fd_end = fds[0];
+        let write_fd_end = fds[1];
+
+        let chunk = read_fd(read_fd_end, 8, false).expect("non-blocking read should succeed");
+        assert!(chunk.is_empty(), "empty pipe should yield an empty read");
+
+        unsafe {
+            libc::close(read_fd_end);
+            libc::close(write_fd_end);
         }
     }
 }
