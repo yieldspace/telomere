@@ -41,3 +41,33 @@
 ;;    (export "a" (type (sub resource)))
 ;;    (export "[constructor]a" (func (type 0)))
 ;;)
+
+(component
+    (component
+        (import "f" (func $f))
+        (export "f2" (func $f) (func))
+    )
+)
+
+(component
+    (component
+        (import "x" (func $f))
+        (export $g "g" (func $f))
+        (export $g2 "g2" (func $g))
+    )
+)
+
+(assert_invalid
+    (component
+        (import "f" (instance $i))
+        (export "f2" (instance $i) (instance (export "f" (func))))
+    )
+    "ascribed type of export is not compatible"
+)
+
+(assert_invalid
+    (component
+        (type (component (export "integrity=<sha256-a>" (func))))
+    )
+    "not a valid export name"
+)
