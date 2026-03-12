@@ -11,7 +11,12 @@ publish.workspace = true
 clap = { version = "4.5.37", features = ["derive"] }
 anyhow = "1.0.98"
 telomere.workspace = true
+telomere-component.workspace = true
+telomere-component-wasi = { path = "crates/telomere-component-wasi" }
 tokio.workspace = true
+
+[dev-dependencies]
+wat = "1.243.0"
 
 [workspace]
 resolver = "2"
@@ -19,6 +24,7 @@ members = [
     "crates/telomere",
     "crates/telomere-component",
     "crates/telomere-component-bindgen",
+    "crates/telomere-component-wasi",
     "crates/telomere-macros",
     "crates/union-find"
 ]
@@ -35,6 +41,7 @@ keywords = ["webassembly", "runtime"]
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }
 telomere-component = { path = "crates/telomere-component" }
+telomere-component-bindgen = { path = "crates/telomere-component-bindgen" }
 union-find = {path = "crates/union-find"}
 telomere-macros = { path = "crates/telomere-macros" }
 tokio = { version = "1.0", features = ["full"] }

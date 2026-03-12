@@ -924,7 +924,10 @@ dependencies = [
  "anyhow",
  "clap",
  "telomere",
+ "telomere-component",
+ "telomere-component-wasi",
  "tokio",
+ "wat",
 ]
 
 [[package]]
@@ -963,6 +966,18 @@ dependencies = [
  "tokio",
  "wat",
  "wit-parser",
+]
+
+[[package]]
+name = "telomere-component-wasi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "telomere",
+ "telomere-component",
+ "telomere-component-bindgen",
+ "tokio",
+ "wat",
 ]
 
 [[package]]

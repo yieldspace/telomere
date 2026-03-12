@@ -16,7 +16,7 @@ use std::pin::Pin;
 
 pub use engine::ComponentEngine;
 pub use error::ComponentError;
-pub use func::{ComponentFunc, LiftComponent, LowerComponent, TypedComponentFunc};
+pub use func::{Borrow, ComponentFunc, LiftComponent, LowerComponent, Own, TypedComponentFunc};
 #[doc(hidden)]
 pub use func::{ComponentParams, ComponentReturn};
 pub use instance::{ComponentExports, ComponentInstance};

@@ -330,10 +330,8 @@ fn validate_required_options(
         .is_some_and(|result| type_needs_memory(result, ctx));
     let params_indirect = direct_params.len() > MAX_FLAT_PARAMS;
     let results_indirect = direct_results.len() > MAX_FLAT_RESULTS;
-    let needs_memory = match mode {
-        CanonMode::Lift => results_need_memory || results_indirect,
-        CanonMode::Lower => params_need_memory || params_indirect,
-    };
+    let needs_memory =
+        params_need_memory || params_indirect || results_need_memory || results_indirect;
     if needs_memory && options.memory.is_none() {
         return Err(ComponentParseError::TypeMismatch(
             "canonical option `memory` is required".to_owned(),
@@ -341,7 +339,7 @@ fn validate_required_options(
     }
     let needs_realloc = match mode {
         CanonMode::Lift => params_need_memory || params_indirect,
-        CanonMode::Lower => results_need_memory || results_indirect,
+        CanonMode::Lower => results_need_memory,
     };
     if needs_realloc && options.realloc.is_none() {
         return Err(ComponentParseError::TypeMismatch(

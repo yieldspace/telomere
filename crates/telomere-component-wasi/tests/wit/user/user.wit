@@ -1,0 +1,5 @@
+package ex:user;
+
+world app {
+    include wasi:cli/imports@0.2.6;
+}

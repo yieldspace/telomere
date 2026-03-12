@@ -286,6 +286,132 @@ async fn component_runtime_canon_lower_writes_indirect_results_into_caller_area(
 }
 
 #[tokio::test]
+async fn component_runtime_canon_lower_reads_packed_u8_lists_from_guest_memory() {
+    let bytes = compile_component(
+        r#"
+(component
+  (import "host" (func $host (param "bytes" (list u8))))
+  (core module $guest
+    (memory (export "memory") 1)
+    (data (i32.const 8) "Hello, world!\n")
+  )
+  (core instance $guest (instantiate $guest))
+  (core func $host-lower
+    (canon lower (func $host) (memory $guest "memory"))
+  )
+  (core module $caller
+    (import "" "host" (func $host (param i32 i32)))
+    (func (export "call-host")
+      (call $host (i32.const 8) (i32.const 14))
+    )
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "host" (func $host-lower))
+      ))
+    )
+  )
+  (func (export "call-host")
+    (canon lift (core func $caller "call-host") (memory $guest "memory"))
+  )
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut linker = ComponentLinker::new();
+    linker.register_import("host", |_store, args| {
+        assert_eq!(
+            args,
+            &[ComponentValue::List(
+                b"Hello, world!\n"
+                    .iter()
+                    .copied()
+                    .map(ComponentValue::U8)
+                    .collect()
+            )]
+        );
+        Ok(Vec::new())
+    });
+
+    let mut store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &mut store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    instance
+        .call(&mut store, "call-host", &[])
+        .await
+        .expect("call should succeed");
+}
+
+#[tokio::test]
+async fn component_runtime_fixup_populates_shim_table_for_host_lowerings() {
+    let bytes = compile_component(
+        r#"
+(component
+  (import "host" (func $host (param "value" u32) (result u32)))
+  (core module $shim
+    (type $thunk (func (param i32) (result i32)))
+    (table (export "imports") 1 1 funcref)
+    (func (export "wrapper") (param i32) (result i32)
+      (local.get 0)
+      (i32.const 0)
+      (call_indirect (type $thunk))
+    )
+  )
+  (core instance $shim (instantiate $shim))
+  (core func $host-lower
+    (canon lower (func $host))
+  )
+  (core instance $fixup-args
+    (export "imports" (table $shim "imports"))
+    (export "host" (func $host-lower))
+  )
+  (core module $fixup
+    (type $thunk (func (param i32) (result i32)))
+    (import "" "host" (func $host (type $thunk)))
+    (import "" "imports" (table 1 1 funcref))
+    (elem (i32.const 0) func $host)
+  )
+  (core instance $fixup
+    (instantiate $fixup
+      (with "" (instance $fixup-args))
+    )
+  )
+  (func (export "call") (param "value" u32) (result u32)
+    (canon lift (core func $shim "wrapper"))
+  )
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let mut linker = ComponentLinker::new();
+    linker.register_import("host", |_store, args| {
+        assert_eq!(args, &[ComponentValue::U32(7)]);
+        Ok(vec![ComponentValue::U32(42)])
+    });
+
+    let mut store = telomere::Store::new();
+    let instance = engine
+        .instantiate(&program, &mut store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let result = instance
+        .call(&mut store, "call", &[ComponentValue::U32(7)])
+        .await
+        .expect("call should succeed");
+
+    assert_eq!(result, vec![ComponentValue::U32(42)]);
+}
+
+#[tokio::test]
 async fn component_runtime_calls_post_return_after_lift() {
     let bytes = compile_component(
         r#"

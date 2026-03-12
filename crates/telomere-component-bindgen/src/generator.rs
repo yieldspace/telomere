@@ -6,17 +6,43 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 use syn::parse::{Parse, ParseStream};
-use syn::{braced, parse_quote, Error, LitStr, Result, Token};
+use syn::{braced, bracketed, parse_quote, Error, LitStr, Path, Result, Token};
 use wit_parser::{
-    Function, FunctionKind, InterfaceId, Resolve, Type, TypeDefKind, TypeId, TypeOwner, WorldId,
-    WorldItem,
+    Function, FunctionKind, Handle, InterfaceId, PackageId, Resolve, Type, TypeDefKind, TypeId,
+    TypeOwner, WorldId, WorldItem,
 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HostMode {
+    Sync,
+    Async,
+    Both,
+}
+
+impl HostMode {
+    fn includes_sync(self) -> bool {
+        matches!(self, Self::Sync | Self::Both)
+    }
+
+    fn includes_async(self) -> bool {
+        matches!(self, Self::Async | Self::Both)
+    }
+}
+
+#[derive(Clone)]
+struct AdoptMapping {
+    prefix: LitStr,
+    path: Path,
+}
 
 pub struct BindgenInput {
     inline: Option<LitStr>,
     path: Option<LitStr>,
+    deps: Vec<LitStr>,
     world: LitStr,
     module: Option<LitStr>,
+    host_mode: HostMode,
+    adopt: Vec<AdoptMapping>,
 }
 
 impl Parse for BindgenInput {
@@ -26,18 +52,79 @@ impl Parse for BindgenInput {
 
         let mut inline = None;
         let mut path = None;
+        let mut deps = Vec::new();
         let mut world = None;
         let mut module = None;
+        let mut host_mode = None;
+        let mut adopt = Vec::new();
 
         while !content.is_empty() {
             let key = content.parse::<Ident>()?;
             content.parse::<Token![:]>()?;
-            let value = content.parse::<LitStr>()?;
             match key.to_string().as_str() {
-                "inline" => set_once(&mut inline, value, "inline")?,
-                "path" => set_once(&mut path, value, "path")?,
-                "world" => set_once(&mut world, value, "world")?,
-                "module" => set_once(&mut module, value, "module")?,
+                "inline" => {
+                    let value = content.parse::<LitStr>()?;
+                    set_once(&mut inline, value, "inline")?;
+                }
+                "path" => {
+                    let value = content.parse::<LitStr>()?;
+                    set_once(&mut path, value, "path")?;
+                }
+                "deps" => {
+                    let deps_content;
+                    bracketed!(deps_content in content);
+                    while !deps_content.is_empty() {
+                        deps.push(deps_content.parse::<LitStr>()?);
+                        if deps_content.is_empty() {
+                            break;
+                        }
+                        deps_content.parse::<Token![,]>()?;
+                    }
+                }
+                "world" => {
+                    let value = content.parse::<LitStr>()?;
+                    set_once(&mut world, value, "world")?;
+                }
+                "module" => {
+                    let value = content.parse::<LitStr>()?;
+                    set_once(&mut module, value, "module")?;
+                }
+                "host_mode" => {
+                    let value = content.parse::<LitStr>()?;
+                    let parsed = match value.value().as_str() {
+                        "sync" => HostMode::Sync,
+                        "async" => HostMode::Async,
+                        "both" => HostMode::Both,
+                        other => {
+                            return Err(Error::new(
+                                value.span(),
+                                format!(
+                                    "unsupported `host_mode` value `{other}`; expected `sync`, `async`, or `both`"
+                                ),
+                            ))
+                        }
+                    };
+                    if host_mode.replace(parsed).is_some() {
+                        return Err(Error::new(
+                            value.span(),
+                            "`host_mode` specified more than once",
+                        ));
+                    }
+                }
+                "adopt" => {
+                    let adopt_content;
+                    braced!(adopt_content in content);
+                    while !adopt_content.is_empty() {
+                        let prefix = adopt_content.parse::<LitStr>()?;
+                        adopt_content.parse::<Token![=>]>()?;
+                        let path = adopt_content.parse::<Path>()?;
+                        adopt.push(AdoptMapping { prefix, path });
+                        if adopt_content.is_empty() {
+                            break;
+                        }
+                        adopt_content.parse::<Token![,]>()?;
+                    }
+                }
                 other => {
                     return Err(Error::new(
                         key.span(),
@@ -63,8 +150,11 @@ impl Parse for BindgenInput {
         Ok(Self {
             inline,
             path,
+            deps,
             world,
             module,
+            host_mode: host_mode.unwrap_or(HostMode::Sync),
+            adopt,
         })
     }
 }
@@ -90,7 +180,13 @@ pub fn expand(input: BindgenInput) -> Result<TokenStream2> {
     let (mut resolve, world_id) = load_world(&input)?;
     resolve.generate_nominal_type_ids(world_id);
 
-    let generator = Generator::new(resolve, world_id, runtime_path)?;
+    let generator = Generator::new(
+        resolve,
+        world_id,
+        runtime_path,
+        input.host_mode,
+        input.adopt,
+    )?;
     let body = generator.generate()?;
     Ok(quote! {
         pub mod #module_ident {
@@ -101,23 +197,34 @@ pub fn expand(input: BindgenInput) -> Result<TokenStream2> {
 
 fn load_world(input: &BindgenInput) -> Result<(Resolve, WorldId)> {
     let mut resolve = Resolve::default();
-    let package = if let Some(inline) = &input.inline {
-        resolve
-            .push_source("<inline>.wit", &inline.value())
-            .map_err(|error| Error::new(inline.span(), error.to_string()))?
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .map_err(|error| Error::new(Span::call_site(), error.to_string()))?;
+    let mut packages = Vec::new();
+    for dep in &input.deps {
+        let absolute = manifest_dir.join(dep.value());
+        let (package, _) = resolve
+            .push_path(&absolute)
+            .map_err(|error| Error::new(dep.span(), error.to_string()))?;
+        packages.push(package);
+    }
+    if let Some(inline) = &input.inline {
+        packages.push(
+            resolve
+                .push_source("<inline>.wit", &inline.value())
+                .map_err(|error| Error::new(inline.span(), error.to_string()))?,
+        );
     } else {
         let path = input.path.as_ref().unwrap();
-        let manifest_dir = env::var("CARGO_MANIFEST_DIR")
-            .map_err(|error| Error::new(path.span(), error.to_string()))?;
-        let absolute = PathBuf::from(manifest_dir).join(path.value());
+        let absolute = manifest_dir.join(path.value());
         let (package, _) = resolve
             .push_path(&absolute)
             .map_err(|error| Error::new(path.span(), error.to_string()))?;
-        package
-    };
+        packages.push(package);
+    }
 
     let world_id = resolve
-        .select_world(&[package], Some(&input.world.value()))
+        .select_world(&packages, Some(&input.world.value()))
         .map_err(|error| Error::new(input.world.span(), error.to_string()))?;
     Ok((resolve, world_id))
 }
@@ -162,12 +269,15 @@ struct InterfaceNamespace {
     module_ident: Ident,
     location: NamespaceLocation,
     functions: Vec<FunctionBinding>,
+    adopt_path: Option<Path>,
 }
 
 struct Generator {
     resolve: Resolve,
     world_id: WorldId,
     runtime_path: syn::Path,
+    host_mode: HostMode,
+    adopt_mappings: Vec<AdoptMapping>,
     direct_imports: Vec<FunctionBinding>,
     direct_exports: Vec<FunctionBinding>,
     import_interfaces: Vec<InterfaceNamespace>,
@@ -176,11 +286,19 @@ struct Generator {
     named_type_ids: Vec<TypeId>,
     type_unique_idents: HashMap<TypeId, Ident>,
     type_alias_idents: HashMap<TypeId, Ident>,
+    resource_marker_idents: HashMap<TypeId, Ident>,
+    resource_borrow_alias_idents: HashMap<TypeId, Ident>,
     type_locations: HashMap<NamespaceLocation, Vec<TypeId>>,
 }
 
 impl Generator {
-    fn new(resolve: Resolve, world_id: WorldId, runtime_path: syn::Path) -> Result<Self> {
+    fn new(
+        resolve: Resolve,
+        world_id: WorldId,
+        runtime_path: syn::Path,
+        host_mode: HostMode,
+        adopt_mappings: Vec<AdoptMapping>,
+    ) -> Result<Self> {
         let import_items = {
             let world = &resolve.worlds[world_id];
             world
@@ -202,6 +320,8 @@ impl Generator {
             resolve,
             world_id,
             runtime_path,
+            host_mode,
+            adopt_mappings,
             direct_imports: Vec::new(),
             direct_exports: Vec::new(),
             import_interfaces: Vec::new(),
@@ -210,6 +330,8 @@ impl Generator {
             named_type_ids: Vec::new(),
             type_unique_idents: HashMap::new(),
             type_alias_idents: HashMap::new(),
+            resource_marker_idents: HashMap::new(),
+            resource_borrow_alias_idents: HashMap::new(),
             type_locations: HashMap::new(),
         };
 
@@ -224,13 +346,44 @@ impl Generator {
             .used_type_ids
             .iter()
             .copied()
-            .filter(|id| generator.resolve.types[*id].name.is_some())
+            .filter(|id| {
+                generator.resolve.types[*id].name.is_some() && !generator.is_adopted_type(*id)
+            })
             .collect::<Vec<_>>();
         named.sort_by_key(|id| id.index());
         generator.named_type_ids = named;
         generator.assign_type_names();
 
         Ok(generator)
+    }
+
+    fn adopt_path_for(&self, wit_name: &str) -> Option<Path> {
+        self.adopt_mappings
+            .iter()
+            .find(|mapping| wit_name.starts_with(&mapping.prefix.value()))
+            .map(|mapping| mapping.path.clone())
+    }
+
+    fn is_adopted_interface(&self, id: InterfaceId) -> bool {
+        self.resolve.interfaces[id]
+            .package
+            .map(|package| {
+                let package = &self.resolve.packages[package];
+                let interface_name = self.resolve.interfaces[id]
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("interface{}", id.index()));
+                let wit_name = package.name.interface_id(&interface_name);
+                self.adopt_path_for(&wit_name).is_some()
+            })
+            .unwrap_or(false)
+    }
+
+    fn is_adopted_type(&self, id: TypeId) -> bool {
+        match self.resolve.types[id].owner {
+            TypeOwner::Interface(interface_id) => self.is_adopted_interface(interface_id),
+            _ => false,
+        }
     }
 
     fn collect_world_item(
@@ -245,7 +398,7 @@ impl Generator {
                 self.collect_function_types(&function)?;
                 let binding = FunctionBinding {
                     wit_name: wit_name.clone(),
-                    method_ident: snake_ident(&function.name),
+                    method_ident: function_method_ident(&function, &self.resolve),
                     function,
                 };
                 if is_import {
@@ -280,21 +433,24 @@ impl Generator {
         is_import: bool,
     ) -> Result<InterfaceNamespace> {
         let interface = self.resolve.interfaces[id].clone();
+        let adopt_path = self.adopt_path_for(wit_name);
         let location = if is_import {
             NamespaceLocation::Import(wit_name.to_owned())
         } else {
             NamespaceLocation::Export(wit_name.to_owned())
         };
-        let mut type_ids = interface.types.values().copied().collect::<Vec<_>>();
-        type_ids.sort_by_key(|type_id| type_id.index());
-        for type_id in &type_ids {
-            self.collect_type_use(Type::Id(*type_id))?;
-        }
-        for type_id in &type_ids {
-            self.type_locations
-                .entry(location.clone())
-                .or_default()
-                .push(*type_id);
+        if adopt_path.is_none() {
+            let mut type_ids = interface.types.values().copied().collect::<Vec<_>>();
+            type_ids.sort_by_key(|type_id| type_id.index());
+            for type_id in &type_ids {
+                self.collect_type_use(Type::Id(*type_id))?;
+            }
+            for type_id in &type_ids {
+                self.type_locations
+                    .entry(location.clone())
+                    .or_default()
+                    .push(*type_id);
+            }
         }
 
         let mut functions = Vec::new();
@@ -303,7 +459,7 @@ impl Generator {
             self.collect_function_types(&function)?;
             functions.push(FunctionBinding {
                 wit_name: name.clone(),
-                method_ident: snake_ident(&name),
+                method_ident: function_method_ident(&function, &self.resolve),
                 function,
             });
         }
@@ -313,39 +469,34 @@ impl Generator {
             module_ident: snake_ident(wit_name),
             location,
             functions,
+            adopt_path,
         })
     }
 
     fn assign_type_names(&mut self) {
-        let mut used = HashSet::new();
-        for type_id in &self.named_type_ids {
-            let typedef = &self.resolve.types[*type_id];
+        let mut named = self
+            .used_type_ids
+            .iter()
+            .copied()
+            .filter(|id| self.resolve.types[*id].name.is_some())
+            .collect::<Vec<_>>();
+        named.sort_by_key(|id| id.index());
+        for type_id in named {
+            let typedef = &self.resolve.types[type_id];
             let local = camel_ident(typedef.name.as_deref().unwrap());
-            self.type_alias_idents.insert(*type_id, local.clone());
-
-            let prefix = match typedef.owner {
-                TypeOwner::World(id) if id == self.world_id => "world".to_owned(),
-                TypeOwner::Interface(id) => self
-                    .resolve
-                    .interfaces
-                    .get(id)
-                    .and_then(|interface| interface.name.clone())
-                    .unwrap_or_else(|| format!("interface{}", id.index())),
-                _ => "type".to_owned(),
-            };
-            let mut candidate =
-                format!("{prefix} {}", typedef.name.as_deref().unwrap()).to_upper_camel_case();
-            if candidate.is_empty() {
-                candidate = format!("GeneratedType{}", type_id.index());
-            }
-            let mut unique = candidate.clone();
-            let mut suffix = 1u32;
-            while !used.insert(unique.clone()) {
-                suffix += 1;
-                unique = format!("{candidate}{suffix}");
-            }
+            self.type_alias_idents.insert(type_id, local.clone());
+            let unique = stable_type_ident(&self.resolve, self.world_id, type_id, false);
             self.type_unique_idents
-                .insert(*type_id, Ident::new(&unique, Span::call_site()));
+                .insert(type_id, Ident::new(&unique, Span::call_site()));
+            if matches!(typedef.kind, TypeDefKind::Resource) {
+                let marker = stable_type_ident(&self.resolve, self.world_id, type_id, true);
+                self.resource_marker_idents
+                    .insert(type_id, Ident::new(&marker, Span::call_site()));
+                let borrow_alias =
+                    format!("{}Borrow", self.type_unique_idents.get(&type_id).unwrap());
+                self.resource_borrow_alias_idents
+                    .insert(type_id, Ident::new(&borrow_alias, Span::call_site()));
+            }
         }
     }
 
@@ -359,7 +510,13 @@ impl Generator {
                 ),
             ));
         }
-        if !matches!(function.kind, FunctionKind::Freestanding) {
+        if !matches!(
+            function.kind,
+            FunctionKind::Freestanding
+                | FunctionKind::Method(_)
+                | FunctionKind::Static(_)
+                | FunctionKind::Constructor(_)
+        ) {
             return Err(Error::new(
                 Span::call_site(),
                 format!(
@@ -421,7 +578,11 @@ impl Generator {
                             self.collect_type_use(err)?;
                         }
                     }
-                    TypeDefKind::Handle(_) => {}
+                    TypeDefKind::Handle(handle) => match handle {
+                        Handle::Own(resource) | Handle::Borrow(resource) => {
+                            self.collect_type_use(Type::Id(resource))?;
+                        }
+                    },
                     TypeDefKind::Map(_, _) | TypeDefKind::Future(_) | TypeDefKind::Stream(_) => {}
                     TypeDefKind::Unknown => {}
                 }
@@ -517,6 +678,12 @@ impl Generator {
                     T: #runtime::ComponentReturn,
                 {
                     <T as #runtime::ComponentReturn>::from_component_results(results)
+                }
+
+                pub fn missing_host(name: &str) -> #runtime::ComponentError {
+                    #runtime::ComponentError::Trap(format!(
+                        "host function `{name}` is not implemented"
+                    ))
                 }
             }
         }
@@ -1088,14 +1255,8 @@ impl Generator {
                 Ok(quote!(pub type #ident = Option<#ty>;))
             }
             TypeDefKind::Result(result) => {
-                let (Some(ok), Some(err)) = (result.ok, result.err) else {
-                    return Err(Error::new(
-                        Span::call_site(),
-                        "result types without both `ok` and `err` payloads are not supported yet",
-                    ));
-                };
-                let ok = self.render_internal_type(ok)?;
-                let err = self.render_internal_type(err)?;
+                let ok = self.render_result_branch_internal_type(result.ok)?;
+                let err = self.render_result_branch_internal_type(result.err)?;
                 Ok(quote!(pub type #ident = Result<#ok, #err>;))
             }
             TypeDefKind::List(inner) | TypeDefKind::FixedLengthList(inner, _) => {
@@ -1106,13 +1267,20 @@ impl Generator {
                 let ty = self.render_internal_type(*inner)?;
                 Ok(quote!(pub type #ident = #ty;))
             }
-            TypeDefKind::Resource | TypeDefKind::Handle(_) => Err(Error::new(
-                Span::call_site(),
-                format!(
-                    "resource type `{}` is not supported by telomere-component-bindgen yet",
-                    typedef.name.as_deref().unwrap_or("<anonymous>")
-                ),
-            )),
+            TypeDefKind::Resource => {
+                let marker = self.resource_marker_idents.get(&type_id).unwrap();
+                let borrow = self.resource_borrow_alias_idents.get(&type_id).unwrap();
+                Ok(quote! {
+                    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+                    pub struct #marker;
+                    pub type #ident = #runtime::Own<#marker>;
+                    pub type #borrow = #runtime::Borrow<#marker>;
+                })
+            }
+            TypeDefKind::Handle(handle) => {
+                let ty = self.render_named_handle_type(*handle, false)?;
+                Ok(quote!(pub type #ident = #ty;))
+            }
             TypeDefKind::Map(_, _)
             | TypeDefKind::Future(_)
             | TypeDefKind::Stream(_)
@@ -1148,6 +1316,10 @@ impl Generator {
             Type::Id(id) => {
                 let typedef = &self.resolve.types[id];
                 if typedef.name.is_some() {
+                    if let Some(prefix) = self.adopted_types_prefix(id) {
+                        let ident = self.type_unique_idents.get(&id).unwrap();
+                        return Ok(quote!(#prefix::types::#ident));
+                    }
                     let ident = self.type_unique_idents.get(&id).unwrap();
                     return Ok(quote!(#ident));
                 }
@@ -1165,14 +1337,8 @@ impl Generator {
                         Ok(quote!(Option<#ty>))
                     }
                     TypeDefKind::Result(result) => {
-                        let (Some(ok), Some(err)) = (result.ok, result.err) else {
-                            return Err(Error::new(
-                                Span::call_site(),
-                                "result types without both `ok` and `err` payloads are not supported yet",
-                            ));
-                        };
-                        let ok = self.render_internal_type(ok)?;
-                        let err = self.render_internal_type(err)?;
+                        let ok = self.render_result_branch_internal_type(result.ok)?;
+                        let err = self.render_result_branch_internal_type(result.err)?;
                         Ok(quote!(Result<#ok, #err>))
                     }
                     TypeDefKind::List(inner) | TypeDefKind::FixedLengthList(inner, _) => {
@@ -1180,6 +1346,11 @@ impl Generator {
                         Ok(quote!(Vec<#ty>))
                     }
                     TypeDefKind::Type(inner) => self.render_internal_type(*inner),
+                    TypeDefKind::Resource => {
+                        let ident = self.type_unique_idents.get(&id).unwrap();
+                        Ok(quote!(#ident))
+                    }
+                    TypeDefKind::Handle(handle) => self.render_named_handle_type(*handle, false),
                     TypeDefKind::Record(_)
                     | TypeDefKind::Variant(_)
                     | TypeDefKind::Enum(_)
@@ -1187,9 +1358,7 @@ impl Generator {
                         Span::call_site(),
                         "anonymous composite type is not supported by telomere-component-bindgen",
                     )),
-                    TypeDefKind::Resource
-                    | TypeDefKind::Handle(_)
-                    | TypeDefKind::Map(_, _)
+                    TypeDefKind::Map(_, _)
                     | TypeDefKind::Future(_)
                     | TypeDefKind::Stream(_)
                     | TypeDefKind::Unknown => Err(Error::new(
@@ -1226,6 +1395,10 @@ impl Generator {
             Type::Id(id) => {
                 let typedef = &self.resolve.types[id];
                 if typedef.name.is_some() {
+                    if let Some(prefix) = self.adopted_types_prefix(id) {
+                        let ident = self.type_unique_idents.get(&id).unwrap();
+                        return Ok(quote!(#prefix::types::#ident));
+                    }
                     let prefix = match depth {
                         ScopeDepth::Root => quote!(types),
                         ScopeDepth::Nested => quote!(super::super::types),
@@ -1247,14 +1420,8 @@ impl Generator {
                         Ok(quote!(Option<#ty>))
                     }
                     TypeDefKind::Result(result) => {
-                        let (Some(ok), Some(err)) = (result.ok, result.err) else {
-                            return Err(Error::new(
-                                Span::call_site(),
-                                "result types without both `ok` and `err` payloads are not supported yet",
-                            ));
-                        };
-                        let ok = self.render_public_type(ok, depth)?;
-                        let err = self.render_public_type(err, depth)?;
+                        let ok = self.render_result_branch_public_type(result.ok, depth)?;
+                        let err = self.render_result_branch_public_type(result.err, depth)?;
                         Ok(quote!(Result<#ok, #err>))
                     }
                     TypeDefKind::List(inner) | TypeDefKind::FixedLengthList(inner, _) => {
@@ -1262,6 +1429,17 @@ impl Generator {
                         Ok(quote!(Vec<#ty>))
                     }
                     TypeDefKind::Type(inner) => self.render_public_type(*inner, depth),
+                    TypeDefKind::Resource => {
+                        let ident = self.type_unique_idents.get(&id).unwrap();
+                        let prefix = match depth {
+                            ScopeDepth::Root => quote!(types),
+                            ScopeDepth::Nested => quote!(super::super::types),
+                        };
+                        Ok(quote!(#prefix::#ident))
+                    }
+                    TypeDefKind::Handle(handle) => {
+                        self.render_unnamed_handle_public_type(*handle, depth)
+                    }
                     TypeDefKind::Record(_)
                     | TypeDefKind::Variant(_)
                     | TypeDefKind::Enum(_)
@@ -1269,9 +1447,7 @@ impl Generator {
                         Span::call_site(),
                         "anonymous composite type is not supported by telomere-component-bindgen",
                     )),
-                    TypeDefKind::Resource
-                    | TypeDefKind::Handle(_)
-                    | TypeDefKind::Map(_, _)
+                    TypeDefKind::Map(_, _)
                     | TypeDefKind::Future(_)
                     | TypeDefKind::Stream(_)
                     | TypeDefKind::Unknown => Err(Error::new(
@@ -1305,10 +1481,156 @@ impl Generator {
             .filter_map(|type_id| {
                 self.type_alias_idents.get(&type_id).map(|alias| {
                     let unique = self.type_unique_idents.get(&type_id).unwrap();
-                    quote!(pub use #prefix::#unique as #alias;)
+                    if let Some(borrow_unique) = self.resource_borrow_alias_idents.get(&type_id) {
+                        let borrow_alias =
+                            Ident::new(&format!("{}Borrow", alias), Span::call_site());
+                        quote! {
+                            pub use #prefix::#unique as #alias;
+                            pub use #prefix::#borrow_unique as #borrow_alias;
+                        }
+                    } else {
+                        quote!(pub use #prefix::#unique as #alias;)
+                    }
                 })
             })
             .collect()
+    }
+
+    fn render_named_handle_type(&self, handle: Handle, public: bool) -> Result<TokenStream2> {
+        let runtime = &self.runtime_path;
+        let (resource, borrowed) = match handle {
+            Handle::Own(resource) => (resource, false),
+            Handle::Borrow(resource) => (resource, true),
+        };
+        let resource = canonical_resource_type_id(&self.resolve, resource);
+        if let Some(prefix) = self.adopted_types_prefix(resource) {
+            let ident = if borrowed {
+                self.resource_borrow_alias_idents
+                    .get(&resource)
+                    .ok_or_else(|| {
+                        Error::new(Span::call_site(), "resource borrow alias is missing")
+                    })?
+            } else {
+                self.type_unique_idents
+                    .get(&resource)
+                    .ok_or_else(|| Error::new(Span::call_site(), "resource alias is missing"))?
+            };
+            return Ok(quote!(#prefix::types::#ident));
+        }
+        let marker = self.resource_marker_idents.get(&resource).ok_or_else(|| {
+            Error::new(
+                Span::call_site(),
+                format!(
+                    "resource marker is missing for handle type `{}` (resource id {})",
+                    self.resolve.types[resource]
+                        .name
+                        .as_deref()
+                        .unwrap_or("<anonymous>"),
+                    resource.index()
+                ),
+            )
+        })?;
+        if public {
+            if borrowed {
+                let borrow = self
+                    .resource_borrow_alias_idents
+                    .get(&resource)
+                    .ok_or_else(|| {
+                        Error::new(
+                            Span::call_site(),
+                            "resource borrow alias is missing for handle type",
+                        )
+                    })?;
+                Ok(quote!(types::#borrow))
+            } else {
+                let ident = self.type_unique_idents.get(&resource).ok_or_else(|| {
+                    Error::new(
+                        Span::call_site(),
+                        "resource alias is missing for handle type",
+                    )
+                })?;
+                Ok(quote!(types::#ident))
+            }
+        } else if borrowed {
+            Ok(quote!(#runtime::Borrow<#marker>))
+        } else {
+            Ok(quote!(#runtime::Own<#marker>))
+        }
+    }
+
+    fn render_unnamed_handle_public_type(
+        &self,
+        handle: Handle,
+        depth: ScopeDepth,
+    ) -> Result<TokenStream2> {
+        let (resource, borrowed) = match handle {
+            Handle::Own(resource) => (resource, false),
+            Handle::Borrow(resource) => (resource, true),
+        };
+        let resource = canonical_resource_type_id(&self.resolve, resource);
+        if let Some(prefix) = self.adopted_types_prefix(resource) {
+            let ident = if borrowed {
+                self.resource_borrow_alias_idents
+                    .get(&resource)
+                    .ok_or_else(|| {
+                        Error::new(Span::call_site(), "resource borrow alias is missing")
+                    })?
+            } else {
+                self.type_unique_idents
+                    .get(&resource)
+                    .ok_or_else(|| Error::new(Span::call_site(), "resource alias is missing"))?
+            };
+            return Ok(quote!(#prefix::types::#ident));
+        }
+
+        let prefix = match depth {
+            ScopeDepth::Root => quote!(types),
+            ScopeDepth::Nested => quote!(super::super::types),
+        };
+        let ident = if borrowed {
+            self.resource_borrow_alias_idents
+                .get(&resource)
+                .ok_or_else(|| Error::new(Span::call_site(), "resource borrow alias is missing"))?
+        } else {
+            self.type_unique_idents
+                .get(&resource)
+                .ok_or_else(|| Error::new(Span::call_site(), "resource alias is missing"))?
+        };
+        Ok(quote!(#prefix::#ident))
+    }
+
+    fn render_result_branch_internal_type(&self, ty: Option<Type>) -> Result<TokenStream2> {
+        match ty {
+            Some(ty) => self.render_internal_type(ty),
+            None => Ok(quote!(())),
+        }
+    }
+
+    fn render_result_branch_public_type(
+        &self,
+        ty: Option<Type>,
+        depth: ScopeDepth,
+    ) -> Result<TokenStream2> {
+        match ty {
+            Some(ty) => self.render_public_type(ty, depth),
+            None => Ok(quote!(())),
+        }
+    }
+
+    fn adopted_types_prefix(&self, type_id: TypeId) -> Option<Path> {
+        let TypeOwner::Interface(interface_id) = self.resolve.types[type_id].owner else {
+            return None;
+        };
+        let package = self.resolve.interfaces[interface_id].package?;
+        let interface_name = self.resolve.interfaces[interface_id]
+            .name
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| format!("interface{}", interface_id.index()));
+        let wit_name = self.resolve.packages[package]
+            .name
+            .interface_id(&interface_name);
+        self.adopt_path_for(&wit_name)
     }
 
     fn generate_root_imports(&self) -> Result<TokenStream2> {
@@ -1316,56 +1638,140 @@ impl Generator {
         if self.direct_imports.is_empty() {
             return Ok(TokenStream2::new());
         }
-        let methods = self
-            .direct_imports
-            .iter()
-            .map(|binding| self.generate_import_trait_method(binding, ScopeDepth::Root))
-            .collect::<Result<Vec<_>>>()?;
-        let registrations = self
-            .direct_imports
-            .iter()
-            .map(|binding| self.generate_root_import_registration(binding))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(quote! {
-            pub trait Imports {
-                #(#methods)*
-            }
-
-            pub fn add_root_imports_to_linker<T>(
-                linker: &mut #runtime::ComponentLinker,
-                host: ::std::rc::Rc<T>,
+        let sync_trait = if self.host_mode.includes_sync() {
+            let methods = self
+                .direct_imports
+                .iter()
+                .map(|binding| self.generate_import_trait_method(binding, ScopeDepth::Root, false))
+                .collect::<Result<Vec<_>>>()?;
+            Some(quote! {
+                pub trait Imports {
+                    #(#methods)*
+                }
+            })
+        } else {
+            None
+        };
+        let async_trait = if self.host_mode.includes_async() {
+            let methods = self
+                .direct_imports
+                .iter()
+                .map(|binding| self.generate_import_trait_method(binding, ScopeDepth::Root, true))
+                .collect::<Result<Vec<_>>>()?;
+            Some(quote! {
+                pub trait ImportsAsync {
+                    #(#methods)*
+                }
+            })
+        } else {
+            None
+        };
+        let sync_registrations = if self.host_mode.includes_sync() {
+            Some(
+                self.direct_imports
+                    .iter()
+                    .map(|binding| self.generate_root_import_registration(binding, false))
+                    .collect::<Result<Vec<_>>>()?,
             )
-            where
-                T: Imports + 'static,
-            {
-                #(#registrations)*
+        } else {
+            None
+        };
+        let async_registrations = if self.host_mode.includes_async() {
+            Some(
+                self.direct_imports
+                    .iter()
+                    .map(|binding| self.generate_root_import_registration(binding, true))
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+
+        let sync_add = sync_registrations.map(|registrations| {
+            quote! {
+                pub fn add_root_imports_to_linker<T>(
+                    linker: &mut #runtime::ComponentLinker,
+                    host: ::std::rc::Rc<T>,
+                )
+                where
+                    T: Imports + 'static,
+                {
+                    #(#registrations)*
+                }
             }
+        });
+        let async_add = async_registrations.map(|registrations| {
+            quote! {
+                pub fn add_root_imports_to_linker_async<T>(
+                    linker: &mut #runtime::ComponentLinker,
+                    host: ::std::rc::Rc<T>,
+                )
+                where
+                    T: ImportsAsync + 'static,
+                {
+                    #(#registrations)*
+                }
+            }
+        });
+
+        Ok(quote! {
+            #sync_trait
+            #async_trait
+            #sync_add
+            #async_add
         })
     }
 
     fn generate_import_interface(&self, namespace: &InterfaceNamespace) -> Result<TokenStream2> {
         let runtime = &self.runtime_path;
         let module_ident = &namespace.module_ident;
+        if let Some(adopt_path) = &namespace.adopt_path {
+            let import_path = quote!(#adopt_path::imports::#module_ident);
+            return Ok(quote! {
+                pub mod #module_ident {
+                    pub use #import_path::*;
+                }
+            });
+        }
         let aliases = self.generate_type_aliases(&namespace.location, ScopeDepth::Nested);
-        let methods = namespace
-            .functions
-            .iter()
-            .map(|binding| self.generate_import_trait_method(binding, ScopeDepth::Nested))
-            .collect::<Result<Vec<_>>>()?;
-        let registrations = namespace
-            .functions
-            .iter()
-            .map(|binding| self.generate_instance_import_registration(binding))
-            .collect::<Result<Vec<_>>>()?;
         let wit_name = LitStr::new(&namespace.wit_name, Span::call_site());
-        Ok(quote! {
-            pub mod #module_ident {
-                #(#aliases)*
-
+        let sync_trait = if self.host_mode.includes_sync() {
+            let methods = namespace
+                .functions
+                .iter()
+                .map(|binding| {
+                    self.generate_import_trait_method(binding, ScopeDepth::Nested, false)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Some(quote! {
                 pub trait Host {
                     #(#methods)*
                 }
-
+            })
+        } else {
+            None
+        };
+        let async_trait = if self.host_mode.includes_async() {
+            let methods = namespace
+                .functions
+                .iter()
+                .map(|binding| self.generate_import_trait_method(binding, ScopeDepth::Nested, true))
+                .collect::<Result<Vec<_>>>()?;
+            Some(quote! {
+                pub trait HostAsync {
+                    #(#methods)*
+                }
+            })
+        } else {
+            None
+        };
+        let sync_add = if self.host_mode.includes_sync() {
+            let registrations = namespace
+                .functions
+                .iter()
+                .map(|binding| self.generate_instance_import_registration(binding, false))
+                .collect::<Result<Vec<_>>>()?;
+            Some(quote! {
                 pub fn add_to_linker<T>(
                     linker: &mut #runtime::ComponentLinker,
                     host: ::std::rc::Rc<T>,
@@ -1377,6 +1783,40 @@ impl Generator {
                     #(#registrations)*
                     linker.register_import_instance(#wit_name, instance);
                 }
+            })
+        } else {
+            None
+        };
+        let async_add = if self.host_mode.includes_async() {
+            let registrations = namespace
+                .functions
+                .iter()
+                .map(|binding| self.generate_instance_import_registration(binding, true))
+                .collect::<Result<Vec<_>>>()?;
+            Some(quote! {
+                pub fn add_to_linker_async<T>(
+                    linker: &mut #runtime::ComponentLinker,
+                    host: ::std::rc::Rc<T>,
+                )
+                where
+                    T: HostAsync + 'static,
+                {
+                    let mut instance = #runtime::ComponentLinkerInstance::new();
+                    #(#registrations)*
+                    linker.register_import_instance(#wit_name, instance);
+                }
+            })
+        } else {
+            None
+        };
+
+        Ok(quote! {
+            pub mod #module_ident {
+                #(#aliases)*
+                #sync_trait
+                #async_trait
+                #sync_add
+                #async_add
             }
         })
     }
@@ -1424,6 +1864,14 @@ impl Generator {
     fn generate_export_interface(&self, namespace: &InterfaceNamespace) -> Result<TokenStream2> {
         let runtime = &self.runtime_path;
         let module_ident = &namespace.module_ident;
+        if let Some(adopt_path) = &namespace.adopt_path {
+            let export_path = quote!(#adopt_path::exports::#module_ident::Exports);
+            return Ok(quote! {
+                pub mod #module_ident {
+                    pub use #export_path as Exports;
+                }
+            });
+        }
         let aliases = self.generate_type_aliases(&namespace.location, ScopeDepth::Nested);
         let methods = namespace
             .functions
@@ -1440,7 +1888,7 @@ impl Generator {
                 }
 
                 impl Exports {
-                    pub(crate) fn new(instance: #runtime::ComponentExports) -> Self {
+                    pub fn new(instance: #runtime::ComponentExports) -> Self {
                         Self { instance }
                     }
 
@@ -1454,9 +1902,15 @@ impl Generator {
         &self,
         binding: &FunctionBinding,
         depth: ScopeDepth,
+        is_async: bool,
     ) -> Result<TokenStream2> {
         let runtime = &self.runtime_path;
+        let internal = match depth {
+            ScopeDepth::Root => quote!(__internal),
+            ScopeDepth::Nested => quote!(super::super::__internal),
+        };
         let method_ident = &binding.method_ident;
+        let wit_name = LitStr::new(&binding.wit_name, Span::call_site());
         let params = binding
             .function
             .params
@@ -1473,16 +1927,46 @@ impl Generator {
             .map(|ty| self.render_public_type(ty, depth))
             .transpose()?
             .unwrap_or_else(|| quote!(()));
-        Ok(quote! {
-            fn #method_ident(
-                &self,
-                store: &mut #runtime::Store,
-                #(#params),*
-            ) -> Result<#result, #runtime::ComponentError>;
-        })
+        let param_names = binding
+            .function
+            .params
+            .iter()
+            .map(|param| snake_ident(&param.name))
+            .collect::<Vec<_>>();
+        if is_async {
+            Ok(quote! {
+                fn #method_ident<'a>(
+                    &'a self,
+                    store: &'a mut #runtime::Store,
+                    #(#params),*
+                ) -> #runtime::ComponentFuture<'a, Result<#result, #runtime::ComponentError>> {
+                    #(let _ = &#param_names;)*
+                    Box::pin(async move {
+                        let _ = store;
+                        Err(#internal::missing_host(#wit_name))
+                    })
+                }
+            })
+        } else {
+            Ok(quote! {
+                fn #method_ident(
+                    &self,
+                    store: &mut #runtime::Store,
+                    #(#params),*
+                ) -> Result<#result, #runtime::ComponentError> {
+                    let _ = store;
+                    #(let _ = &#param_names;)*
+                    Err(#internal::missing_host(#wit_name))
+                }
+            })
+        }
     }
 
-    fn generate_root_import_registration(&self, binding: &FunctionBinding) -> Result<TokenStream2> {
+    fn generate_root_import_registration(
+        &self,
+        binding: &FunctionBinding,
+        is_async: bool,
+    ) -> Result<TokenStream2> {
         let wit_name = LitStr::new(&binding.wit_name, Span::call_site());
         let method_ident = &binding.method_ident;
         let arg_prep = self.generate_argument_lifts(binding, ScopeDepth::Root)?;
@@ -1498,21 +1982,38 @@ impl Generator {
             .map(|ty| self.render_public_type(ty, ScopeDepth::Root))
             .transpose()?
             .unwrap_or_else(|| quote!(()));
-        Ok(quote! {
-            linker.register_import(#wit_name, {
-                let host = ::std::rc::Rc::clone(&host);
-                move |store, args| {
-                    #arg_prep
-                    let result: #result = host.#method_ident(store, #(#arg_names),*)?;
-                    __internal::lower_function_result::<#result>(result)
-                }
-            });
-        })
+        if is_async {
+            Ok(quote! {
+                linker.register_import_async(#wit_name, {
+                    let host = ::std::rc::Rc::clone(&host);
+                    move |store, args| {
+                        let host = ::std::rc::Rc::clone(&host);
+                        Box::pin(async move {
+                            #arg_prep
+                            let result: #result = host.#method_ident(store, #(#arg_names),*).await?;
+                            __internal::lower_function_result::<#result>(result)
+                        })
+                    }
+                });
+            })
+        } else {
+            Ok(quote! {
+                linker.register_import(#wit_name, {
+                    let host = ::std::rc::Rc::clone(&host);
+                    move |store, args| {
+                        #arg_prep
+                        let result: #result = host.#method_ident(store, #(#arg_names),*)?;
+                        __internal::lower_function_result::<#result>(result)
+                    }
+                });
+            })
+        }
     }
 
     fn generate_instance_import_registration(
         &self,
         binding: &FunctionBinding,
+        is_async: bool,
     ) -> Result<TokenStream2> {
         let wit_name = LitStr::new(&binding.wit_name, Span::call_site());
         let method_ident = &binding.method_ident;
@@ -1529,16 +2030,32 @@ impl Generator {
             .map(|ty| self.render_public_type(ty, ScopeDepth::Nested))
             .transpose()?
             .unwrap_or_else(|| quote!(()));
-        Ok(quote! {
-            instance.register_func(#wit_name, {
-                let host = ::std::rc::Rc::clone(&host);
-                move |store, args| {
-                    #arg_prep
-                    let result: #result = host.#method_ident(store, #(#arg_names),*)?;
-                    super::super::__internal::lower_function_result::<#result>(result)
-                }
-            });
-        })
+        if is_async {
+            Ok(quote! {
+                instance.register_func_async(#wit_name, {
+                    let host = ::std::rc::Rc::clone(&host);
+                    move |store, args| {
+                        let host = ::std::rc::Rc::clone(&host);
+                        Box::pin(async move {
+                            #arg_prep
+                            let result: #result = host.#method_ident(store, #(#arg_names),*).await?;
+                            super::super::__internal::lower_function_result::<#result>(result)
+                        })
+                    }
+                });
+            })
+        } else {
+            Ok(quote! {
+                instance.register_func(#wit_name, {
+                    let host = ::std::rc::Rc::clone(&host);
+                    move |store, args| {
+                        #arg_prep
+                        let result: #result = host.#method_ident(store, #(#arg_names),*)?;
+                        super::super::__internal::lower_function_result::<#result>(result)
+                    }
+                });
+            })
+        }
     }
 
     fn generate_export_method(
@@ -1627,6 +2144,111 @@ impl Generator {
             #(#lifts)*
         })
     }
+}
+
+fn function_method_ident(function: &Function, resolve: &Resolve) -> Ident {
+    let name = match function.kind {
+        FunctionKind::Freestanding | FunctionKind::AsyncFreestanding => function.name.clone(),
+        FunctionKind::Method(resource) | FunctionKind::AsyncMethod(resource) => format!(
+            "{} {}",
+            resolve.types[resource]
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("resource{}", resource.index())),
+            function
+                .name
+                .rsplit('.')
+                .next()
+                .unwrap_or(function.name.as_str())
+        ),
+        FunctionKind::Static(resource) | FunctionKind::AsyncStatic(resource) => format!(
+            "{} {}",
+            resolve.types[resource]
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("resource{}", resource.index())),
+            function
+                .name
+                .rsplit('.')
+                .next()
+                .unwrap_or(function.name.as_str())
+        ),
+        FunctionKind::Constructor(resource) => format!(
+            "{} new",
+            resolve.types[resource]
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("resource{}", resource.index()))
+        ),
+    };
+    snake_ident(&name)
+}
+
+fn stable_type_ident(
+    resolve: &Resolve,
+    world_id: WorldId,
+    type_id: TypeId,
+    marker: bool,
+) -> String {
+    let typedef = &resolve.types[type_id];
+    let mut parts = Vec::new();
+    match typedef.owner {
+        TypeOwner::World(id) => {
+            parts.extend(package_prefix(resolve, resolve.worlds[id].package));
+            parts.push(resolve.worlds[id].name.clone());
+        }
+        TypeOwner::Interface(id) => {
+            parts.extend(package_prefix(resolve, resolve.interfaces[id].package));
+            parts.push(
+                resolve.interfaces[id]
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("interface{}", id.index())),
+            );
+        }
+        TypeOwner::None => {
+            parts.push(resolve.worlds[world_id].name.clone());
+        }
+    }
+    parts.push(
+        typedef
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("type{}", type_id.index())),
+    );
+    if marker {
+        parts.push("marker".to_owned());
+    }
+    let mut candidate = parts.join(" ").to_upper_camel_case();
+    if candidate.is_empty() {
+        candidate = format!("GeneratedType{}", type_id.index());
+    }
+    if candidate.chars().next().unwrap().is_ascii_digit() {
+        candidate.insert(0, '_');
+    }
+    if is_reserved(&candidate) {
+        candidate.push('_');
+    }
+    candidate
+}
+
+fn canonical_resource_type_id(resolve: &Resolve, mut type_id: TypeId) -> TypeId {
+    loop {
+        match &resolve.types[type_id].kind {
+            TypeDefKind::Resource => return type_id,
+            TypeDefKind::Type(Type::Id(next)) => type_id = *next,
+            _ => return type_id,
+        }
+    }
+}
+
+fn package_prefix(resolve: &Resolve, package: Option<PackageId>) -> Vec<String> {
+    package
+        .map(|package| {
+            let package = &resolve.packages[package];
+            vec![package.name.namespace.clone(), package.name.name.clone()]
+        })
+        .unwrap_or_default()
 }
 
 fn last_segment(text: &str) -> &str {

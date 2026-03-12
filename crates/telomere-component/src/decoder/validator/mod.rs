@@ -1172,12 +1172,37 @@ impl<'a> Validator<'a> {
                 self.validate_instance_root(*type_id, visible, SurfaceRole::Export, seen)
             }
             InstanceExportType::Type(type_id) => {
-                self.validate_type_root(*type_id, visible, SurfaceRole::Export, seen)
+                self.validate_instance_export_type_root(*type_id, visible, seen)
             }
             InstanceExportType::Func(type_id) => {
                 self.validate_func_root(*type_id, visible, SurfaceRole::Export, seen)
             }
         }
+    }
+
+    fn validate_instance_export_type_root(
+        &self,
+        type_id: TypeId,
+        visible: &[TypeId],
+        seen: &mut VisitTracker,
+    ) -> ParseResult<()> {
+        let ty = self.get_type(type_id)?.clone();
+        if self.type_requires_name(&ty)
+            && !contains_type_id(visible, type_id)
+            && !self.resource_visible_by_identity(type_id, visible)?
+            && !self.defval_visible_by_structure(type_id, visible)?
+        {
+            return Err(ComponentParseError::TypeMismatch(
+                "type not valid to be used as export".to_owned(),
+            ));
+        }
+        self.validate_type_definition(type_id, visible, seen)
+            .map_err(|error| {
+                ComponentParseError::TypeMismatch(format!(
+                    "type not valid to be used as export: {}",
+                    error
+                ))
+            })
     }
 
     fn validate_type_root(
@@ -1187,7 +1212,9 @@ impl<'a> Validator<'a> {
         role: SurfaceRole,
         seen: &mut VisitTracker,
     ) -> ParseResult<()> {
-        if self.contains_resource_handle(type_id)? {
+        if self.contains_resource_handle(type_id)?
+            && !self.type_root_allows_visible_resource_alias(type_id, visible)?
+        {
             return Err(ComponentParseError::TypeMismatch(format!(
                 "type not valid to be used as {}",
                 role.noun()
@@ -1393,6 +1420,44 @@ impl<'a> Validator<'a> {
         }
 
         Ok(false)
+    }
+
+    fn type_root_allows_visible_resource_alias(
+        &self,
+        type_id: TypeId,
+        visible: &[TypeId],
+    ) -> ParseResult<bool> {
+        let mut visiting = VisitTracker::new(self.types.len());
+        self.type_root_allows_visible_resource_alias_inner(type_id, visible, &mut visiting)
+    }
+
+    fn type_root_allows_visible_resource_alias_inner(
+        &self,
+        type_id: TypeId,
+        visible: &[TypeId],
+        visiting: &mut VisitTracker,
+    ) -> ParseResult<bool> {
+        if !visiting.enter(type_id) {
+            return Ok(false);
+        }
+        let result = match self.get_type(type_id)? {
+            Type::Resource(_) => {
+                contains_type_id(visible, type_id)
+                    || self.resource_visible_by_identity(type_id, visible)?
+            }
+            Type::Generic(Generic {
+                bound: GenericBound::Eq(inner),
+                ..
+            }) => {
+                contains_type_id(visible, *inner)
+                    || self.resource_visible_by_identity(*inner, visible)?
+                    || self
+                        .type_root_allows_visible_resource_alias_inner(*inner, visible, visiting)?
+            }
+            _ => false,
+        };
+        visiting.leave(type_id);
+        Ok(result)
     }
 
     fn defval_visible_by_structure(
@@ -1658,11 +1723,20 @@ impl<'a> Validator<'a> {
 
     fn collect_instance_visible_types(&self, ty: &InstanceType) -> ParseResult<Vec<TypeId>> {
         let mut visible = Vec::new();
-        let mut visiting = VisitTracker::new(self.types.len());
         for export in ty.exports.values() {
-            self.extend_instance_export_visible_types(export, &mut visible, &mut visiting)?;
+            self.extend_instance_named_types(export, &mut visible);
         }
         Ok(visible)
+    }
+
+    fn extend_instance_named_types(&self, export: &InstanceExportType, visible: &mut Vec<TypeId>) {
+        match export {
+            InstanceExportType::CoreModule(_) => {}
+            InstanceExportType::Func(type_id)
+            | InstanceExportType::Component(type_id)
+            | InstanceExportType::Instance(type_id)
+            | InstanceExportType::Type(type_id) => merge_type_ids(visible, &[*type_id]),
+        }
     }
 
     fn extend_export_visible_types(
