@@ -3,12 +3,29 @@ mod common;
 use common::run_wast;
 use tokio::test;
 
-async fn run_test_file(name: &str) {
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+fn resolve_test_file(name: &str) -> PathBuf {
+    let suite_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/wasm-testsuite");
+    assert!(
+        suite_dir.is_dir(),
+        "missing wasm testsuite submodule at {}. Run `git submodule update --init --recursive` from the repository root.",
+        suite_dir.display()
+    );
 
-    d.push("tests/wasm-testsuite");
-    d.push(format!("{name}.wast"));
-    let wast = std::fs::read_to_string(d).unwrap();
+    let path = suite_dir.join(format!("{name}.wast"));
+    assert!(
+        path.is_file(),
+        "missing WAST fixture {} in {}. Verify the wasm testsuite submodule is checked out at the pinned commit.",
+        name,
+        suite_dir.display()
+    );
+
+    path
+}
+
+async fn run_test_file(name: &str) {
+    let path = resolve_test_file(name);
+    let wast = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
     run_wast(&wast).await;
 }
 
