@@ -26,6 +26,21 @@ use super::simd_instruction::v128_const;
 use super::validate::{assert_memory, assert_valtype, validate_active_elem};
 use super::{Result, WasmParserError};
 
+#[cfg(debug_assertions)]
+const PARSE_CODE_STACK_SIZE: usize = 32 * 1024 * 1024;
+
+#[cfg(debug_assertions)]
+#[inline(always)]
+fn with_parse_code_stack<R>(callback: impl FnOnce() -> R) -> R {
+    stacker::grow(PARSE_CODE_STACK_SIZE, callback)
+}
+
+#[cfg(not(debug_assertions))]
+#[inline(always)]
+fn with_parse_code_stack<R>(callback: impl FnOnce() -> R) -> R {
+    callback()
+}
+
 fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
     if idx as usize >= tables.len() {
         return Err(WasmParserError::InvalidTableIndex(idx));
@@ -720,61 +735,63 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         data_count_section: &mut DataCountVerifier,
         size: u32,
     ) -> Result<Func> {
-        let (len, locals) = self.parse_vec(&Self::parse_locals)?;
-        let slice = &locals[..];
-        let locals_data = LocalsData::from(slice);
-        let local_reassign = locals_data.create_reassignment_table(&locals)?;
-        validate_locals(&locals)?;
-        let mut instrs = InstructionGenerator::new();
-        let mut checker = TypeChecker::new(typeidx);
-        let mut jump_resolver = JumpResolver::new();
-        let mut else_addr = None;
-        let mut parser = InstructionParser::new(
-            self.reader(),
-            type_section,
-            functions,
-            funcidx,
-            mems,
-            functype,
-            &local_reassign,
-            globals,
-            table_section,
-            elems,
-        );
-        jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
-        instrs.enter_block();
-        let len2 = parser.parse_instrs(
-            data_count_section,
-            &mut instrs,
-            &mut checker,
-            &mut jump_resolver,
-            &mut else_addr,
-        )?;
-        trace!("function return");
+        with_parse_code_stack(|| {
+            let (len, locals) = self.parse_vec(&Self::parse_locals)?;
+            let slice = &locals[..];
+            let locals_data = LocalsData::from(slice);
+            let local_reassign = locals_data.create_reassignment_table(&locals)?;
+            validate_locals(&locals)?;
+            let mut instrs = InstructionGenerator::new();
+            let mut checker = TypeChecker::new(typeidx);
+            let mut jump_resolver = JumpResolver::new();
+            let mut else_addr = None;
+            let mut parser = InstructionParser::new(
+                self.reader(),
+                type_section,
+                functions,
+                funcidx,
+                mems,
+                functype,
+                &local_reassign,
+                globals,
+                table_section,
+                elems,
+            );
+            jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
+            instrs.enter_block();
+            let len2 = parser.parse_instrs(
+                data_count_section,
+                &mut instrs,
+                &mut checker,
+                &mut jump_resolver,
+                &mut else_addr,
+            )?;
+            trace!("function return");
 
-        checker.op(&functype.1 .0, &[])?;
+            checker.op(&functype.1 .0, &[])?;
 
-        checker.leave_block()?;
+            checker.leave_block()?;
 
-        if len + len2 != size as usize {
-            Err(WasmParserError::InvalidInstructionSize(
-                size,
-                (len + len2) as u32,
-            ))?
-        }
-        instrs.leave_block();
-        instrs.push(Instr {
-            op: vm::special_function_return,
-        });
-        instrs.push(Instr {
-            operand: Operand {
-                drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
-            },
-        });
-        jump_resolver.evaluate(&mut instrs);
-        Ok(Func {
-            locals: locals_data,
-            expr: instrs.build(),
+            if len + len2 != size as usize {
+                Err(WasmParserError::InvalidInstructionSize(
+                    size,
+                    (len + len2) as u32,
+                ))?
+            }
+            instrs.leave_block();
+            instrs.push(Instr {
+                op: vm::special_function_return,
+            });
+            instrs.push(Instr {
+                operand: Operand {
+                    drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
+                },
+            });
+            jump_resolver.evaluate(&mut instrs);
+            Ok(Func {
+                locals: locals_data,
+                expr: instrs.build(),
+            })
         })
     }
     #[allow(clippy::too_many_arguments)]

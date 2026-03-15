@@ -1,3 +1,6 @@
+#![cfg_attr(telomere_nightly, feature(explicit_tail_calls))]
+#![cfg_attr(telomere_nightly, allow(incomplete_features))]
+
 pub mod binary;
 #[macro_use]
 pub mod common;

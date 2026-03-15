@@ -26,6 +26,19 @@ use crate::{
     WasmParserError,
 };
 use tracing::trace;
+
+#[cfg(debug_assertions)]
+#[inline(always)]
+fn with_parse_instr_stack<R>(callback: impl FnOnce() -> R) -> R {
+    stacker::maybe_grow(32 * 1024, 1024 * 1024, callback)
+}
+
+#[cfg(not(debug_assertions))]
+#[inline(always)]
+fn with_parse_instr_stack<R>(callback: impl FnOnce() -> R) -> R {
+    callback()
+}
+
 macro_rules! simd_instruction {
     ($code: expr,$ctx: expr, $($name: ident),*) => {
         match ($code) {
@@ -3033,21 +3046,23 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
     ) -> Result<usize> {
-        let mut read_bytes = 0;
-        loop {
-            let (len, end) = self.parse_inst(
-                data_count_section,
-                instrs,
-                checker,
-                jump_resolver,
-                else_addr,
-            )?;
-            trace!("{checker:?}");
-            read_bytes += len;
-            if end {
-                return Ok(read_bytes);
+        with_parse_instr_stack(|| {
+            let mut read_bytes = 0;
+            loop {
+                let (len, end) = self.parse_inst(
+                    data_count_section,
+                    instrs,
+                    checker,
+                    jump_resolver,
+                    else_addr,
+                )?;
+                trace!("{checker:?}");
+                read_bytes += len;
+                if end {
+                    return Ok(read_bytes);
+                }
             }
-        }
+        })
     }
     #[allow(clippy::too_many_arguments)]
     pub fn new(
