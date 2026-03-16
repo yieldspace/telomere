@@ -45,6 +45,46 @@ async fn test_print() {
     }
 }
 
+#[tokio::test]
+async fn test_imported_host_start() {
+    #[allow(static_mut_refs)]
+    unsafe {
+        PRINT_CALL.clear();
+    }
+
+    let mut store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+    (module
+      (func (export "print"))
+    )
+    "#,
+        &mut store,
+        &registry,
+    )
+    .await;
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, print, &store);
+
+    let _instance = instantiate_wat(
+        r#"
+    (module
+      (import "host" "print" (func $print))
+      (start $print)
+    )
+    "#,
+        &mut store,
+        &registry,
+    )
+    .await;
+
+    #[allow(static_mut_refs)]
+    unsafe {
+        assert_eq!(PRINT_CALL, vec![()]);
+    }
+}
+
 const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
     Instr {
         op: telomere::special_function_return,

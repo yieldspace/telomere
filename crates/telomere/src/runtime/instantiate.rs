@@ -161,7 +161,7 @@ pub async fn instantiate(
     } = m;
 
     let mut scheduler = Scheduler::new(store);
-    let (addr, has_start) = {
+    let (addr, has_start, _start_host_program) = {
         let mut gc = store.lock_gc();
         let instance_id = store.new_instance_id();
         let root_slot = gc.reserve_root_slot();
@@ -410,6 +410,7 @@ pub async fn instantiate(
         vm_try!(res);
         gc.write_root_slot(root_slot, inst_addr);
 
+        let mut start_host_program = None;
         let has_start = if let Some(start) = start {
             let mut stack = Stack::new(128 * 1024);
             let funcaddr = instance.funcs[start.0 as usize];
@@ -427,7 +428,7 @@ pub async fn instantiate(
                     &vm::VM_END
                 ));
 
-                let program = &[
+                start_host_program = Some([
                     Instr {
                         op: special_start_host_function_call,
                     },
@@ -436,7 +437,10 @@ pub async fn instantiate(
                             start_host_function: fp,
                         },
                     },
-                ];
+                ]);
+                let program = start_host_program
+                    .as_ref()
+                    .expect("host start trampoline must stay alive until scheduler run");
                 scheduler.push(Task {
                     task_id: 0,
                     stack,
@@ -473,7 +477,7 @@ pub async fn instantiate(
             false
         };
 
-        (addr, has_start)
+        (addr, has_start, start_host_program)
     };
 
     if has_start {
