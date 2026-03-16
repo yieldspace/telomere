@@ -501,7 +501,7 @@ impl WasiHost {
 impl io_error::Host for WasiHost {
     fn error_to_debug_string(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoErrorErrorBorrow,
     ) -> Result<String, ComponentError> {
         self.error_to_debug_string(self_)
@@ -511,7 +511,7 @@ impl io_error::Host for WasiHost {
 impl io_error::HostAsync for WasiHost {
     fn error_to_debug_string<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoErrorErrorBorrow,
     ) -> ComponentFuture<'a, Result<String, ComponentError>> {
         Box::pin(async move { self.error_to_debug_string(self_) })
@@ -521,7 +521,7 @@ impl io_error::HostAsync for WasiHost {
 impl io_poll::Host for WasiHost {
     fn pollable_ready(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoPollPollableBorrow,
     ) -> Result<bool, ComponentError> {
         self.pollable_ready(self_.handle())
@@ -529,7 +529,7 @@ impl io_poll::Host for WasiHost {
 
     fn pollable_block(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoPollPollableBorrow,
     ) -> Result<(), ComponentError> {
         self.pollable_block(self_.handle())
@@ -537,7 +537,7 @@ impl io_poll::Host for WasiHost {
 
     fn poll(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         in_: Vec<WasiIoPollPollableBorrow>,
     ) -> Result<Vec<u32>, ComponentError> {
         self.poll(in_)
@@ -547,7 +547,7 @@ impl io_poll::Host for WasiHost {
 impl io_poll::HostAsync for WasiHost {
     fn pollable_ready<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoPollPollableBorrow,
     ) -> ComponentFuture<'a, Result<bool, ComponentError>> {
         Box::pin(async move { self.pollable_ready(self_.handle()) })
@@ -555,7 +555,7 @@ impl io_poll::HostAsync for WasiHost {
 
     fn pollable_block<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoPollPollableBorrow,
     ) -> ComponentFuture<'a, Result<(), ComponentError>> {
         Box::pin(async move { self.pollable_block(self_.handle()) })
@@ -563,7 +563,7 @@ impl io_poll::HostAsync for WasiHost {
 
     fn poll<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         in_: Vec<WasiIoPollPollableBorrow>,
     ) -> ComponentFuture<'a, Result<Vec<u32>, ComponentError>> {
         Box::pin(async move { self.poll(in_) })
@@ -573,7 +573,7 @@ impl io_poll::HostAsync for WasiHost {
 impl io_streams::Host for WasiHost {
     fn input_stream_read(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError> {
@@ -582,7 +582,7 @@ impl io_streams::Host for WasiHost {
 
     fn input_stream_blocking_read(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError> {
@@ -591,7 +591,7 @@ impl io_streams::Host for WasiHost {
 
     fn input_stream_skip(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> Result<Result<u64, WasiIoStreamsStreamError>, ComponentError> {
@@ -600,7 +600,7 @@ impl io_streams::Host for WasiHost {
 
     fn input_stream_blocking_skip(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> Result<Result<u64, WasiIoStreamsStreamError>, ComponentError> {
@@ -609,7 +609,7 @@ impl io_streams::Host for WasiHost {
 
     fn input_stream_subscribe(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsInputStreamBorrow,
     ) -> Result<WasiIoPollPollable, ComponentError> {
         self.input_stream_subscribe(self_)
@@ -617,7 +617,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_check_write(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
     ) -> Result<Result<u64, WasiIoStreamsStreamError>, ComponentError> {
         self.output_stream_check_write(self_)
@@ -625,7 +625,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_write(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         contents: Vec<u8>,
     ) -> Result<Result<(), WasiIoStreamsStreamError>, ComponentError> {
@@ -634,7 +634,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_blocking_write_and_flush(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         contents: Vec<u8>,
     ) -> Result<Result<(), WasiIoStreamsStreamError>, ComponentError> {
@@ -643,7 +643,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_flush(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
     ) -> Result<Result<(), WasiIoStreamsStreamError>, ComponentError> {
         self.output_stream_check_write(self_)
@@ -652,7 +652,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_blocking_flush(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
     ) -> Result<Result<(), WasiIoStreamsStreamError>, ComponentError> {
         self.output_stream_check_write(self_)
@@ -661,7 +661,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_subscribe(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
     ) -> Result<WasiIoPollPollable, ComponentError> {
         self.output_stream_subscribe(self_)
@@ -669,7 +669,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_write_zeroes(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         len: u64,
     ) -> Result<Result<(), WasiIoStreamsStreamError>, ComponentError> {
@@ -679,7 +679,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_blocking_write_zeroes_and_flush(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         len: u64,
     ) -> Result<Result<(), WasiIoStreamsStreamError>, ComponentError> {
@@ -689,7 +689,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_splice(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         src: WasiIoStreamsInputStreamBorrow,
         len: u64,
@@ -699,7 +699,7 @@ impl io_streams::Host for WasiHost {
 
     fn output_stream_blocking_splice(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         src: WasiIoStreamsInputStreamBorrow,
         len: u64,
@@ -711,7 +711,7 @@ impl io_streams::Host for WasiHost {
 impl io_streams::HostAsync for WasiHost {
     fn input_stream_read<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError>>
@@ -721,7 +721,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn input_stream_blocking_read<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<Vec<u8>, WasiIoStreamsStreamError>, ComponentError>>
@@ -731,7 +731,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn input_stream_skip<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<u64, WasiIoStreamsStreamError>, ComponentError>> {
@@ -740,7 +740,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn input_stream_blocking_skip<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsInputStreamBorrow,
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<u64, WasiIoStreamsStreamError>, ComponentError>> {
@@ -749,7 +749,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn input_stream_subscribe<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsInputStreamBorrow,
     ) -> ComponentFuture<'a, Result<WasiIoPollPollable, ComponentError>> {
         Box::pin(async move { self.input_stream_subscribe(self_) })
@@ -757,7 +757,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_check_write<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
     ) -> ComponentFuture<'a, Result<Result<u64, WasiIoStreamsStreamError>, ComponentError>> {
         Box::pin(async move { self.output_stream_check_write(self_) })
@@ -765,7 +765,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_write<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         contents: Vec<u8>,
     ) -> ComponentFuture<'a, Result<Result<(), WasiIoStreamsStreamError>, ComponentError>> {
@@ -774,7 +774,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_blocking_write_and_flush<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         contents: Vec<u8>,
     ) -> ComponentFuture<'a, Result<Result<(), WasiIoStreamsStreamError>, ComponentError>> {
@@ -783,7 +783,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_flush<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
     ) -> ComponentFuture<'a, Result<Result<(), WasiIoStreamsStreamError>, ComponentError>> {
         Box::pin(async move {
@@ -794,7 +794,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_blocking_flush<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
     ) -> ComponentFuture<'a, Result<Result<(), WasiIoStreamsStreamError>, ComponentError>> {
         Box::pin(async move {
@@ -805,7 +805,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_subscribe<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
     ) -> ComponentFuture<'a, Result<WasiIoPollPollable, ComponentError>> {
         Box::pin(async move { self.output_stream_subscribe(self_) })
@@ -813,7 +813,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_write_zeroes<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<(), WasiIoStreamsStreamError>, ComponentError>> {
@@ -825,7 +825,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_blocking_write_zeroes_and_flush<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         len: u64,
     ) -> ComponentFuture<'a, Result<Result<(), WasiIoStreamsStreamError>, ComponentError>> {
@@ -837,7 +837,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_splice<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         src: WasiIoStreamsInputStreamBorrow,
         len: u64,
@@ -847,7 +847,7 @@ impl io_streams::HostAsync for WasiHost {
 
     fn output_stream_blocking_splice<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiIoStreamsOutputStreamBorrow,
         src: WasiIoStreamsInputStreamBorrow,
         len: u64,

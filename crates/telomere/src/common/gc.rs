@@ -1,7 +1,7 @@
 mod view;
 pub use view::*;
 mod root_handle;
-pub use root_handle::GcRootHandle;
+pub(crate) use root_handle::GcRootHandle;
 mod gc_ref;
 pub use gc_ref::GcRef;
 mod header;

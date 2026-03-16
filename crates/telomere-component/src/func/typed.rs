@@ -25,7 +25,7 @@ impl ComponentFunc {
 
     pub async fn call(
         &self,
-        store: &mut Store,
+        store: &Store,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
         self.runtime.call(store, &self.name, args).await
@@ -65,7 +65,7 @@ where
     P: ComponentParams,
     R: ComponentReturn,
 {
-    pub async fn call(&self, store: &mut Store, params: P) -> Result<R, ComponentError> {
+    pub async fn call(&self, store: &Store, params: P) -> Result<R, ComponentError> {
         let results = self
             .func
             .call(store, &params.into_component_args()?)

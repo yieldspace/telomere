@@ -118,30 +118,30 @@ async fn run_runtime(
     let mut linker = ComponentLinker::new();
     add(&mut linker, build_state()).expect("wasi linker registration should succeed");
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let random = instance
-        .call(&mut store, "get-random-u64", &[])
+        .call(&store, "get-random-u64", &[])
         .await
         .expect("random call should succeed");
     let insecure_random = instance
-        .call(&mut store, "get-insecure-random-u64", &[])
+        .call(&store, "get-insecure-random-u64", &[])
         .await
         .expect("insecure random call should succeed");
     let args = instance
-        .call(&mut store, "get-arguments", &[])
+        .call(&store, "get-arguments", &[])
         .await
         .expect("arguments call should succeed");
     let env = instance
-        .call(&mut store, "get-environment", &[])
+        .call(&store, "get-environment", &[])
         .await
         .expect("environment call should succeed");
     let cwd = instance
-        .call(&mut store, "initial-cwd", &[])
+        .call(&store, "initial-cwd", &[])
         .await
         .expect("cwd call should succeed");
 

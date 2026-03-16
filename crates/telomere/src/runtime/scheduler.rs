@@ -115,7 +115,7 @@ pub(crate) struct Scheduler<'a> {
     notify: Notify,
     async_tasks: FuturesUnordered<Pin<Box<dyn Future<Output = AsyncResult>>>>,
     pub(crate) completed_tasks: Vec<CompletedTask>,
-    pub(crate) store: &'a mut Store,
+    pub(crate) store: &'a Store,
     effects: VecDeque<Effect>,
     ready_count: u32,
 }
@@ -194,7 +194,7 @@ impl EffectSupplier<'_> {
 }
 
 impl<'a> Scheduler<'a> {
-    pub fn new(store: &'a mut Store) -> Self {
+    pub fn new(store: &'a Store) -> Self {
         Self {
             tasks: VecDeque::new(),
             completed_tasks: vec![],
@@ -309,12 +309,9 @@ impl<'a> Scheduler<'a> {
     }
 
     pub async fn run(&mut self) {
-        let gc = self.store.gc.clone();
-
         while !self.tasks.is_empty() {
             self.await_executation().await;
-            let mut gc = gc.borrow_mut();
-            let gc = &mut gc;
+            let mut gc = self.store.lock_gc();
             while self.ready_count != 0 {
                 trace!("task ready count: {:?}", self.ready_count);
 
@@ -334,7 +331,7 @@ impl<'a> Scheduler<'a> {
                 } = task;
 
                 let mut ec = ExecuteContext {
-                    gc,
+                    gc: &mut gc,
                     local_reference,
                     stack: &mut stack,
                     store: self.store,
@@ -378,7 +375,7 @@ impl<'a> Scheduler<'a> {
                     }
                 }
             }
-            self.processing_effect(gc);
+            self.processing_effect(&mut gc);
         }
     }
 
@@ -498,8 +495,8 @@ mod tests {
     }
     #[tokio::test]
     async fn test_async() {
-        let mut store = Store::new();
-        let mut scheduler = Scheduler::new(&mut store);
+        let store = Store::new();
+        let mut scheduler = Scheduler::new(&store);
         {
             scheduler.push(Task {
                 task_id: 0,

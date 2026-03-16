@@ -25,7 +25,7 @@ impl ComponentExports {
 
     pub async fn call(
         &self,
-        store: &mut Store,
+        store: &Store,
         name: &str,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
@@ -49,7 +49,7 @@ impl ComponentInstance {
 
     pub async fn call(
         &self,
-        store: &mut Store,
+        store: &Store,
         name: &str,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {

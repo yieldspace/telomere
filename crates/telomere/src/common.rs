@@ -1,8 +1,7 @@
 #[macro_use]
 mod vm_result;
 use std::fmt::Display;
-
-use std::rc::Rc;
+use std::sync::Arc;
 
 use custom_section::NameSubSection;
 
@@ -405,7 +404,7 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     pub local_reference: LocalReference,
-    pub store: &'a mut Store,
+    pub store: &'a Store,
     pub gc: &'a mut MemoryPool,
     pub effect: EffectSupplier<'a>,
     pub cont: *const Instr,
@@ -448,10 +447,90 @@ impl ExecuteContext<'_> {
 }
 
 #[derive(Debug, Clone)]
-pub struct InstanceHandle(pub(crate) Rc<GcRootHandle>);
+pub struct InstanceHandle(pub(crate) Arc<GcRootHandle>);
 impl InstanceHandle {
-    pub(crate) fn get_gc_ref_with_pool(&self, pool_ref: &MemoryPool) -> GcRef {
-        self.0.get_gc_ref_with_pool(pool_ref)
+    pub(crate) fn get_gc_ref_with_pool(
+        &self,
+        store: &Store,
+        pool_ref: &MemoryPool,
+    ) -> Option<GcRef> {
+        if !store.matches_identity(&self.0.store_identity) {
+            return None;
+        }
+        Some(pool_ref.read_root_slot(self.0.slot.get()))
+    }
+
+    pub(crate) fn from_root_slot(store: &Store, slot: u32) -> Self {
+        Self(Arc::new(GcRootHandle::new(
+            slot,
+            store.gc_weak(),
+            store.identity_weak(),
+        )))
+    }
+}
+
+#[cfg(test)]
+mod instance_handle_tests {
+    use super::{GcRef, InstanceHandle, Store, VMResult, WasmValue};
+    use crate::{get_global, instantiate, IoReadBinaryReader, Module, Registry, WasmParser};
+
+    fn parse_module(wat: &str) -> Module {
+        let source = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(&source[..]);
+        let mut parser = WasmParser::new(&mut reader);
+        parser.parse_module().expect("module must parse")
+    }
+
+    async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
+        instantiate(parse_module(wat), store, registry)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn dropped_instance_handle_releases_root_slot() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let handle = instantiate_wat(
+            r#"
+            (module
+              (global (export "g") i32 (i32.const 42)))
+            "#,
+            &store,
+            &registry,
+        )
+        .await;
+        let slot = handle.0.slot.get();
+        assert_ne!(store.lock_gc().read_root_slot(slot), GcRef(0));
+
+        drop(handle);
+
+        assert_eq!(store.lock_gc().read_root_slot(slot), GcRef(0));
+    }
+
+    #[tokio::test]
+    async fn foreign_store_handle_resolution_fails_closed() {
+        let store_a = Store::new();
+        let store_b = Store::new();
+        let registry = Registry::new();
+        let handle = instantiate_wat(
+            r#"
+            (module
+              (global (export "g") i32 (i32.const 42)))
+            "#,
+            &store_a,
+            &registry,
+        )
+        .await;
+
+        assert!(matches!(
+            get_global(&handle, &store_b, "g"),
+            VMResult::Unlinkable
+        ));
+        assert!(matches!(
+            get_global(&handle, &store_a, "g"),
+            VMResult::Success(WasmValue::I32(42))
+        ));
     }
 }
 

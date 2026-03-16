@@ -81,7 +81,7 @@ pub async fn run_wast(text: &str) {
     let mut store = Store::new();
     let mut registry = Registry::new();
     let st = init_spectest(&mut store, &registry).await;
-    registry.register("spectest", st);
+    registry.register("spectest", st.clone());
     run_wast_with(text, &mut store, &mut registry).await;
 }
 pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {

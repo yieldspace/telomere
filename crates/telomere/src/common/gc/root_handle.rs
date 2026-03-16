@@ -1,36 +1,33 @@
-use std::{cell::RefCell, rc::Rc};
+use parking_lot::Mutex;
+use std::{num::NonZeroU32, sync::Weak};
 
-use super::{object::GcRefDynamicArray, GcRef, MemoryPool};
+use super::MemoryPool;
 
 #[derive(Debug)]
 pub struct GcRootHandle {
-    pool: Rc<RefCell<MemoryPool>>,
-    idx: u32,
+    pub(crate) pool: Weak<Mutex<MemoryPool>>,
+    pub(crate) store_identity: Weak<()>,
+    pub(crate) slot: NonZeroU32,
 }
+
 impl GcRootHandle {
-    pub fn new(ptr: GcRef, pool: Rc<RefCell<MemoryPool>>) -> Self {
-        Self::new_with_ref(ptr, &mut pool.borrow_mut(), pool.clone())
-    }
-    pub fn new_with_ref(
-        ptr: GcRef,
-        pool_ref: &mut MemoryPool,
-        pool: Rc<RefCell<MemoryPool>>,
-    ) -> Self {
-        let idx = pool_ref.add_root(ptr);
-        Self { pool, idx }
-    }
-    pub fn get_gc_ref_with_pool(&self, pool_ref: &MemoryPool) -> GcRef {
-        let arr = unsafe {
-            pool_ref
-                .get_value::<GcRefDynamicArray>(GcRef(1), 0)
-                .as_ref()
-                .unwrap()
-        };
-        arr.as_slice(pool_ref)[self.idx as usize]
+    pub fn new(slot: u32, pool: Weak<Mutex<MemoryPool>>, store_identity: Weak<()>) -> Self {
+        Self {
+            pool,
+            store_identity,
+            slot: NonZeroU32::new(slot).expect("root slot ids are 1-based"),
+        }
     }
 }
+
 impl Drop for GcRootHandle {
     fn drop(&mut self) {
-        self.pool.borrow_mut().remove_root(self.idx);
+        crate::common::store::with_active_gc_for_identity(&self.store_identity, |active_gc| {
+            if let Some(gc) = active_gc {
+                gc.remove_root(self.slot.get());
+            } else if let Some(pool) = self.pool.upgrade() {
+                pool.lock().remove_root(self.slot.get());
+            }
+        });
     }
 }

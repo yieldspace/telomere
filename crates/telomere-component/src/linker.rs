@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 pub(crate) type AsyncHostFn = Arc<
     dyn for<'a> Fn(
-            &'a mut Store,
+            &'a Store,
             &'a [ComponentValue],
         ) -> ComponentFuture<'a, Result<Vec<ComponentValue>, ComponentError>>
         + 'static,
@@ -40,7 +40,7 @@ impl ComponentLinkerInstance {
         &mut self,
         name: impl Into<String>,
         func: impl for<'a> Fn(
-                &'a mut Store,
+                &'a Store,
                 &'a [ComponentValue],
             )
                 -> ComponentFuture<'a, Result<Vec<ComponentValue>, ComponentError>>
@@ -53,7 +53,7 @@ impl ComponentLinkerInstance {
     pub fn register_func(
         &mut self,
         name: impl Into<String>,
-        func: impl Fn(&mut Store, &[ComponentValue]) -> Result<Vec<ComponentValue>, ComponentError>
+        func: impl Fn(&Store, &[ComponentValue]) -> Result<Vec<ComponentValue>, ComponentError>
             + 'static,
     ) {
         self.register_func_async(name, move |store, args| Box::pin(ready(func(store, args))));
@@ -62,8 +62,7 @@ impl ComponentLinkerInstance {
     pub fn register_func_typed_async<P, R>(
         &mut self,
         name: impl Into<String>,
-        func: impl for<'a> Fn(&'a mut Store, P) -> ComponentFuture<'a, Result<R, ComponentError>>
-            + 'static,
+        func: impl for<'a> Fn(&'a Store, P) -> ComponentFuture<'a, Result<R, ComponentError>> + 'static,
     ) where
         P: ComponentParams + 'static,
         R: ComponentReturn + 'static,
@@ -86,7 +85,7 @@ impl ComponentLinkerInstance {
     pub fn register_func_typed<P, R>(
         &mut self,
         name: impl Into<String>,
-        func: impl Fn(&mut Store, P) -> Result<R, ComponentError> + 'static,
+        func: impl Fn(&Store, P) -> Result<R, ComponentError> + 'static,
     ) where
         P: ComponentParams + 'static,
         R: ComponentReturn + 'static,
@@ -117,7 +116,7 @@ impl ComponentLinker {
         &mut self,
         name: impl Into<String>,
         func: impl for<'a> Fn(
-                &'a mut Store,
+                &'a Store,
                 &'a [ComponentValue],
             )
                 -> ComponentFuture<'a, Result<Vec<ComponentValue>, ComponentError>>
@@ -131,7 +130,7 @@ impl ComponentLinker {
         &mut self,
         name: impl Into<String>,
         func: impl for<'a> Fn(
-                &'a mut Store,
+                &'a Store,
                 &'a [ComponentValue],
             )
                 -> ComponentFuture<'a, Result<Vec<ComponentValue>, ComponentError>>
@@ -144,7 +143,7 @@ impl ComponentLinker {
     pub fn register_import(
         &mut self,
         name: impl Into<String>,
-        func: impl Fn(&mut Store, &[ComponentValue]) -> Result<Vec<ComponentValue>, ComponentError>
+        func: impl Fn(&Store, &[ComponentValue]) -> Result<Vec<ComponentValue>, ComponentError>
             + 'static,
     ) {
         self.register_import_async(name, move |store, args| Box::pin(ready(func(store, args))));
@@ -153,7 +152,7 @@ impl ComponentLinker {
     pub fn register_export(
         &mut self,
         name: impl Into<String>,
-        func: impl Fn(&mut Store, &[ComponentValue]) -> Result<Vec<ComponentValue>, ComponentError>
+        func: impl Fn(&Store, &[ComponentValue]) -> Result<Vec<ComponentValue>, ComponentError>
             + 'static,
     ) {
         self.register_export_async(name, move |store, args| Box::pin(ready(func(store, args))));
@@ -162,8 +161,7 @@ impl ComponentLinker {
     pub fn register_import_typed_async<P, R>(
         &mut self,
         name: impl Into<String>,
-        func: impl for<'a> Fn(&'a mut Store, P) -> ComponentFuture<'a, Result<R, ComponentError>>
-            + 'static,
+        func: impl for<'a> Fn(&'a Store, P) -> ComponentFuture<'a, Result<R, ComponentError>> + 'static,
     ) where
         P: ComponentParams + 'static,
         R: ComponentReturn + 'static,
@@ -186,7 +184,7 @@ impl ComponentLinker {
     pub fn register_import_typed<P, R>(
         &mut self,
         name: impl Into<String>,
-        func: impl Fn(&mut Store, P) -> Result<R, ComponentError> + 'static,
+        func: impl Fn(&Store, P) -> Result<R, ComponentError> + 'static,
     ) where
         P: ComponentParams + 'static,
         R: ComponentReturn + 'static,

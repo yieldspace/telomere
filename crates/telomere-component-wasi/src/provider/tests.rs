@@ -59,21 +59,20 @@ fn temp_sandbox() -> PathBuf {
 fn provider_stdio_and_exit_are_recorded() {
     let state = WasiState::builder().stdin(b"abc".to_vec()).build();
     let host = WasiHost::new(state.clone());
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &mut store).unwrap();
+    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &store).unwrap();
     let stdin_borrow = WasiIoStreamsInputStreamBorrow::new(stdin.handle());
-    let chunk =
-        <WasiHost as io_streams::Host>::input_stream_read(&host, &mut store, stdin_borrow, 2)
-            .unwrap()
-            .unwrap();
+    let chunk = <WasiHost as io_streams::Host>::input_stream_read(&host, &store, stdin_borrow, 2)
+        .unwrap()
+        .unwrap();
     assert_eq!(chunk, b"ab");
 
-    let stdout = <WasiHost as cli_stdout::Host>::get_stdout(&host, &mut store).unwrap();
+    let stdout = <WasiHost as cli_stdout::Host>::get_stdout(&host, &store).unwrap();
     let stdout_borrow = WasiIoStreamsOutputStreamBorrow::new(stdout.handle());
     <WasiHost as io_streams::Host>::output_stream_write(
         &host,
-        &mut store,
+        &store,
         stdout_borrow,
         b"hello".to_vec(),
     )
@@ -81,7 +80,7 @@ fn provider_stdio_and_exit_are_recorded() {
     .unwrap();
     assert_eq!(state.stdout(), b"hello");
 
-    let exit = <WasiHost as cli_exit::Host>::exit(&host, &mut store, Err(()));
+    let exit = <WasiHost as cli_exit::Host>::exit(&host, &store, Err(()));
     assert!(matches!(exit, Err(ComponentError::Trap(_))));
     assert_eq!(state.exit_code(), Some(1));
 }
@@ -90,14 +89,14 @@ fn provider_stdio_and_exit_are_recorded() {
 fn provider_write_zeroes_honors_requested_length() {
     let state = WasiState::builder().build();
     let host = WasiHost::new(state.clone());
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let stdout = <WasiHost as cli_stdout::Host>::get_stdout(&host, &mut store).unwrap();
+    let stdout = <WasiHost as cli_stdout::Host>::get_stdout(&host, &store).unwrap();
     let stdout_borrow = WasiIoStreamsOutputStreamBorrow::new(stdout.handle());
 
     <WasiHost as io_streams::Host>::output_stream_write_zeroes(
         &host,
-        &mut store,
+        &store,
         stdout_borrow,
         (1 << 20) as u64 + 33,
     )
@@ -111,9 +110,9 @@ fn provider_write_zeroes_honors_requested_length() {
 fn provider_inherit_stdin_uses_live_host_source() {
     let state = WasiState::builder().inherit_stdin().build();
     let host = WasiHost::new(state);
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &mut store).unwrap();
+    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &store).unwrap();
     let inner = host.state.inner.borrow();
     let entry = inner
         .input_streams
@@ -126,19 +125,19 @@ fn provider_inherit_stdin_uses_live_host_source() {
 fn provider_buffered_input_stream_subscribe_is_ready() {
     let state = WasiState::builder().stdin(b"abc".to_vec()).build();
     let host = WasiHost::new(state);
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &mut store).unwrap();
+    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &store).unwrap();
     let pollable = <WasiHost as io_streams::Host>::input_stream_subscribe(
         &host,
-        &mut store,
+        &store,
         WasiIoStreamsInputStreamBorrow::new(stdin.handle()),
     )
     .unwrap();
 
     let ready = <WasiHost as io_poll::Host>::pollable_ready(
         &host,
-        &mut store,
+        &store,
         WasiIoPollPollableBorrow::new(pollable.handle()),
     )
     .unwrap();
@@ -149,12 +148,12 @@ fn provider_buffered_input_stream_subscribe_is_ready() {
 fn provider_host_stdin_subscribe_registers_input_stream_pollable() {
     let state = WasiState::builder().inherit_stdin().build();
     let host = WasiHost::new(state);
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &mut store).unwrap();
+    let stdin = <WasiHost as cli_stdin::Host>::get_stdin(&host, &store).unwrap();
     let pollable = <WasiHost as io_streams::Host>::input_stream_subscribe(
         &host,
-        &mut store,
+        &store,
         WasiIoStreamsInputStreamBorrow::new(stdin.handle()),
     )
     .unwrap();
@@ -174,17 +173,16 @@ fn provider_preopen_open_and_read_work() {
 
     let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
     let host = WasiHost::new(state);
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let preopens =
-        <WasiHost as filesystem_preopens::Host>::get_directories(&host, &mut store).unwrap();
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
     assert_eq!(preopens.len(), 1);
     assert_eq!(preopens[0].1, "sandbox");
 
     let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
     let descriptor = <WasiHost as filesystem_types::Host>::descriptor_open_at(
         &host,
-        &mut store,
+        &store,
         root,
         empty_path_flags(),
         "hello.txt".to_owned(),
@@ -196,7 +194,7 @@ fn provider_preopen_open_and_read_work() {
     let descriptor_borrow = WasiFilesystemTypesDescriptorBorrow::new(descriptor.handle());
 
     let stat =
-        <WasiHost as filesystem_types::Host>::descriptor_stat(&host, &mut store, descriptor_borrow)
+        <WasiHost as filesystem_types::Host>::descriptor_stat(&host, &store, descriptor_borrow)
             .unwrap()
             .unwrap();
     assert_eq!(stat.size, 10);
@@ -204,7 +202,7 @@ fn provider_preopen_open_and_read_work() {
 
     let read = <WasiHost as filesystem_types::Host>::descriptor_read(
         &host,
-        &mut store,
+        &store,
         descriptor_borrow,
         5,
         0,
@@ -215,7 +213,7 @@ fn provider_preopen_open_and_read_work() {
 
     let stream = <WasiHost as filesystem_types::Host>::descriptor_read_via_stream(
         &host,
-        &mut store,
+        &store,
         descriptor_borrow,
         6,
     )
@@ -223,7 +221,7 @@ fn provider_preopen_open_and_read_work() {
     .unwrap();
     let stream_borrow = WasiIoStreamsInputStreamBorrow::new(stream.handle());
     let remainder =
-        <WasiHost as io_streams::Host>::input_stream_read(&host, &mut store, stream_borrow, 8)
+        <WasiHost as io_streams::Host>::input_stream_read(&host, &store, stream_borrow, 8)
             .unwrap()
             .unwrap();
     assert_eq!(remainder, b"wasi");
@@ -239,14 +237,13 @@ fn provider_stream_read_failure_returns_last_operation_failed() {
 
     let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
     let host = WasiHost::new(state);
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let preopens =
-        <WasiHost as filesystem_preopens::Host>::get_directories(&host, &mut store).unwrap();
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
     let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
     let descriptor = <WasiHost as filesystem_types::Host>::descriptor_open_at(
         &host,
-        &mut store,
+        &store,
         root,
         empty_path_flags(),
         "hello.txt".to_owned(),
@@ -258,7 +255,7 @@ fn provider_stream_read_failure_returns_last_operation_failed() {
     let descriptor_borrow = WasiFilesystemTypesDescriptorBorrow::new(descriptor.handle());
     let stream = <WasiHost as filesystem_types::Host>::descriptor_read_via_stream(
         &host,
-        &mut store,
+        &store,
         descriptor_borrow,
         0,
     )
@@ -268,7 +265,7 @@ fn provider_stream_read_failure_returns_last_operation_failed() {
 
     let error = <WasiHost as io_streams::Host>::input_stream_read(
         &host,
-        &mut store,
+        &store,
         WasiIoStreamsInputStreamBorrow::new(stream.handle()),
         8,
     )
@@ -281,7 +278,7 @@ fn provider_stream_read_failure_returns_last_operation_failed() {
 
     let debug = <WasiHost as io_error::Host>::error_to_debug_string(
         &host,
-        &mut store,
+        &store,
         WasiIoErrorErrorBorrow::new(handle),
     )
     .unwrap();
@@ -289,7 +286,7 @@ fn provider_stream_read_failure_returns_last_operation_failed() {
 
     let code = <WasiHost as filesystem_types::Host>::filesystem_error_code(
         &host,
-        &mut store,
+        &store,
         WasiIoErrorErrorBorrow::new(handle),
     )
     .unwrap();
@@ -306,16 +303,15 @@ fn provider_rejects_reads_when_descriptor_lacks_read_rights() {
 
     let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
     let host = WasiHost::new(state);
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let preopens =
-        <WasiHost as filesystem_preopens::Host>::get_directories(&host, &mut store).unwrap();
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
     let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
     let mut no_read_flags = read_only_flags();
     no_read_flags.read = false;
     let descriptor = <WasiHost as filesystem_types::Host>::descriptor_open_at(
         &host,
-        &mut store,
+        &store,
         root,
         empty_path_flags(),
         "hello.txt".to_owned(),
@@ -328,7 +324,7 @@ fn provider_rejects_reads_when_descriptor_lacks_read_rights() {
 
     let read = <WasiHost as filesystem_types::Host>::descriptor_read(
         &host,
-        &mut store,
+        &store,
         descriptor_borrow,
         5,
         0,
@@ -338,7 +334,7 @@ fn provider_rejects_reads_when_descriptor_lacks_read_rights() {
 
     let stream = <WasiHost as filesystem_types::Host>::descriptor_read_via_stream(
         &host,
-        &mut store,
+        &store,
         descriptor_borrow,
         0,
     )
@@ -360,14 +356,13 @@ fn provider_rejects_symlink_escape_when_not_following() {
 
     let state = WasiState::builder().preopen_dir(&dir, "sandbox").build();
     let host = WasiHost::new(state);
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
-    let preopens =
-        <WasiHost as filesystem_preopens::Host>::get_directories(&host, &mut store).unwrap();
+    let preopens = <WasiHost as filesystem_preopens::Host>::get_directories(&host, &store).unwrap();
     let root = WasiFilesystemTypesDescriptorBorrow::new(preopens[0].0.handle());
     let result = <WasiHost as filesystem_types::Host>::descriptor_open_at(
         &host,
-        &mut store,
+        &store,
         root,
         empty_path_flags(),
         "escape/secret.txt".to_owned(),

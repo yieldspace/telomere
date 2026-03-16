@@ -439,18 +439,40 @@ impl MemoryPool {
         self.mark_phase();
         self.compact_phase();
     }
-    pub fn add_root(&mut self, item: GcRef) -> u32 {
+    pub fn reserve_root_slot(&mut self) -> u32 {
         unsafe {
-            self.gc_ref_array_push_vec(self.root, 0, &[item]);
-            self.get_ref_dynamic_array(self.root, 0).len - 1
+            self.gc_ref_array_push_vec(self.root, 0, &[GcRef(0)]);
+            self.get_ref_dynamic_array(self.root, 0).len
         }
     }
-    pub fn remove_root(&mut self, idx: u32) {
+
+    pub fn write_root_slot(&mut self, slot: u32, item: GcRef) {
+        let idx = slot.checked_sub(1).expect("root slot ids are 1-based") as usize;
         unsafe {
             *(*self.get_value_mut::<GcRefDynamicArray>(self.root, 0))
                 .as_ptr_mut(self)
-                .add(idx as usize) = GcRef(0);
+                .add(idx) = item;
         }
+    }
+
+    pub fn read_root_slot(&self, slot: u32) -> GcRef {
+        let idx = slot.checked_sub(1).expect("root slot ids are 1-based") as usize;
+        unsafe {
+            *(*self.get_value::<GcRefDynamicArray>(self.root, 0))
+                .as_ptr(self)
+                .add(idx)
+        }
+    }
+
+    #[cfg(test)]
+    pub fn add_root(&mut self, item: GcRef) -> u32 {
+        let slot = self.reserve_root_slot();
+        self.write_root_slot(slot, item);
+        slot
+    }
+
+    pub fn remove_root(&mut self, slot: u32) {
+        self.write_root_slot(slot, GcRef(0));
     }
     #[cfg(test)]
     fn scan_heap(&self) -> impl Iterator<Item = GcRef> + use<'_> {

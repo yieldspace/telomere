@@ -31,13 +31,13 @@ async fn test_print() {
                 signature: FuncType::new(vec![], vec![]),
             }],
         },
-        &mut store,
+        &store,
         &registry,
     )
     .await
     .unwrap();
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, print, &mut store);
+    link_host_function_with_function_idx(&host, 0, print, &store);
     let wast = r#"
     (module
       (import "host" "print" (func $print))
@@ -106,13 +106,13 @@ async fn test_tail_call_wasm() {
                 signature: FuncType::new(vec![ValType::FuncRef, ValType::I32], vec![ValType::I32]),
             }],
         },
-        &mut store,
+        &store,
         &registry,
     )
     .await
     .unwrap();
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
+    link_host_function_with_function_idx(&host, 0, tail_call, &store);
     let wast = r#"
     (module
       (import "host" "tail_call" (func $tail_call (param funcref i32) (result i32)))
@@ -157,14 +157,14 @@ pub async fn test_tail_call_native() {
                 },
             ],
         },
-        &mut store,
+        &store,
         &registry,
     )
     .await
     .unwrap();
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
-    link_host_function_with_function_idx(&host, 1, plus60, &mut store);
+    link_host_function_with_function_idx(&host, 0, tail_call, &store);
+    link_host_function_with_function_idx(&host, 1, plus60, &store);
 
     let wast = r#"
     (module
