@@ -1,15 +1,18 @@
 mod common;
 use common::{instantiate_wat, run_wast_with};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
-    common::{ExecuteContext, Instr},
+    common::{ExecuteContext, Instr, StoreState},
     link_host_function_with_function_idx, vm_try, Registry, Store, VMResult,
 };
-static mut PRINT_CALL: Vec<()> = vec![];
+
+fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
+    unsafe { ctx.store.state.get::<AtomicUsize>() }
+        .expect("host function tests require an AtomicUsize in StoreState")
+}
+
 fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    #[allow(static_mut_refs)]
-    unsafe {
-        PRINT_CALL.push(())
-    };
+    print_counter(ctx).fetch_add(1, Ordering::SeqCst);
     let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
@@ -17,7 +20,10 @@ fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 
 #[tokio::test]
 async fn test_print() {
-    let mut store = Store::new();
+    let counter = Box::new(AtomicUsize::new(0));
+    let mut store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+    });
     let mut registry = Registry::new();
     let host = instantiate_wat(
         r#"
@@ -39,20 +45,15 @@ async fn test_print() {
     (invoke "wasm_print")
     "#;
     run_wast_with(wast, &mut store, &mut registry).await;
-    #[allow(static_mut_refs)]
-    unsafe {
-        assert_eq!(PRINT_CALL, vec![()]);
-    }
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn test_imported_host_start() {
-    #[allow(static_mut_refs)]
-    unsafe {
-        PRINT_CALL.clear();
-    }
-
-    let mut store = Store::new();
+    let counter = Box::new(AtomicUsize::new(0));
+    let mut store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+    });
     let mut registry = Registry::new();
     let host = instantiate_wat(
         r#"
@@ -79,10 +80,7 @@ async fn test_imported_host_start() {
     )
     .await;
 
-    #[allow(static_mut_refs)]
-    unsafe {
-        assert_eq!(PRINT_CALL, vec![()]);
-    }
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
 const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
