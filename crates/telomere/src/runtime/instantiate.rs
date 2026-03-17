@@ -168,9 +168,6 @@ pub async fn instantiate(
     let (addr, has_start, _start_host_program) = {
         let mut gc = store.lock_gc();
         let instance_id = store.new_instance_id();
-        let root_slot = gc.reserve_root_slot();
-        debug_assert_eq!(instance_id, root_slot);
-        let addr = InstanceHandle::from_root_slot(store, root_slot);
 
         // -> addr
         let mut memory: Option<GcRef> = None;
@@ -412,7 +409,9 @@ pub async fn instantiate(
             gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
+        let root_slot = gc.reserve_root_slot();
         gc.write_root_slot(root_slot, inst_addr);
+        let addr = InstanceHandle::from_root_slot(store, root_slot);
 
         let mut start_host_program = None;
         let has_start = if let Some(start) = start {
@@ -504,8 +503,6 @@ pub fn aliasing(
     }
     let mut gc = store.lock_gc();
     let inst_id = store.new_instance_id();
-    let root_slot = gc.reserve_root_slot();
-    debug_assert_eq!(inst_id, root_slot);
     let mut functions = vec![];
     let mut function_types = vec![];
     let mut globals = vec![];
@@ -596,6 +593,7 @@ pub fn aliasing(
         tables: table_addrs,
         instance_id: inst_id,
     });
+    let root_slot = gc.reserve_root_slot();
     gc.write_root_slot(root_slot, inst_addr);
     VMResult::Success(InstanceHandle::from_root_slot(store, root_slot))
 }

@@ -473,8 +473,8 @@ impl InstanceHandle {
 mod instance_handle_tests {
     use super::{GcRef, InstanceHandle, Store, VMResult, WasmValue};
     use crate::{
-        get_global, instantiate, run_module_function, IoReadBinaryReader, Module, Registry,
-        ResultValue, WasmParser,
+        aliasing, get_global, instantiate, run_module_function, IoReadBinaryReader, Module,
+        Registry, ResultValue, WasmParser,
     };
     use futures::executor::block_on;
 
@@ -604,6 +604,43 @@ mod instance_handle_tests {
             )),
             VMResult::Unlinkable
         ));
+    }
+
+    #[tokio::test]
+    async fn failed_instantiate_does_not_leak_root_slots() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let module = parse_module(
+            r#"
+            (module
+              (import "env" "missing" (func)))
+            "#,
+        );
+
+        for _ in 0..3 {
+            assert!(matches!(
+                instantiate(module.clone(), &store, &registry).await,
+                VMResult::Unlinkable
+            ));
+        }
+
+        assert_eq!(store.lock_gc().reserve_root_slot(), 1);
+    }
+
+    #[test]
+    fn failed_aliasing_does_not_leak_root_slots() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let triplets = [("missing".to_owned(), "x".to_owned(), "y".to_owned())];
+
+        for _ in 0..3 {
+            assert!(matches!(
+                aliasing(&registry, &triplets, &store),
+                VMResult::Unlinkable
+            ));
+        }
+
+        assert_eq!(store.lock_gc().reserve_root_slot(), 1);
     }
 }
 

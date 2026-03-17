@@ -80,10 +80,12 @@ impl DerefMut for StoreGcGuard<'_> {
 impl Drop for StoreGcGuard<'_> {
     fn drop(&mut self) {
         ACTIVE_STORE_GC.with(|active| {
-            let (identity, _) = active
-                .borrow_mut()
-                .pop()
+            let mut active = active.borrow_mut();
+            let index = active
+                .iter()
+                .rposition(|(identity, _)| *identity == self.identity)
                 .expect("store GC guard stack must stay balanced");
+            let (identity, _) = active.remove(index);
             debug_assert_eq!(identity, self.identity);
         });
     }
@@ -211,12 +213,36 @@ impl StoreState {
 
 #[cfg(test)]
 mod test {
+    use super::{has_active_gc_for_identity, Store, StoreState};
+
     #[test]
     fn test_state() {
-        use super::StoreState;
         static DATA: [i32; 3] = [1, 2, 3];
         let state = StoreState::from_static(&DATA);
         let value = unsafe { state.get::<[i32; 3]>() }.unwrap();
         assert_eq!(value, &DATA);
+    }
+
+    #[test]
+    fn non_lifo_store_gc_drop_keeps_other_store_active() {
+        let store_a = Store::new();
+        let store_b = Store::new();
+        let identity_a = store_a.identity_weak();
+        let identity_b = store_b.identity_weak();
+
+        let guard_a = store_a.lock_gc();
+        let guard_b = store_b.lock_gc();
+
+        assert!(has_active_gc_for_identity(&identity_a));
+        assert!(has_active_gc_for_identity(&identity_b));
+
+        drop(guard_a);
+
+        assert!(!has_active_gc_for_identity(&identity_a));
+        assert!(has_active_gc_for_identity(&identity_b));
+
+        drop(guard_b);
+
+        assert!(!has_active_gc_for_identity(&identity_b));
     }
 }
