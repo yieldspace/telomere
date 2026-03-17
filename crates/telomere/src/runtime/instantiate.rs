@@ -605,6 +605,12 @@ pub fn link_host_function_with_function_idx(
     f: HostFunction,
     store: &Store,
 ) {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!(
+            "link_host_function_with_function_idx is unsupported while the same store GC is already active"
+        );
+        return;
+    }
     let mut gc = store.lock_gc();
     let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
         tracing::error!("instance handle belongs to another store");
@@ -623,6 +629,12 @@ pub fn link_host_function_with_export_name(
     f: HostFunction,
     store: &Store,
 ) {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!(
+            "link_host_function_with_export_name is unsupported while the same store GC is already active"
+        );
+        return;
+    }
     let mut gc = store.lock_gc();
     let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
         tracing::error!("instance handle belongs to another store");

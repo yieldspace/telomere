@@ -3,8 +3,23 @@ use common::{instantiate_wat, run_wast_with};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
     common::{ExecuteContext, Instr, StoreState},
-    link_host_function_with_function_idx, vm_try, Registry, Store, VMResult,
+    link_host_function_with_export_name, link_host_function_with_function_idx, vm_try, Registry,
+    Store, VMResult,
 };
+
+const PRINT_HOST_WAT: &str = r#"
+    (module
+      (func (export "print"))
+    )
+    "#;
+
+const CALL_PRINT_WAST: &str = r#"
+    (module
+      (import "host" "print" (func $print))
+      (func (export "wasm_print") (call $print))
+    )
+    (invoke "wasm_print")
+    "#;
 
 fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
     unsafe { ctx.store.state.get::<AtomicUsize>() }
@@ -25,26 +40,10 @@ async fn test_print() {
         StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
     });
     let mut registry = Registry::new();
-    let host = instantiate_wat(
-        r#"
-    (module
-      (func (export "print"))
-    )
-    "#,
-        &store,
-        &registry,
-    )
-    .await;
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
     registry.register("host", host.clone());
     link_host_function_with_function_idx(&host, 0, print, &store);
-    let wast = r#"
-    (module
-      (import "host" "print" (func $print))
-      (func (export "wasm_print") (call $print))
-    )
-    (invoke "wasm_print")
-    "#;
-    run_wast_with(wast, &store, &mut registry).await;
+    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -55,16 +54,7 @@ async fn test_imported_host_start() {
         StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
     });
     let mut registry = Registry::new();
-    let host = instantiate_wat(
-        r#"
-    (module
-      (func (export "print"))
-    )
-    "#,
-        &store,
-        &registry,
-    )
-    .await;
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
     registry.register("host", host.clone());
     link_host_function_with_function_idx(&host, 0, print, &store);
 
@@ -81,6 +71,44 @@ async fn test_imported_host_start() {
     .await;
 
     assert_eq!(counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_reentrant_link_host_function_with_function_idx_fails_closed() {
+    let counter = Box::new(AtomicUsize::new(0));
+    let store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+    });
+    let mut registry = Registry::new();
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
+    registry.register("host", host.clone());
+
+    {
+        let _gc = store.lock_gc();
+        link_host_function_with_function_idx(&host, 0, print, &store);
+    }
+
+    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn test_reentrant_link_host_function_with_export_name_fails_closed() {
+    let counter = Box::new(AtomicUsize::new(0));
+    let store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+    });
+    let mut registry = Registry::new();
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
+    registry.register("host", host.clone());
+
+    {
+        let _gc = store.lock_gc();
+        link_host_function_with_export_name(&host, "print", print, &store);
+    }
+
+    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
 }
 
 const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
