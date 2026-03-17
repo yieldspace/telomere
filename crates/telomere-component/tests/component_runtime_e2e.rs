@@ -41,15 +41,15 @@ async fn component_runtime_calls_async_import_as_lifted_export() {
         })
     });
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let result = instance
         .call(
-            &mut store,
+            &store,
             "add",
             &[ComponentValue::I32(20), ComponentValue::I32(22)],
         )
@@ -73,7 +73,7 @@ async fn component_runtime_calls_registered_core_export() {
 
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let registry = Registry::new();
     let core = instantiate_wat(
         r#"
@@ -83,7 +83,7 @@ async fn component_runtime_calls_registered_core_export() {
         local.get 1
         i32.add))
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
@@ -92,13 +92,13 @@ async fn component_runtime_calls_registered_core_export() {
     linker.register_export_core("add", core, "core_add");
 
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let result = instance
         .call(
-            &mut store,
+            &store,
             "add",
             &[ComponentValue::I32(20), ComponentValue::I32(22)],
         )
@@ -106,6 +106,74 @@ async fn component_runtime_calls_registered_core_export() {
         .expect("core call should succeed");
 
     assert_eq!(result, vec![ComponentValue::I32(42)]);
+}
+
+#[tokio::test]
+async fn component_runtime_can_lower_registered_core_imports_back_into_core() {
+    let bytes = compile_component(
+        r#"
+(component
+  (type (func (param "lhs" s32) (param "rhs" s32) (result s32)))
+  (import "core-add" (func $core-add (type 0)))
+  (core func $core-add-lower
+    (canon lower (func $core-add))
+  )
+  (core module $caller
+    (import "" "core-add" (func $core-add (param i32 i32) (result i32)))
+    (func (export "call-add") (param i32 i32) (result i32)
+      local.get 0
+      local.get 1
+      call $core-add)
+  )
+  (core instance $caller
+    (instantiate $caller
+      (with "" (instance
+        (export "core-add" (func $core-add-lower))
+      ))
+    )
+  )
+  (func (export "call-add") (param "lhs" s32) (param "rhs" s32) (result s32)
+    (canon lift (core func $caller "call-add"))
+  )
+)
+"#,
+    );
+
+    let engine = ComponentEngine::new();
+    let program = engine.compile(&bytes).expect("compile should succeed");
+    let store = telomere::Store::new();
+    let registry = Registry::new();
+    let core = instantiate_wat(
+        r#"
+    (module
+      (func (export "core_add") (param i32 i32) (result i32)
+        local.get 0
+        local.get 1
+        i32.add))
+    "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let mut linker = ComponentLinker::new();
+    linker.register_import_core("core-add", core, "core_add");
+
+    let instance = engine
+        .instantiate(&program, &store, &linker)
+        .await
+        .expect("instantiate should succeed");
+
+    let result = instance
+        .call(
+            &store,
+            "call-add",
+            &[ComponentValue::I32(20), ComponentValue::I32(22)],
+        )
+        .await
+        .expect("call should succeed");
+
+    assert_eq!(result, vec![ComponentValue::S32(42)]);
 }
 
 #[tokio::test]
@@ -136,11 +204,11 @@ async fn component_runtime_nested_component_instantiation_succeeds() {
 
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let linker = ComponentLinker::new();
 
     let _instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 }
@@ -159,11 +227,11 @@ async fn component_runtime_inline_instance_export_instantiation_succeeds() {
 
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let linker = ComponentLinker::new();
 
     let _instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 }
@@ -199,15 +267,15 @@ async fn component_runtime_sync_wrapper_registration_still_works() {
         Ok(vec![ComponentValue::I32(lhs + rhs)])
     });
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let result = instance
         .call(
-            &mut store,
+            &store,
             "add",
             &[ComponentValue::I32(1), ComponentValue::I32(2)],
         )
@@ -271,14 +339,14 @@ async fn component_runtime_canon_lower_writes_indirect_results_into_caller_area(
         Ok(vec![ComponentValue::String("hello".to_owned())])
     });
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let result = instance
-        .call(&mut store, "call-host", &[])
+        .call(&store, "call-host", &[])
         .await
         .expect("call should succeed");
 
@@ -336,14 +404,14 @@ async fn component_runtime_canon_lower_reads_packed_u8_lists_from_guest_memory()
         Ok(Vec::new())
     });
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     instance
-        .call(&mut store, "call-host", &[])
+        .call(&store, "call-host", &[])
         .await
         .expect("call should succeed");
 }
@@ -397,14 +465,14 @@ async fn component_runtime_fixup_populates_shim_table_for_host_lowerings() {
         Ok(vec![ComponentValue::U32(42)])
     });
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let result = instance
-        .call(&mut store, "call", &[ComponentValue::U32(7)])
+        .call(&store, "call", &[ComponentValue::U32(7)])
         .await
         .expect("call should succeed");
 
@@ -445,21 +513,21 @@ async fn component_runtime_calls_post_return_after_lift() {
 
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let linker = ComponentLinker::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let result = instance
-        .call(&mut store, "str", &[])
+        .call(&store, "str", &[])
         .await
         .expect("call should succeed");
     assert_eq!(result, vec![ComponentValue::String("a".to_owned())]);
 
     let count = instance
-        .call(&mut store, "count", &[])
+        .call(&store, "count", &[])
         .await
         .expect("count should succeed");
     assert_eq!(count, vec![ComponentValue::U32(1)]);
@@ -492,15 +560,15 @@ async fn component_runtime_surfaces_post_return_traps() {
 
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let linker = ComponentLinker::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let error = instance
-        .call(&mut store, "str", &[])
+        .call(&store, "str", &[])
         .await
         .expect_err("post-return trap should surface");
     assert!(matches!(error, ComponentError::Trap(message) if message.contains("unreachable")));
@@ -544,15 +612,15 @@ async fn component_runtime_surfaces_resource_drop_destructor_traps() {
 
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let linker = ComponentLinker::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let error = instance
-        .call(&mut store, "run", &[])
+        .call(&store, "run", &[])
         .await
         .expect_err("resource drop trap should surface");
     assert!(matches!(error, ComponentError::Trap(message) if message.contains("unreachable")));

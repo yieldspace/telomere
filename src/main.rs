@@ -50,11 +50,11 @@ async fn run_core_module(args: Cli) -> anyhow::Result<()> {
         parser.parse_module()?
     };
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
 
     let registry = telomere::Registry::new();
 
-    let instance = telomere::instantiate(module, &mut store, &registry)
+    let instance = telomere::instantiate(module, &store, &registry)
         .await
         .unwrap();
 
@@ -65,7 +65,7 @@ async fn run_core_module(args: Cli) -> anyhow::Result<()> {
             .collect(),
     );
 
-    let ret = telomere::run_module_function(&instance, &mut store, &func, &wasm_args)
+    let ret = telomere::run_module_function(&instance, &store, &func, &wasm_args)
         .await
         .unwrap();
 

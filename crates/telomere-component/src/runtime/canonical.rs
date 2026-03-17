@@ -48,7 +48,7 @@ pub(super) fn lower_component_args(
     args: &[ComponentValue],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     if func_type.params.len() != args.len() {
         return Err(ComponentError::InvalidArgument(format!(
@@ -93,7 +93,7 @@ pub(super) fn lift_component_args(
     args: &[WasmValue],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<ComponentValue>, ComponentError> {
     if function_params_flat_len(func_type, program)? > MAX_FLAT_PARAMS {
         let memory = options.memory.clone().ok_or_else(|| {
@@ -135,7 +135,7 @@ pub(super) fn lift_component_results(
     results: &[WasmValue],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<ComponentValue>, ComponentError> {
     let Some(result_ty) = &func_type.result else {
         return Ok(Vec::new());
@@ -158,7 +158,7 @@ pub(super) fn lower_component_results(
     results: &[ComponentValue],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     result_area: Option<u32>,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     let Some(result_ty) = &func_type.result else {
@@ -213,7 +213,7 @@ fn lower_value(
     ty: &ValType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     out: &mut Vec<WasmValue>,
 ) -> Result<(), ComponentError> {
     out.extend(lower_value_to_flat(value, ty, options, program, store)?);
@@ -225,7 +225,7 @@ fn lower_value_to_flat(
     ty: &ValType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     match ty {
         ValType::Primitive(prim) => lower_primitive(value, prim, options, store, program),
@@ -237,7 +237,7 @@ fn lower_primitive(
     value: &ComponentValue,
     prim: &PrimValType,
     options: &RuntimeCanonicalOptions,
-    store: &mut Store,
+    store: &Store,
     program: &ComponentProgram,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     Ok(match prim {
@@ -262,7 +262,7 @@ fn lower_defined_value(
     type_id: TypeId,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     match program
         .get_type(type_id)
@@ -296,7 +296,7 @@ fn lift_value(
     ty: &ValType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     match ty {
@@ -309,7 +309,7 @@ fn lift_defined_value(
     type_id: TypeId,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     match program
@@ -345,7 +345,7 @@ fn lift_defined_value(
 fn lift_primitive(
     prim: &PrimValType,
     options: &RuntimeCanonicalOptions,
-    store: &mut Store,
+    store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     Ok(match prim {
@@ -385,7 +385,7 @@ fn lower_string(
     value: &ComponentValue,
     options: &RuntimeCanonicalOptions,
     _program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     let memory = options.memory.clone().ok_or_else(|| {
         ComponentError::Runtime("canonical option `memory` is required".to_owned())
@@ -658,7 +658,7 @@ fn write_value_to_memory(
     ty: &ValType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
     match ty {
@@ -675,7 +675,7 @@ fn read_value_from_memory(
     ty: &ValType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
@@ -694,7 +694,7 @@ fn write_defined_value_to_memory(
     type_id: TypeId,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
     let memory = options.memory.as_ref().ok_or_else(|| {
@@ -754,7 +754,7 @@ fn read_defined_value_from_memory(
     type_id: TypeId,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
@@ -803,7 +803,7 @@ fn write_primitive_to_memory(
     prim: &PrimValType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
     let memory = options.memory.as_ref().ok_or_else(|| {
@@ -848,7 +848,7 @@ fn read_primitive_from_memory(
     prim: &PrimValType,
     options: &RuntimeCanonicalOptions,
     _program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
@@ -895,7 +895,7 @@ fn write_record_value_to_memory(
     fields: &[LabelValType],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
     let values = if is_tuple_fields(fields) {
@@ -968,7 +968,7 @@ fn read_record_value_from_memory(
     fields: &[LabelValType],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
@@ -997,7 +997,7 @@ fn write_variant_value_to_memory(
     cases: &[Case],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
     let (case_name, payload) = match value {
@@ -1070,7 +1070,7 @@ fn read_variant_value_from_memory(
     cases: &[Case],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
@@ -1127,7 +1127,7 @@ fn write_flags_value_to_memory(
     labels: &[crate::ir::Label],
     options: &RuntimeCanonicalOptions,
     _program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     ptr: u32,
 ) -> Result<(), ComponentError> {
     let memory = options.memory.as_ref().ok_or_else(|| {
@@ -1169,7 +1169,7 @@ fn write_flags_value_to_memory(
 fn read_flags_value_from_memory(
     labels: &[crate::ir::Label],
     memory: &CoreExportRef,
-    store: &mut Store,
+    store: &Store,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
     let abi = flags_memory_abi(labels.len());
@@ -1206,7 +1206,7 @@ fn read_list_value_from_memory(
     fixed_len: Option<usize>,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<ComponentValue, ComponentError> {
@@ -1255,7 +1255,7 @@ fn variant_payload_offset_and_size(
 }
 
 fn write_variant_discriminant_to_memory(
-    store: &mut Store,
+    store: &Store,
     options: &RuntimeCanonicalOptions,
     ptr: u32,
     case_count: usize,
@@ -1273,7 +1273,7 @@ fn write_variant_discriminant_to_memory(
 }
 
 fn read_variant_discriminant_from_memory(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
     case_count: usize,
@@ -1287,7 +1287,7 @@ fn read_variant_discriminant_from_memory(
 }
 
 fn read_u8_from_memory(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<u8, ComponentError> {
@@ -1295,7 +1295,7 @@ fn read_u8_from_memory(
 }
 
 fn read_u16_from_memory(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<u16, ComponentError> {
@@ -1307,7 +1307,7 @@ fn read_u16_from_memory(
 }
 
 fn read_i32_from_memory(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<i32, ComponentError> {
@@ -1319,7 +1319,7 @@ fn read_i32_from_memory(
 }
 
 fn read_i64_from_memory(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
 ) -> Result<i64, ComponentError> {
@@ -1348,7 +1348,7 @@ fn lower_record_value(
     fields: &[LabelValType],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     let values = if is_tuple_fields(fields) {
         match value {
@@ -1411,7 +1411,7 @@ fn lift_record_value(
     fields: &[LabelValType],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     let mut values = Vec::with_capacity(fields.len());
@@ -1435,7 +1435,7 @@ fn lower_variant_value(
     cases: &[Case],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     let (case_name, payload) = match value {
         ComponentValue::Variant { case, value } => (case.as_str(), value.as_deref()),
@@ -1512,7 +1512,7 @@ fn lift_variant_value(
     cases: &[Case],
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     let case_index = cursor.next_i32()? as usize;
@@ -1630,7 +1630,7 @@ fn lower_list_value(
     fixed_len: Option<usize>,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<Vec<WasmValue>, ComponentError> {
     let values = match value {
         ComponentValue::List(values) => values,
@@ -1679,7 +1679,7 @@ fn lift_list_value(
     fixed_len: Option<usize>,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     cursor: &mut CoreValueCursor<'_>,
 ) -> Result<ComponentValue, ComponentError> {
     let memory = options.memory.clone().ok_or_else(|| {
@@ -1713,7 +1713,7 @@ fn lift_value_from_flat_values(
     ty: &ValType,
     options: &RuntimeCanonicalOptions,
     program: &ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     values: &[WasmValue],
 ) -> Result<ComponentValue, ComponentError> {
     let mut cursor = CoreValueCursor::new(values);
@@ -1820,7 +1820,7 @@ fn is_enum_cases(cases: &[Case]) -> bool {
 }
 
 fn read_string_from_memory(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
     len: u32,
@@ -1853,7 +1853,7 @@ fn read_string_from_memory(
 }
 
 fn read_memory(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
     len: usize,
@@ -1862,16 +1862,16 @@ fn read_memory(
         let mut owned_gc = None;
         let gc = match gc {
             Some(gc) => gc,
-            None => owned_gc.get_or_insert_with(|| store.gc.borrow_mut()),
+            None => &mut *owned_gc.get_or_insert_with(|| store.lock_gc()),
         };
-        let addr = memory_addr(memory, gc)?;
+        let addr = memory_addr(store, memory, gc)?;
         crate::support::common::read_memory(gc, addr, ptr, len)
             .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))
     })
 }
 
 fn write_memory(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
     bytes: &[u8],
@@ -1880,9 +1880,9 @@ fn write_memory(
         let mut owned_gc = None;
         let gc = match gc {
             Some(gc) => gc,
-            None => owned_gc.get_or_insert_with(|| store.gc.borrow_mut()),
+            None => &mut *owned_gc.get_or_insert_with(|| store.lock_gc()),
         };
-        let addr = memory_addr(memory, gc)?;
+        let addr = memory_addr(store, memory, gc)?;
         if crate::support::common::write_memory(gc, addr, ptr, bytes) {
             Ok(())
         } else {
@@ -1894,7 +1894,7 @@ fn write_memory(
 }
 
 fn write_flat_values(
-    store: &mut Store,
+    store: &Store,
     memory: &CoreExportRef,
     ptr: u32,
     values: &[WasmValue],
@@ -1932,16 +1932,17 @@ fn write_flat_values(
 }
 
 fn memory_addr(
+    store: &Store,
     memory: &CoreExportRef,
     gc: &mut crate::support::common::gc::MemoryPool,
 ) -> Result<crate::support::common::gc::GcRef, ComponentError> {
-    crate::support::common::memory_export_addr(&memory.instance, &memory.export_name, gc)
+    crate::support::common::memory_export_addr(&memory.instance, store, &memory.export_name, gc)
         .map_err(ComponentError::Link)
 }
 
 fn call_realloc(
     realloc: &RuntimeCoreFunc,
-    store: &mut Store,
+    store: &Store,
     old_ptr: i32,
     old_len: i32,
     align: i32,

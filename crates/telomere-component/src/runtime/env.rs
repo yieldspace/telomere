@@ -6,7 +6,7 @@ use super::*;
 
 pub async fn instantiate(
     program: ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     linker: &ComponentLinker,
 ) -> Result<ComponentInstance, ComponentError> {
     let runtime = instantiate_sync(program.clone(), store, linker)?;
@@ -15,7 +15,7 @@ pub async fn instantiate(
 
 fn instantiate_sync(
     program: ComponentProgram,
-    store: &mut Store,
+    store: &Store,
     linker: &ComponentLinker,
 ) -> Result<RuntimeInstance, ComponentError> {
     let program = Rc::new(program);
@@ -49,7 +49,7 @@ fn instantiate_sync(
 
 fn materialize_defined_core_instances(
     env: &RuntimeEnv,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<(), ComponentError> {
     let mut pending = env
         .program
@@ -69,7 +69,7 @@ fn materialize_defined_core_instances(
 impl RuntimeInstance {
     pub(crate) async fn call(
         &self,
-        store: &mut Store,
+        store: &Store,
         name: &str,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
@@ -78,7 +78,7 @@ impl RuntimeInstance {
 
     pub(crate) async fn call_path(
         &self,
-        store: &mut Store,
+        store: &Store,
         path: &[String],
         name: &str,
         args: &[ComponentValue],
@@ -88,7 +88,7 @@ impl RuntimeInstance {
 
     fn call_path_sync(
         &self,
-        store: &mut Store,
+        store: &Store,
         path: &[String],
         name: &str,
         args: &[ComponentValue],
@@ -102,7 +102,7 @@ impl RuntimeInstance {
 
     fn resolve_namespace(
         &self,
-        store: &mut Store,
+        store: &Store,
         path: &[String],
     ) -> Result<Rc<RuntimeComponentInstance>, ComponentError> {
         let mut current = self.root.clone();
@@ -144,7 +144,7 @@ impl RuntimeEnv {
     fn resolve_component(
         &self,
         idx: GlobalIdx<Component>,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<RuntimeComponentDef, ComponentError> {
         if let Some(component) = self.components.borrow().get(&idx).cloned() {
             return Ok(component);
@@ -180,7 +180,7 @@ impl RuntimeEnv {
     fn resolve_instance(
         &self,
         idx: GlobalIdx<Instance>,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<Rc<RuntimeComponentInstance>, ComponentError> {
         if let Some(instance) = self.instances.borrow().get(&idx).cloned() {
             return Ok(instance);
@@ -243,7 +243,7 @@ impl RuntimeEnv {
     fn resolve_func(
         &self,
         idx: GlobalIdx<Func>,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<Rc<ResolvedCallable>, ComponentError> {
         if let Some(func) = self.funcs.borrow().get(&idx).cloned() {
             return Ok(func);
@@ -286,7 +286,7 @@ impl RuntimeEnv {
     fn resolve_core_module(
         &self,
         idx: GlobalIdx<crate::ir::CoreModule>,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<Module, ComponentError> {
         if let Some(module) = self.core_modules.borrow().get(&idx).cloned() {
             return Ok(module);
@@ -324,7 +324,7 @@ impl RuntimeEnv {
     fn resolve_core_instance(
         &self,
         idx: GlobalIdx<CoreInstance>,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<InstanceHandle, ComponentError> {
         if let Some(instance) = self.core_instances.borrow().get(&idx).cloned() {
             return Ok(instance);
@@ -384,7 +384,7 @@ impl RuntimeEnv {
     pub(super) fn resolve_core_func(
         &self,
         idx: GlobalIdx<CoreFunc>,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<RuntimeCoreFunc, ComponentError> {
         if let Some(func) = self.core_funcs.borrow().get(&idx).cloned() {
             return Ok(func);
@@ -467,7 +467,7 @@ impl RuntimeEnv {
     pub(super) fn resolve_core_memory(
         &self,
         idx: GlobalIdx<CoreMemory>,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<CoreExportRef, ComponentError> {
         if let Some(memory) = self.core_memories.borrow().get(&idx).cloned() {
             return Ok(memory);
@@ -490,7 +490,7 @@ impl RuntimeEnv {
     pub(super) fn resolve_core_table(
         &self,
         idx: GlobalIdx<CoreTable>,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<CoreExportRef, ComponentError> {
         if let Some(table) = self.core_tables.borrow().get(&idx).cloned() {
             return Ok(table);
@@ -513,7 +513,7 @@ impl RuntimeEnv {
     fn resolve_runtime_options(
         &self,
         options: &CanonicalOptions,
-        store: &mut Store,
+        store: &Store,
     ) -> Result<RuntimeCanonicalOptions, ComponentError> {
         Ok(RuntimeCanonicalOptions {
             string_encoding: options.string_encoding,
@@ -665,11 +665,7 @@ impl RuntimeComponentInstance {
         }
     }
 
-    fn resolve_export(
-        &self,
-        name: &str,
-        store: &mut Store,
-    ) -> Result<RuntimeExport, ComponentError> {
+    fn resolve_export(&self, name: &str, store: &Store) -> Result<RuntimeExport, ComponentError> {
         if let Some(export) = self.exports.borrow().get(name).cloned() {
             return Ok(export);
         }

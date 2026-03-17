@@ -705,7 +705,7 @@ impl Generator {
             pub mod exports {
                 #(#export_modules)*
             }
-            const _: fn(&mut #runtime::Store) = |_store| {};
+            const _: fn(&#runtime::Store) = |_store| {};
         })
     }
 
@@ -2002,7 +2002,7 @@ impl Generator {
             Ok(quote! {
                 fn #method_ident<'a>(
                     &'a self,
-                    store: &'a mut #runtime::Store,
+                    store: &'a #runtime::Store,
                     #(#params),*
                 ) -> #runtime::ComponentFuture<'a, Result<#result, #runtime::ComponentError>> {
                     #(let _ = &#param_names;)*
@@ -2016,7 +2016,7 @@ impl Generator {
             Ok(quote! {
                 fn #method_ident(
                     &self,
-                    store: &mut #runtime::Store,
+                    store: &#runtime::Store,
                     #(#params),*
                 ) -> Result<#result, #runtime::ComponentError> {
                     let _ = store;
@@ -2164,7 +2164,7 @@ impl Generator {
         Ok(quote! {
             pub async fn #method_ident(
                 &self,
-                store: &mut #runtime::Store,
+                store: &#runtime::Store,
                 #(#params),*
             ) -> Result<#result, #runtime::ComponentError> {
                 use #runtime::LowerComponent as _;

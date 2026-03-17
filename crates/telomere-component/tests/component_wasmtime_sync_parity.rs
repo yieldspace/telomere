@@ -96,9 +96,9 @@ async fn instantiate_component(
     let bytes = compile_component(text);
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, linker)
+        .instantiate(&program, &store, linker)
         .await
         .expect("instantiate should succeed");
     (store, instance)
@@ -112,18 +112,18 @@ async fn assert_dynamic_roundtrip(text: &str, input: ComponentValue) {
         Ok(vec![expected.clone()])
     });
 
-    let (mut store, instance) = instantiate_component(text, &linker).await;
+    let (store, instance) = instantiate_component(text, &linker).await;
     let result = instance
-        .call(&mut store, "run", std::slice::from_ref(&input))
+        .call(&store, "run", std::slice::from_ref(&input))
         .await
         .expect("roundtrip call should succeed");
     assert_eq!(result, vec![input]);
 }
 
 async fn assert_component_echo(text: &str, input: ComponentValue) {
-    let (mut store, instance) = instantiate_component(text, &ComponentLinker::new()).await;
+    let (store, instance) = instantiate_component(text, &ComponentLinker::new()).await;
     let result = instance
-        .call(&mut store, "run", std::slice::from_ref(&input))
+        .call(&store, "run", std::slice::from_ref(&input))
         .await
         .expect("self echo call should succeed");
     assert_eq!(result, vec![input]);
@@ -383,14 +383,14 @@ async fn component_typed_funcs_roundtrip_supported_values() {
     );
     let mut linker = ComponentLinker::new();
     linker.register_import_typed("host", |_store, (text,): (String,)| Ok(text));
-    let (mut store, instance) = instantiate_component(&string_component, &linker).await;
+    let (store, instance) = instantiate_component(&string_component, &linker).await;
     let func = instance
         .get_func("run")
         .expect("dynamic func lookup should succeed")
         .typed::<(String,), String>()
         .expect("typed view should succeed");
     assert_eq!(
-        func.call(&mut store, ("hello".to_owned(),))
+        func.call(&store, ("hello".to_owned(),))
             .await
             .expect("typed call should succeed"),
         "hello".to_owned()
@@ -407,12 +407,12 @@ async fn component_typed_funcs_roundtrip_supported_values() {
     linker.register_import_typed_async("host", |_store, (bytes,): (Vec<u8>,)| {
         Box::pin(async move { Ok(bytes) })
     });
-    let (mut store, instance) = instantiate_component(&list_component, &linker).await;
+    let (store, instance) = instantiate_component(&list_component, &linker).await;
     let func = instance
         .get_typed_func::<(Vec<u8>,), Vec<u8>>("run")
         .expect("typed func lookup should succeed");
     assert_eq!(
-        func.call(&mut store, (vec![1, 2, 3, 4],))
+        func.call(&store, (vec![1, 2, 3, 4],))
             .await
             .expect("typed list call should succeed"),
         vec![1, 2, 3, 4]
@@ -427,12 +427,12 @@ async fn component_typed_funcs_roundtrip_supported_values() {
     );
     let mut linker = ComponentLinker::new();
     linker.register_import_typed("host", |_store, (value,): ((u8, i8),)| Ok(value));
-    let (mut store, instance) = instantiate_component(&tuple_component, &linker).await;
+    let (store, instance) = instantiate_component(&tuple_component, &linker).await;
     let func = instance
         .get_typed_func::<((u8, i8),), (u8, i8)>("run")
         .expect("tuple typed func lookup should succeed");
     assert_eq!(
-        func.call(&mut store, ((7, -3),))
+        func.call(&store, ((7, -3),))
             .await
             .expect("tuple typed call should succeed"),
         (7, -3)
@@ -447,12 +447,12 @@ async fn component_typed_funcs_roundtrip_supported_values() {
     );
     let mut linker = ComponentLinker::new();
     linker.register_import_typed("host", |_store, (value,): (Option<u32>,)| Ok(value));
-    let (mut store, instance) = instantiate_component(&option_component, &linker).await;
+    let (store, instance) = instantiate_component(&option_component, &linker).await;
     let func = instance
         .get_typed_func::<(Option<u32>,), Option<u32>>("run")
         .expect("option typed func lookup should succeed");
     assert_eq!(
-        func.call(&mut store, (Some(123),))
+        func.call(&store, (Some(123),))
             .await
             .expect("option typed call should succeed"),
         Some(123)
@@ -469,12 +469,12 @@ async fn component_typed_funcs_roundtrip_supported_values() {
     linker.register_import_typed("host", |_store, (value,): (Result<String, String>,)| {
         Ok(value)
     });
-    let (mut store, instance) = instantiate_component(&result_component, &linker).await;
+    let (store, instance) = instantiate_component(&result_component, &linker).await;
     let func = instance
         .get_typed_func::<(Result<String, String>,), Result<String, String>>("run")
         .expect("result typed func lookup should succeed");
     assert_eq!(
-        func.call(&mut store, (Err("boom".to_owned()),))
+        func.call(&store, (Err("boom".to_owned()),))
             .await
             .expect("result typed call should succeed"),
         Err("boom".to_owned())
@@ -492,7 +492,7 @@ async fn component_typed_funcs_validate_signatures_like_wasmtime() {
     );
     let mut linker = ComponentLinker::new();
     linker.register_import_typed("host", |_store, (bytes,): (Vec<u8>,)| Ok(bytes));
-    let (mut store, instance) = instantiate_component(&component, &linker).await;
+    let (store, instance) = instantiate_component(&component, &linker).await;
     let func = instance
         .get_func("run")
         .expect("func lookup should succeed");
@@ -510,7 +510,7 @@ async fn component_typed_funcs_validate_signatures_like_wasmtime() {
         .expect("typed func lookup should succeed");
     assert_eq!(
         typed
-            .call(&mut store, (vec![9, 8, 7],))
+            .call(&store, (vec![9, 8, 7],))
             .await
             .expect("typed call should succeed"),
         vec![9, 8, 7]
@@ -546,9 +546,9 @@ async fn component_typed_integer_bindings_match_wasmtime_reinterpretation() {
     );
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &ComponentLinker::new())
+        .instantiate(&program, &store, &ComponentLinker::new())
         .await
         .expect("instantiate should succeed");
 
@@ -556,11 +556,11 @@ async fn component_typed_integer_bindings_match_wasmtime_reinterpretation() {
         .get_typed_func::<(u8,), ()>("take-u8")
         .expect("typed func lookup should succeed");
     take_u8
-        .call(&mut store, (100,))
+        .call(&store, (100,))
         .await
         .expect("100 should pass through");
     let error = take_u8
-        .call(&mut store, (101,))
+        .call(&store, (101,))
         .await
         .expect_err("101 should trap");
     assert!(matches!(error, ComponentError::Trap(message) if message.contains("unreachable")));
@@ -569,10 +569,7 @@ async fn component_typed_integer_bindings_match_wasmtime_reinterpretation() {
         .get_typed_func::<(), u8>("retm1-u8")
         .expect("typed func lookup should succeed");
     assert_eq!(
-        retm1
-            .call(&mut store, ())
-            .await
-            .expect("call should succeed"),
+        retm1.call(&store, ()).await.expect("call should succeed"),
         0xff
     );
 
@@ -580,10 +577,7 @@ async fn component_typed_integer_bindings_match_wasmtime_reinterpretation() {
         .get_typed_func::<(), u8>("retbig-u8")
         .expect("typed func lookup should succeed");
     assert_eq!(
-        retbig
-            .call(&mut store, ())
-            .await
-            .expect("call should succeed"),
+        retbig.call(&store, ()).await.expect("call should succeed"),
         100000u32 as u8
     );
 }
@@ -599,20 +593,20 @@ async fn component_fixed_length_lists_roundtrip_and_reject_wrong_length() {
     );
     let mut linker = ComponentLinker::new();
     linker.register_import_typed("host", |_store, (bytes,): (Vec<u8>,)| Ok(bytes));
-    let (mut store, instance) = instantiate_component(&component, &linker).await;
+    let (store, instance) = instantiate_component(&component, &linker).await;
     let typed = instance
         .get_typed_func::<(Vec<u8>,), Vec<u8>>("run")
         .expect("typed func lookup should succeed");
     assert_eq!(
         typed
-            .call(&mut store, (vec![1, 2, 3],))
+            .call(&store, (vec![1, 2, 3],))
             .await
             .expect("fixed-length list should roundtrip"),
         vec![1, 2, 3]
     );
 
     let error = typed
-        .call(&mut store, (vec![1, 2],))
+        .call(&store, (vec![1, 2],))
         .await
         .expect_err("wrong list length should fail");
     assert!(

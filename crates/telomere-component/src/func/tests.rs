@@ -112,10 +112,10 @@ fn get_typed_func_reports_signature_mismatch() {
     .unwrap();
     let engine = ComponentEngine::new();
     let compiled = engine.compile(&bytes).unwrap();
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let mut linker = ComponentLinker::new();
     linker.register_import("host", |_store, _args| Ok(Vec::new()));
-    let instance = block_on(engine.instantiate(&compiled, &mut store, &linker)).unwrap();
+    let instance = block_on(engine.instantiate(&compiled, &store, &linker)).unwrap();
     let mismatch = instance.get_typed_func::<(u32, u32), ()>("f");
     assert!(mismatch.is_err());
 }

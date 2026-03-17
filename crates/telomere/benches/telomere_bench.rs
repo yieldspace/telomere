@@ -23,9 +23,9 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                 let module = module.clone();
                 let mut duration = Duration::new(0, 0);
                 for _ in 0..iters {
-                    let mut store = telomere::Store::new();
+                    let store = telomere::Store::new();
                     let registry = telomere::Registry::new();
-                    let handle = telomere::instantiate(module.clone(), &mut store, &registry)
+                    let handle = telomere::instantiate(module.clone(), &store, &registry)
                         .await
                         .unwrap();
                     let start = Instant::now();
@@ -33,7 +33,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                         black_box(
                             telomere::run_module_function(
                                 &handle,
-                                &mut store,
+                                &store,
                                 "run",
                                 &telomere::ResultValue::new(vec![WasmValue::I32(20)]),
                             )

@@ -108,7 +108,7 @@ fn compile_component() -> Vec<u8> {
 struct RootHost;
 
 impl bindings::Imports for RootHost {
-    fn bump(&self, _store: &mut Store, value: u32) -> Result<u32, ComponentError> {
+    fn bump(&self, _store: &Store, value: u32) -> Result<u32, ComponentError> {
         Ok(value + 10)
     }
 }
@@ -116,7 +116,7 @@ impl bindings::Imports for RootHost {
 struct MathHost;
 
 impl bindings::imports::math::Host for MathHost {
-    fn double(&self, _store: &mut Store, value: u32) -> Result<u32, ComponentError> {
+    fn double(&self, _store: &Store, value: u32) -> Result<u32, ComponentError> {
         Ok(value * 2)
     }
 }
@@ -131,16 +131,16 @@ async fn bindgen_supports_root_and_interface_bindings() {
     bindings::add_root_imports_to_linker(&mut linker, Rc::new(RootHost));
     bindings::imports::math::add_to_linker(&mut linker, Rc::new(MathHost));
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .expect("instantiate should succeed");
 
     let exports = bindings::Exports::new(instance);
     let payload = exports
         .ping(
-            &mut store,
+            &store,
             bindings::Status::Ready,
             bindings::Modes {
                 fast: true,
@@ -153,7 +153,7 @@ async fn bindgen_supports_root_and_interface_bindings() {
 
     let guest = exports.guest();
     let doubled = guest
-        .run(&mut store, 21)
+        .run(&store, 21)
         .await
         .expect("interface export should succeed");
     assert_eq!(doubled, 42);

@@ -54,14 +54,11 @@ impl WasiHost {
 }
 
 impl clocks_wall::Host for WasiHost {
-    fn now(&self, _store: &mut Store) -> Result<WasiClocksWallClockDatetime, ComponentError> {
+    fn now(&self, _store: &Store) -> Result<WasiClocksWallClockDatetime, ComponentError> {
         Ok(self.wall_clock_now())
     }
 
-    fn resolution(
-        &self,
-        _store: &mut Store,
-    ) -> Result<WasiClocksWallClockDatetime, ComponentError> {
+    fn resolution(&self, _store: &Store) -> Result<WasiClocksWallClockDatetime, ComponentError> {
         Ok(self.wall_clock_resolution())
     }
 }
@@ -69,31 +66,31 @@ impl clocks_wall::Host for WasiHost {
 impl clocks_wall::HostAsync for WasiHost {
     fn now<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<WasiClocksWallClockDatetime, ComponentError>> {
         Box::pin(async move { Ok(self.wall_clock_now()) })
     }
 
     fn resolution<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<WasiClocksWallClockDatetime, ComponentError>> {
         Box::pin(async move { Ok(self.wall_clock_resolution()) })
     }
 }
 
 impl clocks_monotonic::Host for WasiHost {
-    fn now(&self, _store: &mut Store) -> Result<u64, ComponentError> {
+    fn now(&self, _store: &Store) -> Result<u64, ComponentError> {
         Ok(self.monotonic_now())
     }
 
-    fn resolution(&self, _store: &mut Store) -> Result<u64, ComponentError> {
+    fn resolution(&self, _store: &Store) -> Result<u64, ComponentError> {
         Ok(self.monotonic_resolution())
     }
 
     fn subscribe_instant(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         when: u64,
     ) -> Result<WasiIoPollPollable, ComponentError> {
         Ok(self.monotonic_subscribe_instant(when))
@@ -101,7 +98,7 @@ impl clocks_monotonic::Host for WasiHost {
 
     fn subscribe_duration(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         when: u64,
     ) -> Result<WasiIoPollPollable, ComponentError> {
         Ok(self.monotonic_subscribe_duration(when))
@@ -109,23 +106,20 @@ impl clocks_monotonic::Host for WasiHost {
 }
 
 impl clocks_monotonic::HostAsync for WasiHost {
-    fn now<'a>(
-        &'a self,
-        _store: &'a mut Store,
-    ) -> ComponentFuture<'a, Result<u64, ComponentError>> {
+    fn now<'a>(&'a self, _store: &'a Store) -> ComponentFuture<'a, Result<u64, ComponentError>> {
         Box::pin(async move { Ok(self.monotonic_now()) })
     }
 
     fn resolution<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<u64, ComponentError>> {
         Box::pin(async move { Ok(self.monotonic_resolution()) })
     }
 
     fn subscribe_instant<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         when: u64,
     ) -> ComponentFuture<'a, Result<WasiIoPollPollable, ComponentError>> {
         Box::pin(async move { Ok(self.monotonic_subscribe_instant(when)) })
@@ -133,7 +127,7 @@ impl clocks_monotonic::HostAsync for WasiHost {
 
     fn subscribe_duration<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         when: u64,
     ) -> ComponentFuture<'a, Result<WasiIoPollPollable, ComponentError>> {
         Box::pin(async move { Ok(self.monotonic_subscribe_duration(when)) })

@@ -105,15 +105,15 @@ impl WasiHost {
 }
 
 impl cli_environment::Host for WasiHost {
-    fn get_environment(&self, _store: &mut Store) -> Result<Vec<(String, String)>, ComponentError> {
+    fn get_environment(&self, _store: &Store) -> Result<Vec<(String, String)>, ComponentError> {
         Ok(self.environment())
     }
 
-    fn get_arguments(&self, _store: &mut Store) -> Result<Vec<String>, ComponentError> {
+    fn get_arguments(&self, _store: &Store) -> Result<Vec<String>, ComponentError> {
         Ok(self.arguments())
     }
 
-    fn initial_cwd(&self, _store: &mut Store) -> Result<Option<String>, ComponentError> {
+    fn initial_cwd(&self, _store: &Store) -> Result<Option<String>, ComponentError> {
         Ok(self.initial_cwd())
     }
 }
@@ -121,28 +121,28 @@ impl cli_environment::Host for WasiHost {
 impl cli_environment::HostAsync for WasiHost {
     fn get_environment<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<Vec<(String, String)>, ComponentError>> {
         Box::pin(async move { Ok(self.environment()) })
     }
 
     fn get_arguments<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<Vec<String>, ComponentError>> {
         Box::pin(async move { Ok(self.arguments()) })
     }
 
     fn initial_cwd<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<Option<String>, ComponentError>> {
         Box::pin(async move { Ok(self.initial_cwd()) })
     }
 }
 
 impl cli_exit::Host for WasiHost {
-    fn exit(&self, _store: &mut Store, status: Result<(), ()>) -> Result<(), ComponentError> {
+    fn exit(&self, _store: &Store, status: Result<(), ()>) -> Result<(), ComponentError> {
         self.exit(if status.is_ok() { 0 } else { 1 })
     }
 }
@@ -150,7 +150,7 @@ impl cli_exit::Host for WasiHost {
 impl cli_exit::HostAsync for WasiHost {
     fn exit<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         status: Result<(), ()>,
     ) -> ComponentFuture<'a, Result<(), ComponentError>> {
         Box::pin(async move { self.exit(if status.is_ok() { 0 } else { 1 }) })
@@ -158,7 +158,7 @@ impl cli_exit::HostAsync for WasiHost {
 }
 
 impl cli_stdin::Host for WasiHost {
-    fn get_stdin(&self, _store: &mut Store) -> Result<WasiIoStreamsInputStream, ComponentError> {
+    fn get_stdin(&self, _store: &Store) -> Result<WasiIoStreamsInputStream, ComponentError> {
         Ok(self.input_stream_from_stdin())
     }
 }
@@ -166,14 +166,14 @@ impl cli_stdin::Host for WasiHost {
 impl cli_stdin::HostAsync for WasiHost {
     fn get_stdin<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<WasiIoStreamsInputStream, ComponentError>> {
         Box::pin(async move { Ok(self.input_stream_from_stdin()) })
     }
 }
 
 impl cli_stdout::Host for WasiHost {
-    fn get_stdout(&self, _store: &mut Store) -> Result<WasiIoStreamsOutputStream, ComponentError> {
+    fn get_stdout(&self, _store: &Store) -> Result<WasiIoStreamsOutputStream, ComponentError> {
         Ok(self.output_stream(OutputStreamKind::Stdout))
     }
 }
@@ -181,14 +181,14 @@ impl cli_stdout::Host for WasiHost {
 impl cli_stdout::HostAsync for WasiHost {
     fn get_stdout<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<WasiIoStreamsOutputStream, ComponentError>> {
         Box::pin(async move { Ok(self.output_stream(OutputStreamKind::Stdout)) })
     }
 }
 
 impl cli_stderr::Host for WasiHost {
-    fn get_stderr(&self, _store: &mut Store) -> Result<WasiIoStreamsOutputStream, ComponentError> {
+    fn get_stderr(&self, _store: &Store) -> Result<WasiIoStreamsOutputStream, ComponentError> {
         Ok(self.output_stream(OutputStreamKind::Stderr))
     }
 }
@@ -196,7 +196,7 @@ impl cli_stderr::Host for WasiHost {
 impl cli_stderr::HostAsync for WasiHost {
     fn get_stderr<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<WasiIoStreamsOutputStream, ComponentError>> {
         Box::pin(async move { Ok(self.output_stream(OutputStreamKind::Stderr)) })
     }
@@ -210,7 +210,7 @@ impl cli_terminal_output::HostAsync for WasiHost {}
 impl cli_terminal_stdin::Host for WasiHost {
     fn get_terminal_stdin(
         &self,
-        _store: &mut Store,
+        _store: &Store,
     ) -> Result<Option<WasiCliTerminalInputTerminalInput>, ComponentError> {
         Ok(None)
     }
@@ -219,7 +219,7 @@ impl cli_terminal_stdin::Host for WasiHost {
 impl cli_terminal_stdin::HostAsync for WasiHost {
     fn get_terminal_stdin<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<Option<WasiCliTerminalInputTerminalInput>, ComponentError>>
     {
         Box::pin(async move { Ok(None) })
@@ -229,7 +229,7 @@ impl cli_terminal_stdin::HostAsync for WasiHost {
 impl cli_terminal_stdout::Host for WasiHost {
     fn get_terminal_stdout(
         &self,
-        _store: &mut Store,
+        _store: &Store,
     ) -> Result<Option<WasiCliTerminalOutputTerminalOutput>, ComponentError> {
         Ok(None)
     }
@@ -238,7 +238,7 @@ impl cli_terminal_stdout::Host for WasiHost {
 impl cli_terminal_stdout::HostAsync for WasiHost {
     fn get_terminal_stdout<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<Option<WasiCliTerminalOutputTerminalOutput>, ComponentError>>
     {
         Box::pin(async move { Ok(None) })
@@ -248,7 +248,7 @@ impl cli_terminal_stdout::HostAsync for WasiHost {
 impl cli_terminal_stderr::Host for WasiHost {
     fn get_terminal_stderr(
         &self,
-        _store: &mut Store,
+        _store: &Store,
     ) -> Result<Option<WasiCliTerminalOutputTerminalOutput>, ComponentError> {
         Ok(None)
     }
@@ -257,7 +257,7 @@ impl cli_terminal_stderr::Host for WasiHost {
 impl cli_terminal_stderr::HostAsync for WasiHost {
     fn get_terminal_stderr<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<Option<WasiCliTerminalOutputTerminalOutput>, ComponentError>>
     {
         Box::pin(async move { Ok(None) })

@@ -66,11 +66,11 @@ impl WasiHost {
 }
 
 impl random_random::Host for WasiHost {
-    fn get_random_bytes(&self, _store: &mut Store, len: u64) -> Result<Vec<u8>, ComponentError> {
+    fn get_random_bytes(&self, _store: &Store, len: u64) -> Result<Vec<u8>, ComponentError> {
         self.secure_random_bytes(len)
     }
 
-    fn get_random_u64(&self, _store: &mut Store) -> Result<u64, ComponentError> {
+    fn get_random_u64(&self, _store: &Store) -> Result<u64, ComponentError> {
         self.secure_random_u64()
     }
 }
@@ -78,7 +78,7 @@ impl random_random::Host for WasiHost {
 impl random_random::HostAsync for WasiHost {
     fn get_random_bytes<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         len: u64,
     ) -> ComponentFuture<'a, Result<Vec<u8>, ComponentError>> {
         Box::pin(async move { self.secure_random_bytes(len) })
@@ -86,7 +86,7 @@ impl random_random::HostAsync for WasiHost {
 
     fn get_random_u64<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<u64, ComponentError>> {
         Box::pin(async move { self.secure_random_u64() })
     }
@@ -95,13 +95,13 @@ impl random_random::HostAsync for WasiHost {
 impl random_insecure::Host for WasiHost {
     fn get_insecure_random_bytes(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         len: u64,
     ) -> Result<Vec<u8>, ComponentError> {
         self.insecure_random_bytes(len)
     }
 
-    fn get_insecure_random_u64(&self, _store: &mut Store) -> Result<u64, ComponentError> {
+    fn get_insecure_random_u64(&self, _store: &Store) -> Result<u64, ComponentError> {
         Ok(self.next_insecure_random_u64())
     }
 }
@@ -109,7 +109,7 @@ impl random_insecure::Host for WasiHost {
 impl random_insecure::HostAsync for WasiHost {
     fn get_insecure_random_bytes<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         len: u64,
     ) -> ComponentFuture<'a, Result<Vec<u8>, ComponentError>> {
         Box::pin(async move { self.insecure_random_bytes(len) })
@@ -117,14 +117,14 @@ impl random_insecure::HostAsync for WasiHost {
 
     fn get_insecure_random_u64<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<u64, ComponentError>> {
         Box::pin(async move { Ok(self.next_insecure_random_u64()) })
     }
 }
 
 impl random_insecure_seed::Host for WasiHost {
-    fn insecure_seed(&self, _store: &mut Store) -> Result<(u64, u64), ComponentError> {
+    fn insecure_seed(&self, _store: &Store) -> Result<(u64, u64), ComponentError> {
         Ok((
             self.next_insecure_random_u64(),
             self.next_insecure_random_u64(),
@@ -135,7 +135,7 @@ impl random_insecure_seed::Host for WasiHost {
 impl random_insecure_seed::HostAsync for WasiHost {
     fn insecure_seed<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<(u64, u64), ComponentError>> {
         Box::pin(async move {
             Ok((
@@ -156,16 +156,16 @@ mod tests {
     #[test]
     fn random_bytes_return_full_requested_length() {
         let host = WasiHost::new(crate::WasiState::builder().random_seed(0x1234_5678).build());
-        let mut store = telomere::Store::new();
+        let store = telomere::Store::new();
 
         let secure =
-            <WasiHost as random_random::Host>::get_random_bytes(&host, &mut store, (1 << 20) + 17)
+            <WasiHost as random_random::Host>::get_random_bytes(&host, &store, (1 << 20) + 17)
                 .expect("secure random should succeed");
         assert_eq!(secure.len(), (1 << 20) + 17);
 
         let insecure = <WasiHost as random_insecure::Host>::get_insecure_random_bytes(
             &host,
-            &mut store,
+            &store,
             (1 << 20) + 9,
         )
         .expect("insecure random should succeed");

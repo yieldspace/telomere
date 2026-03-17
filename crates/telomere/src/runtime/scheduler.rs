@@ -5,7 +5,7 @@ use super::{
     vm::traps::TRAPS_MEMORY_INDEX_OUT_OF_RANGE,
 };
 use crate::{
-    common::{gc::MemoryPool, ExecuteContext, GcRef, Instr, LocalReference, MemArg},
+    common::{gc::MemoryPool, ExecuteContext, GcRef, LocalReference, MemArg, StablePc},
     Stack, Store, VMResult,
 };
 use futures::{future::FusedFuture, stream::FuturesUnordered};
@@ -36,7 +36,7 @@ pub(crate) struct Task {
     pub local_reference: LocalReference,
     pub pending_effects: u32,
     pub ready_flag: ReadyFlag,
-    pub fp: *const Instr,
+    pub fp: StablePc,
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ pub(crate) struct CompletedTask {
 }
 pub(crate) struct AsyncResult {
     pub task_id: u32,
-    pub fp: *const Instr,
+    pub fp: StablePc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,7 +115,7 @@ pub(crate) struct Scheduler<'a> {
     notify: Notify,
     async_tasks: FuturesUnordered<Pin<Box<dyn Future<Output = AsyncResult>>>>,
     pub(crate) completed_tasks: Vec<CompletedTask>,
-    pub(crate) store: &'a mut Store,
+    pub(crate) store: &'a Store,
     effects: VecDeque<Effect>,
     ready_count: u32,
 }
@@ -194,7 +194,7 @@ impl EffectSupplier<'_> {
 }
 
 impl<'a> Scheduler<'a> {
-    pub fn new(store: &'a mut Store) -> Self {
+    pub fn new(store: &'a Store) -> Self {
         Self {
             tasks: VecDeque::new(),
             completed_tasks: vec![],
@@ -228,12 +228,15 @@ impl<'a> Scheduler<'a> {
                 atomic: AtomicFlag::NonAtomic,
                 operation: Operation::Read(handler),
             } => {
-                let data = unsafe { gc.get_memory(addr).get(range.start..range.end) };
-                if let Some(data) = data {
-                    task.fp = handler(&mut task.stack, data, task.fp);
+                let cont = task.fp.resolve(gc, &task.stack, task.local_reference);
+                let next = if let Some(data) =
+                    unsafe { gc.get_memory(addr).get(range.start..range.end) }
+                {
+                    handler(&mut task.stack, data, cont)
                 } else {
-                    task.fp = TRAPS_MEMORY_INDEX_OUT_OF_RANGE.as_ptr();
-                }
+                    TRAPS_MEMORY_INDEX_OUT_OF_RANGE.as_ptr()
+                };
+                task.fp = StablePc::from_raw_in_frame(gc, &task.stack, task.local_reference, next);
 
                 task.pending_effects -= 1;
                 if task.pending_effects == 0 {
@@ -309,12 +312,9 @@ impl<'a> Scheduler<'a> {
     }
 
     pub async fn run(&mut self) {
-        let gc = self.store.gc.clone();
-
         while !self.tasks.is_empty() {
             self.await_executation().await;
-            let mut gc = gc.borrow_mut();
-            let gc = &mut gc;
+            let mut gc = self.store.lock_gc();
             while self.ready_count != 0 {
                 trace!("task ready count: {:?}", self.ready_count);
 
@@ -326,15 +326,16 @@ impl<'a> Scheduler<'a> {
                 self.ready_count -= 1;
                 let Task {
                     local_reference,
-                    fp,
+                    fp: pc,
                     mut stack,
                     task_id,
                     mut pending_effects,
                     ..
                 } = task;
+                let fp = pc.resolve(&gc, &stack, local_reference);
 
                 let mut ec = ExecuteContext {
-                    gc,
+                    gc: &mut gc,
                     local_reference,
                     stack: &mut stack,
                     store: self.store,
@@ -354,7 +355,7 @@ impl<'a> Scheduler<'a> {
                             trace!("continue task: {}", ec.task_id);
                             let new_task = Task {
                                 local_reference,
-                                fp: cont,
+                                fp: StablePc::from_raw_in_frame(&gc, &stack, local_reference, cont),
                                 ready_flag: ReadyFlag::NonReady,
                                 task_id,
                                 stack,
@@ -378,7 +379,7 @@ impl<'a> Scheduler<'a> {
                     }
                 }
             }
-            self.processing_effect(gc);
+            self.processing_effect(&mut gc);
         }
     }
 
@@ -395,12 +396,13 @@ impl<'a> Scheduler<'a> {
                 self.ready_count -= 1;
                 let Task {
                     local_reference,
-                    fp,
+                    fp: pc,
                     mut stack,
                     task_id,
                     mut pending_effects,
                     ..
                 } = task;
+                let fp = pc.resolve(gc, &stack, local_reference);
 
                 let mut ec = ExecuteContext {
                     gc,
@@ -423,7 +425,7 @@ impl<'a> Scheduler<'a> {
                             trace!("continue task: {}", ec.task_id);
                             let new_task = Task {
                                 local_reference,
-                                fp: cont,
+                                fp: StablePc::from_raw_in_frame(gc, &stack, local_reference, cont),
                                 ready_flag: ReadyFlag::NonReady,
                                 task_id,
                                 stack,
@@ -482,7 +484,7 @@ impl<'a> Scheduler<'a> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        common::{ExecuteContext, Instr, LocalReference},
+        common::{ExecuteContext, Instr, LocalReference, StablePc},
         runtime::memory_effect::{AsyncEffect, AsyncEffectOperation, Effect},
         Stack, Store, VMResult,
     };
@@ -493,13 +495,14 @@ mod tests {
         trace!("ok");
         VMResult::Success(())
     }
-    async fn example_func(task_id: u32, fp: *const Instr) -> AsyncResult {
+    async fn example_func(task_id: u32, fp: StablePc) -> AsyncResult {
         AsyncResult { task_id, fp }
     }
     #[tokio::test]
     async fn test_async() {
-        let mut store = Store::new();
-        let mut scheduler = Scheduler::new(&mut store);
+        let store = Store::new();
+        let mut scheduler = Scheduler::new(&store);
+        let async_end_program = [Instr { op: async_end }];
         {
             scheduler.push(Task {
                 task_id: 0,
@@ -510,7 +513,7 @@ mod tests {
                 },
                 pending_effects: 1,
                 ready_flag: ReadyFlag::NonReady,
-                fp: &Instr { op: async_end },
+                fp: StablePc::from_stable_ptr(async_end_program.as_ptr()),
             });
             scheduler
                 .effects

@@ -84,7 +84,7 @@ impl ComponentEngine {
     pub async fn instantiate(
         &self,
         program: &ComponentProgram,
-        store: &mut Store,
+        store: &Store,
         linker: &ComponentLinker,
     ) -> Result<ComponentInstance, ComponentError> {
         runtime::instantiate(program.clone(), store, linker).await

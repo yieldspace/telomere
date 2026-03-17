@@ -1,48 +1,114 @@
 mod common;
 use common::{instantiate_wat, run_wast_with};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
-    common::{ExecuteContext, Instr},
-    link_host_function_with_function_idx, vm_try, Registry, Store, VMResult,
+    common::{ExecuteContext, Instr, StoreState},
+    link_host_function_with_export_name, link_host_function_with_function_idx, vm_try, Registry,
+    Store, VMResult,
 };
-static mut PRINT_CALL: Vec<()> = vec![];
-fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    #[allow(static_mut_refs)]
-    unsafe {
-        PRINT_CALL.push(())
-    };
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0);
-    ctx.local_reference = prev_local_ref;
-    VMResult::Success(return_addr)
-}
 
-#[tokio::test]
-async fn test_print() {
-    let mut store = Store::new();
-    let mut registry = Registry::new();
-    let host = instantiate_wat(
-        r#"
+const PRINT_HOST_WAT: &str = r#"
     (module
       (func (export "print"))
     )
-    "#,
-        &mut store,
-        &registry,
-    )
-    .await;
-    registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, print, &mut store);
-    let wast = r#"
+    "#;
+
+const CALL_PRINT_WAST: &str = r#"
     (module
       (import "host" "print" (func $print))
       (func (export "wasm_print") (call $print))
     )
     (invoke "wasm_print")
     "#;
-    run_wast_with(wast, &mut store, &mut registry).await;
-    #[allow(static_mut_refs)]
-    unsafe {
-        assert_eq!(PRINT_CALL, vec![()]);
+
+fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
+    unsafe { ctx.store.state.get::<AtomicUsize>() }
+        .expect("host function tests require an AtomicUsize in StoreState")
+}
+
+fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    print_counter(ctx).fetch_add(1, Ordering::SeqCst);
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0, ctx.gc);
+    ctx.local_reference = prev_local_ref;
+    VMResult::Success(return_addr)
+}
+
+#[tokio::test]
+async fn test_print() {
+    let counter = Box::new(AtomicUsize::new(0));
+    let store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+    });
+    let mut registry = Registry::new();
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, print, &store);
+    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_imported_host_start() {
+    let counter = Box::new(AtomicUsize::new(0));
+    let store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+    });
+    let mut registry = Registry::new();
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
+    registry.register("host", host.clone());
+    link_host_function_with_function_idx(&host, 0, print, &store);
+
+    let _instance = instantiate_wat(
+        r#"
+    (module
+      (import "host" "print" (func $print))
+      (start $print)
+    )
+    "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_reentrant_link_host_function_with_function_idx_fails_closed() {
+    let counter = Box::new(AtomicUsize::new(0));
+    let store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+    });
+    let mut registry = Registry::new();
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
+    registry.register("host", host.clone());
+
+    {
+        let _gc = store.lock_gc();
+        link_host_function_with_function_idx(&host, 0, print, &store);
     }
+
+    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn test_reentrant_link_host_function_with_export_name_fails_closed() {
+    let counter = Box::new(AtomicUsize::new(0));
+    let store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+    });
+    let mut registry = Registry::new();
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
+    registry.register("host", host.clone());
+
+    {
+        let _gc = store.lock_gc();
+        link_host_function_with_export_name(&host, "print", print, &store);
+    }
+
+    run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
 }
 
 const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
@@ -69,7 +135,8 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             0,
             func_addr,
             ctx.local_reference,
-            TAIL_CALL_FUNCTION_RETURN.as_ptr()
+            TAIL_CALL_FUNCTION_RETURN.as_ptr(),
+            ctx.gc,
         ));
         fp(ctx)
     } else {
@@ -80,7 +147,8 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             locals_data.byte_size(),
             func_addr,
             ctx.local_reference,
-            TAIL_CALL_FUNCTION_RETURN.as_ptr()
+            TAIL_CALL_FUNCTION_RETURN.as_ptr(),
+            ctx.gc,
         ));
         VMResult::Success(instr)
     }
@@ -88,7 +156,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 
 #[tokio::test]
 async fn test_tail_call_wasm() {
-    let mut store = Store::new();
+    let store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
         r#"
@@ -97,12 +165,12 @@ async fn test_tail_call_wasm() {
       (func $plus23 (param i32) (result i32) (i32.add (local.get 0) (i32.const 23)))
     )
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
+    link_host_function_with_function_idx(&host, 0, tail_call, &store);
     let wast = r#"
     (module
       (import "host" "tail_call" (func $tail_call (param i32) (result i32)))
@@ -110,7 +178,7 @@ async fn test_tail_call_wasm() {
     )
     (assert_return (invoke "tail_call" (i32.const 2)) (i32.const 65))
     "#;
-    run_wast_with(wast, &mut store, &mut registry).await;
+    run_wast_with(wast, &store, &mut registry).await;
 }
 
 fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
@@ -119,13 +187,13 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     tracing::trace!("{arg}");
 
     vm_try!(ctx.stack.push_i32(arg + 60));
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 4);
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 4, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
 #[tokio::test]
 pub async fn test_tail_call_native() {
-    let mut store = Store::new();
+    let store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
         r#"
@@ -134,13 +202,13 @@ pub async fn test_tail_call_native() {
       (func (param i32) (result i32) (unreachable))
     )
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
     registry.register("host", host.clone());
-    link_host_function_with_function_idx(&host, 0, tail_call, &mut store);
-    link_host_function_with_function_idx(&host, 1, plus60, &mut store);
+    link_host_function_with_function_idx(&host, 0, tail_call, &store);
+    link_host_function_with_function_idx(&host, 1, plus60, &store);
 
     let wast = r#"
     (module
@@ -149,5 +217,5 @@ pub async fn test_tail_call_native() {
     )
     (assert_return (invoke "tail_call" (i32.const 2)) (i32.const 102))
     "#;
-    run_wast_with(wast, &mut store, &mut registry).await;
+    run_wast_with(wast, &store, &mut registry).await;
 }

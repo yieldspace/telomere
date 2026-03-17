@@ -311,7 +311,7 @@ impl WasiHost {
 impl filesystem_preopens::Host for WasiHost {
     fn get_directories(
         &self,
-        _store: &mut Store,
+        _store: &Store,
     ) -> Result<Vec<(WasiFilesystemTypesDescriptor, String)>, ComponentError> {
         Ok(self.preopen_directories())
     }
@@ -320,7 +320,7 @@ impl filesystem_preopens::Host for WasiHost {
 impl filesystem_preopens::HostAsync for WasiHost {
     fn get_directories<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
     ) -> ComponentFuture<'a, Result<Vec<(WasiFilesystemTypesDescriptor, String)>, ComponentError>>
     {
         Box::pin(async move { Ok(self.preopen_directories()) })
@@ -330,7 +330,7 @@ impl filesystem_preopens::HostAsync for WasiHost {
 impl filesystem_types::Host for WasiHost {
     fn descriptor_read_via_stream(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
         offset: u64,
     ) -> Result<Result<WasiIoStreamsInputStream, WasiFilesystemTypesErrorCode>, ComponentError>
@@ -340,7 +340,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn descriptor_get_type(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
     ) -> Result<
         Result<WasiFilesystemTypesDescriptorType, WasiFilesystemTypesErrorCode>,
@@ -351,7 +351,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn descriptor_get_flags(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
     ) -> Result<
         Result<WasiFilesystemTypesDescriptorFlags, WasiFilesystemTypesErrorCode>,
@@ -362,7 +362,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn descriptor_read(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
         length: u64,
         offset: u64,
@@ -372,7 +372,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn descriptor_read_directory(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
     ) -> Result<
         Result<WasiFilesystemTypesDirectoryEntryStream, WasiFilesystemTypesErrorCode>,
@@ -383,7 +383,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn descriptor_stat(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
     ) -> Result<
         Result<WasiFilesystemTypesDescriptorStat, WasiFilesystemTypesErrorCode>,
@@ -394,7 +394,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn descriptor_stat_at(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
         path_flags: WasiFilesystemTypesPathFlags,
         path: String,
@@ -407,7 +407,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn descriptor_open_at(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
         path_flags: WasiFilesystemTypesPathFlags,
         path: String,
@@ -420,7 +420,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn directory_entry_stream_read_directory_entry(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: WasiFilesystemTypesDirectoryEntryStreamBorrow,
     ) -> Result<
         Result<Option<WasiFilesystemTypesDirectoryEntry>, WasiFilesystemTypesErrorCode>,
@@ -431,7 +431,7 @@ impl filesystem_types::Host for WasiHost {
 
     fn filesystem_error_code(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         err: WasiIoErrorErrorBorrow,
     ) -> Result<Option<WasiFilesystemTypesErrorCode>, ComponentError> {
         self.filesystem_error_code(err)
@@ -441,7 +441,7 @@ impl filesystem_types::Host for WasiHost {
 impl filesystem_types::HostAsync for WasiHost {
     fn descriptor_read_via_stream<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
         offset: u64,
     ) -> ComponentFuture<
@@ -453,7 +453,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn descriptor_get_type<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
     ) -> ComponentFuture<
         'a,
@@ -467,7 +467,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn descriptor_get_flags<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
     ) -> ComponentFuture<
         'a,
@@ -481,7 +481,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn descriptor_read<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
         length: u64,
         offset: u64,
@@ -494,7 +494,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn descriptor_read_directory<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
     ) -> ComponentFuture<
         'a,
@@ -508,7 +508,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn descriptor_stat<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
     ) -> ComponentFuture<
         'a,
@@ -522,7 +522,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn descriptor_stat_at<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
         path_flags: WasiFilesystemTypesPathFlags,
         path: String,
@@ -538,7 +538,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn descriptor_open_at<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDescriptorBorrow,
         path_flags: WasiFilesystemTypesPathFlags,
         path: String,
@@ -553,7 +553,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn directory_entry_stream_read_directory_entry<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: WasiFilesystemTypesDirectoryEntryStreamBorrow,
     ) -> ComponentFuture<
         'a,
@@ -567,7 +567,7 @@ impl filesystem_types::HostAsync for WasiHost {
 
     fn filesystem_error_code<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         err: WasiIoErrorErrorBorrow,
     ) -> ComponentFuture<'a, Result<Option<WasiFilesystemTypesErrorCode>, ComponentError>> {
         Box::pin(async move { self.filesystem_error_code(err) })

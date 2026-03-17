@@ -8,8 +8,8 @@ use crate::{
     common::{
         execute_elem_init_const_expr,
         gc::{GcRef, InstanceData},
-        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, Stack,
-        VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
+        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, StablePc,
+        Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::scheduler::{ReadyFlag, Scheduler, SyncRunError, Task},
     Store,
@@ -695,7 +695,8 @@ pub(crate) unsafe fn internal_op_call(
                 0,
                 funcaddr,
                 ctx.local_reference,
-                return_addr
+                return_addr,
+                ctx.gc,
             ));
         }
         let return_addr = vm_try!(fp(ctx));
@@ -716,7 +717,8 @@ pub(crate) unsafe fn internal_op_call(
                 locals.byte_size(),
                 funcaddr,
                 ctx.local_reference,
-                return_addr
+                return_addr,
+                ctx.gc,
             ));
         }
 
@@ -948,58 +950,80 @@ pub unsafe fn op_table_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let instance_addr = ctx.instance_addr();
 
     let ExecuteContext { store, gc, .. } = ctx;
-
-    let Store { elems, .. } = store;
     let instance = *gc.get_instance_unchecked(instance_addr);
     let dst_table_addr = instance.tables.as_slice(gc)[dst_table_idx];
-    if let Some(elem) = elems.get(&(instance.instance_id, src_elem_idx)) {
-        let dst_table = gc.get_table(dst_table_addr);
-        let dst = vm_try!(VMResult::from_option(
-            dst_table.1.get_mut(dst_pos..dst_pos + len),
-            || { VMResult::TableIndexOutOfRange }
-        ));
-        let reftype = dst_table.0.reftype;
-        match &elem.init {
-            ElemInit::FuncIdx(idxs) => {
-                let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
-                    VMResult::TableIndexOutOfRange
-                }));
-                for (i, funcidx) in slice.iter().enumerate() {
-                    dst[i] = instance.funcs.as_slice(&store.gc.borrow())[*funcidx as usize].get();
-                }
-            }
-            ElemInit::ConstExpr(exprs) => {
-                let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
-                    VMResult::TableIndexOutOfRange
-                }));
-                for (i, expr) in slice.iter().enumerate() {
-                    let res = vm_try!(execute_elem_init_const_expr(
-                        gc,
-                        instance.globals.as_slice(gc),
-                        instance.funcs.as_slice(gc),
-                        expr,
-                        reftype,
-                    ));
+    // `call_next` may recurse into `elem.drop`, so the segments guard must be dropped first.
+    let init_result = {
+        let segments = store.lock_segments();
+        let dst_table_len = {
+            let dst_table = gc.get_table(dst_table_addr);
+            dst_table.1.len()
+        };
+        if dst_pos.checked_add(len).is_none() || dst_pos + len > dst_table_len {
+            VMResult::TableIndexOutOfRange
+        } else if let Some(elem) = segments.elems.get(&(instance.instance_id, src_elem_idx)) {
+            let reftype = {
+                let dst_table = gc.get_table(dst_table_addr);
+                dst_table.0.reftype
+            };
+            match &elem.init {
+                ElemInit::FuncIdx(idxs) => {
+                    let slice = vm_try!(VMResult::from_option(idxs.get(src..(src + len)), || {
+                        VMResult::TableIndexOutOfRange
+                    }));
+                    let func_addrs = instance
+                        .funcs
+                        .as_slice(gc)
+                        .iter()
+                        .map(|it| it.get())
+                        .collect::<Vec<_>>();
                     let dst_table = gc.get_table(dst_table_addr);
                     let dst = vm_try!(VMResult::from_option(
                         dst_table.1.get_mut(dst_pos..dst_pos + len),
                         || { VMResult::TableIndexOutOfRange }
                     ));
-                    dst[i] = res.get();
+                    for (i, funcidx) in slice.iter().enumerate() {
+                        dst[i] = func_addrs[*funcidx as usize];
+                    }
+                }
+                ElemInit::ConstExpr(exprs) => {
+                    let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
+                        VMResult::TableIndexOutOfRange
+                    }));
+                    for (i, expr) in slice.iter().enumerate() {
+                        let res = vm_try!(execute_elem_init_const_expr(
+                            gc,
+                            instance.globals.as_slice(gc),
+                            instance.funcs.as_slice(gc),
+                            expr,
+                            reftype,
+                        ));
+                        let dst_table = gc.get_table(dst_table_addr);
+                        let dst = vm_try!(VMResult::from_option(
+                            dst_table.1.get_mut(dst_pos..dst_pos + len),
+                            || { VMResult::TableIndexOutOfRange }
+                        ));
+                        dst[i] = res.get();
+                    }
                 }
             }
+            VMResult::Success(())
+        } else if len == 0 && src == 0 {
+            VMResult::Success(())
+        } else {
+            VMResult::TableIndexOutOfRange
         }
-    } else if len == 0 {
-        // ok
-    } else {
-        return VMResult::TableIndexOutOfRange;
-    }
+    };
+    vm_try!(init_result);
     call_next(tail_code, 2, ctx)
 }
 pub unsafe fn op_elem_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let elem_idx = (*tail_code).operand.u32;
     let instance_id = ctx.instance_id();
-    ctx.store.elems.remove(&(instance_id, elem_idx));
+    ctx.store
+        .lock_segments()
+        .elems
+        .remove(&(instance_id, elem_idx));
     call_next(tail_code, 1, ctx)
 }
 
@@ -1855,8 +1879,9 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
         let src_last = vm_try!(VMResult::from_option(s.checked_add(n), || {
             VMResult::MemoryIndexOutOfRange
         })) as usize;
-        let data = ctx.store.data.get(&(instance_id, idx));
-        if data.is_none() && n == 0 {
+        let segments = ctx.store.lock_segments();
+        let data = segments.data.get(&(instance_id, idx));
+        if data.is_none() && n == 0 && s == 0 {
             // it is ok
         } else {
             let data = vm_try!(VMResult::from_option(data, || {
@@ -1875,7 +1900,7 @@ pub unsafe fn op_data_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     wait_effect!(ctx, ctx.cont);
     let idx = (*tail_code).operand.u32;
     let instance_id = ctx.instance_id();
-    ctx.store.data.remove(&(instance_id, idx));
+    ctx.store.lock_segments().data.remove(&(instance_id, idx));
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -1951,10 +1976,10 @@ pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn special_start_host_function_call(
-    tail_code: *const Instr,
+    _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let instr = vm_try!(((*tail_code).operand.start_host_function)(ctx));
+    let instr = vm_try!(ctx.func().host_code_pointer(ctx.gc)(ctx));
     call_next(instr, 0, ctx)
 }
 pub unsafe fn special_function_return(
@@ -1965,6 +1990,7 @@ pub unsafe fn special_function_return(
     let (prev_local_ref, tail_code) = ctx.stack.function_return(
         &ctx.local_reference(),
         (*tail_code).operand.drop_size as usize,
+        ctx.gc,
     );
     ctx.local_reference = prev_local_ref;
     call_next(tail_code, 0, ctx)
@@ -2002,25 +2028,37 @@ pub unsafe fn special_function_vm_end(
 pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
+pub(crate) const START_HOST_FUNCTION_PROGRAM: [Instr; 1] = [Instr {
+    op: special_start_host_function_call,
+}];
 pub async fn run_module_function(
     instance: &InstanceHandle,
-    store: &mut Store,
+    store: &Store,
     name: &str,
     args: &ResultValue,
 ) -> VMResult<ResultValue> {
-    let gc = store.gc.clone();
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!(
+            "run_module_function is unsupported while the same store GC is already active"
+        );
+        return VMResult::Unlinkable;
+    }
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
-        let mut gc_holder = gc.borrow_mut();
-        let gc = &mut gc_holder;
+        let gc = store.lock_gc();
         let InstanceData {
             module_addr, funcs, ..
-        } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(gc)) };
+        } = unsafe {
+            *gc.get_instance_unchecked(vm_try!(VMResult::from_option(
+                instance.get_gc_ref_with_pool(store, &gc),
+                || { VMResult::Unlinkable }
+            )))
+        };
         let module_inst = unsafe { gc.get_module(module_addr) };
         trace!("{:?}", module_inst.exports);
         let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
-            let code_addr = funcs.as_slice(gc)[idx.0 as usize];
+            let code_addr = funcs.as_slice(&gc)[idx.0 as usize];
             let funcinst = unsafe { gc.get_func(code_addr) };
             let mut stack = Stack::new(128 * 1024);
             let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
@@ -2035,7 +2073,7 @@ pub async fn run_module_function(
                 param_size += t.stack_size().usize();
             }
 
-            let (locals_data, code_offset) = funcinst.locals_and_code_offset(gc);
+            let (locals_data, _code_offset) = funcinst.locals_and_code_offset(&gc);
             let local_size = locals_data.byte_size();
             for arg in args.iter() {
                 vm_try!(match arg {
@@ -2058,13 +2096,12 @@ pub async fn run_module_function(
                     local_size: 0,
                     local_top: 0
                 },
-                &VM_END as *const Instr
+                &VM_END as *const Instr,
+                &gc,
             ));
 
-            let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
-
             scheduler.push(Task {
-                fp: ptr,
+                fp: StablePc::from_relative_index(0),
                 task_id: 0,
                 stack,
                 local_reference,
@@ -2100,7 +2137,7 @@ pub async fn run_module_function(
 
 pub(crate) fn run_module_function_sync_with_gc(
     instance: &InstanceHandle,
-    store: &mut Store,
+    store: &Store,
     gc: &mut crate::common::gc::MemoryPool,
     name: &str,
     args: &ResultValue,
@@ -2110,7 +2147,12 @@ pub(crate) fn run_module_function_sync_with_gc(
     let ft = {
         let InstanceData {
             module_addr, funcs, ..
-        } = unsafe { *gc.get_instance_unchecked(instance.get_gc_ref_with_pool(gc)) };
+        } = unsafe {
+            *gc.get_instance_unchecked(match instance.get_gc_ref_with_pool(store, gc) {
+                Some(gc_ref) => gc_ref,
+                None => return Ok(VMResult::Unlinkable),
+            })
+        };
         let module_inst = unsafe { gc.get_module(module_addr) };
         trace!("{:?}", module_inst.exports);
         let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
@@ -2129,7 +2171,7 @@ pub(crate) fn run_module_function_sync_with_gc(
                 param_size += t.stack_size().usize();
             }
 
-            let (locals_data, code_offset) = funcinst.locals_and_code_offset(gc);
+            let (locals_data, _code_offset) = funcinst.locals_and_code_offset(gc);
             let local_size = locals_data.byte_size();
             for arg in args.iter() {
                 match arg {
@@ -2174,15 +2216,14 @@ pub(crate) fn run_module_function_sync_with_gc(
                     local_top: 0,
                 },
                 &VM_END as *const Instr,
+                gc,
             ) {
                 VMResult::Success(local_reference) => local_reference,
                 other => return Ok(vm_result_err_into_result_value(other)),
             };
 
-            let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
-
             scheduler.push(Task {
-                fp: ptr,
+                fp: StablePc::from_relative_index(0),
                 task_id: 0,
                 stack,
                 local_reference,
@@ -2242,13 +2283,22 @@ fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultVal
     }
 }
 
-pub fn get_global(instance: &InstanceHandle, store: &mut Store, name: &str) -> VMResult<WasmValue> {
-    let gc = store.gc.borrow();
+pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMResult<WasmValue> {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!("get_global is unsupported while the same store GC is already active");
+        return VMResult::Unlinkable;
+    }
+    let gc = store.lock_gc();
 
-    let instance = unsafe { &*gc.get_instance_unchecked(instance.get_gc_ref_with_pool(&gc)) };
+    let instance = unsafe {
+        &*gc.get_instance_unchecked(vm_try!(VMResult::from_option(
+            instance.get_gc_ref_with_pool(store, &gc),
+            || { VMResult::Unlinkable }
+        )))
+    };
     let module_inst = unsafe { gc.get_module(instance.module_addr) };
     if let Some(ExportDesc::Global(idx)) = module_inst.exports.find(name) {
-        let addr = instance.globals.as_slice(&store.gc.borrow())[idx.0 as usize];
+        let addr = instance.globals.as_slice(&gc)[idx.0 as usize];
         let gt = module_inst.globals[idx.0 as usize];
         VMResult::Success(match gt.0 {
             ValType::I32 => {

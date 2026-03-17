@@ -1,20 +1,16 @@
-use std::rc::Rc;
-
 use crate::{
     common::{
         execute_elem_init_const_expr,
-        gc::{
-            FunctionInstanceData, GcRef, GcRootHandle, Header, InstanceData, MemoryPool, ObjectType,
-        },
+        gc::{FunctionInstanceData, GcRef, Header, InstanceData, MemoryPool, ObjectType},
         word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
         ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, GlobalIdx,
-        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Instr,
-        Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TypeIdx,
+        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Limits,
+        LocalReference, MemIdx, ModuleInstance, NativeModule, StablePc, TableIdx, TypeIdx,
         TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
-        vm::{self, special_start_host_function_call},
+        vm,
     },
     Instance, Module, Registry, Stack, Store, VMResult,
 };
@@ -138,27 +134,20 @@ fn convert_native_module_to_module(m: NativeModule) -> Module {
 }
 pub async fn instantiate_native_module(
     m: NativeModule,
-    store: &mut Store,
+    store: &Store,
     registry: &Registry,
 ) -> VMResult<InstanceHandle> {
     instantiate(convert_native_module_to_module(m), store, registry).await
 }
-// FIXME: Organizing the scope of gc holder so that clippy can understand it will make the code more complicated.
-#[allow(clippy::await_holding_refcell_ref)]
 pub async fn instantiate(
     m: Module,
-    store: &mut Store,
+    store: &Store,
     registry: &Registry,
 ) -> VMResult<InstanceHandle> {
-    let instance_id = store.new_instance_id();
-    let gc = store.gc.clone();
-    let mut gc_holder = gc.borrow_mut();
-    let gc = &mut gc_holder;
-    // -> addr
-    let mut memory: Option<GcRef> = None;
-    let mut globals = vec![];
-    let mut funcs: Vec<GcRef> = vec![];
-    let mut tables = vec![];
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!("instantiate is unsupported while the same store GC is already active");
+        return VMResult::Unlinkable;
+    }
     let Module {
         fts,
         functions,
@@ -174,320 +163,317 @@ pub async fn instantiate(
         start,
         ..
     } = m;
-    for import in &imports.0 {
-        tracing::trace!("processing import: {import:?}");
-        let ext_inst_addr = vm_try!(VMResult::from_option(registry.get(&import.module), || {
-            tracing::error!("unknown instance");
-            VMResult::Unlinkable
-        }));
-        let instance_gc_ref = ext_inst_addr.get_gc_ref_with_pool(gc);
-        let ext_inst = unsafe { &*gc.get_instance_unchecked(instance_gc_ref) };
-        let ext_module = unsafe { gc.get_module(ext_inst.module_addr) };
-        let export = vm_try!(VMResult::from_option(
-            ext_module.exports.find(&import.name),
-            || {
-                tracing::error!("unknown export");
-                VMResult::Unlinkable
+
+    let mut scheduler = Scheduler::new(store);
+    let (addr, has_start) = {
+        let mut gc = store.lock_gc();
+        let instance_id = store.new_instance_id();
+
+        // -> addr
+        let mut memory: Option<GcRef> = None;
+        let mut globals = vec![];
+        let mut funcs: Vec<GcRef> = vec![];
+        let mut tables = vec![];
+
+        for import in &imports.0 {
+            tracing::trace!("processing import: {import:?}");
+            let ext_inst_addr =
+                vm_try!(VMResult::from_option(registry.get(&import.module), || {
+                    tracing::error!("unknown instance");
+                    VMResult::Unlinkable
+                }));
+            let instance_gc_ref = vm_try!(VMResult::from_option(
+                ext_inst_addr.get_gc_ref_with_pool(store, &gc),
+                || {
+                    tracing::error!("instance handle belongs to another store");
+                    VMResult::Unlinkable
+                }
+            ));
+            let ext_inst = unsafe { &*gc.get_instance_unchecked(instance_gc_ref) };
+            let ext_module = unsafe { gc.get_module(ext_inst.module_addr) };
+            let export = vm_try!(VMResult::from_option(
+                ext_module.exports.find(&import.name),
+                || {
+                    tracing::error!("unknown export");
+                    VMResult::Unlinkable
+                }
+            ));
+            match (&import.desc, export) {
+                (ImportDesc::TypeIdx(tidx), ExportDesc::Func(funcidx)) => {
+                    let import_ft = fts.get(*tidx).unwrap();
+                    let export_ft_idx = ext_module.functions[funcidx.0 as usize];
+                    let export_ft = ext_module
+                        .function_types
+                        .get(export_ft_idx.0 as usize)
+                        .unwrap();
+                    if import_ft != export_ft {
+                        tracing::trace!("import function type");
+                        return VMResult::Unlinkable;
+                    }
+                    let funcaddr = ext_inst.funcs.as_slice(&gc)[funcidx.0 as usize];
+                    let funcidx = funcs.len();
+                    funcs.push(funcaddr);
+                    tracing::trace!("linking: {funcidx} => {funcaddr:?}")
+                }
+                (ImportDesc::GlobalType(import_gt), ExportDesc::Global(global_idx)) => {
+                    let export_gt = ext_module.globals.get(global_idx.0 as usize).unwrap();
+                    if import_gt != export_gt {
+                        tracing::trace!("import global type");
+                        return VMResult::Unlinkable;
+                    }
+                    globals.push(ext_inst.globals.as_slice(&gc)[global_idx.0 as usize]);
+                }
+                (ImportDesc::TableType(import_tt), ExportDesc::Table(idx)) => {
+                    let export_tt = ext_module.tables[idx.0 as usize];
+                    tracing::trace!("{export_tt:?}");
+
+                    if import_tt.reftype != export_tt.reftype {
+                        tracing::trace!("import table type");
+                        return VMResult::Unlinkable;
+                    }
+                    let addr = ext_inst.tables.as_slice(&gc)[idx.0 as usize];
+                    vm_try!(validate_limit(
+                        import_tt.limits,
+                        unsafe { gc.get_table(addr) }.1.len() as u32,
+                        export_tt.limits
+                    ));
+                    tables.push(ext_inst.tables.as_slice(&gc)[idx.0 as usize]);
+                }
+                (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
+                    memory = ext_inst.mems.as_slice(&gc).first().copied();
+                    let limits = ext_module.mems[0].0;
+
+                    if let Some(memory_addr) = memory {
+                        let memory = unsafe { gc.get_memory(memory_addr) };
+                        vm_try!(validate_limit(mt.0, memory.page_size(), limits))
+                    } else {
+                        tracing::trace!("invalid instance memory");
+                        return VMResult::Unlinkable;
+                    }
+                }
+                _ => {
+                    tracing::trace!("import other type objects");
+                    return VMResult::Unlinkable;
+                }
             }
+        }
+
+        let inst_addr = gc.allocate(Header::new(
+            ObjectType::Instance,
+            word_size::<InstanceData>(),
         ));
-        match (&import.desc, export) {
-            (ImportDesc::TypeIdx(tidx), ExportDesc::Func(funcidx)) => {
-                let import_ft = fts.get(*tidx).unwrap();
-                let export_ft_idx = ext_module.functions[funcidx.0 as usize];
-                let export_ft = ext_module
-                    .function_types
-                    .get(export_ft_idx.0 as usize)
-                    .unwrap();
-                if import_ft != export_ft {
-                    tracing::trace!("import function type");
-                    return VMResult::Unlinkable;
-                }
-                let funcaddr = ext_inst.funcs.as_slice(gc)[funcidx.0 as usize];
-                let funcidx = funcs.len();
-                funcs.push(funcaddr);
-                tracing::trace!("linking: {funcidx} => {funcaddr:?}")
-            }
-            (ImportDesc::GlobalType(import_gt), ExportDesc::Global(global_idx)) => {
-                let export_gt = ext_module.globals.get(global_idx.0 as usize).unwrap();
-                if import_gt != export_gt {
-                    tracing::trace!("import global type");
-
-                    return VMResult::Unlinkable;
-                }
-                globals.push(ext_inst.globals.as_slice(gc)[global_idx.0 as usize]);
-            }
-            (ImportDesc::TableType(import_tt), ExportDesc::Table(idx)) => {
-                let export_tt = ext_module.tables[idx.0 as usize];
-                tracing::trace!("{export_tt:?}");
-
-                if import_tt.reftype != export_tt.reftype {
-                    tracing::trace!("import table type");
-
-                    return VMResult::Unlinkable;
-                }
-                let addr = ext_inst.tables.as_slice(gc)[idx.0 as usize];
-                vm_try!(validate_limit(
-                    import_tt.limits,
-                    unsafe { gc.get_table(addr) }.1.len() as u32,
-                    export_tt.limits
-                ));
-                tables.push(ext_inst.tables.as_slice(gc)[idx.0 as usize]);
-            }
-            (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                memory = ext_inst.mems.as_slice(gc).first().copied();
-                let limits = ext_module.mems[0].0;
-
-                if let Some(memory_addr) = memory {
-                    let memory = unsafe { gc.get_memory(memory_addr) };
-                    vm_try!(validate_limit(mt.0, memory.page_size(), limits))
-                } else {
-                    tracing::trace!("invalid instance memory");
-                    return VMResult::Unlinkable;
-                }
-            }
-            _ => {
-                tracing::trace!("import other type objects");
-                return VMResult::Unlinkable;
+        if memory.is_none() {
+            if let Some(mem) = mems.first() {
+                memory = Some(gc.new_memory(mem.0.min, mem.0.max.unwrap_or(PAGE_SIZE_MAX as u32)));
             }
         }
-    }
-    let inst_addr = gc.allocate(Header::new(
-        ObjectType::Instance,
-        word_size::<InstanceData>(),
-    ));
-    if memory.is_none() {
-        if let Some(mem) = mems.first() {
-            memory = Some(gc.new_memory(mem.0.min, mem.0.max.unwrap_or(PAGE_SIZE_MAX as u32)))
-        }
-    }
 
-    for (idx, d) in (0..).zip(data.0.into_iter()) {
-        match &d.mode {
-            DataMode::Active(mem, offset) => {
-                assert_eq!(mem.0, 0);
-                let offset = vm_try!(execute_offset_const_expr(gc, &globals, offset)) as usize;
-                if let Some(memory) = &memory {
-                    let memory = unsafe { gc.get_memory(*memory) };
-                    if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
-                        slice.copy_from_slice(&d.init);
+        for (idx, d) in (0..).zip(data.0.into_iter()) {
+            match &d.mode {
+                DataMode::Active(mem, offset) => {
+                    assert_eq!(mem.0, 0);
+                    let offset =
+                        vm_try!(execute_offset_const_expr(&mut gc, &globals, offset)) as usize;
+                    if let Some(memory) = &memory {
+                        let memory = unsafe { gc.get_memory(*memory) };
+                        if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
+                            slice.copy_from_slice(&d.init);
+                        } else {
+                            return VMResult::MemoryIndexOutOfRange;
+                        }
                     } else {
                         return VMResult::MemoryIndexOutOfRange;
                     }
-                } else {
-                    return VMResult::MemoryIndexOutOfRange;
+                    store.lock_segments().data.insert((instance_id, idx), d);
                 }
-                store.data.insert((instance_id, idx), d);
-            }
-            DataMode::Passive => {
-                store.data.insert((instance_id, idx), d);
+                DataMode::Passive => {
+                    store.lock_segments().data.insert((instance_id, idx), d);
+                }
             }
         }
-    }
 
-    for func in codes.0.into_iter() {
-        let funcidx = funcs.len() as u32;
+        for func in codes.0.into_iter() {
+            let funcidx = funcs.len() as u32;
 
-        let func_addr = match func {
-            FunctionBody::Wasm(code) => {
-                let body = gc.new_function_body(&code.locals, &code.expr);
-                gc.new_func(&FunctionInstanceData {
-                    instance_addr: inst_addr,
-                    function_flags: FunctionInstanceData::create_wasm_flags(&code.locals),
-                    body,
-                    funcidx,
-                })
+            let func_addr = match func {
+                FunctionBody::Wasm(code) => {
+                    let body = gc.new_function_body(&code.locals, &code.expr);
+                    gc.new_func(&FunctionInstanceData {
+                        instance_addr: inst_addr,
+                        function_flags: FunctionInstanceData::create_wasm_flags(&code.locals),
+                        body,
+                        funcidx,
+                    })
+                }
+                FunctionBody::Host(fp) => {
+                    let align = align_of::<HostFunction>();
+                    let align64 = align == 8;
+                    let header = if align64 {
+                        Header::new(ObjectType::Raw, word_size::<usize>())
+                            .align64()
+                            .initialized()
+                    } else {
+                        Header::new(ObjectType::Raw, word_size::<usize>()).initialized()
+                    };
+                    let body = gc.allocate(header);
+                    let ptr = unsafe { gc.get_value_mut::<usize>(body, 0) };
+                    unsafe { std::ptr::write(ptr, fp as usize) };
+                    gc.new_func(&FunctionInstanceData {
+                        instance_addr: inst_addr,
+                        function_flags: FunctionInstanceData::create_host_flags(),
+                        body,
+                        funcidx,
+                    })
+                }
+            };
+
+            funcs.push(func_addr);
+            tracing::trace!("linking: {funcidx} => {func_addr:?}");
+        }
+
+        for init in &global_init {
+            globals.push(vm_try!(init_global(&mut gc, init, &globals, &funcs)));
+        }
+        let mut table_instances: Vec<GcRef> = m_tables.iter().map(|v| gc.new_table(*v)).collect();
+        tables.append(&mut table_instances);
+
+        let res = (|| {
+            for (idx, elem) in (0u32..).zip(m_elems.0.into_iter()) {
+                match &elem.mode {
+                    ElemMode::Active(idx, offset) => match &elem.init {
+                        ElemInit::FuncIdx(idxs) => {
+                            let offset =
+                                vm_try!(execute_offset_const_expr(&mut gc, &globals, offset))
+                                    as usize;
+                            let table_addr = tables[idx.0 as usize];
+                            let instance = unsafe { gc.get_table(table_addr) };
+
+                            if instance.0.reftype != elem.kind {
+                                panic!("reftype mismatch")
+                            }
+                            if offset + idxs.len() > instance.1.len() {
+                                return VMResult::TableIndexOutOfRange;
+                            }
+                            for (idx, funcidx) in idxs.iter().enumerate() {
+                                instance.1[offset + idx] = funcs[*funcidx as usize].get();
+                            }
+                        }
+                        ElemInit::ConstExpr(idxs) => {
+                            let offset =
+                                vm_try!(execute_offset_const_expr(&mut gc, &globals, offset))
+                                    as usize;
+                            let table_addr = tables[idx.0 as usize];
+                            let instance = unsafe { gc.get_table(table_addr) };
+                            if offset + idxs.len() > instance.1.len() {
+                                return VMResult::TableIndexOutOfRange;
+                            }
+                            let rt = instance.0.reftype;
+
+                            for (idx, idx_expr) in idxs.iter().enumerate() {
+                                let elem_addr = vm_try!(execute_elem_init_const_expr(
+                                    &mut gc, &globals, &funcs, idx_expr, rt
+                                ));
+                                let instance = unsafe { gc.get_table(table_addr) };
+                                instance.1[offset + idx] = elem_addr.get();
+                            }
+                        }
+                    },
+                    ElemMode::Passive => {
+                        store.lock_segments().elems.insert((instance_id, idx), elem);
+                    }
+                    ElemMode::Declarative => {}
+                }
             }
-            FunctionBody::Host(fp) => {
-                let align = align_of::<HostFunction>();
-                let align64 = align == 8;
-                let header = if align64 {
-                    Header::new(ObjectType::Raw, word_size::<usize>())
-                        .align64()
-                        .initialized()
-                } else {
-                    Header::new(ObjectType::Raw, word_size::<usize>()).initialized()
-                };
-                let body = gc.allocate(header);
-                let ptr = unsafe { gc.get_value_mut::<usize>(body, 0) };
-                unsafe { std::ptr::write(ptr, fp as usize) };
-                gc.new_func(&FunctionInstanceData {
-                    instance_addr: inst_addr,
-                    function_flags: FunctionInstanceData::create_host_flags(),
-                    body,
-                    funcidx,
-                })
-            }
+            VMResult::Success(())
+        })();
+
+        let mod_addr = gc.new_module(ModuleInstance {
+            function_types: fts.0,
+            functions,
+            exports: exs,
+            tables: m_tables,
+            globals: m_globals,
+            mems,
+        });
+
+        let instance = Instance {
+            module_addr: mod_addr,
+            instance_id,
+            memory: memory.into_iter().collect::<Vec<_>>(),
+            tables,
+            globals,
+            funcs,
         };
 
-        funcs.push(func_addr);
-
-        tracing::trace!("linking: {funcidx} => {func_addr:?}");
-    }
-
-    for init in &global_init {
-        globals.push(vm_try!(init_global(gc, init, &globals, &funcs)));
-    }
-    let mut table_instances: Vec<GcRef> = m_tables.iter().map(|v| gc.new_table(*v)).collect();
-    tables.append(&mut table_instances);
-
-    tracing::trace!("funcs: {funcs:?}");
-
-    let res = (|| {
-        tracing::trace!("funcs2: {funcs:?}");
-        for (idx, elem) in (0u32..).zip(m_elems.0.into_iter()) {
-            tracing::trace!("funcs3: {funcs:?}");
-            match &elem.mode {
-                ElemMode::Active(idx, offset) => match &elem.init {
-                    ElemInit::FuncIdx(idxs) => {
-                        let offset =
-                            vm_try!(execute_offset_const_expr(gc, &globals, offset)) as usize;
-                        let table_addr = tables[idx.0 as usize];
-
-                        let instance = unsafe { gc.get_table(table_addr) };
-
-                        if instance.0.reftype != elem.kind {
-                            panic!("reftype mismatch")
-                        }
-                        if offset + idxs.len() > instance.1.len() {
-                            return VMResult::TableIndexOutOfRange;
-                        }
-                        for (idx, funcidx) in idxs.iter().enumerate() {
-                            instance.1[offset + idx] = funcs[*funcidx as usize].get();
-                            tracing::trace!(
-                                "table[{}] = {:?}",
-                                offset + idx,
-                                funcs[*funcidx as usize]
-                            );
-                        }
-                    }
-                    ElemInit::ConstExpr(idxs) => {
-                        let offset =
-                            vm_try!(execute_offset_const_expr(gc, &globals, offset)) as usize;
-                        let table_addr = tables[idx.0 as usize];
-                        let Store { .. } = store;
-                        let instance = unsafe { gc.get_table(table_addr) };
-                        if offset + idxs.len() > instance.1.len() {
-                            return VMResult::TableIndexOutOfRange;
-                        }
-                        let rt = instance.0.reftype;
-
-                        tracing::trace!("funcs4: {funcs:?}");
-
-                        for (idx, idx_expr) in idxs.iter().enumerate() {
-                            let addr = vm_try!(execute_elem_init_const_expr(
-                                gc, &globals, &funcs, idx_expr, rt
-                            ));
-                            let instance = unsafe { gc.get_table(table_addr) };
-                            instance.1[offset + idx] = addr.get();
-                            tracing::trace!("table[{}] = {:?}", offset + idx, addr);
-                        }
-                    }
-                },
-                ElemMode::Passive => {
-                    store.elems.insert((instance_id, idx), elem);
-                }
-                ElemMode::Declarative => {
-                    //do nothing
-                }
-            }
+        unsafe {
+            gc.place_instance_unchecked(inst_addr, &instance);
         }
-        VMResult::Success(())
-    })();
+        vm_try!(res);
+        let root_slot = gc.reserve_root_slot();
+        gc.write_root_slot(root_slot, inst_addr);
+        let addr = InstanceHandle::from_root_slot(store, root_slot);
 
-    tracing::trace!("instance funcs: {funcs:?}");
-    let mod_addr = gc.new_module(ModuleInstance {
-        function_types: fts.0,
-        functions,
-        exports: exs,
-        tables: m_tables,
-        globals: m_globals,
-        mems,
-    });
+        let has_start = if let Some(start) = start {
+            let mut stack = Stack::new(128 * 1024);
+            let funcaddr = instance.funcs[start.0 as usize];
+            let funcinst = unsafe { gc.get_func(funcaddr) };
+            if funcinst.is_host_func() {
+                let local_reference = vm_try!(stack.function_call(
+                    0,
+                    0,
+                    funcaddr,
+                    LocalReference {
+                        local_size: 0,
+                        local_top: 0
+                    },
+                    &vm::VM_END,
+                    &gc,
+                ));
 
-    let instance = Instance {
-        module_addr: mod_addr,
-        instance_id,
-        memory: memory.into_iter().collect::<Vec<_>>(),
-        tables,
-        globals,
-        funcs,
+                scheduler.push(Task {
+                    task_id: 0,
+                    stack,
+                    local_reference,
+                    ready_flag: ReadyFlag::Ready,
+                    fp: StablePc::from_stable_ptr(vm::START_HOST_FUNCTION_PROGRAM.as_ptr()),
+                    pending_effects: 0,
+                });
+            } else {
+                let (locals, _offset) = funcinst.locals_and_code_offset(&gc);
+                let local_reference = vm_try!(stack.function_call(
+                    0,
+                    locals.byte_size(),
+                    funcaddr,
+                    LocalReference {
+                        local_size: 0,
+                        local_top: 0
+                    },
+                    &vm::VM_END,
+                    &gc,
+                ));
+
+                scheduler.push(Task {
+                    fp: StablePc::from_relative_index(0),
+                    task_id: 0,
+                    stack,
+                    local_reference,
+                    ready_flag: ReadyFlag::Ready,
+                    pending_effects: 0,
+                });
+            }
+            true
+        } else {
+            false
+        };
+
+        (addr, has_start)
     };
 
-    if let Some(start) = start {
-        let mut stack = Stack::new(128 * 1024);
-
-        let funcaddr = instance.funcs[start.0 as usize];
-        unsafe {
-            gc.place_instance_unchecked(inst_addr, &instance);
-        }
-        vm_try!(res);
-        let mut scheduler = Scheduler::new(store);
-        let funcinst = unsafe { gc.get_func(funcaddr) };
-        if funcinst.is_host_func() {
-            let fp = funcinst.host_code_pointer(gc);
-            let local_reference = vm_try!(stack.function_call(
-                0,
-                0,
-                funcaddr,
-                LocalReference {
-                    local_size: 0,
-                    local_top: 0
-                },
-                &vm::VM_END
-            ));
-
-            let program = &[
-                Instr {
-                    op: special_start_host_function_call,
-                },
-                Instr {
-                    operand: crate::common::Operand {
-                        start_host_function: fp,
-                    },
-                },
-            ];
-            scheduler.push(Task {
-                task_id: 0,
-                stack,
-                local_reference,
-                ready_flag: ReadyFlag::Ready,
-                fp: program.as_ptr(),
-                pending_effects: 0,
-            });
-        } else {
-            let (locals, offset) = funcinst.locals_and_code_offset(gc);
-            let local_reference = vm_try!(stack.function_call(
-                0,
-                locals.byte_size(),
-                funcaddr,
-                LocalReference {
-                    local_size: 0,
-                    local_top: 0
-                },
-                &vm::VM_END
-            ));
-            let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, offset) };
-
-            scheduler.push(Task {
-                fp: ptr,
-                task_id: 0,
-                stack,
-                local_reference,
-                ready_flag: ReadyFlag::Ready,
-                pending_effects: 0,
-            });
-        }
-        drop(gc_holder);
+    if has_start {
         scheduler.run().await;
-        vm_try!(scheduler.completed_tasks.pop().unwrap().result)
-    } else {
-        unsafe {
-            gc.place_instance_unchecked(inst_addr, &instance);
-        }
-        vm_try!(res);
-        drop(gc_holder);
+        vm_try!(scheduler.completed_tasks.pop().unwrap().result);
     }
-    let addr = InstanceHandle(Rc::new(GcRootHandle::new(inst_addr, store.gc.clone())));
+
     VMResult::Success(addr)
 }
 // TODO:
@@ -495,11 +481,14 @@ pub async fn instantiate(
 pub fn aliasing(
     registry: &Registry,
     triplets: &[(String, String, String)],
-    store: &mut Store,
+    store: &Store,
 ) -> VMResult<InstanceHandle> {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!("aliasing is unsupported while the same store GC is already active");
+        return VMResult::Unlinkable;
+    }
+    let mut gc = store.lock_gc();
     let inst_id = store.new_instance_id();
-    let mut gc = store.gc.borrow_mut();
-    let gc = &mut gc;
     let mut functions = vec![];
     let mut function_types = vec![];
     let mut globals = vec![];
@@ -515,7 +504,10 @@ pub fn aliasing(
             VMResult::Unlinkable
         }));
 
-        let gc_ref = instance_addr.get_gc_ref_with_pool(gc);
+        let gc_ref = vm_try!(VMResult::from_option(
+            instance_addr.get_gc_ref_with_pool(store, &gc),
+            || { VMResult::Unlinkable }
+        ));
         let ext_instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
         let ext_module = unsafe { gc.get_module(ext_instance.module_addr) };
         let export_desc = vm_try!(VMResult::from_option(
@@ -531,7 +523,7 @@ pub fn aliasing(
                 let new_funcidx = functions.len();
                 function_types.push(ft.clone());
                 functions.push(TypeIdx(new_tidx as u32));
-                let addr = ext_instance.funcs.as_slice(gc)[idx.0 as usize];
+                let addr = ext_instance.funcs.as_slice(&gc)[idx.0 as usize];
                 function_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -542,7 +534,7 @@ pub fn aliasing(
                 let gt = ext_module.globals[idx.0 as usize];
                 let new_gidx = globals.len();
                 globals.push(gt);
-                let addr = ext_instance.globals.as_slice(gc)[idx.0 as usize];
+                let addr = ext_instance.globals.as_slice(&gc)[idx.0 as usize];
                 global_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -553,7 +545,7 @@ pub fn aliasing(
                 let mt = ext_module.mems[idx.0 as usize];
                 let new_memidx = memories.len();
                 memories.push(mt);
-                mem_addr = Some(ext_instance.mems.as_slice(gc)[idx.0 as usize]);
+                mem_addr = Some(ext_instance.mems.as_slice(&gc)[idx.0 as usize]);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Mem(MemIdx(new_memidx as u32)),
@@ -563,7 +555,7 @@ pub fn aliasing(
                 let tt = ext_module.tables[idx.0 as usize];
                 let new_tableidx = tables.len();
                 tables.push(tt);
-                table_addrs.push(ext_instance.tables.as_slice(gc)[idx.0 as usize]);
+                table_addrs.push(ext_instance.tables.as_slice(&gc)[idx.0 as usize]);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Table(TableIdx(new_tableidx as u32)),
@@ -587,21 +579,27 @@ pub fn aliasing(
         tables: table_addrs,
         instance_id: inst_id,
     });
-
-    VMResult::Success(InstanceHandle(Rc::new(GcRootHandle::new_with_ref(
-        inst_addr,
-        gc,
-        store.gc.clone(),
-    ))))
+    let root_slot = gc.reserve_root_slot();
+    gc.write_root_slot(root_slot, inst_addr);
+    VMResult::Success(InstanceHandle::from_root_slot(store, root_slot))
 }
 pub fn link_host_function_with_function_idx(
     addr: &InstanceHandle,
     funcidx: u32,
     f: HostFunction,
-    store: &mut Store,
+    store: &Store,
 ) {
-    let mut gc = store.gc.borrow_mut();
-    let gc_ref = addr.get_gc_ref_with_pool(&gc);
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!(
+            "link_host_function_with_function_idx is unsupported while the same store GC is already active"
+        );
+        return;
+    }
+    let mut gc = store.lock_gc();
+    let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
+        tracing::error!("instance handle belongs to another store");
+        return;
+    };
     let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
     let funcaddr = instance.funcs.as_slice(&gc)[funcidx as usize];
     let func = unsafe { gc.get_func_mut(funcaddr) };
@@ -613,10 +611,20 @@ pub fn link_host_function_with_export_name(
     addr: &InstanceHandle,
     name: &str,
     f: HostFunction,
-    store: &mut Store,
+    store: &Store,
 ) {
-    let mut gc = store.gc.borrow_mut();
-    let instance = unsafe { &*gc.get_instance_unchecked(addr.get_gc_ref_with_pool(&gc)) };
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!(
+            "link_host_function_with_export_name is unsupported while the same store GC is already active"
+        );
+        return;
+    }
+    let mut gc = store.lock_gc();
+    let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
+        tracing::error!("instance handle belongs to another store");
+        return;
+    };
+    let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
     let module = unsafe { gc.get_module(instance.module_addr) };
     let export = &module.exports.find(name).unwrap();
     let func_idx = if let ExportDesc::Func(v) = export {

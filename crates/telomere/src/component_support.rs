@@ -51,24 +51,31 @@ pub mod common {
 
     pub fn instance_gc_ref(
         handle: &crate::common::InstanceHandle,
+        store: &crate::common::Store,
         pool: &crate::common::gc::MemoryPool,
-    ) -> crate::common::gc::GcRef {
-        handle.get_gc_ref_with_pool(pool)
+    ) -> Option<crate::common::gc::GcRef> {
+        handle.get_gc_ref_with_pool(store, pool)
     }
 
     pub fn instance_id(
         handle: &crate::common::InstanceHandle,
+        store: &crate::common::Store,
         pool: &crate::common::gc::MemoryPool,
-    ) -> u32 {
-        unsafe { (*pool.get_instance_unchecked(handle.get_gc_ref_with_pool(pool))).instance_id }
+    ) -> Option<u32> {
+        let gc_ref = handle.get_gc_ref_with_pool(store, pool)?;
+        Some(unsafe { (*pool.get_instance_unchecked(gc_ref)).instance_id })
     }
 
     pub fn memory_export_addr(
         instance: &crate::common::InstanceHandle,
+        store: &crate::common::Store,
         export_name: &str,
         gc: &mut crate::common::gc::MemoryPool,
     ) -> Result<crate::common::gc::GcRef, String> {
-        let instance = unsafe { &*gc.get_instance_unchecked(instance.get_gc_ref_with_pool(gc)) };
+        let gc_ref = instance
+            .get_gc_ref_with_pool(store, gc)
+            .ok_or_else(|| "instance handle belongs to another store".to_owned())?;
+        let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
         let module = unsafe { gc.get_module(instance.module_addr) };
         let crate::common::ExportDesc::Mem(idx) = module
             .exports
@@ -121,7 +128,7 @@ pub mod runtime {
 
     pub fn run_module_function_sync_with_gc(
         instance: &crate::common::InstanceHandle,
-        store: &mut crate::common::Store,
+        store: &crate::common::Store,
         gc: &mut crate::common::gc::MemoryPool,
         name: &str,
         args: &crate::runtime::ResultValue,

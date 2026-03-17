@@ -28,23 +28,19 @@ telomere_component_bindgen::bindgen!({
 struct SyncHost;
 
 impl bindings::Imports for SyncHost {
-    fn ping(&self, _store: &mut Store) -> Result<u32, ComponentError> {
+    fn ping(&self, _store: &Store) -> Result<u32, ComponentError> {
         Ok(7)
     }
 }
 
 impl service::Host for SyncHost {
-    fn counter_new(
-        &self,
-        _store: &mut Store,
-        seed: u32,
-    ) -> Result<service::Counter, ComponentError> {
+    fn counter_new(&self, _store: &Store, seed: u32) -> Result<service::Counter, ComponentError> {
         Ok(service::Counter::new(seed))
     }
 
     fn counter_clone(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         other: service::CounterBorrow,
     ) -> Result<service::Counter, ComponentError> {
         Ok(service::Counter::new(other.handle()))
@@ -52,7 +48,7 @@ impl service::Host for SyncHost {
 
     fn counter_value(
         &self,
-        _store: &mut Store,
+        _store: &Store,
         self_: service::CounterBorrow,
     ) -> Result<u32, ComponentError> {
         Ok(self_.handle())
@@ -62,10 +58,7 @@ impl service::Host for SyncHost {
 struct AsyncHost;
 
 impl bindings::ImportsAsync for AsyncHost {
-    fn ping<'a>(
-        &'a self,
-        _store: &'a mut Store,
-    ) -> ComponentFuture<'a, Result<u32, ComponentError>> {
+    fn ping<'a>(&'a self, _store: &'a Store) -> ComponentFuture<'a, Result<u32, ComponentError>> {
         Box::pin(async move { Ok(9) })
     }
 }
@@ -73,7 +66,7 @@ impl bindings::ImportsAsync for AsyncHost {
 impl service::HostAsync for AsyncHost {
     fn counter_new<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         seed: u32,
     ) -> ComponentFuture<'a, Result<service::Counter, ComponentError>> {
         Box::pin(async move { Ok(service::Counter::new(seed)) })
@@ -81,7 +74,7 @@ impl service::HostAsync for AsyncHost {
 
     fn counter_clone<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         other: service::CounterBorrow,
     ) -> ComponentFuture<'a, Result<service::Counter, ComponentError>> {
         Box::pin(async move { Ok(service::Counter::new(other.handle())) })
@@ -89,7 +82,7 @@ impl service::HostAsync for AsyncHost {
 
     fn counter_value<'a>(
         &'a self,
-        _store: &'a mut Store,
+        _store: &'a Store,
         self_: service::CounterBorrow,
     ) -> ComponentFuture<'a, Result<u32, ComponentError>> {
         Box::pin(async move { Ok(self_.handle()) })

@@ -28,14 +28,14 @@ async fn run_component_bytes(
     add_to_linker_sync(&mut linker, state.clone())
         .context("failed to register WASI imports into component linker")?;
 
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let instance = engine
-        .instantiate(&program, &mut store, &linker)
+        .instantiate(&program, &store, &linker)
         .await
         .with_context(|| format!("failed to instantiate component `{}`", path.display()))?;
 
     let exports = bindings::Exports::new(instance);
-    let result = exports.wasi_cli_run().run(&mut store).await;
+    let result = exports.wasi_cli_run().run(&store).await;
     if let Some(code) = state.exit_code() {
         return Ok(ExitCode::from(code));
     }

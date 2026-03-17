@@ -8,7 +8,7 @@ use super::*;
 impl ResolvedCallable {
     pub(super) fn call_sync(
         &self,
-        store: &mut Store,
+        store: &Store,
         args: &[ComponentValue],
     ) -> Result<Vec<ComponentValue>, ComponentError> {
         match self {
@@ -53,7 +53,7 @@ impl ResolvedCallable {
 impl RuntimeCoreFunc {
     pub(super) fn call_sync(
         &self,
-        store: &mut Store,
+        store: &Store,
         args: &[WasmValue],
     ) -> Result<Vec<WasmValue>, ComponentError> {
         match self {
@@ -79,7 +79,7 @@ impl HostBinding {
 
     fn call_sync(
         &self,
-        store: &mut Store,
+        store: &Store,
         args: &[WasmValue],
     ) -> Result<Vec<WasmValue>, ComponentError> {
         match self {
@@ -206,7 +206,7 @@ impl SharedState {
 pub(super) fn materialize_inline_core_instance(
     env: &RuntimeEnv,
     exports: &HashMap<String, CoreInstanceInlineExport>,
-    store: &mut Store,
+    store: &Store,
 ) -> Result<InstanceHandle, ComponentError> {
     let mut registry = Registry::new();
     let mut triplets = Vec::new();
@@ -221,7 +221,7 @@ pub(super) fn materialize_inline_core_instance(
                     ..
                 } => {
                     let module_name = format!("core-func-{}-{}", export_name, triplets.len());
-                    registry.register(module_name.clone(), instance);
+                    registry.register(module_name.clone(), instance.clone());
                     triplets.push((module_name, source_name, export_name.clone()));
                 }
                 RuntimeCoreFunc::Host(binding) => {
@@ -231,13 +231,13 @@ pub(super) fn materialize_inline_core_instance(
             CoreInstanceInlineExport::Memory(idx) => {
                 let memory = env.resolve_core_memory(*idx, store)?;
                 let module_name = format!("core-memory-{}-{}", export_name, triplets.len());
-                registry.register(module_name.clone(), memory.instance);
+                registry.register(module_name.clone(), memory.instance.clone());
                 triplets.push((module_name, memory.export_name, export_name.clone()));
             }
             CoreInstanceInlineExport::Table(idx) => {
                 let table = env.resolve_core_table(*idx, store)?;
                 let module_name = format!("core-table-{}-{}", export_name, triplets.len());
-                registry.register(module_name.clone(), table.instance);
+                registry.register(module_name.clone(), table.instance.clone());
                 triplets.push((module_name, table.export_name, export_name.clone()));
             }
             CoreInstanceInlineExport::Global(_)
@@ -275,7 +275,7 @@ pub(super) fn materialize_inline_core_instance(
             };
         register_host_bindings(&host_instance, &host_functions, store);
         let module_name = format!("host-inline-{}", triplets.len());
-        registry.register(module_name.clone(), host_instance);
+        registry.register(module_name.clone(), host_instance.clone());
         for (name, _) in host_functions {
             triplets.push((module_name.clone(), name.clone(), name));
         }
@@ -290,7 +290,7 @@ pub(super) fn materialize_inline_core_instance(
 fn register_host_bindings(
     instance: &InstanceHandle,
     bindings: &[(String, Rc<HostBinding>)],
-    store: &mut Store,
+    store: &Store,
 ) {
     let instance_id = instance_id(instance, store);
     HOST_BINDINGS.with(|host_bindings| {
@@ -326,7 +326,8 @@ fn component_host_trampoline(ctx: &mut ExecuteContext) -> VMResult<*const Instr>
         .map(|ty| ty.stack_size().u32())
         .sum::<u32>() as usize;
     let (prev_local_ref, return_addr) =
-        ctx.stack.function_return(&ctx.local_reference, return_size);
+        ctx.stack
+            .function_return(&ctx.local_reference, return_size, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
@@ -481,14 +482,15 @@ pub(super) fn linker_binding_to_callable(binding: LinkerBinding) -> ResolvedCall
     }
 }
 
-fn instance_id(instance: &InstanceHandle, store: &mut Store) -> u32 {
-    let gc = store.gc.borrow();
-    crate::support::common::instance_id(instance, &gc)
+fn instance_id(instance: &InstanceHandle, store: &Store) -> u32 {
+    let gc = store.lock_gc();
+    crate::support::common::instance_id(instance, store, &gc)
+        .expect("instance handle belongs to another store")
 }
 
 fn call_core_export_sync(
     instance: &InstanceHandle,
-    store: &mut Store,
+    store: &Store,
     export_name: &str,
     args: &[WasmValue],
 ) -> Result<Vec<WasmValue>, ComponentError> {
