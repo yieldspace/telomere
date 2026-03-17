@@ -106,8 +106,20 @@ impl Store {
         }
     }
 
-    pub fn lock_gc(&self) -> StoreGcGuard<'_> {
+    fn assert_no_same_thread_gc_reentry(&self, api_name: &str) {
+        assert!(
+            !self.has_active_gc_on_current_thread(),
+            "{api_name} is unsupported while the same store GC is already active on this thread"
+        );
+    }
+
+    fn lock_gc_unchecked(&self) -> StoreGcGuard<'_> {
         StoreGcGuard::new(&self.identity, self.gc.lock())
+    }
+
+    pub fn lock_gc(&self) -> StoreGcGuard<'_> {
+        self.assert_no_same_thread_gc_reentry("lock_gc");
+        self.lock_gc_unchecked()
     }
 
     pub fn lock_segments(&self) -> MutexGuard<'_, StoreSegments> {
@@ -115,7 +127,8 @@ impl Store {
     }
 
     pub fn with_gc<T>(&self, f: impl FnOnce(&mut MemoryPool) -> T) -> T {
-        let mut gc = self.lock_gc();
+        self.assert_no_same_thread_gc_reentry("with_gc");
+        let mut gc = self.lock_gc_unchecked();
         f(&mut gc)
     }
 
@@ -214,6 +227,17 @@ impl StoreState {
 #[cfg(test)]
 mod test {
     use super::{has_active_gc_for_identity, Store, StoreState};
+    use std::panic::{self, AssertUnwindSafe};
+
+    fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(message) => *message,
+            Err(payload) => match payload.downcast::<&'static str>() {
+                Ok(message) => (*message).to_owned(),
+                Err(_) => "<non-string panic payload>".to_owned(),
+            },
+        }
+    }
 
     #[test]
     fn test_state() {
@@ -244,5 +268,31 @@ mod test {
         drop(guard_b);
 
         assert!(!has_active_gc_for_identity(&identity_b));
+    }
+
+    #[test]
+    fn lock_gc_panics_on_same_thread_reentry() {
+        let store = Store::new();
+        let _guard = store.lock_gc();
+
+        let panic = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _reentered = store.lock_gc();
+        }))
+        .expect_err("lock_gc should panic on same-thread same-store reentry");
+
+        assert!(panic_message(panic).contains("lock_gc"));
+    }
+
+    #[test]
+    fn with_gc_panics_on_same_thread_reentry() {
+        let store = Store::new();
+        let _guard = store.lock_gc();
+
+        let panic = panic::catch_unwind(AssertUnwindSafe(|| {
+            store.with_gc(|_| ());
+        }))
+        .expect_err("with_gc should panic on same-thread same-store reentry");
+
+        assert!(panic_message(panic).contains("with_gc"));
     }
 }
