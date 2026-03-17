@@ -3,7 +3,10 @@ use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16}
 use crate::VMResult;
 use std::fmt::Debug;
 
-use super::{gc::GcRef, Instr};
+use super::{
+    gc::{GcRef, MemoryPool},
+    Instr, StablePc,
+};
 
 pub(crate) trait LaneType
 where
@@ -40,8 +43,8 @@ impl Debug for Stack {
     }
 }
 #[repr(C, packed)]
-struct CallStackInfo {
-    return_addr: *const Instr,
+pub(crate) struct CallStackInfo {
+    return_pc: StablePc,
     prev_local_reference_top: usize,
     prev_local_reference_size: u32,
     code_addr: GcRef,
@@ -205,6 +208,7 @@ impl Stack {
         code_addr: GcRef,
         prev_local_reference: LocalReference,
         return_addr: *const Instr,
+        gc: &MemoryPool,
     ) -> VMResult<LocalReference> {
         let local_top = vm_try!(VMResult::from_option(
             self.top.checked_sub(param_size),
@@ -213,7 +217,7 @@ impl Stack {
 
         vm_try!(self.add_top(local_size));
         let info = CallStackInfo {
-            return_addr,
+            return_pc: StablePc::from_raw_in_frame(gc, self, prev_local_reference, return_addr),
             code_addr,
             prev_local_reference_top: prev_local_reference.local_top,
             prev_local_reference_size: prev_local_reference.local_size,
@@ -235,23 +239,25 @@ impl Stack {
         &mut self,
         reference: &LocalReference,
         return_size: usize,
+        gc: &MemoryPool,
     ) -> (LocalReference, *const Instr) {
         let CallStackInfo {
-            return_addr,
+            return_pc,
             prev_local_reference_top,
             prev_local_reference_size,
             ..
         } = *self.call_stack_info(reference);
+        let prev_local_reference = LocalReference {
+            local_size: prev_local_reference_size,
+            local_top: prev_local_reference_top,
+        };
 
         self.memory
             .copy_within(self.top - return_size..self.top, reference.local_top);
         self.top = reference.local_top + return_size;
         (
-            LocalReference {
-                local_size: prev_local_reference_size,
-                local_top: prev_local_reference_top,
-            },
-            return_addr,
+            prev_local_reference,
+            return_pc.resolve(gc, self, prev_local_reference),
         )
     }
     pub fn function_return_call(
@@ -263,7 +269,7 @@ impl Stack {
     ) -> VMResult<LocalReference> {
         tracing::trace!("function_return_call: {reference:?}");
         let CallStackInfo {
-            return_addr,
+            return_pc,
             prev_local_reference_top,
             prev_local_reference_size,
             ..
@@ -275,7 +281,7 @@ impl Stack {
         vm_try!(self.add_top(local_size));
 
         let info = CallStackInfo {
-            return_addr,
+            return_pc,
             code_addr,
             prev_local_reference_top,
             prev_local_reference_size,

@@ -1,7 +1,7 @@
 use std::{future::Future, ops::Range, pin::Pin};
 
 use crate::{
-    common::{GcRef, Instr},
+    common::{GcRef, Instr, StablePc},
     Stack,
 };
 
@@ -47,7 +47,7 @@ pub struct MemoryEffect {
     pub operation: Operation,
 }
 pub type AsyncEffectOperationCallSignature =
-    fn(u32, *const Instr) -> Pin<Box<dyn Future<Output = AsyncResult>>>;
+    fn(u32, StablePc) -> Pin<Box<dyn Future<Output = AsyncResult>>>;
 #[cfg(feature = "async-runtime")]
 #[derive(Debug)]
 pub enum AsyncEffectOperation {

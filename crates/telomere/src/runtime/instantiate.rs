@@ -4,13 +4,13 @@ use crate::{
         gc::{FunctionInstanceData, GcRef, Header, InstanceData, MemoryPool, ObjectType},
         word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
         ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, GlobalIdx,
-        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Instr,
-        Limits, LocalReference, MemIdx, ModuleInstance, NativeModule, TableIdx, TypeIdx,
+        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Limits,
+        LocalReference, MemIdx, ModuleInstance, NativeModule, StablePc, TableIdx, TypeIdx,
         TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
-        vm::{self, special_start_host_function_call},
+        vm,
     },
     Instance, Module, Registry, Stack, Store, VMResult,
 };
@@ -165,7 +165,7 @@ pub async fn instantiate(
     } = m;
 
     let mut scheduler = Scheduler::new(store);
-    let (addr, has_start, _start_host_program) = {
+    let (addr, has_start) = {
         let mut gc = store.lock_gc();
         let instance_id = store.new_instance_id();
 
@@ -413,13 +413,11 @@ pub async fn instantiate(
         gc.write_root_slot(root_slot, inst_addr);
         let addr = InstanceHandle::from_root_slot(store, root_slot);
 
-        let mut start_host_program = None;
         let has_start = if let Some(start) = start {
             let mut stack = Stack::new(128 * 1024);
             let funcaddr = instance.funcs[start.0 as usize];
             let funcinst = unsafe { gc.get_func(funcaddr) };
             if funcinst.is_host_func() {
-                let fp = funcinst.host_code_pointer(&gc);
                 let local_reference = vm_try!(stack.function_call(
                     0,
                     0,
@@ -428,32 +426,20 @@ pub async fn instantiate(
                         local_size: 0,
                         local_top: 0
                     },
-                    &vm::VM_END
+                    &vm::VM_END,
+                    &gc,
                 ));
 
-                start_host_program = Some([
-                    Instr {
-                        op: special_start_host_function_call,
-                    },
-                    Instr {
-                        operand: crate::common::Operand {
-                            start_host_function: fp,
-                        },
-                    },
-                ]);
-                let program = start_host_program
-                    .as_ref()
-                    .expect("host start trampoline must stay alive until scheduler run");
                 scheduler.push(Task {
                     task_id: 0,
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
-                    fp: program.as_ptr(),
+                    fp: StablePc::from_stable_ptr(vm::START_HOST_FUNCTION_PROGRAM.as_ptr()),
                     pending_effects: 0,
                 });
             } else {
-                let (locals, offset) = funcinst.locals_and_code_offset(&gc);
+                let (locals, _offset) = funcinst.locals_and_code_offset(&gc);
                 let local_reference = vm_try!(stack.function_call(
                     0,
                     locals.byte_size(),
@@ -462,12 +448,12 @@ pub async fn instantiate(
                         local_size: 0,
                         local_top: 0
                     },
-                    &vm::VM_END
+                    &vm::VM_END,
+                    &gc,
                 ));
-                let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, offset) };
 
                 scheduler.push(Task {
-                    fp: ptr,
+                    fp: StablePc::from_relative_index(0),
                     task_id: 0,
                     stack,
                     local_reference,
@@ -480,7 +466,7 @@ pub async fn instantiate(
             false
         };
 
-        (addr, has_start, start_host_program)
+        (addr, has_start)
     };
 
     if has_start {

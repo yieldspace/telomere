@@ -326,7 +326,8 @@ fn component_host_trampoline(ctx: &mut ExecuteContext) -> VMResult<*const Instr>
         .map(|ty| ty.stack_size().u32())
         .sum::<u32>() as usize;
     let (prev_local_ref, return_addr) =
-        ctx.stack.function_return(&ctx.local_reference, return_size);
+        ctx.stack
+            .function_return(&ctx.local_reference, return_size, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }

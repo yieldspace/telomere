@@ -368,6 +368,101 @@ pub union Instr {
 }
 unsafe impl Send for Instr {}
 unsafe impl Sync for Instr {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct StablePc(usize);
+impl StablePc {
+    const RELATIVE_TAG: usize = 1;
+
+    pub(crate) fn from_stable_ptr(ptr: *const Instr) -> Self {
+        let ptr = ptr as usize;
+        debug_assert_eq!(ptr & Self::RELATIVE_TAG, 0);
+        Self(ptr)
+    }
+
+    pub(crate) fn from_relative_index(index: usize) -> Self {
+        Self((index << 1) | Self::RELATIVE_TAG)
+    }
+
+    pub(crate) fn from_raw_in_frame(
+        gc: &MemoryPool,
+        stack: &Stack,
+        local_reference: LocalReference,
+        ptr: *const Instr,
+    ) -> Self {
+        Self::relative_index_for_ptr(gc, stack, local_reference, ptr)
+            .map(Self::from_relative_index)
+            .unwrap_or_else(|| Self::from_stable_ptr(ptr))
+    }
+
+    pub(crate) fn resolve(
+        self,
+        gc: &MemoryPool,
+        stack: &Stack,
+        local_reference: LocalReference,
+    ) -> *const Instr {
+        match self.relative_index() {
+            Some(index) => {
+                let (base, len) = Self::current_frame_code_range(gc, stack, local_reference)
+                    .expect("relative continuation must resolve against a wasm frame");
+                debug_assert!(index < len);
+                unsafe { base.add(index) }
+            }
+            None => self.0 as *const Instr,
+        }
+    }
+
+    fn relative_index(self) -> Option<usize> {
+        (self.0 & Self::RELATIVE_TAG == Self::RELATIVE_TAG).then_some(self.0 >> 1)
+    }
+
+    fn current_frame_code_range(
+        gc: &MemoryPool,
+        stack: &Stack,
+        local_reference: LocalReference,
+    ) -> Option<(*const Instr, usize)> {
+        let frame_size = local_reference.local_size as usize;
+        if frame_size < std::mem::size_of::<crate::common::stack::CallStackInfo>() {
+            return None;
+        }
+        let code_addr = stack.code_addr(&local_reference);
+        let funcinst = unsafe { gc.get_func(code_addr) };
+        if funcinst.is_host_func() {
+            return None;
+        }
+        let (_locals, code_offset) = funcinst.locals_and_code_offset(gc);
+        let total_words = gc.read_header(funcinst.body).word_size() as usize;
+        let code_words = total_words.checked_sub(code_offset)?;
+        let instr_len = code_words / word_size::<Instr>();
+        Some((
+            unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) },
+            instr_len,
+        ))
+    }
+
+    fn relative_index_for_ptr(
+        gc: &MemoryPool,
+        stack: &Stack,
+        local_reference: LocalReference,
+        ptr: *const Instr,
+    ) -> Option<usize> {
+        let (base, instr_len) = Self::current_frame_code_range(gc, stack, local_reference)?;
+        let instr_size = std::mem::size_of::<Instr>();
+        let base_addr = base as usize;
+        let ptr_addr = ptr as usize;
+        let byte_len = instr_len.checked_mul(instr_size)?;
+        let end_addr = base_addr.checked_add(byte_len)?;
+        if !(base_addr..end_addr).contains(&ptr_addr) {
+            return None;
+        }
+        let delta = ptr_addr - base_addr;
+        if delta % instr_size != 0 {
+            return None;
+        }
+        Some(delta / instr_size)
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WasmValue {
     I32(i32),
@@ -471,7 +566,10 @@ impl InstanceHandle {
 
 #[cfg(test)]
 mod instance_handle_tests {
-    use super::{GcRef, InstanceHandle, Store, VMResult, WasmValue};
+    use super::{
+        gc::{Header, ObjectType},
+        GcRef, InstanceHandle, LocalReference, StablePc, Stack, Store, VMResult, WasmValue,
+    };
     use crate::{
         aliasing, get_global, instantiate, run_module_function, IoReadBinaryReader, Module,
         Registry, ResultValue, WasmParser,
@@ -641,6 +739,142 @@ mod instance_handle_tests {
         }
 
         assert_eq!(store.lock_gc().reserve_root_slot(), 1);
+    }
+
+    #[tokio::test]
+    async fn stable_pc_relative_continuation_survives_memory_pool_growth() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let handle = instantiate_wat(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                i32.const 42))
+            "#,
+            &store,
+            &registry,
+        )
+        .await;
+        let mut gc = store.lock_gc();
+        let instance_gc_ref = handle.get_gc_ref_with_pool(&store, &gc).unwrap();
+        let instance = unsafe { &*gc.get_instance_unchecked(instance_gc_ref) };
+        let func_addr = instance.funcs.as_slice(&gc)[0];
+        let func = unsafe { gc.get_func(func_addr) };
+        let (locals, code_offset) = func.locals_and_code_offset(&gc);
+        let mut stack = Stack::new(256);
+        let local_reference = stack
+            .function_call(
+                0,
+                locals.byte_size(),
+                func_addr,
+                LocalReference {
+                    local_size: 0,
+                    local_top: 0,
+                },
+                &crate::runtime::vm::VM_END as *const super::Instr,
+                &gc,
+            )
+            .unwrap();
+        let raw = unsafe { gc.get_value::<super::Instr>(func.body, code_offset) };
+        let first_instr = unsafe { *raw };
+        let stable = StablePc::from_raw_in_frame(&gc, &stack, local_reference, raw);
+
+        let mut reallocated = false;
+        while !reallocated {
+            let old_ptr = gc.memory.as_ptr();
+            gc.allocate(Header::new(ObjectType::Raw, 4096).initialized());
+            reallocated = gc.memory.as_ptr() != old_ptr;
+        }
+
+        let resolved = stable.resolve(&gc, &stack, local_reference);
+        assert_eq!(unsafe { first_instr.op as usize }, unsafe {
+            (*resolved).op as usize
+        });
+        assert_eq!(
+            stable,
+            StablePc::from_raw_in_frame(&gc, &stack, local_reference, resolved)
+        );
+    }
+
+    #[tokio::test]
+    async fn stack_return_continuation_survives_memory_pool_growth() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let handle = instantiate_wat(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                i32.const 1
+                drop
+                i32.const 42))
+            "#,
+            &store,
+            &registry,
+        )
+        .await;
+        let mut gc = store.lock_gc();
+        let instance_gc_ref = handle.get_gc_ref_with_pool(&store, &gc).unwrap();
+        let instance = unsafe { &*gc.get_instance_unchecked(instance_gc_ref) };
+        let func_addr = instance.funcs.as_slice(&gc)[0];
+        let func = unsafe { gc.get_func(func_addr) };
+        let (locals, code_offset) = func.locals_and_code_offset(&gc);
+        let mut stack = Stack::new(256);
+        let caller_reference = stack
+            .function_call(
+                0,
+                locals.byte_size(),
+                func_addr,
+                LocalReference {
+                    local_size: 0,
+                    local_top: 0,
+                },
+                &crate::runtime::vm::VM_END as *const super::Instr,
+                &gc,
+            )
+            .unwrap();
+        let caller_entry = unsafe { gc.get_value::<super::Instr>(func.body, code_offset) };
+        let return_addr = unsafe { caller_entry.add(2) };
+        let callee_reference = stack
+            .function_call(0, 0, func_addr, caller_reference, return_addr, &gc)
+            .unwrap();
+        let expected = unsafe { *return_addr };
+
+        let mut reallocated = false;
+        while !reallocated {
+            let old_ptr = gc.memory.as_ptr();
+            gc.allocate(Header::new(ObjectType::Raw, 4096).initialized());
+            reallocated = gc.memory.as_ptr() != old_ptr;
+        }
+
+        let (prev_local_reference, resolved_return_addr) =
+            stack.function_return(&callee_reference, 0, &gc);
+        let prev_local_top = prev_local_reference.local_top;
+        let prev_local_size = prev_local_reference.local_size;
+        let caller_local_top = caller_reference.local_top;
+        let caller_local_size = caller_reference.local_size;
+        assert_eq!(prev_local_top, caller_local_top);
+        assert_eq!(prev_local_size, caller_local_size);
+        assert_eq!(unsafe { expected.op as usize }, unsafe {
+            (*resolved_return_addr).op as usize
+        });
+    }
+
+    #[test]
+    fn stable_pc_static_continuation_round_trips() {
+        let stack = Stack::new(0);
+        let gc = crate::common::gc::MemoryPool::new();
+        let pc = StablePc::from_stable_ptr(&crate::runtime::vm::VM_END as *const super::Instr);
+        assert_eq!(
+            pc.resolve(
+                &gc,
+                &stack,
+                LocalReference {
+                    local_size: 0,
+                    local_top: 0,
+                }
+            ),
+            &crate::runtime::vm::VM_END as *const super::Instr
+        );
     }
 }
 

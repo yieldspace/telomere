@@ -18,7 +18,7 @@ fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
 
 fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     print_counter(ctx).fetch_add(1, Ordering::SeqCst);
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0);
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
@@ -80,7 +80,8 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             0,
             func_addr,
             ctx.local_reference,
-            TAIL_CALL_FUNCTION_RETURN.as_ptr()
+            TAIL_CALL_FUNCTION_RETURN.as_ptr(),
+            ctx.gc,
         ));
         f(ctx)
     } else {
@@ -91,7 +92,8 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             locals_data.byte_size(),
             func_addr,
             ctx.local_reference,
-            TAIL_CALL_FUNCTION_RETURN.as_ptr()
+            TAIL_CALL_FUNCTION_RETURN.as_ptr(),
+            ctx.gc,
         ));
         let ptr = unsafe { ctx.gc.get_value::<Instr>(code_addr, code_offset) };
         VMResult::Success(ptr)
@@ -135,7 +137,7 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     tracing::trace!("{arg}");
 
     vm_try!(ctx.stack.push_i32(arg + 60));
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 4);
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 4, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }

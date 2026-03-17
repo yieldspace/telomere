@@ -8,8 +8,8 @@ use crate::{
     common::{
         execute_elem_init_const_expr,
         gc::{GcRef, InstanceData},
-        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, Stack,
-        VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
+        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, StablePc,
+        Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::scheduler::{ReadyFlag, Scheduler, SyncRunError, Task},
     Store,
@@ -695,7 +695,8 @@ pub(crate) unsafe fn internal_op_call(
                 0,
                 funcaddr,
                 ctx.local_reference,
-                return_addr
+                return_addr,
+                ctx.gc,
             ));
         }
         let return_addr = vm_try!(fp(ctx));
@@ -716,7 +717,8 @@ pub(crate) unsafe fn internal_op_call(
                 locals.byte_size(),
                 funcaddr,
                 ctx.local_reference,
-                return_addr
+                return_addr,
+                ctx.gc,
             ));
         }
 
@@ -1974,10 +1976,10 @@ pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 1, ctx)
 }
 pub unsafe fn special_start_host_function_call(
-    tail_code: *const Instr,
+    _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let instr = vm_try!(((*tail_code).operand.start_host_function)(ctx));
+    let instr = vm_try!(ctx.func().host_code_pointer(ctx.gc)(ctx));
     call_next(instr, 0, ctx)
 }
 pub unsafe fn special_function_return(
@@ -1988,6 +1990,7 @@ pub unsafe fn special_function_return(
     let (prev_local_ref, tail_code) = ctx.stack.function_return(
         &ctx.local_reference(),
         (*tail_code).operand.drop_size as usize,
+        ctx.gc,
     );
     ctx.local_reference = prev_local_ref;
     call_next(tail_code, 0, ctx)
@@ -2025,6 +2028,9 @@ pub unsafe fn special_function_vm_end(
 pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
+pub(crate) const START_HOST_FUNCTION_PROGRAM: [Instr; 1] = [Instr {
+    op: special_start_host_function_call,
+}];
 pub async fn run_module_function(
     instance: &InstanceHandle,
     store: &Store,
@@ -2067,7 +2073,7 @@ pub async fn run_module_function(
                 param_size += t.stack_size().usize();
             }
 
-            let (locals_data, code_offset) = funcinst.locals_and_code_offset(&gc);
+            let (locals_data, _code_offset) = funcinst.locals_and_code_offset(&gc);
             let local_size = locals_data.byte_size();
             for arg in args.iter() {
                 vm_try!(match arg {
@@ -2090,13 +2096,12 @@ pub async fn run_module_function(
                     local_size: 0,
                     local_top: 0
                 },
-                &VM_END as *const Instr
+                &VM_END as *const Instr,
+                &gc,
             ));
 
-            let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
-
             scheduler.push(Task {
-                fp: ptr,
+                fp: StablePc::from_relative_index(0),
                 task_id: 0,
                 stack,
                 local_reference,
@@ -2166,7 +2171,7 @@ pub(crate) fn run_module_function_sync_with_gc(
                 param_size += t.stack_size().usize();
             }
 
-            let (locals_data, code_offset) = funcinst.locals_and_code_offset(gc);
+            let (locals_data, _code_offset) = funcinst.locals_and_code_offset(gc);
             let local_size = locals_data.byte_size();
             for arg in args.iter() {
                 match arg {
@@ -2211,15 +2216,14 @@ pub(crate) fn run_module_function_sync_with_gc(
                     local_top: 0,
                 },
                 &VM_END as *const Instr,
+                gc,
             ) {
                 VMResult::Success(local_reference) => local_reference,
                 other => return Ok(vm_result_err_into_result_value(other)),
             };
 
-            let ptr = unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) };
-
             scheduler.push(Task {
-                fp: ptr,
+                fp: StablePc::from_relative_index(0),
                 task_id: 0,
                 stack,
                 local_reference,

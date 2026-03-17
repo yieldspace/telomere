@@ -31,7 +31,7 @@ async fn instantiate_wat(
 }
 
 fn noop_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0);
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
