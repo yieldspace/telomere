@@ -307,10 +307,10 @@ impl<'a> Scheduler<'a> {
             }
             AsyncCompletion::HostCall { result } => match result {
                 VMResult::Success(fp) => {
-                    let mut gc = self.store.lock_gc();
+                    let gc = self.store.lock_gc();
                     let fp = {
                         let task = self.tasks.get_mut(task_index).unwrap();
-                        StablePc::from_raw_in_frame(&mut gc, &task.stack, task.local_reference, fp)
+                        StablePc::from_raw_in_frame(&gc, &task.stack, task.local_reference, fp)
                     };
                     let task = self.tasks.get_mut(task_index).unwrap();
                     task.pending_effects -= 1;

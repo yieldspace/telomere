@@ -28,7 +28,8 @@ fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
 fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     print_counter(ctx).fetch_add(1, Ordering::SeqCst);
     let (prev_local_ref, return_addr) =
-        ctx.stack.function_return_in_place(&ctx.local_reference, 0, ctx.gc);
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
@@ -192,7 +193,8 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let slot = ctx.return_slot();
     slot.write(&(value + 60).to_le_bytes());
     let (prev_local_ref, return_addr) =
-        ctx.stack.function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }

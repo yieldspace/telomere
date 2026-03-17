@@ -53,7 +53,9 @@ pub struct AsyncResult {
 #[derive(Debug)]
 pub enum AsyncCompletion {
     #[allow(dead_code)]
-    Continue { fp: StablePc },
+    Continue {
+        fp: StablePc,
+    },
     HostCall {
         result: VMResult<*const Instr>,
     },

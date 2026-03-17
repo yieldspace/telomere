@@ -8,9 +8,8 @@ use crate::{
     common::{
         execute_elem_init_const_expr,
         gc::{GcRef, InstanceData},
-        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference,
-        ResultType, ResultValue, Stack, StablePc, VMResult, ValType, WasmValue,
-        TABLE_UNINITIALIZED,
+        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, ResultType,
+        ResultValue, StablePc, Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::scheduler::{ReadyFlag, Scheduler, SyncRunError, Task},
     Store,
@@ -72,7 +71,6 @@ fn push_result_values(stack: &mut Stack, types: &ResultType, values: &ResultValu
     }
     VMResult::Success(())
 }
-
 
 fn pop_result_values(stack: &mut Stack, ty: &ResultType) -> ResultValue {
     let mut result = ty
