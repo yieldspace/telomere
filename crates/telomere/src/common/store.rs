@@ -112,7 +112,6 @@ impl Store {
             "{api_name} is unsupported while the same store GC is already active on this thread"
         );
     }
-
     fn lock_gc_unchecked(&self) -> StoreGcGuard<'_> {
         StoreGcGuard::new(&self.identity, self.gc.lock())
     }
@@ -186,7 +185,7 @@ pub(crate) fn clear_active_root_slot_for_identity(identity: &Weak<()>, slot: u32
     true
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct StoreState(usize);
 
 impl StoreState {

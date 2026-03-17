@@ -316,18 +316,75 @@ fn component_host_trampoline(ctx: &mut ExecuteContext) -> VMResult<*const Instr>
             Ok(results) => results,
             Err(_) => return VMResult::Unreachable,
         };
-    if push_core_results(ctx, &results).is_err() {
-        return VMResult::Unreachable;
+    let slot = ctx.return_slot();
+    let mut offset = 0usize;
+    for value in &results {
+        match value {
+            WasmValue::I32(v) => {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        v.to_le_bytes().as_ptr(),
+                        slot.as_mut_ptr().add(offset),
+                        4,
+                    )
+                };
+                offset += 4;
+            }
+            WasmValue::I64(v) => {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        v.to_le_bytes().as_ptr(),
+                        slot.as_mut_ptr().add(offset),
+                        8,
+                    )
+                };
+                offset += 8;
+            }
+            WasmValue::F32(v) => {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        v.to_le_bytes().as_ptr(),
+                        slot.as_mut_ptr().add(offset),
+                        4,
+                    )
+                };
+                offset += 4;
+            }
+            WasmValue::F64(v) => {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        v.to_le_bytes().as_ptr(),
+                        slot.as_mut_ptr().add(offset),
+                        8,
+                    )
+                };
+                offset += 8;
+            }
+            WasmValue::FuncRef(v) | WasmValue::ExternRef(v) => {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        v.to_le_bytes().as_ptr(),
+                        slot.as_mut_ptr().add(offset),
+                        4,
+                    )
+                };
+                offset += 4;
+            }
+            WasmValue::V128(v) => {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        v.to_le_bytes().as_ptr(),
+                        slot.as_mut_ptr().add(offset),
+                        16,
+                    )
+                };
+                offset += 16;
+            }
+        }
     }
-    let return_size = binding
-        .signature()
-        .1
-        .iter()
-        .map(|ty| ty.stack_size().u32())
-        .sum::<u32>() as usize;
     let (prev_local_ref, return_addr) =
         ctx.stack
-            .function_return(&ctx.local_reference, return_size, ctx.gc);
+            .function_return_in_place(&ctx.local_reference, offset, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
@@ -396,80 +453,6 @@ fn read_core_args_from_locals(
         offset += ty.stack_size().u32();
     }
     Ok(args)
-}
-
-fn push_core_results(
-    ctx: &mut ExecuteContext,
-    results: &[WasmValue],
-) -> Result<(), ComponentError> {
-    for value in results {
-        match value {
-            WasmValue::I32(v) => match ctx.stack.push_i32(*v) {
-                VMResult::Success(()) => {}
-                other => {
-                    return Err(vm_result_to_component_error(
-                        other,
-                        "host trampoline push result",
-                    ))
-                }
-            },
-            WasmValue::I64(v) => match ctx.stack.push_i64(*v) {
-                VMResult::Success(()) => {}
-                other => {
-                    return Err(vm_result_to_component_error(
-                        other,
-                        "host trampoline push result",
-                    ))
-                }
-            },
-            WasmValue::F32(v) => match ctx.stack.push_f32(*v) {
-                VMResult::Success(()) => {}
-                other => {
-                    return Err(vm_result_to_component_error(
-                        other,
-                        "host trampoline push result",
-                    ))
-                }
-            },
-            WasmValue::F64(v) => match ctx.stack.push_f64(*v) {
-                VMResult::Success(()) => {}
-                other => {
-                    return Err(vm_result_to_component_error(
-                        other,
-                        "host trampoline push result",
-                    ))
-                }
-            },
-            WasmValue::FuncRef(v) => match ctx.stack.push_u32(*v) {
-                VMResult::Success(()) => {}
-                other => {
-                    return Err(vm_result_to_component_error(
-                        other,
-                        "host trampoline push result",
-                    ))
-                }
-            },
-            WasmValue::ExternRef(v) => match ctx.stack.push_u32(*v) {
-                VMResult::Success(()) => {}
-                other => {
-                    return Err(vm_result_to_component_error(
-                        other,
-                        "host trampoline push result",
-                    ))
-                }
-            },
-            WasmValue::V128(v) => match ctx.stack.push_u128(*v) {
-                VMResult::Success(()) => {}
-                other => {
-                    return Err(vm_result_to_component_error(
-                        other,
-                        "host trampoline push result",
-                    ))
-                }
-            },
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn linker_binding_to_callable(binding: LinkerBinding) -> ResolvedCallable {

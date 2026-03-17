@@ -123,7 +123,9 @@ pub mod common {
 
 pub mod runtime {
     pub use crate::runtime::{
-        aliasing, instantiate, instantiate_native_module, run_module_function, ResultValue,
+        aliasing, instantiate, instantiate_native_async_module, instantiate_native_module,
+        link_async_host_function_with_export_name, link_async_host_function_with_function_idx,
+        run_module_function, ResultValue,
     };
 
     pub fn run_module_function_sync_with_gc(

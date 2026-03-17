@@ -8,14 +8,14 @@ use crate::{
     common::{
         execute_elem_init_const_expr,
         gc::{GcRef, InstanceData},
-        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, StablePc,
-        Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
+        ElemInit, ExecuteContext, ExportDesc, InstanceHandle, Instr, LocalReference, ResultType,
+        ResultValue, StablePc, Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::scheduler::{ReadyFlag, Scheduler, SyncRunError, Task},
     Store,
 };
 
-use super::memory_effect::{ReadOperationHandler, WriteOperation};
+use super::memory_effect::{AsyncCompletion, AsyncResult, ReadOperationHandler, WriteOperation};
 macro_rules! wait_effect {
     ($ctx: expr, $cont: expr) => {
         if $ctx.effect.get_pending_count() != 0 {
@@ -26,15 +26,9 @@ macro_rules! wait_effect {
     };
 }
 
-#[derive(Debug, PartialEq)]
-pub struct ResultValue(Vec<WasmValue>);
-impl ResultValue {
-    pub fn new(args: Vec<WasmValue>) -> Self {
-        Self(args)
-    }
-    pub fn iter(&self) -> impl Iterator<Item = &WasmValue> + use<'_> {
-        self.0.iter()
-    }
+enum CallOutcome {
+    Immediate(*const Instr),
+    Pending,
 }
 
 #[inline(always)]
@@ -49,6 +43,82 @@ pub(crate) unsafe fn call_next(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     call_code(tail_code.offset(consumed), ctx)
+}
+
+fn result_type_size(ty: &ResultType) -> usize {
+    ty.iter().map(|value| value.stack_size().usize()).sum()
+}
+
+fn push_typed_value(stack: &mut Stack, ty: ValType, value: &WasmValue) -> VMResult<()> {
+    match (ty, value) {
+        (ValType::I32, WasmValue::I32(value)) => stack.push_i32(*value),
+        (ValType::I64, WasmValue::I64(value)) => stack.push_i64(*value),
+        (ValType::F32, WasmValue::F32(value)) => stack.push_f32(*value),
+        (ValType::F64, WasmValue::F64(value)) => stack.push_f64(*value),
+        (ValType::V128, WasmValue::V128(value)) => stack.push_u128(*value),
+        (ValType::FuncRef, WasmValue::FuncRef(value)) => stack.push_u32(*value),
+        (ValType::ExternRef, WasmValue::ExternRef(value)) => stack.push_u32(*value),
+        _ => VMResult::InvalidOperand,
+    }
+}
+
+fn push_result_values(stack: &mut Stack, types: &ResultType, values: &ResultValue) -> VMResult<()> {
+    if types.0.len() != values.len() {
+        return VMResult::InvalidOperand;
+    }
+    for (ty, value) in types.iter().zip(values.iter()) {
+        vm_try!(push_typed_value(stack, *ty, value));
+    }
+    VMResult::Success(())
+}
+
+fn pop_result_values(stack: &mut Stack, ty: &ResultType) -> ResultValue {
+    let mut result = ty
+        .stack_pop_iter()
+        .map(|t| match t {
+            ValType::I32 => WasmValue::I32(stack.pop_i32()),
+            ValType::I64 => WasmValue::I64(stack.pop_i64()),
+            ValType::F32 => WasmValue::F32(stack.pop_f32()),
+            ValType::F64 => WasmValue::F64(stack.pop_f64()),
+            ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
+            ValType::ExternRef => WasmValue::ExternRef(stack.pop_u32()),
+            ValType::V128 => WasmValue::V128(stack.pop_u128()),
+        })
+        .collect::<Vec<_>>();
+    result.reverse();
+    ResultValue::new(result)
+}
+
+fn start_async_host_call(
+    return_addr: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<CallOutcome> {
+    let async_host = ctx.func().async_host_code_pointer(ctx.gc);
+    let task_id = ctx.task_id;
+    let future = async_host(ctx);
+    ctx.effect.push_async_effect(Box::pin(async move {
+        AsyncResult {
+            task_id,
+            completion: AsyncCompletion::HostCall {
+                result: future.await,
+            },
+        }
+    }));
+    ctx.cont = return_addr;
+    VMResult::Success(CallOutcome::Pending)
+}
+
+fn invoke_host_function(
+    return_addr: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<CallOutcome> {
+    if ctx.func().is_async_host_func() {
+        start_async_host_call(return_addr, ctx)
+    } else {
+        let fp = ctx.func().host_code_pointer(ctx.gc);
+        let return_addr = vm_try!(fp(ctx));
+        VMResult::Success(CallOutcome::Immediate(return_addr))
+    }
 }
 pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = (*tail_code).operand.i32;
@@ -659,12 +729,12 @@ pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
-pub(crate) unsafe fn internal_op_call(
+unsafe fn internal_op_call(
     return_addr: *const Instr,
     funcaddr: GcRef,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
-) -> VMResult<*const Instr> {
+) -> VMResult<CallOutcome> {
     let funcinst = ctx.func_by_addr(funcaddr);
     let instance_addr = funcinst.instance_addr;
     let instance = &*ctx.gc.get_instance_unchecked(instance_addr);
@@ -680,8 +750,8 @@ pub(crate) unsafe fn internal_op_call(
     for param in ft.0.iter() {
         param_size += param.stack_size().usize();
     }
+    let is_host_func = funcinst.is_host_func();
     if funcinst.is_host_func() {
-        let fp = funcinst.host_code_pointer(ctx.gc);
         if is_return_call {
             ctx.local_reference = vm_try!(ctx.stack.function_return_call(
                 &ctx.local_reference,
@@ -699,8 +769,7 @@ pub(crate) unsafe fn internal_op_call(
                 ctx.gc,
             ));
         }
-        let return_addr = vm_try!(fp(ctx));
-        VMResult::Success(return_addr)
+        invoke_host_function(return_addr, ctx)
     } else {
         let (locals, code_offset) = funcinst.locals_and_code_offset(ctx.gc);
         let addr = funcinst.body;
@@ -722,28 +791,34 @@ pub(crate) unsafe fn internal_op_call(
             ));
         }
 
-        VMResult::Success(ctx.gc.get_value::<Instr>(addr, code_offset))
+        let ptr = ctx.gc.get_value::<Instr>(addr, code_offset);
+        debug_assert!(!is_host_func);
+        VMResult::Success(CallOutcome::Immediate(ptr))
     }
 }
 
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let funcidx = (*tail_code).operand.u32;
     let funcaddr = ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false));
-    call_next(ptr, 0, ctx)
+    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let funcidx = (*tail_code).operand.u32;
     let funcaddr = ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true));
-    call_next(ptr, 0, ctx)
+    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 #[inline(never)]
 unsafe fn internal_op_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
-) -> VMResult<*const Instr> {
+) -> VMResult<CallOutcome> {
     let i = ctx.stack.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
     let table_addr = *vm_try!(VMResult::from_option(
@@ -774,24 +849,28 @@ unsafe fn internal_op_call_indirect(
     if actual_ft != expected_ft {
         return VMResult::CallIndirectInvalidType;
     }
-    let ptr = vm_try!(internal_op_call(
+    let outcome = vm_try!(internal_op_call(
         tail_code.offset(2),
         func_addr,
         ctx,
         is_return_call
     ));
-    VMResult::Success(ptr)
+    VMResult::Success(outcome)
 }
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let ptr = vm_try!(internal_op_call_indirect(tail_code, ctx, false));
-    call_next(ptr, 0, ctx)
+    match vm_try!(internal_op_call_indirect(tail_code, ctx, false)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 pub unsafe fn op_return_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let ptr = vm_try!(internal_op_call_indirect(tail_code, ctx, true));
-    call_next(ptr, 0, ctx)
+    match vm_try!(internal_op_call_indirect(tail_code, ctx, true)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let size = (*tail_code).operand.drop_size as usize;
@@ -1975,12 +2054,14 @@ pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
         .push_u32(ctx.instance().funcs.as_slice(ctx.gc)[funcidx as usize].get()));
     call_next(tail_code, 1, ctx)
 }
-pub unsafe fn special_start_host_function_call(
+pub unsafe fn special_start_function_call(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let instr = vm_try!(ctx.func().host_code_pointer(ctx.gc)(ctx));
-    call_next(instr, 0, ctx)
+    match vm_try!(invoke_host_function(&VM_END as *const Instr, ctx)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 pub unsafe fn special_function_return(
     tail_code: *const Instr,
@@ -2029,7 +2110,7 @@ pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
 pub(crate) const START_HOST_FUNCTION_PROGRAM: [Instr; 1] = [Instr {
-    op: special_start_host_function_call,
+    op: special_start_function_call,
 }];
 pub async fn run_module_function(
     instance: &InstanceHandle,
@@ -2067,25 +2148,11 @@ pub async fn run_module_function(
                 .get(tidx.0 as usize)
                 .unwrap()
                 .clone();
-
-            let mut param_size = 0usize;
-            for t in ft.0.iter() {
-                param_size += t.stack_size().usize();
-            }
+            let param_size = result_type_size(&ft.0);
 
             let (locals_data, _code_offset) = funcinst.locals_and_code_offset(&gc);
             let local_size = locals_data.byte_size();
-            for arg in args.iter() {
-                vm_try!(match arg {
-                    WasmValue::I32(i32) => stack.push_i32(*i32),
-                    WasmValue::I64(i64) => stack.push_i64(*i64),
-                    WasmValue::F32(v) => stack.push_f32(*v),
-                    WasmValue::F64(v) => stack.push_f64(*v),
-                    WasmValue::V128(v) => stack.push_u128(*v),
-                    WasmValue::ExternRef(v) => stack.push_u32(*v),
-                    WasmValue::FuncRef(v) => stack.push_u32(*v),
-                });
-            }
+            vm_try!(push_result_values(&mut stack, &ft.0, args));
 
             tracing::trace!("run_module_function: {name} {local_size}");
             let local_reference = vm_try!(stack.function_call(
@@ -2118,21 +2185,7 @@ pub async fn run_module_function(
     let ct = scheduler.completed_tasks.pop().unwrap();
     vm_try!(ct.result);
     let mut stack = ct.stack;
-
-    let mut result =
-        ft.1.stack_pop_iter()
-            .map(|t| match t {
-                ValType::I32 => WasmValue::I32(stack.pop_i32()),
-                ValType::I64 => WasmValue::I64(stack.pop_i64()),
-                ValType::F32 => WasmValue::F32(stack.pop_f32()),
-                ValType::F64 => WasmValue::F64(stack.pop_f64()),
-                ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
-                ValType::ExternRef => WasmValue::ExternRef(stack.pop_u32()),
-                ValType::V128 => WasmValue::V128(stack.pop_u128()),
-            })
-            .collect::<Vec<_>>();
-    result.reverse();
-    VMResult::Success(ResultValue(result))
+    VMResult::Success(pop_result_values(&mut stack, &ft.1))
 }
 
 pub(crate) fn run_module_function_sync_with_gc(
@@ -2165,45 +2218,13 @@ pub(crate) fn run_module_function_sync_with_gc(
                 .get(tidx.0 as usize)
                 .unwrap()
                 .clone();
-
-            let mut param_size = 0usize;
-            for t in ft.0.iter() {
-                param_size += t.stack_size().usize();
-            }
+            let param_size = result_type_size(&ft.0);
 
             let (locals_data, _code_offset) = funcinst.locals_and_code_offset(gc);
             let local_size = locals_data.byte_size();
-            for arg in args.iter() {
-                match arg {
-                    WasmValue::I32(i32) => match stack.push_i32(*i32) {
-                        VMResult::Success(()) => {}
-                        other => return Ok(vm_result_err_into_result_value(other)),
-                    },
-                    WasmValue::I64(i64) => match stack.push_i64(*i64) {
-                        VMResult::Success(()) => {}
-                        other => return Ok(vm_result_err_into_result_value(other)),
-                    },
-                    WasmValue::F32(v) => match stack.push_f32(*v) {
-                        VMResult::Success(()) => {}
-                        other => return Ok(vm_result_err_into_result_value(other)),
-                    },
-                    WasmValue::F64(v) => match stack.push_f64(*v) {
-                        VMResult::Success(()) => {}
-                        other => return Ok(vm_result_err_into_result_value(other)),
-                    },
-                    WasmValue::V128(v) => match stack.push_u128(*v) {
-                        VMResult::Success(()) => {}
-                        other => return Ok(vm_result_err_into_result_value(other)),
-                    },
-                    WasmValue::ExternRef(v) => match stack.push_u32(*v) {
-                        VMResult::Success(()) => {}
-                        other => return Ok(vm_result_err_into_result_value(other)),
-                    },
-                    WasmValue::FuncRef(v) => match stack.push_u32(*v) {
-                        VMResult::Success(()) => {}
-                        other => return Ok(vm_result_err_into_result_value(other)),
-                    },
-                }
+            let push_result = push_result_values(&mut stack, &ft.0, args);
+            if !matches!(push_result, VMResult::Success(())) {
+                return Ok(vm_result_err_into_result_value(push_result));
             }
 
             tracing::trace!("run_module_function: {name} {local_size}");
@@ -2242,21 +2263,7 @@ pub(crate) fn run_module_function_sync_with_gc(
     match ct.result {
         VMResult::Success(()) => {
             let mut stack = ct.stack;
-
-            let mut result =
-                ft.1.stack_pop_iter()
-                    .map(|t| match t {
-                        ValType::I32 => WasmValue::I32(stack.pop_i32()),
-                        ValType::I64 => WasmValue::I64(stack.pop_i64()),
-                        ValType::F32 => WasmValue::F32(stack.pop_f32()),
-                        ValType::F64 => WasmValue::F64(stack.pop_f64()),
-                        ValType::FuncRef => WasmValue::FuncRef(stack.pop_u32()),
-                        ValType::ExternRef => WasmValue::ExternRef(stack.pop_u32()),
-                        ValType::V128 => WasmValue::V128(stack.pop_u128()),
-                    })
-                    .collect::<Vec<_>>();
-            result.reverse();
-            Ok(VMResult::Success(ResultValue(result)))
+            Ok(VMResult::Success(pop_result_values(&mut stack, &ft.1)))
         }
         VMResult::Unreachable => Ok(VMResult::Unreachable),
         VMResult::StackOverflow => Ok(VMResult::StackOverflow),

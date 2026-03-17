@@ -1,6 +1,7 @@
 use super::{
     memory_effect::{
-        AtomicFlag, Effect, MemoryEffect, Operation, ReadOperationHandler, Target, WriteOperation,
+        AsyncCompletion, AsyncEffect, AsyncEffectFuture, AsyncResult, AtomicFlag, Effect,
+        MemoryEffect, Operation, ReadOperationHandler, Target, WriteOperation,
     },
     vm::traps::TRAPS_MEMORY_INDEX_OUT_OF_RANGE,
 };
@@ -24,6 +25,20 @@ fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
     )
 }
 
+fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
+    match result {
+        VMResult::Success(_) => VMResult::Success(()),
+        VMResult::Unreachable => VMResult::Unreachable,
+        VMResult::StackOverflow => VMResult::StackOverflow,
+        VMResult::MemoryIndexOutOfRange => VMResult::MemoryIndexOutOfRange,
+        VMResult::TableIndexOutOfRange => VMResult::TableIndexOutOfRange,
+        VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
+        VMResult::TableUninitialized => VMResult::TableUninitialized,
+        VMResult::Unlinkable => VMResult::Unlinkable,
+        VMResult::InvalidOperand => VMResult::InvalidOperand,
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReadyFlag {
     Ready,
@@ -43,10 +58,6 @@ pub(crate) struct Task {
 pub(crate) struct CompletedTask {
     pub stack: Stack,
     pub result: VMResult<()>,
-}
-pub(crate) struct AsyncResult {
-    pub task_id: u32,
-    pub fp: StablePc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,7 +124,7 @@ impl FusedFuture for NotificationReceiver<'_> {
 pub(crate) struct Scheduler<'a> {
     tasks: VecDeque<Task>,
     notify: Notify,
-    async_tasks: FuturesUnordered<Pin<Box<dyn Future<Output = AsyncResult>>>>,
+    async_tasks: FuturesUnordered<AsyncEffectFuture>,
     pub(crate) completed_tasks: Vec<CompletedTask>,
     pub(crate) store: &'a Store,
     effects: VecDeque<Effect>,
@@ -127,6 +138,13 @@ pub struct EffectSupplier<'a> {
 impl EffectSupplier<'_> {
     pub(crate) fn get_pending_count(&self) -> u32 {
         *self.pending_effects
+    }
+
+    #[cfg(feature = "async-runtime")]
+    pub(crate) fn push_async_effect(&mut self, future: AsyncEffectFuture) {
+        self.effects
+            .push_back(Effect::AsyncEffect(AsyncEffect { future }));
+        *self.pending_effects += 1;
     }
 }
 fn write_operation_size(op: &WriteOperation) -> usize {
@@ -267,33 +285,49 @@ impl<'a> Scheduler<'a> {
         }
     }
     #[cfg(feature = "async-runtime")]
-    unsafe fn handle_async_effect_call(&mut self, effect: super::memory_effect::AsyncEffect) {
-        use crate::runtime::memory_effect::AsyncEffectOperation;
-
-        use super::memory_effect::AsyncEffect;
-        let AsyncEffect { task_id, operation } = effect;
-        let task = self
-            .tasks
-            .iter_mut()
-            .find(|v| v.task_id == effect.task_id)
-            .unwrap();
-        match operation {
-            AsyncEffectOperation::Call(sup) => {
-                self.async_tasks.push(sup(task_id, task.fp));
-            }
-        }
+    unsafe fn handle_async_effect_call(&mut self, effect: AsyncEffect) {
+        self.async_tasks.push(effect.future);
     }
     fn handle_async_return(&mut self, ret: AsyncResult) {
-        let task = self
+        let Some(task_index) = self
             .tasks
-            .iter_mut()
-            .find(|v| v.task_id == ret.task_id)
-            .unwrap();
-        task.pending_effects -= 1;
-        task.ready_flag = ReadyFlag::Ready;
-        self.ready_count += 1;
-        self.notify.wake();
-        task.fp = ret.fp;
+            .iter()
+            .position(|task| task.task_id == ret.task_id)
+        else {
+            return;
+        };
+        match ret.completion {
+            AsyncCompletion::Continue { fp } => {
+                let task = self.tasks.get_mut(task_index).unwrap();
+                task.pending_effects -= 1;
+                task.ready_flag = ReadyFlag::Ready;
+                task.fp = fp;
+                self.ready_count += 1;
+                self.notify.wake();
+            }
+            AsyncCompletion::HostCall { result } => match result {
+                VMResult::Success(fp) => {
+                    let gc = self.store.lock_gc();
+                    let fp = {
+                        let task = self.tasks.get_mut(task_index).unwrap();
+                        StablePc::from_raw_in_frame(&gc, &task.stack, task.local_reference, fp)
+                    };
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    task.pending_effects -= 1;
+                    task.ready_flag = ReadyFlag::Ready;
+                    task.fp = fp;
+                    self.ready_count += 1;
+                    self.notify.wake();
+                }
+                other => {
+                    let task = self.tasks.remove(task_index).unwrap();
+                    self.completed_tasks.push(CompletedTask {
+                        stack: task.stack,
+                        result: vm_result_to_unit(other),
+                    });
+                }
+            },
+        }
     }
     #[cfg(feature = "async-runtime")]
     async fn await_executation(&mut self) {
@@ -303,6 +337,9 @@ impl<'a> Scheduler<'a> {
             select_biased! {
                 fut = self.async_tasks.select_next_some() => {
                     self.handle_async_return(fut);
+                    if self.ready_count != 0 || self.tasks.is_empty() {
+                        break;
+                    }
                 }
                 _ = self.notify.receiver() => {
                     break;
@@ -485,18 +522,22 @@ impl<'a> Scheduler<'a> {
 mod tests {
     use crate::{
         common::{ExecuteContext, Instr, LocalReference, StablePc},
-        runtime::memory_effect::{AsyncEffect, AsyncEffectOperation, Effect},
+        runtime::memory_effect::{AsyncCompletion, AsyncEffect, AsyncResult, Effect},
         Stack, Store, VMResult,
     };
 
-    use super::{AsyncResult, ReadyFlag, Scheduler, Task};
+    use super::{ReadyFlag, Scheduler, Task};
+    const ASYNC_END: Instr = Instr { op: async_end };
     fn async_end(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
         ctx.cont = std::ptr::null();
         trace!("ok");
         VMResult::Success(())
     }
     async fn example_func(task_id: u32, fp: StablePc) -> AsyncResult {
-        AsyncResult { task_id, fp }
+        AsyncResult {
+            task_id,
+            completion: AsyncCompletion::Continue { fp },
+        }
     }
     #[tokio::test]
     async fn test_async() {
@@ -518,8 +559,7 @@ mod tests {
             scheduler
                 .effects
                 .push_back(Effect::AsyncEffect(AsyncEffect {
-                    operation: AsyncEffectOperation::Call(|a, b| Box::pin(example_func(a, b))),
-                    task_id: 0,
+                    future: Box::pin(example_func(0, StablePc::from_stable_ptr(&ASYNC_END))),
                 }));
             scheduler.notify.wake();
         }

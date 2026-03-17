@@ -2,9 +2,10 @@ use crate::{
     common::{
         execute_elem_init_const_expr,
         gc::{FunctionInstanceData, GcRef, Header, InstanceData, MemoryPool, ObjectType},
-        word_size, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
-        ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, GlobalIdx,
-        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Limits,
+        word_size, AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CodeSection,
+        ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection, ExecuteContext,
+        Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, GlobalIdx, HostFunction,
+        HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Instr, Limits,
         LocalReference, MemIdx, ModuleInstance, NativeModule, StablePc, TableIdx, TypeIdx,
         TypeSection, PAGE_SIZE_MAX,
     },
@@ -132,6 +133,51 @@ fn convert_native_module_to_module(m: NativeModule) -> Module {
         name: None,
     }
 }
+
+fn async_host_placeholder(_ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    VMResult::Unreachable
+}
+
+fn convert_async_native_module_to_module(m: AsyncNativeModule) -> (Module, Vec<AsyncHostFunction>) {
+    let mut codes = vec![];
+    let mut functions = vec![];
+    let mut fts = vec![];
+    let mut exs = vec![];
+    let mut async_functions = Vec::with_capacity(m.functions.len());
+    for AsyncHostFunctionDefinition {
+        fp,
+        name,
+        signature,
+    } in m.functions.into_iter()
+    {
+        let funcidx = functions.len();
+        functions.push(TypeIdx(fts.len() as u32));
+        fts.push(signature);
+        codes.push(FunctionBody::Host(async_host_placeholder));
+        async_functions.push(fp);
+        if let Some(name) = name {
+            exs.push(Export(name, ExportDesc::Func(FuncIdx(funcidx as u32))));
+        }
+    }
+    (
+        Module {
+            codes: CodeSection(codes),
+            functions,
+            fts: TypeSection(fts),
+            data: DataSection(vec![]),
+            elems: ElementSection(vec![]),
+            imports: ImportSection(vec![]),
+            mems: vec![],
+            globals: vec![],
+            global_init: vec![],
+            exs: ExportSection(exs),
+            tables: vec![],
+            start: None,
+            name: None,
+        },
+        async_functions,
+    )
+}
 pub async fn instantiate_native_module(
     m: NativeModule,
     store: &Store,
@@ -139,6 +185,20 @@ pub async fn instantiate_native_module(
 ) -> VMResult<InstanceHandle> {
     instantiate(convert_native_module_to_module(m), store, registry).await
 }
+
+pub async fn instantiate_native_async_module(
+    m: AsyncNativeModule,
+    store: &Store,
+    registry: &Registry,
+) -> VMResult<InstanceHandle> {
+    let (module, async_functions) = convert_async_native_module_to_module(m);
+    let instance = vm_try!(instantiate(module, store, registry).await);
+    for (funcidx, fp) in async_functions.into_iter().enumerate() {
+        link_async_host_function_with_function_idx(&instance, funcidx as u32, fp, store);
+    }
+    VMResult::Success(instance)
+}
+
 pub async fn instantiate(
     m: Module,
     store: &Store,
@@ -619,7 +679,7 @@ pub fn link_host_function_with_export_name(
         );
         return;
     }
-    let mut gc = store.lock_gc();
+    let gc = store.lock_gc();
     let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
         tracing::error!("instance handle belongs to another store");
         return;
@@ -628,14 +688,63 @@ pub fn link_host_function_with_export_name(
     let module = unsafe { gc.get_module(instance.module_addr) };
     let export = &module.exports.find(name).unwrap();
     let func_idx = if let ExportDesc::Func(v) = export {
-        v
+        v.0
     } else {
         unreachable!()
     };
-    let funcaddr = instance.funcs.as_slice(&gc)[func_idx.0 as usize];
-    let func = unsafe { gc.get_func_mut(funcaddr) };
-    func.function_flags = FunctionInstanceData::create_host_flags();
-    let funcbody = func.body;
+    link_host_function_with_function_idx(addr, func_idx, f, store);
+}
 
-    unsafe { *gc.get_value_mut::<HostFunction>(funcbody, 0) = f };
+pub fn link_async_host_function_with_function_idx(
+    addr: &InstanceHandle,
+    funcidx: u32,
+    f: AsyncHostFunction,
+    store: &Store,
+) {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!(
+            "link_async_host_function_with_function_idx is unsupported while the same store GC is already active"
+        );
+        return;
+    }
+    let mut gc = store.lock_gc();
+    let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
+        tracing::error!("instance handle belongs to another store");
+        return;
+    };
+    let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
+    let funcaddr = instance.funcs.as_slice(&gc)[funcidx as usize];
+    let func = unsafe { gc.get_func_mut(funcaddr) };
+    func.function_flags = FunctionInstanceData::create_async_host_flags();
+    let funcbody = func.body;
+    unsafe { *gc.get_value_mut::<AsyncHostFunction>(funcbody, 0) = f };
+}
+
+pub fn link_async_host_function_with_export_name(
+    addr: &InstanceHandle,
+    name: &str,
+    f: AsyncHostFunction,
+    store: &Store,
+) {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!(
+            "link_async_host_function_with_export_name is unsupported while the same store GC is already active"
+        );
+        return;
+    }
+    let gc = store.lock_gc();
+    let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
+        tracing::error!("instance handle belongs to another store");
+        return;
+    };
+    let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
+    let module = unsafe { gc.get_module(instance.module_addr) };
+    let export = &module.exports.find(name).unwrap();
+    let func_idx = if let ExportDesc::Func(v) = export {
+        v.0
+    } else {
+        unreachable!()
+    };
+    drop(gc);
+    link_async_host_function_with_function_idx(addr, func_idx, f, store);
 }

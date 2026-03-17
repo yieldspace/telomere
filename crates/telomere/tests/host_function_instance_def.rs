@@ -18,7 +18,9 @@ fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
 
 fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     print_counter(ctx).fetch_add(1, Ordering::SeqCst);
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0, ctx.gc);
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
@@ -132,12 +134,18 @@ async fn test_tail_call_wasm() {
 }
 
 fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    vm_try!(ctx.stack.local_get(&ctx.local_reference(), 0, 4));
-    let arg = ctx.stack.pop_i32();
-    tracing::trace!("{arg}");
-
-    vm_try!(ctx.stack.push_i32(arg + 60));
-    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 4, ctx.gc);
+    let value = i32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), 0, 4)
+            .try_into()
+            .unwrap(),
+    );
+    tracing::trace!("{value}");
+    let slot = ctx.return_slot();
+    slot.write(&(value + 60).to_le_bytes());
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
     ctx.local_reference = prev_local_ref;
     VMResult::Success(return_addr)
 }
