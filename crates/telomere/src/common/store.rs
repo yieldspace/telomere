@@ -1,5 +1,6 @@
 use super::{
-    gc::MemoryPool, Data, Elem, ExportSection, FuncType, GlobalType, MemType, TableType, TypeIdx,
+    gc::{GcRef, MemoryPool},
+    Data, Elem, ExportSection, FuncType, GlobalType, MemType, TableType, TypeIdx,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -138,27 +139,36 @@ impl Store {
             .upgrade()
             .is_some_and(|identity| Arc::ptr_eq(&self.identity, &identity))
     }
+
+    pub(crate) fn has_active_gc_on_current_thread(&self) -> bool {
+        has_active_gc_for_identity(&self.identity_weak())
+    }
 }
 
-pub(crate) fn with_active_gc_for_identity<T>(
-    identity: &Weak<()>,
-    f: impl FnOnce(Option<&mut MemoryPool>) -> T,
-) -> T {
-    let Some(identity) = identity.upgrade() else {
-        return f(None);
-    };
+fn active_gc_ptr_for_identity(identity: &Weak<()>) -> Option<*mut MemoryPool> {
+    let identity = identity.upgrade()?;
     let identity_ptr = Arc::as_ptr(&identity);
     ACTIVE_STORE_GC.with(|active| {
         let active = active.borrow();
-        let gc = active
+        active
             .iter()
             .rev()
-            .find_map(|(active_identity, gc)| (*active_identity == identity_ptr).then_some(*gc));
-        match gc {
-            Some(gc) => f(Some(unsafe { &mut *gc })),
-            None => f(None),
-        }
+            .find_map(|(active_identity, gc)| (*active_identity == identity_ptr).then_some(*gc))
     })
+}
+
+pub(crate) fn has_active_gc_for_identity(identity: &Weak<()>) -> bool {
+    active_gc_ptr_for_identity(identity).is_some()
+}
+
+pub(crate) fn clear_active_root_slot_for_identity(identity: &Weak<()>, slot: u32) -> bool {
+    let Some(gc) = active_gc_ptr_for_identity(identity) else {
+        return false;
+    };
+    unsafe {
+        (*gc).write_root_slot(slot, GcRef(0));
+    }
+    true
 }
 
 #[derive(Default)]

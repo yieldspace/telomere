@@ -73,7 +73,7 @@ async fn component_runtime_calls_registered_core_export() {
 
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let registry = Registry::new();
     let core = instantiate_wat(
         r#"
@@ -83,7 +83,7 @@ async fn component_runtime_calls_registered_core_export() {
         local.get 1
         i32.add))
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
@@ -141,7 +141,7 @@ async fn component_runtime_can_lower_registered_core_imports_back_into_core() {
 
     let engine = ComponentEngine::new();
     let program = engine.compile(&bytes).expect("compile should succeed");
-    let mut store = telomere::Store::new();
+    let store = telomere::Store::new();
     let registry = Registry::new();
     let core = instantiate_wat(
         r#"
@@ -151,7 +151,7 @@ async fn component_runtime_can_lower_registered_core_imports_back_into_core() {
         local.get 1
         i32.add))
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;

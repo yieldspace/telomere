@@ -22,12 +22,14 @@ impl GcRootHandle {
 
 impl Drop for GcRootHandle {
     fn drop(&mut self) {
-        crate::common::store::with_active_gc_for_identity(&self.store_identity, |active_gc| {
-            if let Some(gc) = active_gc {
-                gc.remove_root(self.slot.get());
-            } else if let Some(pool) = self.pool.upgrade() {
-                pool.lock().remove_root(self.slot.get());
-            }
-        });
+        if crate::common::store::clear_active_root_slot_for_identity(
+            &self.store_identity,
+            self.slot.get(),
+        ) {
+            return;
+        }
+        if let Some(pool) = self.pool.upgrade() {
+            pool.lock().remove_root(self.slot.get());
+        }
     }
 }

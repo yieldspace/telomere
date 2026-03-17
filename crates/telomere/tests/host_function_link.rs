@@ -21,7 +21,7 @@ fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 #[tokio::test]
 async fn test_print() {
     let counter = Box::new(AtomicUsize::new(0));
-    let mut store = Store::new_with_state(unsafe {
+    let store = Store::new_with_state(unsafe {
         StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
     });
     let mut registry = Registry::new();
@@ -31,7 +31,7 @@ async fn test_print() {
       (func (export "print"))
     )
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
@@ -44,14 +44,14 @@ async fn test_print() {
     )
     (invoke "wasm_print")
     "#;
-    run_wast_with(wast, &mut store, &mut registry).await;
+    run_wast_with(wast, &store, &mut registry).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn test_imported_host_start() {
     let counter = Box::new(AtomicUsize::new(0));
-    let mut store = Store::new_with_state(unsafe {
+    let store = Store::new_with_state(unsafe {
         StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
     });
     let mut registry = Registry::new();
@@ -61,7 +61,7 @@ async fn test_imported_host_start() {
       (func (export "print"))
     )
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
@@ -75,7 +75,7 @@ async fn test_imported_host_start() {
       (start $print)
     )
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
@@ -126,7 +126,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 
 #[tokio::test]
 async fn test_tail_call_wasm() {
-    let mut store = Store::new();
+    let store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
         r#"
@@ -135,7 +135,7 @@ async fn test_tail_call_wasm() {
       (func $plus23 (param i32) (result i32) (i32.add (local.get 0) (i32.const 23)))
     )
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
@@ -148,7 +148,7 @@ async fn test_tail_call_wasm() {
     )
     (assert_return (invoke "tail_call" (i32.const 2)) (i32.const 65))
     "#;
-    run_wast_with(wast, &mut store, &mut registry).await;
+    run_wast_with(wast, &store, &mut registry).await;
 }
 
 fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
@@ -163,7 +163,7 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
 }
 #[tokio::test]
 pub async fn test_tail_call_native() {
-    let mut store = Store::new();
+    let store = Store::new();
     let mut registry = Registry::new();
     let host = instantiate_wat(
         r#"
@@ -172,7 +172,7 @@ pub async fn test_tail_call_native() {
       (func (param i32) (result i32) (unreachable))
     )
     "#,
-        &mut store,
+        &store,
         &registry,
     )
     .await;
@@ -187,5 +187,5 @@ pub async fn test_tail_call_native() {
     )
     (assert_return (invoke "tail_call" (i32.const 2)) (i32.const 102))
     "#;
-    run_wast_with(wast, &mut store, &mut registry).await;
+    run_wast_with(wast, &store, &mut registry).await;
 }

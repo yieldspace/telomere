@@ -11,7 +11,7 @@ use wast::{
     Wast, WastArg, WastRet, Wat,
 };
 
-pub async fn instantiate_wat(wat: &str, store: &mut Store, registry: &Registry) -> InstanceHandle {
+pub async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
     let buf = ParseBuffer::new(wat).unwrap();
     let mut wat = wast::parser::parse::<Wat>(&buf).unwrap();
     let source = wat.encode().unwrap();
@@ -73,18 +73,18 @@ const SPECTEST_WAT: &str = r#"
     (func (export "print_f64_f64") (param f64 f64))
 )
 "#;
-async fn init_spectest(store: &mut Store, registry: &Registry) -> InstanceHandle {
+async fn init_spectest(store: &Store, registry: &Registry) -> InstanceHandle {
     instantiate_wat(SPECTEST_WAT, store, registry).await
 }
 #[allow(dead_code)]
 pub async fn run_wast(text: &str) {
-    let mut store = Store::new();
+    let store = Store::new();
     let mut registry = Registry::new();
-    let st = init_spectest(&mut store, &registry).await;
+    let st = init_spectest(&store, &registry).await;
     registry.register("spectest", st.clone());
-    run_wast_with(text, &mut store, &mut registry).await;
+    run_wast_with(text, &store, &mut registry).await;
 }
-pub async fn run_wast_with(text: &str, store: &mut Store, registry: &mut Registry) {
+pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
     let buf = ParseBuffer::new(text).unwrap();
     let wast = wast::parser::parse::<Wast>(&buf).unwrap();
     let mut instance: Option<InstanceHandle> = None;

@@ -144,6 +144,10 @@ pub async fn instantiate(
     store: &Store,
     registry: &Registry,
 ) -> VMResult<InstanceHandle> {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!("instantiate is unsupported while the same store GC is already active");
+        return VMResult::Unlinkable;
+    }
     let Module {
         fts,
         functions,
@@ -494,6 +498,10 @@ pub fn aliasing(
     triplets: &[(String, String, String)],
     store: &Store,
 ) -> VMResult<InstanceHandle> {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!("aliasing is unsupported while the same store GC is already active");
+        return VMResult::Unlinkable;
+    }
     let mut gc = store.lock_gc();
     let inst_id = store.new_instance_id();
     let root_slot = gc.reserve_root_slot();

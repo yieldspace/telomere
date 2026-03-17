@@ -2031,6 +2031,12 @@ pub async fn run_module_function(
     name: &str,
     args: &ResultValue,
 ) -> VMResult<ResultValue> {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!(
+            "run_module_function is unsupported while the same store GC is already active"
+        );
+        return VMResult::Unlinkable;
+    }
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
@@ -2274,6 +2280,10 @@ fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultVal
 }
 
 pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMResult<WasmValue> {
+    if store.has_active_gc_on_current_thread() {
+        tracing::error!("get_global is unsupported while the same store GC is already active");
+        return VMResult::Unlinkable;
+    }
     let gc = store.lock_gc();
 
     let instance = unsafe {

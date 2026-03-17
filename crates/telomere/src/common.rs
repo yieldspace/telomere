@@ -472,7 +472,11 @@ impl InstanceHandle {
 #[cfg(test)]
 mod instance_handle_tests {
     use super::{GcRef, InstanceHandle, Store, VMResult, WasmValue};
-    use crate::{get_global, instantiate, IoReadBinaryReader, Module, Registry, WasmParser};
+    use crate::{
+        get_global, instantiate, run_module_function, IoReadBinaryReader, Module, Registry,
+        ResultValue, WasmParser,
+    };
+    use futures::executor::block_on;
 
     fn parse_module(wat: &str) -> Module {
         let source = wat::parse_str(wat).expect("wat must parse");
@@ -509,6 +513,28 @@ mod instance_handle_tests {
     }
 
     #[tokio::test]
+    async fn dropped_instance_handle_releases_root_slot_while_store_gc_is_active() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let handle = instantiate_wat(
+            r#"
+            (module
+              (global (export "g") i32 (i32.const 42)))
+            "#,
+            &store,
+            &registry,
+        )
+        .await;
+        let slot = handle.0.slot.get();
+        let gc = store.lock_gc();
+        assert_ne!(gc.read_root_slot(slot), GcRef(0));
+
+        drop(handle);
+
+        assert_eq!(gc.read_root_slot(slot), GcRef(0));
+    }
+
+    #[tokio::test]
     async fn foreign_store_handle_resolution_fails_closed() {
         let store_a = Store::new();
         let store_b = Store::new();
@@ -530,6 +556,53 @@ mod instance_handle_tests {
         assert!(matches!(
             get_global(&handle, &store_a, "g"),
             VMResult::Success(WasmValue::I32(42))
+        ));
+    }
+
+    #[tokio::test]
+    async fn same_thread_reentrant_get_global_fails_closed() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let handle = instantiate_wat(
+            r#"
+            (module
+              (global (export "g") i32 (i32.const 42)))
+            "#,
+            &store,
+            &registry,
+        )
+        .await;
+        let _gc = store.lock_gc();
+
+        assert!(matches!(
+            get_global(&handle, &store, "g"),
+            VMResult::Unlinkable
+        ));
+    }
+
+    #[tokio::test]
+    async fn same_thread_reentrant_run_module_function_fails_closed() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let handle = instantiate_wat(
+            r#"
+            (module
+              (func (export "f") (result i32) (i32.const 42)))
+            "#,
+            &store,
+            &registry,
+        )
+        .await;
+        let _gc = store.lock_gc();
+
+        assert!(matches!(
+            block_on(run_module_function(
+                &handle,
+                &store,
+                "f",
+                &ResultValue::new(vec![]),
+            )),
+            VMResult::Unlinkable
         ));
     }
 }
