@@ -155,8 +155,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         else_addr: &mut Option<u32>,
     ) -> Result<(usize, bool)> {
         let v = self.reader.read_exact_one()?;
-
-        Ok(match v {
+        instrs.begin_instruction();
+        let result = match v {
             0x00 => {
                 trace!("parse_op_unreachable");
                 instrs
@@ -732,6 +732,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let x = checker.pop()?;
 
                 if let MaybeUnreachable::Normal(x) = x {
+                    if matches!(x.stack_size(), ValueSize::Byte4) {
+                        instrs.set_current_instruction_fusible();
+                    }
                     instrs.push(Instr { op: vm::op_drop });
                     instrs.push(Instr {
                         operand: Operand {
@@ -814,9 +817,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 
                 match ty.stack_size() {
-                    ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_local_get4,
-                    }),
+                    ValueSize::Byte4 => {
+                        instrs.set_current_instruction_fusible();
+                        instrs.push(Instr {
+                            op: vm::op_local_get4,
+                        })
+                    }
                     ValueSize::Byte8 => instrs.push(Instr {
                         op: vm::op_local_get8,
                     }),
@@ -838,9 +844,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 
                 match ty.stack_size() {
-                    ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_local_set4,
-                    }),
+                    ValueSize::Byte4 => {
+                        instrs.set_current_instruction_fusible();
+                        instrs.push(Instr {
+                            op: vm::op_local_set4,
+                        })
+                    }
                     ValueSize::Byte8 => instrs.push(Instr {
                         op: vm::op_local_set8,
                     }),
@@ -862,9 +871,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 
                 match ty.stack_size() {
-                    ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_local_tee4,
-                    }),
+                    ValueSize::Byte4 => {
+                        instrs.set_current_instruction_fusible();
+                        instrs.push(Instr {
+                            op: vm::op_local_tee4,
+                        })
+                    }
                     ValueSize::Byte8 => instrs.push(Instr {
                         op: vm::op_local_tee8,
                     }),
@@ -1334,6 +1346,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x41 => {
                 trace!("parse_op_i32_const");
                 let (len, operand) = self.parse_i32()?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_const,
                 });
@@ -1387,6 +1400,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x45 => {
                 trace!("parse_op_i32_eqz");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_eqz });
 
                 checker.op(&[ValType::I32], &[ValType::I32])?;
@@ -1394,6 +1408,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x46 => {
                 trace!("parse_op_i32_eq");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_eq });
 
                 checker.cond_op(ValType::I32)?;
@@ -1401,6 +1416,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x47 => {
                 trace!("parse_op_i32_ne");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_ne });
 
                 checker.cond_op(ValType::I32)?;
@@ -1683,6 +1699,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x6A => {
                 trace!("parse_op_i32_add");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_add });
 
                 checker.unary_op(ValType::I32)?;
@@ -1690,6 +1707,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x6B => {
                 trace!("parse_op_i32_sub");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_sub });
 
                 checker.unary_op(ValType::I32)?;
@@ -1697,6 +1715,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x6C => {
                 trace!("parse_op_i32_mul");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_mul });
                 checker.unary_op(ValType::I32)?;
 
@@ -1742,6 +1761,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x71 => {
                 trace!("parse_op_i32_and");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_and });
 
                 checker.unary_op(ValType::I32)?;
@@ -1750,6 +1770,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x72 => {
                 trace!("parse_op_i32_or");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_or });
 
                 checker.unary_op(ValType::I32)?;
@@ -1757,6 +1778,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x73 => {
                 trace!("parse_op_i32_xor");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_xor });
 
                 checker.unary_op(ValType::I32)?;
@@ -1764,6 +1786,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x74 => {
                 trace!("parse_op_i32_shl");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i32_shl });
 
                 checker.unary_op(ValType::I32)?;
@@ -1771,6 +1794,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x75 => {
                 trace!("parse_op_i32_shr_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_shr_s,
                 });
@@ -1780,6 +1804,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x76 => {
                 trace!("parse_op_i32_shr_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_shr_u,
                 });
@@ -3022,7 +3047,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,
-        })
+        };
+        instrs.finish_instruction();
+        Ok(result)
     }
     #[allow(clippy::too_many_arguments)]
     pub fn parse_instrs(

@@ -1,16 +1,23 @@
 use std::ops::{Deref, DerefMut};
 
+use super::fusion;
 use crate::common::{Instr, Op, Operand};
 
 pub(crate) struct InstructionGenerator {
     instr: Vec<Instr>,
+    pending: Vec<Instr>,
     unreachable: Vec<bool>,
+    current_instruction_fusible: Vec<bool>,
+    fusion_enabled: bool,
 }
 impl InstructionGenerator {
     pub(crate) fn new() -> Self {
         Self {
             instr: vec![],
+            pending: vec![],
             unreachable: vec![false],
+            current_instruction_fusible: vec![],
+            fusion_enabled: true,
         }
     }
     #[allow(dead_code)]
@@ -26,18 +33,57 @@ impl InstructionGenerator {
         }
         self
     }
+    pub(crate) fn begin_instruction(&mut self) {
+        self.current_instruction_fusible.push(false);
+    }
+    pub(crate) fn set_current_instruction_fusible(&mut self) {
+        if self.fusion_enabled {
+            if let Some(flag) = self.current_instruction_fusible.last_mut() {
+                *flag = true;
+            }
+        }
+    }
+    pub(crate) fn finish_instruction(&mut self) {
+        let fusible = self.current_instruction_fusible.pop().unwrap_or(false);
+        if fusible && self.pending.len() >= 64 {
+            self.flush_pending();
+        }
+    }
+    pub(crate) fn enable_fusion(&mut self) {
+        self.fusion_enabled = true;
+    }
+    fn current_instruction_fusible(&self) -> bool {
+        self.current_instruction_fusible
+            .last()
+            .copied()
+            .unwrap_or(false)
+    }
     pub(crate) fn push(&mut self, instr: Instr) -> &mut Self {
         if !self.unreachable.last().unwrap() {
-            self.instr.push(instr);
+            if self.current_instruction_fusible() {
+                self.pending.push(instr);
+            } else {
+                self.flush_pending();
+                self.instr.push(instr);
+                self.fusion_enabled = false;
+            }
         }
         self
     }
     pub(crate) fn force_push(&mut self, instr: Instr) -> &mut Self {
+        self.flush_pending();
         self.instr.push(instr);
-
         self
     }
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn flush_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        fusion::emit_fused_region(&self.pending, &mut self.instr);
+        self.pending.clear();
+    }
+    pub(crate) fn len(&mut self) -> usize {
+        self.flush_pending();
         self.instr.len()
     }
     pub(crate) fn set_unreachable(&mut self) -> &mut Self {
@@ -48,13 +94,17 @@ impl InstructionGenerator {
         *self.unreachable.last().unwrap()
     }
     pub(crate) fn enter_block(&mut self) {
+        self.flush_pending();
+        self.fusion_enabled = false;
         let unreachable = self.is_unreachable();
         self.unreachable.push(unreachable);
     }
     pub(crate) fn leave_block(&mut self) {
+        self.flush_pending();
         self.unreachable.pop();
     }
-    pub(crate) fn build(self) -> Vec<Instr> {
+    pub(crate) fn build(mut self) -> Vec<Instr> {
+        self.flush_pending();
         self.instr
     }
 }

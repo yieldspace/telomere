@@ -743,6 +743,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         );
         jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
         instrs.enter_block();
+        instrs.enable_fusion();
         let len2 = parser.parse_instrs(
             data_count_section,
             &mut instrs,
@@ -771,6 +772,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
             },
         });
+        instrs.flush_pending();
         jump_resolver.evaluate(&mut instrs);
         Ok(Func {
             locals: locals_data,

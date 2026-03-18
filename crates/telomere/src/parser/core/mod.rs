@@ -1,6 +1,7 @@
 mod base;
 mod custom_section;
 mod error;
+mod fusion;
 mod instruction;
 mod jump_resolver;
 mod parser;

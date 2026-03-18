@@ -146,6 +146,137 @@ pub unsafe fn op_i32_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 
     call_next(tail_code, 0, ctx)
 }
+
+#[inline(always)]
+fn unpack_local_i32_operand(tail_code: *const Instr) -> (usize, i32) {
+    let encoded = unsafe { (*tail_code).operand.encoded };
+    let mut addr = [0u8; 4];
+    let mut imm = [0u8; 4];
+    addr.copy_from_slice(&encoded[..4]);
+    imm.copy_from_slice(&encoded[4..]);
+    (u32::from_le_bytes(addr) as usize, i32::from_le_bytes(imm))
+}
+
+#[inline(always)]
+fn read_local_i32(ctx: &ExecuteContext, addr: usize) -> i32 {
+    let bytes = ctx.stack.local_bytes(&ctx.local_reference(), addr, 4);
+    i32::from_le_bytes(bytes.try_into().expect("i32 local must be 4 bytes"))
+}
+
+#[inline(always)]
+fn write_local_i32(ctx: &mut ExecuteContext, addr: usize, value: i32) {
+    let bytes = value.to_le_bytes();
+    let locals = ctx.stack.access_locals(&ctx.local_reference());
+    locals[addr..addr + 4].copy_from_slice(&bytes);
+}
+
+pub unsafe fn op_i32_const_local_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let (addr, imm) = unpack_local_i32_operand(tail_code);
+    write_local_i32(ctx, addr, imm);
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn op_i32_const_local_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let (addr, imm) = unpack_local_i32_operand(tail_code);
+    write_local_i32(ctx, addr, imm);
+    vm_try!(ctx.stack.push_i32(imm));
+    call_next(tail_code, 1, ctx)
+}
+
+macro_rules! define_local_get_const_i32_ops {
+    ($(($value_name:ident, $set_name:ident, $op:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $value_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm) = unpack_local_i32_operand(tail_code);
+                let lhs = read_local_i32(ctx, addr);
+                let rhs = imm;
+                let result: i32 = ($op)(lhs, rhs);
+                vm_try!(ctx.stack.push_i32(result));
+                call_next(tail_code, 1, ctx)
+            }
+
+            pub unsafe fn $set_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm) = unpack_local_i32_operand(tail_code);
+                let lhs = read_local_i32(ctx, addr);
+                let rhs = imm;
+                let result: i32 = ($op)(lhs, rhs);
+                write_local_i32(ctx, addr, result);
+                call_next(tail_code, 1, ctx)
+            }
+        )*
+    };
+}
+
+define_local_get_const_i32_ops!(
+    (
+        op_local_get4_i32_const_add,
+        op_local_get4_i32_const_add_local_set4,
+        |lhs: i32, rhs: i32| lhs.wrapping_add(rhs)
+    ),
+    (
+        op_local_get4_i32_const_sub,
+        op_local_get4_i32_const_sub_local_set4,
+        |lhs: i32, rhs: i32| lhs.wrapping_sub(rhs)
+    ),
+    (
+        op_local_get4_i32_const_mul,
+        op_local_get4_i32_const_mul_local_set4,
+        |lhs: i32, rhs: i32| lhs.wrapping_mul(rhs)
+    ),
+    (
+        op_local_get4_i32_const_and,
+        op_local_get4_i32_const_and_local_set4,
+        |lhs: i32, rhs: i32| ((lhs as u32) & (rhs as u32)) as i32
+    ),
+    (
+        op_local_get4_i32_const_or,
+        op_local_get4_i32_const_or_local_set4,
+        |lhs: i32, rhs: i32| ((lhs as u32) | (rhs as u32)) as i32
+    ),
+    (
+        op_local_get4_i32_const_xor,
+        op_local_get4_i32_const_xor_local_set4,
+        |lhs: i32, rhs: i32| ((lhs as u32) ^ (rhs as u32)) as i32
+    ),
+    (
+        op_local_get4_i32_const_shl,
+        op_local_get4_i32_const_shl_local_set4,
+        |lhs: i32, rhs: i32| lhs << rhs
+    ),
+    (
+        op_local_get4_i32_const_shr_s,
+        op_local_get4_i32_const_shr_s_local_set4,
+        |lhs: i32, rhs: i32| lhs >> rhs
+    ),
+    (
+        op_local_get4_i32_const_shr_u,
+        op_local_get4_i32_const_shr_u_local_set4,
+        |lhs: i32, rhs: i32| ((lhs as u32) >> (rhs as u32)) as i32
+    ),
+    (
+        op_local_get4_i32_const_eq,
+        op_local_get4_i32_const_eq_local_set4,
+        |lhs: i32, rhs: i32| if lhs == rhs { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_ne,
+        op_local_get4_i32_const_ne_local_set4,
+        |lhs: i32, rhs: i32| if lhs != rhs { 1 } else { 0 }
+    ),
+);
+
 pub unsafe fn op_i64_clz(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a = ctx.stack.pop_i64();
     vm_try!(ctx.stack.push_i64(a.leading_zeros().into()));
