@@ -8,7 +8,7 @@ pub(crate) struct InstructionGenerator {
     pending: Vec<Instr>,
     unreachable: Vec<bool>,
     current_instruction_fusible: Vec<bool>,
-    fusion_enabled: bool,
+    fusion_enabled: Vec<bool>,
 }
 impl InstructionGenerator {
     pub(crate) fn new() -> Self {
@@ -17,7 +17,7 @@ impl InstructionGenerator {
             pending: vec![],
             unreachable: vec![false],
             current_instruction_fusible: vec![],
-            fusion_enabled: true,
+            fusion_enabled: vec![true],
         }
     }
     #[allow(dead_code)]
@@ -37,7 +37,7 @@ impl InstructionGenerator {
         self.current_instruction_fusible.push(false);
     }
     pub(crate) fn set_current_instruction_fusible(&mut self) {
-        if self.fusion_enabled {
+        if self.fusion_enabled() {
             if let Some(flag) = self.current_instruction_fusible.last_mut() {
                 *flag = true;
             }
@@ -50,7 +50,10 @@ impl InstructionGenerator {
         }
     }
     pub(crate) fn enable_fusion(&mut self) {
-        self.fusion_enabled = true;
+        *self.fusion_enabled.last_mut().unwrap() = true;
+    }
+    fn fusion_enabled(&self) -> bool {
+        self.fusion_enabled.last().copied().unwrap_or(false)
     }
     fn current_instruction_fusible(&self) -> bool {
         self.current_instruction_fusible
@@ -65,7 +68,6 @@ impl InstructionGenerator {
             } else {
                 self.flush_pending();
                 self.instr.push(instr);
-                self.fusion_enabled = false;
             }
         }
         self
@@ -95,13 +97,14 @@ impl InstructionGenerator {
     }
     pub(crate) fn enter_block(&mut self) {
         self.flush_pending();
-        self.fusion_enabled = false;
         let unreachable = self.is_unreachable();
         self.unreachable.push(unreachable);
+        self.fusion_enabled.push(false);
     }
     pub(crate) fn leave_block(&mut self) {
         self.flush_pending();
         self.unreachable.pop();
+        self.fusion_enabled.pop();
     }
     pub(crate) fn build(mut self) -> Vec<Instr> {
         self.flush_pending();

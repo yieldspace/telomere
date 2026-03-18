@@ -170,25 +170,6 @@ fn write_local_i32(ctx: &mut ExecuteContext, addr: usize, value: i32) {
     locals[addr..addr + 4].copy_from_slice(&bytes);
 }
 
-pub unsafe fn op_i32_const_local_set4(
-    tail_code: *const Instr,
-    ctx: &mut ExecuteContext,
-) -> VMResult<()> {
-    let (addr, imm) = unpack_local_i32_operand(tail_code);
-    write_local_i32(ctx, addr, imm);
-    call_next(tail_code, 1, ctx)
-}
-
-pub unsafe fn op_i32_const_local_tee4(
-    tail_code: *const Instr,
-    ctx: &mut ExecuteContext,
-) -> VMResult<()> {
-    let (addr, imm) = unpack_local_i32_operand(tail_code);
-    write_local_i32(ctx, addr, imm);
-    vm_try!(ctx.stack.push_i32(imm));
-    call_next(tail_code, 1, ctx)
-}
-
 macro_rules! define_local_get_const_i32_ops {
     ($(($value_name:ident, $set_name:ident, $op:expr)),* $(,)?) => {
         $(
@@ -274,6 +255,787 @@ define_local_get_const_i32_ops!(
         op_local_get4_i32_const_ne,
         op_local_get4_i32_const_ne_local_set4,
         |lhs: i32, rhs: i32| if lhs != rhs { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_lt_s,
+        op_local_get4_i32_const_lt_s_local_set4,
+        |lhs: i32, rhs: i32| if lhs < rhs { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_lt_u,
+        op_local_get4_i32_const_lt_u_local_set4,
+        |lhs: i32, rhs: i32| if (lhs as u32) < (rhs as u32) { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_gt_s,
+        op_local_get4_i32_const_gt_s_local_set4,
+        |lhs: i32, rhs: i32| if lhs > rhs { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_gt_u,
+        op_local_get4_i32_const_gt_u_local_set4,
+        |lhs: i32, rhs: i32| if (lhs as u32) > (rhs as u32) { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_le_s,
+        op_local_get4_i32_const_le_s_local_set4,
+        |lhs: i32, rhs: i32| if lhs <= rhs { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_le_u,
+        op_local_get4_i32_const_le_u_local_set4,
+        |lhs: i32, rhs: i32| if (lhs as u32) <= (rhs as u32) { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_ge_s,
+        op_local_get4_i32_const_ge_s_local_set4,
+        |lhs: i32, rhs: i32| if lhs >= rhs { 1 } else { 0 }
+    ),
+    (
+        op_local_get4_i32_const_ge_u,
+        op_local_get4_i32_const_ge_u_local_set4,
+        |lhs: i32, rhs: i32| if (lhs as u32) >= (rhs as u32) { 1 } else { 0 }
+    ),
+);
+
+#[inline(always)]
+fn unpack_local_u32_operand(tail_code: *const Instr) -> (usize, u32) {
+    let encoded = unsafe { (*tail_code).operand.encoded };
+    let mut addr = [0u8; 4];
+    let mut imm = [0u8; 4];
+    addr.copy_from_slice(&encoded[..4]);
+    imm.copy_from_slice(&encoded[4..]);
+    (u32::from_le_bytes(addr) as usize, u32::from_le_bytes(imm))
+}
+
+#[inline(always)]
+fn unpack_local_u64_operand(tail_code: *const Instr) -> (usize, u64) {
+    let addr = unsafe { (*tail_code).operand.local_addr as usize };
+    let imm = unsafe { (*tail_code.offset(1)).operand.u64 };
+    (addr, imm)
+}
+
+#[inline(always)]
+fn read_local_i64(ctx: &ExecuteContext, addr: usize) -> i64 {
+    let bytes = ctx.stack.local_bytes(&ctx.local_reference(), addr, 8);
+    i64::from_le_bytes(bytes.try_into().expect("i64 local must be 8 bytes"))
+}
+
+#[inline(always)]
+fn read_local_f32(ctx: &ExecuteContext, addr: usize) -> f32 {
+    let bytes = ctx.stack.local_bytes(&ctx.local_reference(), addr, 4);
+    f32::from_le_bytes(bytes.try_into().expect("f32 local must be 4 bytes"))
+}
+
+#[inline(always)]
+fn read_local_f64(ctx: &ExecuteContext, addr: usize) -> f64 {
+    let bytes = ctx.stack.local_bytes(&ctx.local_reference(), addr, 8);
+    f64::from_le_bytes(bytes.try_into().expect("f64 local must be 8 bytes"))
+}
+
+#[inline(always)]
+fn write_local_bytes(ctx: &mut ExecuteContext, addr: usize, bytes: &[u8]) {
+    let locals = ctx.stack.access_locals(&ctx.local_reference());
+    locals[addr..addr + bytes.len()].copy_from_slice(bytes);
+}
+
+#[inline(always)]
+fn jump_to_offset(
+    tail_code: *const Instr,
+    jump_offset: isize,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = unsafe { (*tail_code.offset(jump_offset)).operand.jump_addr };
+    let ptr = unsafe { ctx.code().offset(addr as isize) };
+    unsafe { call_next(ptr, 0, ctx) }
+}
+
+#[inline(always)]
+fn branch_to_offset(
+    tail_code: *const Instr,
+    jump_offset: isize,
+    taken: bool,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let ptr = if taken {
+        let addr = unsafe { (*tail_code.offset(jump_offset)).operand.jump_addr };
+        unsafe { ctx.code().offset(addr as isize) }
+    } else {
+        unsafe { tail_code.offset(jump_offset + 1) }
+    };
+    unsafe { call_next(ptr, 0, ctx) }
+}
+
+pub unsafe fn op_const4_local_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let encoded = (*tail_code).operand.encoded;
+    let mut addr = [0u8; 4];
+    addr.copy_from_slice(&encoded[..4]);
+    write_local_bytes(ctx, u32::from_le_bytes(addr) as usize, &encoded[4..]);
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn op_const4_local_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let encoded = (*tail_code).operand.encoded;
+    let mut addr = [0u8; 4];
+    addr.copy_from_slice(&encoded[..4]);
+    let value = &encoded[4..];
+    write_local_bytes(ctx, u32::from_le_bytes(addr) as usize, value);
+    vm_try!(ctx.stack.push_slice(value));
+    call_next(tail_code, 1, ctx)
+}
+
+pub unsafe fn op_const8_local_set8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    let value = (*tail_code.offset(1)).operand.u64.to_le_bytes();
+    write_local_bytes(ctx, addr, &value);
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_const8_local_tee8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    let value = (*tail_code.offset(1)).operand.u64.to_le_bytes();
+    write_local_bytes(ctx, addr, &value);
+    vm_try!(ctx.stack.push_slice(&value));
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_const4_return(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    vm_try!(ctx.stack.push_u32((*tail_code).operand.u32));
+    jump_to_offset(tail_code, 1, ctx)
+}
+
+pub unsafe fn op_const8_return(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    vm_try!(ctx.stack.push_u64((*tail_code).operand.u64));
+    jump_to_offset(tail_code, 1, ctx)
+}
+
+pub unsafe fn op_local_get4_return(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    let bytes = ctx
+        .stack
+        .local_bytes(&ctx.local_reference(), addr, 4)
+        .to_vec();
+    vm_try!(ctx.stack.push_slice(&bytes));
+    jump_to_offset(tail_code, 1, ctx)
+}
+
+pub unsafe fn op_local_get8_return(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    let bytes = ctx
+        .stack
+        .local_bytes(&ctx.local_reference(), addr, 8)
+        .to_vec();
+    vm_try!(ctx.stack.push_slice(&bytes));
+    jump_to_offset(tail_code, 1, ctx)
+}
+
+pub unsafe fn op_local_get4_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    branch_to_offset(tail_code, 1, read_local_i32(ctx, addr) == 0, ctx)
+}
+
+pub unsafe fn op_local_get4_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    branch_to_offset(tail_code, 1, read_local_i32(ctx, addr) != 0, ctx)
+}
+
+pub unsafe fn op_local_get4_i32_eqz_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    branch_to_offset(tail_code, 1, read_local_i32(ctx, addr) != 0, ctx)
+}
+
+pub unsafe fn op_local_get4_i32_eqz_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    branch_to_offset(tail_code, 1, read_local_i32(ctx, addr) == 0, ctx)
+}
+
+macro_rules! define_local_get_const_i32_branch_ops {
+    ($(($if_name:ident, $br_name:ident, $op:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $if_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u32_operand(tail_code);
+                let taken = !($op)(read_local_i32(ctx, addr), imm_bits as i32);
+                branch_to_offset(tail_code, 1, taken, ctx)
+            }
+
+            pub unsafe fn $br_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u32_operand(tail_code);
+                let taken = ($op)(read_local_i32(ctx, addr), imm_bits as i32);
+                branch_to_offset(tail_code, 1, taken, ctx)
+            }
+        )*
+    };
+}
+
+define_local_get_const_i32_branch_ops!(
+    (
+        op_local_get4_i32_const_eq_if,
+        op_local_get4_i32_const_eq_br_if,
+        |lhs: i32, rhs: i32| lhs == rhs
+    ),
+    (
+        op_local_get4_i32_const_ne_if,
+        op_local_get4_i32_const_ne_br_if,
+        |lhs: i32, rhs: i32| lhs != rhs
+    ),
+    (
+        op_local_get4_i32_const_lt_s_if,
+        op_local_get4_i32_const_lt_s_br_if,
+        |lhs: i32, rhs: i32| lhs < rhs
+    ),
+    (
+        op_local_get4_i32_const_lt_u_if,
+        op_local_get4_i32_const_lt_u_br_if,
+        |lhs: i32, rhs: i32| (lhs as u32) < (rhs as u32)
+    ),
+    (
+        op_local_get4_i32_const_gt_s_if,
+        op_local_get4_i32_const_gt_s_br_if,
+        |lhs: i32, rhs: i32| lhs > rhs
+    ),
+    (
+        op_local_get4_i32_const_gt_u_if,
+        op_local_get4_i32_const_gt_u_br_if,
+        |lhs: i32, rhs: i32| (lhs as u32) > (rhs as u32)
+    ),
+    (
+        op_local_get4_i32_const_le_s_if,
+        op_local_get4_i32_const_le_s_br_if,
+        |lhs: i32, rhs: i32| lhs <= rhs
+    ),
+    (
+        op_local_get4_i32_const_le_u_if,
+        op_local_get4_i32_const_le_u_br_if,
+        |lhs: i32, rhs: i32| (lhs as u32) <= (rhs as u32)
+    ),
+    (
+        op_local_get4_i32_const_ge_s_if,
+        op_local_get4_i32_const_ge_s_br_if,
+        |lhs: i32, rhs: i32| lhs >= rhs
+    ),
+    (
+        op_local_get4_i32_const_ge_u_if,
+        op_local_get4_i32_const_ge_u_br_if,
+        |lhs: i32, rhs: i32| (lhs as u32) >= (rhs as u32)
+    ),
+);
+
+macro_rules! define_local_get_const_i64_ops {
+    ($(($value_name:ident, $set_name:ident, $op:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $value_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u64_operand(tail_code);
+                let result: i64 = ($op)(read_local_i64(ctx, addr), imm_bits as i64);
+                vm_try!(ctx.stack.push_i64(result));
+                call_next(tail_code, 2, ctx)
+            }
+
+            pub unsafe fn $set_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u64_operand(tail_code);
+                let result: i64 = ($op)(read_local_i64(ctx, addr), imm_bits as i64);
+                write_local_bytes(ctx, addr, &result.to_le_bytes());
+                call_next(tail_code, 2, ctx)
+            }
+        )*
+    };
+}
+
+define_local_get_const_i64_ops!(
+    (
+        op_local_get8_i64_const_add,
+        op_local_get8_i64_const_add_local_set8,
+        |lhs: i64, rhs: i64| lhs.wrapping_add(rhs)
+    ),
+    (
+        op_local_get8_i64_const_sub,
+        op_local_get8_i64_const_sub_local_set8,
+        |lhs: i64, rhs: i64| lhs.wrapping_sub(rhs)
+    ),
+    (
+        op_local_get8_i64_const_mul,
+        op_local_get8_i64_const_mul_local_set8,
+        |lhs: i64, rhs: i64| lhs.wrapping_mul(rhs)
+    ),
+    (
+        op_local_get8_i64_const_and,
+        op_local_get8_i64_const_and_local_set8,
+        |lhs: i64, rhs: i64| ((lhs as u64) & (rhs as u64)) as i64
+    ),
+    (
+        op_local_get8_i64_const_or,
+        op_local_get8_i64_const_or_local_set8,
+        |lhs: i64, rhs: i64| ((lhs as u64) | (rhs as u64)) as i64
+    ),
+    (
+        op_local_get8_i64_const_xor,
+        op_local_get8_i64_const_xor_local_set8,
+        |lhs: i64, rhs: i64| ((lhs as u64) ^ (rhs as u64)) as i64
+    ),
+    (
+        op_local_get8_i64_const_shl,
+        op_local_get8_i64_const_shl_local_set8,
+        |lhs: i64, rhs: i64| lhs << rhs
+    ),
+    (
+        op_local_get8_i64_const_shr_s,
+        op_local_get8_i64_const_shr_s_local_set8,
+        |lhs: i64, rhs: i64| lhs >> rhs
+    ),
+    (
+        op_local_get8_i64_const_shr_u,
+        op_local_get8_i64_const_shr_u_local_set8,
+        |lhs: i64, rhs: i64| ((lhs as u64) >> (rhs as u64)) as i64
+    ),
+);
+
+macro_rules! define_local_get_const_i64_cmp_ops {
+    ($(($name:ident, $op:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u64_operand(tail_code);
+                let lhs_bits = read_local_i64(ctx, addr) as u64;
+                let result = if ($op)(lhs_bits, imm_bits) { 1 } else { 0 };
+                vm_try!(ctx.stack.push_i32(result));
+                call_next(tail_code, 2, ctx)
+            }
+        )*
+    };
+}
+
+define_local_get_const_i64_cmp_ops!(
+    (op_local_get8_i64_const_eq, |lhs: u64, rhs: u64| lhs == rhs),
+    (op_local_get8_i64_const_ne, |lhs: u64, rhs: u64| lhs != rhs),
+    (op_local_get8_i64_const_lt_s, |lhs: u64, rhs: u64| (lhs
+        as i64)
+        < (rhs as i64)),
+    (op_local_get8_i64_const_lt_u, |lhs: u64, rhs: u64| lhs < rhs),
+    (op_local_get8_i64_const_gt_s, |lhs: u64, rhs: u64| (lhs
+        as i64)
+        > (rhs as i64)),
+    (op_local_get8_i64_const_gt_u, |lhs: u64, rhs: u64| lhs > rhs),
+    (op_local_get8_i64_const_le_s, |lhs: u64, rhs: u64| (lhs
+        as i64)
+        <= (rhs as i64)),
+    (op_local_get8_i64_const_le_u, |lhs: u64, rhs: u64| lhs
+        <= rhs),
+    (op_local_get8_i64_const_ge_s, |lhs: u64, rhs: u64| (lhs
+        as i64)
+        >= (rhs as i64)),
+    (op_local_get8_i64_const_ge_u, |lhs: u64, rhs: u64| lhs
+        >= rhs),
+);
+
+macro_rules! define_local_get_const_f32_ops {
+    ($(($value_name:ident, $set_name:ident, $op:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $value_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u32_operand(tail_code);
+                let result: f32 = ($op)(read_local_f32(ctx, addr), f32::from_bits(imm_bits));
+                vm_try!(ctx.stack.push_f32(result));
+                call_next(tail_code, 1, ctx)
+            }
+
+            pub unsafe fn $set_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u32_operand(tail_code);
+                let result: f32 = ($op)(read_local_f32(ctx, addr), f32::from_bits(imm_bits));
+                write_local_bytes(ctx, addr, &result.to_le_bytes());
+                call_next(tail_code, 1, ctx)
+            }
+        )*
+    };
+}
+
+define_local_get_const_f32_ops!(
+    (
+        op_local_get4_f32_const_add,
+        op_local_get4_f32_const_add_local_set4,
+        |lhs: f32, rhs: f32| lhs + rhs
+    ),
+    (
+        op_local_get4_f32_const_sub,
+        op_local_get4_f32_const_sub_local_set4,
+        |lhs: f32, rhs: f32| lhs - rhs
+    ),
+    (
+        op_local_get4_f32_const_mul,
+        op_local_get4_f32_const_mul_local_set4,
+        |lhs: f32, rhs: f32| lhs * rhs
+    ),
+    (
+        op_local_get4_f32_const_div,
+        op_local_get4_f32_const_div_local_set4,
+        |lhs: f32, rhs: f32| lhs / rhs
+    ),
+);
+
+macro_rules! define_local_get_const_f32_cmp_ops {
+    ($(($name:ident, $op:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u32_operand(tail_code);
+                let lhs = read_local_f32(ctx, addr);
+                let rhs = f32::from_bits(imm_bits);
+                let result = if ($op)(lhs, rhs) { 1 } else { 0 };
+                vm_try!(ctx.stack.push_i32(result));
+                call_next(tail_code, 1, ctx)
+            }
+        )*
+    };
+}
+
+define_local_get_const_f32_cmp_ops!(
+    (op_local_get4_f32_const_eq, |lhs: f32, rhs: f32| lhs == rhs),
+    (op_local_get4_f32_const_ne, |lhs: f32, rhs: f32| lhs != rhs),
+    (op_local_get4_f32_const_lt, |lhs: f32, rhs: f32| lhs < rhs),
+    (op_local_get4_f32_const_gt, |lhs: f32, rhs: f32| lhs > rhs),
+    (op_local_get4_f32_const_le, |lhs: f32, rhs: f32| lhs <= rhs),
+    (op_local_get4_f32_const_ge, |lhs: f32, rhs: f32| lhs >= rhs),
+);
+
+macro_rules! define_local_get_const_f64_ops {
+    ($(($value_name:ident, $set_name:ident, $op:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $value_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u64_operand(tail_code);
+                let result: f64 = ($op)(read_local_f64(ctx, addr), f64::from_bits(imm_bits));
+                vm_try!(ctx.stack.push_f64(result));
+                call_next(tail_code, 2, ctx)
+            }
+
+            pub unsafe fn $set_name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u64_operand(tail_code);
+                let result: f64 = ($op)(read_local_f64(ctx, addr), f64::from_bits(imm_bits));
+                write_local_bytes(ctx, addr, &result.to_le_bytes());
+                call_next(tail_code, 2, ctx)
+            }
+        )*
+    };
+}
+
+define_local_get_const_f64_ops!(
+    (
+        op_local_get8_f64_const_add,
+        op_local_get8_f64_const_add_local_set8,
+        |lhs: f64, rhs: f64| lhs + rhs
+    ),
+    (
+        op_local_get8_f64_const_sub,
+        op_local_get8_f64_const_sub_local_set8,
+        |lhs: f64, rhs: f64| lhs - rhs
+    ),
+    (
+        op_local_get8_f64_const_mul,
+        op_local_get8_f64_const_mul_local_set8,
+        |lhs: f64, rhs: f64| lhs * rhs
+    ),
+    (
+        op_local_get8_f64_const_div,
+        op_local_get8_f64_const_div_local_set8,
+        |lhs: f64, rhs: f64| lhs / rhs
+    ),
+);
+
+macro_rules! define_local_get_const_f64_cmp_ops {
+    ($(($name:ident, $op:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm_bits) = unpack_local_u64_operand(tail_code);
+                let lhs = read_local_f64(ctx, addr);
+                let rhs = f64::from_bits(imm_bits);
+                let result = if ($op)(lhs, rhs) { 1 } else { 0 };
+                vm_try!(ctx.stack.push_i32(result));
+                call_next(tail_code, 2, ctx)
+            }
+        )*
+    };
+}
+
+define_local_get_const_f64_cmp_ops!(
+    (op_local_get8_f64_const_eq, |lhs: f64, rhs: f64| lhs == rhs),
+    (op_local_get8_f64_const_ne, |lhs: f64, rhs: f64| lhs != rhs),
+    (op_local_get8_f64_const_lt, |lhs: f64, rhs: f64| lhs < rhs),
+    (op_local_get8_f64_const_gt, |lhs: f64, rhs: f64| lhs > rhs),
+    (op_local_get8_f64_const_le, |lhs: f64, rhs: f64| lhs <= rhs),
+    (op_local_get8_f64_const_ge, |lhs: f64, rhs: f64| lhs >= rhs),
+);
+
+macro_rules! define_local_addr_load_ops {
+    ($(($name:ident, $n:expr, $load_handler:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm) = unpack_local_i32_operand(tail_code);
+                let memarg = (*tail_code.offset(1)).operand.memarg;
+                let offset = read_local_i32(ctx, addr).wrapping_add(imm) as u32;
+                let mem_addr = vm_try!(VMResult::from_option(ctx.memory_addr(), || {
+                    VMResult::MemoryIndexOutOfRange
+                }));
+                vm_try!(ctx.effect.push_non_atomic_memory_read_effect(
+                    ctx.task_id,
+                    mem_addr,
+                    memarg,
+                    offset,
+                    $n,
+                    $load_handler
+                ));
+                ctx.cont = tail_code.add(2);
+                VMResult::Success(())
+            }
+        )*
+    };
+}
+
+macro_rules! define_local_addr_store_ops {
+    ($(($name:ident, $make_store:expr)),* $(,)?) => {
+        $(
+            pub unsafe fn $name(
+                tail_code: *const Instr,
+                ctx: &mut ExecuteContext,
+            ) -> VMResult<()> {
+                let (addr, imm) = unpack_local_i32_operand(tail_code);
+                let memarg = (*tail_code.offset(1)).operand.memarg;
+                let operation = ($make_store)(ctx);
+                let offset = read_local_i32(ctx, addr).wrapping_add(imm) as u32;
+                let mem_addr = vm_try!(VMResult::from_option(ctx.memory_addr(), || {
+                    VMResult::MemoryIndexOutOfRange
+                }));
+                vm_try!(ctx.effect.push_non_atomic_memory_write_effect(
+                    ctx.task_id,
+                    mem_addr,
+                    memarg,
+                    offset,
+                    ctx.gc,
+                    operation
+                ));
+                call_next(tail_code, 2, ctx)
+            }
+        )*
+    };
+}
+
+define_local_addr_load_ops!(
+    (
+        op_local_get4_i32_const_add_i32_load,
+        4,
+        read_operation_handler_push_stack
+    ),
+    (
+        op_local_get4_i32_const_add_i64_load,
+        8,
+        read_operation_handler_push_stack
+    ),
+    (
+        op_local_get4_i32_const_add_f32_load,
+        4,
+        read_operation_handler_push_stack
+    ),
+    (
+        op_local_get4_i32_const_add_f64_load,
+        8,
+        read_operation_handler_push_stack
+    ),
+    (
+        op_local_get4_i32_const_add_i32_load8_s,
+        1,
+        |stack, data, code| {
+            let v = i8::from_le_bytes([data[0]]);
+            trap_func!(stack.push_i32(v as i32));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i32_load8_u,
+        1,
+        |stack, data, code| {
+            let v = u8::from_le_bytes([data[0]]);
+            trap_func!(stack.push_u32(v as u32));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i32_load16_s,
+        2,
+        |stack, data, code| {
+            let v = i16::from_le_bytes([data[0], data[1]]);
+            trap_func!(stack.push_i32(v as i32));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i32_load16_u,
+        2,
+        |stack, data, code| {
+            let v = u16::from_le_bytes([data[0], data[1]]);
+            trap_func!(stack.push_u32(v as u32));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_load8_s,
+        1,
+        |stack, data, code| {
+            let v = i8::from_le_bytes([data[0]]);
+            trap_func!(stack.push_i64(v as i64));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_load8_u,
+        1,
+        |stack, data, code| {
+            let v = u8::from_le_bytes([data[0]]);
+            trap_func!(stack.push_u64(v as u64));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_load16_s,
+        2,
+        |stack, data, code| {
+            let v = i16::from_le_bytes([data[0], data[1]]);
+            trap_func!(stack.push_i64(v as i64));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_load16_u,
+        2,
+        |stack, data, code| {
+            let v = u16::from_le_bytes([data[0], data[1]]);
+            trap_func!(stack.push_u64(v as u64));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_load32_s,
+        4,
+        |stack, data, code| {
+            let v = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            trap_func!(stack.push_i64(v as i64));
+            code
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_load32_u,
+        4,
+        |stack, data, code| {
+            let v = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            trap_func!(stack.push_u64(v as u64));
+            code
+        }
+    ),
+);
+
+define_local_addr_store_ops!(
+    (
+        op_local_get4_i32_const_add_i32_store,
+        |ctx: &mut ExecuteContext| WriteOperation::Write4(ctx.stack.pop_u8_array::<4>())
+    ),
+    (
+        op_local_get4_i32_const_add_i64_store,
+        |ctx: &mut ExecuteContext| WriteOperation::Write8(ctx.stack.pop_u8_array::<8>())
+    ),
+    (
+        op_local_get4_i32_const_add_f32_store,
+        |ctx: &mut ExecuteContext| WriteOperation::Write4(ctx.stack.pop_u8_array::<4>())
+    ),
+    (
+        op_local_get4_i32_const_add_f64_store,
+        |ctx: &mut ExecuteContext| WriteOperation::Write8(ctx.stack.pop_u8_array::<8>())
+    ),
+    (
+        op_local_get4_i32_const_add_i32_store8,
+        |ctx: &mut ExecuteContext| WriteOperation::Write1([ctx.stack.pop_u32().to_le_bytes()[0]])
+    ),
+    (
+        op_local_get4_i32_const_add_i32_store16,
+        |ctx: &mut ExecuteContext| {
+            let v = ctx.stack.pop_u32().to_le_bytes();
+            WriteOperation::Write2([v[0], v[1]])
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_store8,
+        |ctx: &mut ExecuteContext| {
+            let v = ctx.stack.pop_u64().to_le_bytes();
+            WriteOperation::Write1([v[0]])
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_store16,
+        |ctx: &mut ExecuteContext| {
+            let v = ctx.stack.pop_u64().to_le_bytes();
+            WriteOperation::Write2([v[0], v[1]])
+        }
+    ),
+    (
+        op_local_get4_i32_const_add_i64_store32,
+        |ctx: &mut ExecuteContext| {
+            let v = ctx.stack.pop_u64().to_le_bytes();
+            WriteOperation::Write4([v[0], v[1], v[2], v[3]])
+        }
     ),
 );
 

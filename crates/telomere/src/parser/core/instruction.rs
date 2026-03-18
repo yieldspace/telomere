@@ -186,6 +186,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 };
                 jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
                 instrs.enter_block();
+                instrs.enable_fusion();
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
@@ -271,6 +272,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
 
                 instrs.enter_block();
+                instrs.enable_fusion();
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
@@ -324,6 +326,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_if");
                 let (len, blocktype) = self.parse_block_type()?;
                 let is_unreachable_if_block = instrs.is_unreachable();
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_if });
                 instrs.push(Instr {
                     operand: Operand {
@@ -346,9 +349,15 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
 
-                let index = instrs.len() - 1;
+                instrs.flush_pending();
+                let index = if is_unreachable_if_block {
+                    None
+                } else {
+                    Some(instrs.len() - 1)
+                };
                 let mut else_addr = None;
                 instrs.enter_block();
+                instrs.enable_fusion();
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
@@ -357,9 +366,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     &mut else_addr,
                 )?;
                 if !is_unreachable_if_block {
-                    instrs[index].operand = Operand {
-                        jump_addr: else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
-                    };
+                    instrs[index.expect("reachable if must record operand index")].operand =
+                        Operand {
+                            jump_addr: else_addr.unwrap_or_else(|| (instrs.len() - 1) as u32),
+                        };
                 }
                 match blocktype {
                     BlockType::Void => {
@@ -421,6 +431,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_else: {inst_unreachable}");
                 instrs.leave_block();
                 instrs.enter_block();
+                instrs.enable_fusion();
                 if !instrs.is_unreachable() {
                     instrs.push(Instr { op: vm::op_else });
                     jump_resolver.push(JumpResolverDSL::Br(0, instrs.len() as u32));
@@ -558,13 +569,15 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }
                 }
                 if !instrs.is_unreachable() {
+                    instrs.set_current_instruction_fusible();
                     instrs.push(Instr { op: vm::op_br_if });
-                    jump_resolver.push(JumpResolverDSL::Br(idx, instrs.len() as u32));
                     instrs.push(Instr {
                         operand: Operand {
                             u32: 0xFFFE0000 | idx,
                         },
                     });
+                    instrs.flush_pending();
+                    jump_resolver.push(JumpResolverDSL::Br(idx, (instrs.len() - 1) as u32));
                 }
                 (1 + len, false)
             }
@@ -611,13 +624,15 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x0F => {
                 trace!("parse_op_return");
                 if !instrs.is_unreachable() {
+                    instrs.set_current_instruction_fusible();
                     instrs.push(Instr { op: vm::op_return });
-                    jump_resolver.push(JumpResolverDSL::Return(instrs.len() as u32));
                     instrs.push(Instr {
                         operand: Operand {
                             jump_addr: 0xFFFC0000,
                         },
                     });
+                    instrs.flush_pending();
+                    jump_resolver.push(JumpResolverDSL::Return((instrs.len() - 1) as u32));
                     instrs.set_unreachable();
                 }
                 checker.op(&self.functype.1 .0, &[])?;
@@ -732,7 +747,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let x = checker.pop()?;
 
                 if let MaybeUnreachable::Normal(x) = x {
-                    if matches!(x.stack_size(), ValueSize::Byte4) {
+                    if matches!(x.stack_size(), ValueSize::Byte4 | ValueSize::Byte8) {
                         instrs.set_current_instruction_fusible();
                     }
                     instrs.push(Instr { op: vm::op_drop });
@@ -823,9 +838,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_local_get4,
                         })
                     }
-                    ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_local_get8,
-                    }),
+                    ValueSize::Byte8 => {
+                        instrs.set_current_instruction_fusible();
+                        instrs.push(Instr {
+                            op: vm::op_local_get8,
+                        })
+                    }
                     ValueSize::Byte16 => instrs.push(Instr {
                         op: vm::op_local_get16,
                     }),
@@ -850,9 +868,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_local_set4,
                         })
                     }
-                    ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_local_set8,
-                    }),
+                    ValueSize::Byte8 => {
+                        instrs.set_current_instruction_fusible();
+                        instrs.push(Instr {
+                            op: vm::op_local_set8,
+                        })
+                    }
                     ValueSize::Byte16 => instrs.push(Instr {
                         op: vm::op_local_set16,
                     }),
@@ -877,9 +898,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             op: vm::op_local_tee4,
                         })
                     }
-                    ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_local_tee8,
-                    }),
+                    ValueSize::Byte8 => {
+                        instrs.set_current_instruction_fusible();
+                        instrs.push(Instr {
+                            op: vm::op_local_tee8,
+                        })
+                    }
                     ValueSize::Byte16 => instrs.push(Instr {
                         op: vm::op_local_tee16,
                     }),
@@ -988,12 +1012,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_load,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I32)?;
                 (1 + len, false)
@@ -1002,12 +1028,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_load,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
@@ -1016,12 +1044,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_load");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_f32_load,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::F32)?;
                 (1 + len, false)
@@ -1030,12 +1060,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_load");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_f64_load,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::F64)?;
 
@@ -1045,12 +1077,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load8_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_load8_s,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I32)?;
 
@@ -1060,12 +1094,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load8_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_load8_u,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I32)?;
 
@@ -1075,12 +1111,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load16_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_load16_s,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I32)?;
                 (1 + len, false)
@@ -1089,12 +1127,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_load16_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_load16_u,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I32)?;
                 (1 + len, false)
@@ -1103,12 +1143,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load8_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_load8_s,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
@@ -1117,12 +1159,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load8_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_load8_u,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
@@ -1131,12 +1175,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load16_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_load16_s,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
@@ -1145,12 +1191,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load16_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_load16_u,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I64)?;
                 (1 + len, false)
@@ -1159,12 +1207,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load32_s");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_load32_s,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I64)?;
 
@@ -1174,12 +1224,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_load32_u");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_load32_u,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.load_op(ValType::I64)?;
 
@@ -1189,12 +1241,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_store");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_store,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::I32)?;
                 (1 + len, false)
@@ -1203,12 +1257,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_store");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_store,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::I64)?;
 
@@ -1218,12 +1274,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f32_store");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_f32_store,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::F32)?;
                 (1 + len, false)
@@ -1232,12 +1290,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_f64_store");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_f64_store,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::F64)?;
 
@@ -1247,12 +1307,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_store8");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_store8,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::I32)?;
 
@@ -1262,12 +1324,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i32_store16");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_store16,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::I32)?;
                 (1 + len, false)
@@ -1276,12 +1340,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_store8");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_store8,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::I64)?;
                 (1 + len, false)
@@ -1290,12 +1356,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_store16");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_store16,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::I64)?;
 
@@ -1305,12 +1373,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_store32");
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_store32,
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
                 });
+                instrs.flush_pending();
 
                 checker.store_op(ValType::I64)?;
                 (1 + len, false)
@@ -1360,6 +1430,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x42 => {
                 trace!("parse_op_i64_const");
                 let (len, operand) = self.parse_i64()?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_const,
                 });
@@ -1373,6 +1444,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x43 => {
                 trace!("parse_op_f32_const");
                 let (len, operand) = self.parse_f32()?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_f32_const,
                 });
@@ -1387,6 +1459,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x44 => {
                 trace!("parse_op_f64_const");
                 let (len, operand) = self.parse_f64()?;
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_f64_const,
                 });
@@ -1424,6 +1497,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x48 => {
                 trace!("parse_op_i32_lt_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_lt_s,
                 });
@@ -1433,6 +1507,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x49 => {
                 trace!("parse_op_i32_lt_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_lt_u,
                 });
@@ -1442,6 +1517,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x4A => {
                 trace!("parse_op_i32_gt_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_gt_s,
                 });
@@ -1451,6 +1527,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x4B => {
                 trace!("parse_op_i32_gt_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_gt_u,
                 });
@@ -1460,6 +1537,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x4C => {
                 trace!("parse_op_i32_le_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_le_s,
                 });
@@ -1469,6 +1547,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x4D => {
                 trace!("parse_op_i32_le_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_le_u,
                 });
@@ -1478,6 +1557,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x4E => {
                 trace!("parse_op_i32_ge_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_ge_s,
                 });
@@ -1487,6 +1567,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x4F => {
                 trace!("parse_op_i32_ge_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i32_ge_u,
                 });
@@ -1498,12 +1579,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 trace!("parse_op_i64_eqz");
                 checker.op(&[ValType::I64], &[ValType::I32])?;
 
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_eqz });
 
                 (1, false)
             }
             0x51 => {
                 trace!("parse_op_i64_eq");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_eq });
 
                 checker.cond_op(ValType::I64)?;
@@ -1511,6 +1594,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x52 => {
                 trace!("parse_op_i64_ne");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_ne });
 
                 checker.cond_op(ValType::I64)?;
@@ -1518,6 +1602,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x53 => {
                 trace!("parse_op_i64_lt_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_lt_s,
                 });
@@ -1527,6 +1612,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x54 => {
                 trace!("parse_op_i64_lt_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_lt_u,
                 });
@@ -1536,6 +1622,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x55 => {
                 trace!("parse_op_i64_gt_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_gt_s,
                 });
@@ -1545,6 +1632,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x56 => {
                 trace!("parse_op_i64_gt_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_gt_u,
                 });
@@ -1554,6 +1642,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x57 => {
                 trace!("parse_op_i64_le_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_le_s,
                 });
@@ -1563,6 +1652,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x58 => {
                 trace!("parse_op_i64_le_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_le_u,
                 });
@@ -1572,6 +1662,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x59 => {
                 trace!("parse_op_i64_ge_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_ge_s,
                 });
@@ -1581,6 +1672,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x5A => {
                 trace!("parse_op_i64_ge_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_ge_u,
                 });
@@ -1590,6 +1682,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x5B => {
                 trace!("parse_op_f32_eq");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_eq });
 
                 checker.cond_op(ValType::F32)?;
@@ -1597,6 +1690,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x5C => {
                 trace!("parse_op_f32_ne");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_ne });
 
                 checker.cond_op(ValType::F32)?;
@@ -1604,6 +1698,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x5D => {
                 trace!("parse_op_f32_lt");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_lt });
 
                 checker.cond_op(ValType::F32)?;
@@ -1611,6 +1706,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x5E => {
                 trace!("parse_op_f32_gt");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_gt });
 
                 checker.cond_op(ValType::F32)?;
@@ -1618,6 +1714,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x5F => {
                 trace!("parse_op_f32_le");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_le });
 
                 checker.cond_op(ValType::F32)?;
@@ -1625,6 +1722,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x60 => {
                 trace!("parse_op_f32_ge");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_ge });
 
                 checker.cond_op(ValType::F32)?;
@@ -1632,6 +1730,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x61 => {
                 trace!("parse_op_f64_eq");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_eq });
 
                 checker.cond_op(ValType::F64)?;
@@ -1639,6 +1738,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x62 => {
                 trace!("parse_op_f64_ne");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_ne });
 
                 checker.cond_op(ValType::F64)?;
@@ -1646,6 +1746,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x63 => {
                 trace!("parse_op_f64_lt");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_lt });
 
                 checker.cond_op(ValType::F64)?;
@@ -1653,6 +1754,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x64 => {
                 trace!("parse_op_f64_gt");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_gt });
 
                 checker.cond_op(ValType::F64)?;
@@ -1660,6 +1762,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x65 => {
                 trace!("parse_op_f64_le");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_le });
 
                 checker.cond_op(ValType::F64)?;
@@ -1667,6 +1770,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x66 => {
                 trace!("parse_op_f64_ge");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_ge });
 
                 checker.cond_op(ValType::F64)?;
@@ -1855,6 +1959,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x7C => {
                 trace!("parse_op_i64_add");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_add });
 
                 checker.unary_op(ValType::I64)?;
@@ -1862,6 +1967,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x7D => {
                 trace!("parse_op_i64_sub");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_sub });
 
                 checker.unary_op(ValType::I64)?;
@@ -1870,6 +1976,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x7E => {
                 trace!("parse_op_i64_mul");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_mul });
 
                 checker.unary_op(ValType::I64)?;
@@ -1913,6 +2020,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x83 => {
                 trace!("parse_op_i64_and");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_and });
 
                 checker.unary_op(ValType::I64)?;
@@ -1920,6 +2028,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x84 => {
                 trace!("parse_op_i64_or");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_or });
 
                 checker.unary_op(ValType::I64)?;
@@ -1927,6 +2036,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x85 => {
                 trace!("parse_op_i64_xor");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_xor });
 
                 checker.unary_op(ValType::I64)?;
@@ -1934,6 +2044,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x86 => {
                 trace!("parse_op64_shl");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_i64_shl });
 
                 checker.unary_op(ValType::I64)?;
@@ -1941,6 +2052,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x87 => {
                 trace!("parse_op_i64_shr_s");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_shr_s,
                 });
@@ -1950,6 +2062,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x88 => {
                 trace!("parse_op_i64_shr_u");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr {
                     op: vm::op_i64_shr_u,
                 });
@@ -2037,6 +2150,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x92 => {
                 trace!("parse_op_f32_add");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_add });
 
                 checker.unary_op(ValType::F32)?;
@@ -2044,6 +2158,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x93 => {
                 trace!("parse_op_f32_sub");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_sub });
 
                 checker.unary_op(ValType::F32)?;
@@ -2051,6 +2166,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x94 => {
                 trace!("parse_op_f32_mul");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_mul });
 
                 checker.unary_op(ValType::F32)?;
@@ -2058,6 +2174,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x95 => {
                 trace!("parse_op_f32_div");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f32_div });
 
                 checker.unary_op(ValType::F32)?;
@@ -2148,6 +2265,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0xA0 => {
                 trace!("parse_op_f64_add");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_add });
 
                 checker.unary_op(ValType::F64)?;
@@ -2155,6 +2273,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0xA1 => {
                 trace!("parse_op_f64_sub");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_sub });
 
                 checker.unary_op(ValType::F64)?;
@@ -2162,6 +2281,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0xA2 => {
                 trace!("parse_op_f64_mul");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_mul });
 
                 checker.unary_op(ValType::F64)?;
@@ -2169,6 +2289,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0xA3 => {
                 trace!("parse_op_f64_div");
+                instrs.set_current_instruction_fusible();
                 instrs.push(Instr { op: vm::op_f64_div });
                 checker.unary_op(ValType::F64)?;
                 (1, false)
