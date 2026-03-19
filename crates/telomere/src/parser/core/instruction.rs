@@ -21,11 +21,25 @@ use crate::runtime::vm;
 use crate::{
     common::{
         BlockType, DataCountVerifier, Elem, FuncIdx, FuncType, Instr, LocalReassignTable, MemType,
-        Operand, TableType, TypeIdx, TypeSection, ValType, ValueSize,
+        Op, Operand, TableType, TypeIdx, TypeSection, ValType, ValueSize,
     },
     WasmParserError,
 };
 use tracing::trace;
+use vstd::prelude::*;
+
+verus! {
+
+#[inline(always)]
+fn select_default_memory_family(shared: bool) -> (result: bool)
+    ensures
+        result == shared,
+{
+    shared
+}
+
+} // verus!
+
 macro_rules! simd_instruction {
     ($code: expr,$ctx: expr, $($name: ident),*) => {
         match ($code) {
@@ -118,6 +132,11 @@ fn assert_data_idx(idx: u32, dcv: &mut DataCountVerifier) -> Result<()> {
     Ok(())
 }
 
+#[inline(always)]
+fn default_memory_is_shared(mems: &[MemType]) -> bool {
+    mems.first().map(|mem| mem.shared).unwrap_or(false)
+}
+
 #[derive(Debug)]
 pub(crate) enum BlockKind {
     Block,
@@ -142,6 +161,14 @@ impl<R: BinaryReader> WasmBaseParser<R> for InstructionParser<'_, R> {
     }
 }
 impl<'a, R: BinaryReader> InstructionParser<'a, R> {
+    fn default_memory_op(&self, local: Op, shared: Op) -> Op {
+        if select_default_memory_family(default_memory_is_shared(self.mems)) {
+            shared
+        } else {
+            local
+        }
+    }
+
     fn parse_memarg(&mut self, natural_align: u32) -> Result<(usize, MemArg)> {
         values::parse_memarg(self.reader, natural_align)
     }
@@ -981,7 +1008,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
                 instrs.push(Instr {
-                    op: vm::op_i32_load,
+                    op: self.default_memory_op(vm::op_i32_load_local, vm::op_i32_load_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -995,7 +1022,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_load,
+                    op: self.default_memory_op(vm::op_i64_load_local, vm::op_i64_load_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1009,7 +1036,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
                 instrs.push(Instr {
-                    op: vm::op_f32_load,
+                    op: self.default_memory_op(vm::op_f32_load_local, vm::op_f32_load_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1023,7 +1050,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
                 instrs.push(Instr {
-                    op: vm::op_f64_load,
+                    op: self.default_memory_op(vm::op_f64_load_local, vm::op_f64_load_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1038,7 +1065,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
                 instrs.push(Instr {
-                    op: vm::op_i32_load8_s,
+                    op: self.default_memory_op(vm::op_i32_load8_s_local, vm::op_i32_load8_s_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1053,7 +1080,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
                 instrs.push(Instr {
-                    op: vm::op_i32_load8_u,
+                    op: self.default_memory_op(vm::op_i32_load8_u_local, vm::op_i32_load8_u_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1068,7 +1095,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
                 instrs.push(Instr {
-                    op: vm::op_i32_load16_s,
+                    op: self
+                        .default_memory_op(vm::op_i32_load16_s_local, vm::op_i32_load16_s_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1082,7 +1110,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
                 instrs.push(Instr {
-                    op: vm::op_i32_load16_u,
+                    op: self
+                        .default_memory_op(vm::op_i32_load16_u_local, vm::op_i32_load16_u_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1096,7 +1125,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_load8_s,
+                    op: self.default_memory_op(vm::op_i64_load8_s_local, vm::op_i64_load8_s_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1110,7 +1139,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_load8_u,
+                    op: self.default_memory_op(vm::op_i64_load8_u_local, vm::op_i64_load8_u_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1124,7 +1153,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_load16_s,
+                    op: self
+                        .default_memory_op(vm::op_i64_load16_s_local, vm::op_i64_load16_s_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1138,7 +1168,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_load16_u,
+                    op: self
+                        .default_memory_op(vm::op_i64_load16_u_local, vm::op_i64_load16_u_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1152,7 +1183,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_load32_s,
+                    op: self
+                        .default_memory_op(vm::op_i64_load32_s_local, vm::op_i64_load32_s_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1167,7 +1199,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_load32_u,
+                    op: self
+                        .default_memory_op(vm::op_i64_load32_u_local, vm::op_i64_load32_u_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1182,7 +1215,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
                 instrs.push(Instr {
-                    op: vm::op_i32_store,
+                    op: self.default_memory_op(vm::op_i32_store_local, vm::op_i32_store_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1196,7 +1229,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_store,
+                    op: self.default_memory_op(vm::op_i64_store_local, vm::op_i64_store_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1211,7 +1244,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
                 instrs.push(Instr {
-                    op: vm::op_f32_store,
+                    op: self.default_memory_op(vm::op_f32_store_local, vm::op_f32_store_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1225,7 +1258,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(8)?;
                 instrs.push(Instr {
-                    op: vm::op_f64_store,
+                    op: self.default_memory_op(vm::op_f64_store_local, vm::op_f64_store_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1240,7 +1273,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
                 instrs.push(Instr {
-                    op: vm::op_i32_store8,
+                    op: self.default_memory_op(vm::op_i32_store8_local, vm::op_i32_store8_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1255,7 +1288,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
                 instrs.push(Instr {
-                    op: vm::op_i32_store16,
+                    op: self.default_memory_op(vm::op_i32_store16_local, vm::op_i32_store16_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1269,7 +1302,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(1)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_store8,
+                    op: self.default_memory_op(vm::op_i64_store8_local, vm::op_i64_store8_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1283,7 +1316,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(2)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_store16,
+                    op: self.default_memory_op(vm::op_i64_store16_local, vm::op_i64_store16_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1298,7 +1331,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 assert_memory(self.mems)?;
                 let (len, memarg) = self.parse_memarg(4)?;
                 instrs.push(Instr {
-                    op: vm::op_i64_store32,
+                    op: self.default_memory_op(vm::op_i64_store32_local, vm::op_i64_store32_shared),
                 });
                 instrs.push(Instr {
                     operand: Operand { memarg },
@@ -1315,7 +1348,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     Err(WasmParserError::InvalidInstruction([0x3F, next, 0, 0]))?
                 }
                 instrs.push(Instr {
-                    op: vm::op_mem_size,
+                    op: self.default_memory_op(vm::op_mem_size_local, vm::op_mem_size_shared),
                 });
 
                 checker.op(&[], &[ValType::I32])?;
@@ -1329,7 +1362,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 assert_memory(self.mems)?;
                 instrs.push(Instr {
-                    op: vm::op_mem_grow,
+                    op: self.default_memory_op(vm::op_mem_grow_local, vm::op_mem_grow_shared),
                 });
 
                 checker.op(&[ValType::I32], &[ValType::I32])?;
@@ -2475,7 +2508,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             Err(WasmParserError::InvalidDataSectionCount)?
                         }
                         instrs.push(Instr {
-                            op: vm::op_mem_init,
+                            op: self
+                                .default_memory_op(vm::op_mem_init_local, vm::op_mem_init_shared),
                         });
                         instrs.push(Instr {
                             operand: Operand { u32: idx },
@@ -2512,7 +2546,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         trace!("parse_op_mem_copy");
                         assert_memory(self.mems)?;
                         instrs.push(Instr {
-                            op: vm::op_mem_copy,
+                            op: self
+                                .default_memory_op(vm::op_mem_copy_local, vm::op_mem_copy_shared),
                         });
 
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
@@ -2526,7 +2561,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         assert_memory(self.mems)?;
                         trace!("parse_op_mem_fill");
                         instrs.push(Instr {
-                            op: vm::op_mem_fill,
+                            op: self
+                                .default_memory_op(vm::op_mem_fill_local, vm::op_mem_fill_shared),
                         });
 
                         checker.op(&[ValType::I32, ValType::I32, ValType::I32], &[])?;
@@ -2774,6 +2810,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     let (len, idx) = self.parse_u32()?;
                     use super::simd_instruction::*;
                     let mut ctx = SimdParserContext {
+                        default_memory_shared: default_memory_is_shared(self.mems),
                         instrs,
                         reader: self.reader,
                         checker,
@@ -3028,10 +3065,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0xFE => {
                 let (len, next) = self.parse_u32()?;
                 macro_rules! atomic_load {
-                    ($align:expr, $op:path, $ty:expr) => {{
+                    ($align:expr, $local:path, $shared:path, $ty:expr) => {{
                         assert_memory(self.mems)?;
                         let (len2, memarg) = self.parse_atomic_memarg($align)?;
-                        instrs.push(Instr { op: $op });
+                        instrs.push(Instr {
+                            op: self.default_memory_op($local, $shared),
+                        });
                         instrs.push(Instr {
                             operand: Operand { memarg },
                         });
@@ -3040,10 +3079,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }};
                 }
                 macro_rules! atomic_store {
-                    ($align:expr, $op:path, $ty:expr) => {{
+                    ($align:expr, $local:path, $shared:path, $ty:expr) => {{
                         assert_memory(self.mems)?;
                         let (len2, memarg) = self.parse_atomic_memarg($align)?;
-                        instrs.push(Instr { op: $op });
+                        instrs.push(Instr {
+                            op: self.default_memory_op($local, $shared),
+                        });
                         instrs.push(Instr {
                             operand: Operand { memarg },
                         });
@@ -3052,10 +3093,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }};
                 }
                 macro_rules! atomic_rmw {
-                    ($align:expr, $op:path, $value_ty:expr, $result_ty:expr) => {{
+                    ($align:expr, $local:path, $shared:path, $value_ty:expr, $result_ty:expr) => {{
                         assert_memory(self.mems)?;
                         let (len2, memarg) = self.parse_atomic_memarg($align)?;
-                        instrs.push(Instr { op: $op });
+                        instrs.push(Instr {
+                            op: self.default_memory_op($local, $shared),
+                        });
                         instrs.push(Instr {
                             operand: Operand { memarg },
                         });
@@ -3064,10 +3107,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     }};
                 }
                 macro_rules! atomic_cmpxchg {
-                    ($align:expr, $op:path, $value_ty:expr, $result_ty:expr) => {{
+                    ($align:expr, $local:path, $shared:path, $value_ty:expr, $result_ty:expr) => {{
                         assert_memory(self.mems)?;
                         let (len2, memarg) = self.parse_atomic_memarg($align)?;
-                        instrs.push(Instr { op: $op });
+                        instrs.push(Instr {
+                            op: self.default_memory_op($local, $shared),
+                        });
                         instrs.push(Instr {
                             operand: Operand { memarg },
                         });
@@ -3080,7 +3125,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         assert_memory(self.mems)?;
                         let (len2, memarg) = self.parse_atomic_memarg(2)?;
                         instrs.push(Instr {
-                            op: vm::op_memory_atomic_notify,
+                            op: self.default_memory_op(
+                                vm::op_memory_atomic_notify_unshared,
+                                vm::op_memory_atomic_notify_shared,
+                            ),
                         });
                         instrs.push(Instr {
                             operand: Operand { memarg },
@@ -3092,7 +3140,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         assert_memory(self.mems)?;
                         let (len2, memarg) = self.parse_atomic_memarg(2)?;
                         instrs.push(Instr {
-                            op: vm::op_memory_atomic_wait32,
+                            op: self.default_memory_op(
+                                vm::op_memory_atomic_wait32_unshared,
+                                vm::op_memory_atomic_wait32_shared,
+                            ),
                         });
                         instrs.push(Instr {
                             operand: Operand { memarg },
@@ -3104,7 +3155,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         assert_memory(self.mems)?;
                         let (len2, memarg) = self.parse_atomic_memarg(3)?;
                         instrs.push(Instr {
-                            op: vm::op_memory_atomic_wait64,
+                            op: self.default_memory_op(
+                                vm::op_memory_atomic_wait64_unshared,
+                                vm::op_memory_atomic_wait64_shared,
+                            ),
                         });
                         instrs.push(Instr {
                             operand: Operand { memarg },
@@ -3120,7 +3174,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             ]))?;
                         }
                         instrs.push(Instr {
-                            op: vm::op_atomic_fence,
+                            op: self.default_memory_op(
+                                vm::op_atomic_fence_local,
+                                vm::op_atomic_fence_shared,
+                            ),
                         });
                         instrs.push(Instr {
                             operand: Operand { u32: 0 },
@@ -3128,166 +3185,480 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         checker.op(&[], &[])?;
                         (2 + len, false)
                     }
-                    0x10 => atomic_load!(2, vm::op_i32_atomic_load, ValType::I32),
-                    0x11 => atomic_load!(3, vm::op_i64_atomic_load, ValType::I64),
-                    0x12 => atomic_load!(0, vm::op_i32_atomic_load8_u, ValType::I32),
-                    0x13 => atomic_load!(1, vm::op_i32_atomic_load16_u, ValType::I32),
-                    0x14 => atomic_load!(0, vm::op_i64_atomic_load8_u, ValType::I64),
-                    0x15 => atomic_load!(1, vm::op_i64_atomic_load16_u, ValType::I64),
-                    0x16 => atomic_load!(2, vm::op_i64_atomic_load32_u, ValType::I64),
-                    0x17 => atomic_store!(2, vm::op_i32_atomic_store, ValType::I32),
-                    0x18 => atomic_store!(3, vm::op_i64_atomic_store, ValType::I64),
-                    0x19 => atomic_store!(0, vm::op_i32_atomic_store8, ValType::I32),
-                    0x1A => atomic_store!(1, vm::op_i32_atomic_store16, ValType::I32),
-                    0x1B => atomic_store!(0, vm::op_i64_atomic_store8, ValType::I64),
-                    0x1C => atomic_store!(1, vm::op_i64_atomic_store16, ValType::I64),
-                    0x1D => atomic_store!(2, vm::op_i64_atomic_store32, ValType::I64),
-                    0x1E => atomic_rmw!(2, vm::op_i32_atomic_rmw_add, ValType::I32, ValType::I32),
-                    0x1F => atomic_rmw!(3, vm::op_i64_atomic_rmw_add, ValType::I64, ValType::I64),
+                    0x10 => atomic_load!(
+                        2,
+                        vm::op_i32_atomic_load_local,
+                        vm::op_i32_atomic_load_shared,
+                        ValType::I32
+                    ),
+                    0x11 => atomic_load!(
+                        3,
+                        vm::op_i64_atomic_load_local,
+                        vm::op_i64_atomic_load_shared,
+                        ValType::I64
+                    ),
+                    0x12 => atomic_load!(
+                        0,
+                        vm::op_i32_atomic_load8_u_local,
+                        vm::op_i32_atomic_load8_u_shared,
+                        ValType::I32
+                    ),
+                    0x13 => atomic_load!(
+                        1,
+                        vm::op_i32_atomic_load16_u_local,
+                        vm::op_i32_atomic_load16_u_shared,
+                        ValType::I32
+                    ),
+                    0x14 => atomic_load!(
+                        0,
+                        vm::op_i64_atomic_load8_u_local,
+                        vm::op_i64_atomic_load8_u_shared,
+                        ValType::I64
+                    ),
+                    0x15 => atomic_load!(
+                        1,
+                        vm::op_i64_atomic_load16_u_local,
+                        vm::op_i64_atomic_load16_u_shared,
+                        ValType::I64
+                    ),
+                    0x16 => atomic_load!(
+                        2,
+                        vm::op_i64_atomic_load32_u_local,
+                        vm::op_i64_atomic_load32_u_shared,
+                        ValType::I64
+                    ),
+                    0x17 => atomic_store!(
+                        2,
+                        vm::op_i32_atomic_store_local,
+                        vm::op_i32_atomic_store_shared,
+                        ValType::I32
+                    ),
+                    0x18 => atomic_store!(
+                        3,
+                        vm::op_i64_atomic_store_local,
+                        vm::op_i64_atomic_store_shared,
+                        ValType::I64
+                    ),
+                    0x19 => atomic_store!(
+                        0,
+                        vm::op_i32_atomic_store8_local,
+                        vm::op_i32_atomic_store8_shared,
+                        ValType::I32
+                    ),
+                    0x1A => atomic_store!(
+                        1,
+                        vm::op_i32_atomic_store16_local,
+                        vm::op_i32_atomic_store16_shared,
+                        ValType::I32
+                    ),
+                    0x1B => atomic_store!(
+                        0,
+                        vm::op_i64_atomic_store8_local,
+                        vm::op_i64_atomic_store8_shared,
+                        ValType::I64
+                    ),
+                    0x1C => atomic_store!(
+                        1,
+                        vm::op_i64_atomic_store16_local,
+                        vm::op_i64_atomic_store16_shared,
+                        ValType::I64
+                    ),
+                    0x1D => atomic_store!(
+                        2,
+                        vm::op_i64_atomic_store32_local,
+                        vm::op_i64_atomic_store32_shared,
+                        ValType::I64
+                    ),
+                    0x1E => atomic_rmw!(
+                        2,
+                        vm::op_i32_atomic_rmw_add,
+                        vm::op_i32_atomic_rmw_add_shared,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x1F => atomic_rmw!(
+                        3,
+                        vm::op_i64_atomic_rmw_add,
+                        vm::op_i64_atomic_rmw_add_shared,
+                        ValType::I64,
+                        ValType::I64
+                    ),
                     0x20 => {
-                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_add_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i32_atomic_rmw8_add_u,
+                            vm::op_i32_atomic_rmw8_add_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x21 => {
-                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_add_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i32_atomic_rmw16_add_u,
+                            vm::op_i32_atomic_rmw16_add_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x22 => {
-                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_add_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i64_atomic_rmw8_add_u,
+                            vm::op_i64_atomic_rmw8_add_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x23 => {
-                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_add_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i64_atomic_rmw16_add_u,
+                            vm::op_i64_atomic_rmw16_add_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x24 => {
-                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_add_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            2,
+                            vm::op_i64_atomic_rmw32_add_u,
+                            vm::op_i64_atomic_rmw32_add_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
-                    0x25 => atomic_rmw!(2, vm::op_i32_atomic_rmw_sub, ValType::I32, ValType::I32),
-                    0x26 => atomic_rmw!(3, vm::op_i64_atomic_rmw_sub, ValType::I64, ValType::I64),
+                    0x25 => atomic_rmw!(
+                        2,
+                        vm::op_i32_atomic_rmw_sub,
+                        vm::op_i32_atomic_rmw_sub_shared,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x26 => atomic_rmw!(
+                        3,
+                        vm::op_i64_atomic_rmw_sub,
+                        vm::op_i64_atomic_rmw_sub_shared,
+                        ValType::I64,
+                        ValType::I64
+                    ),
                     0x27 => {
-                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_sub_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i32_atomic_rmw8_sub_u,
+                            vm::op_i32_atomic_rmw8_sub_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x28 => {
-                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_sub_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i32_atomic_rmw16_sub_u,
+                            vm::op_i32_atomic_rmw16_sub_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x29 => {
-                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_sub_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i64_atomic_rmw8_sub_u,
+                            vm::op_i64_atomic_rmw8_sub_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x2A => {
-                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_sub_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i64_atomic_rmw16_sub_u,
+                            vm::op_i64_atomic_rmw16_sub_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x2B => {
-                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_sub_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            2,
+                            vm::op_i64_atomic_rmw32_sub_u,
+                            vm::op_i64_atomic_rmw32_sub_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
-                    0x2C => atomic_rmw!(2, vm::op_i32_atomic_rmw_and, ValType::I32, ValType::I32),
-                    0x2D => atomic_rmw!(3, vm::op_i64_atomic_rmw_and, ValType::I64, ValType::I64),
+                    0x2C => atomic_rmw!(
+                        2,
+                        vm::op_i32_atomic_rmw_and,
+                        vm::op_i32_atomic_rmw_and_shared,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x2D => atomic_rmw!(
+                        3,
+                        vm::op_i64_atomic_rmw_and,
+                        vm::op_i64_atomic_rmw_and_shared,
+                        ValType::I64,
+                        ValType::I64
+                    ),
                     0x2E => {
-                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_and_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i32_atomic_rmw8_and_u,
+                            vm::op_i32_atomic_rmw8_and_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x2F => {
-                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_and_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i32_atomic_rmw16_and_u,
+                            vm::op_i32_atomic_rmw16_and_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x30 => {
-                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_and_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i64_atomic_rmw8_and_u,
+                            vm::op_i64_atomic_rmw8_and_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x31 => {
-                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_and_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i64_atomic_rmw16_and_u,
+                            vm::op_i64_atomic_rmw16_and_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x32 => {
-                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_and_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            2,
+                            vm::op_i64_atomic_rmw32_and_u,
+                            vm::op_i64_atomic_rmw32_and_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
-                    0x33 => atomic_rmw!(2, vm::op_i32_atomic_rmw_or, ValType::I32, ValType::I32),
-                    0x34 => atomic_rmw!(3, vm::op_i64_atomic_rmw_or, ValType::I64, ValType::I64),
-                    0x35 => atomic_rmw!(0, vm::op_i32_atomic_rmw8_or_u, ValType::I32, ValType::I32),
+                    0x33 => atomic_rmw!(
+                        2,
+                        vm::op_i32_atomic_rmw_or,
+                        vm::op_i32_atomic_rmw_or_shared,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x34 => atomic_rmw!(
+                        3,
+                        vm::op_i64_atomic_rmw_or,
+                        vm::op_i64_atomic_rmw_or_shared,
+                        ValType::I64,
+                        ValType::I64
+                    ),
+                    0x35 => atomic_rmw!(
+                        0,
+                        vm::op_i32_atomic_rmw8_or_u,
+                        vm::op_i32_atomic_rmw8_or_u_shared,
+                        ValType::I32,
+                        ValType::I32
+                    ),
                     0x36 => {
-                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_or_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i32_atomic_rmw16_or_u,
+                            vm::op_i32_atomic_rmw16_or_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
-                    0x37 => atomic_rmw!(0, vm::op_i64_atomic_rmw8_or_u, ValType::I64, ValType::I64),
+                    0x37 => atomic_rmw!(
+                        0,
+                        vm::op_i64_atomic_rmw8_or_u,
+                        vm::op_i64_atomic_rmw8_or_u_shared,
+                        ValType::I64,
+                        ValType::I64
+                    ),
                     0x38 => {
-                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_or_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i64_atomic_rmw16_or_u,
+                            vm::op_i64_atomic_rmw16_or_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x39 => {
-                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_or_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            2,
+                            vm::op_i64_atomic_rmw32_or_u,
+                            vm::op_i64_atomic_rmw32_or_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
-                    0x3A => atomic_rmw!(2, vm::op_i32_atomic_rmw_xor, ValType::I32, ValType::I32),
-                    0x3B => atomic_rmw!(3, vm::op_i64_atomic_rmw_xor, ValType::I64, ValType::I64),
+                    0x3A => atomic_rmw!(
+                        2,
+                        vm::op_i32_atomic_rmw_xor,
+                        vm::op_i32_atomic_rmw_xor_shared,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x3B => atomic_rmw!(
+                        3,
+                        vm::op_i64_atomic_rmw_xor,
+                        vm::op_i64_atomic_rmw_xor_shared,
+                        ValType::I64,
+                        ValType::I64
+                    ),
                     0x3C => {
-                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_xor_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i32_atomic_rmw8_xor_u,
+                            vm::op_i32_atomic_rmw8_xor_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x3D => {
-                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_xor_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i32_atomic_rmw16_xor_u,
+                            vm::op_i32_atomic_rmw16_xor_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x3E => {
-                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_xor_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i64_atomic_rmw8_xor_u,
+                            vm::op_i64_atomic_rmw8_xor_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x3F => {
-                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_xor_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            1,
+                            vm::op_i64_atomic_rmw16_xor_u,
+                            vm::op_i64_atomic_rmw16_xor_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x40 => {
-                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_xor_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            2,
+                            vm::op_i64_atomic_rmw32_xor_u,
+                            vm::op_i64_atomic_rmw32_xor_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
-                    0x41 => atomic_rmw!(2, vm::op_i32_atomic_rmw_xchg, ValType::I32, ValType::I32),
-                    0x42 => atomic_rmw!(3, vm::op_i64_atomic_rmw_xchg, ValType::I64, ValType::I64),
+                    0x41 => atomic_rmw!(
+                        2,
+                        vm::op_i32_atomic_rmw_xchg,
+                        vm::op_i32_atomic_rmw_xchg_shared,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x42 => atomic_rmw!(
+                        3,
+                        vm::op_i64_atomic_rmw_xchg,
+                        vm::op_i64_atomic_rmw_xchg_shared,
+                        ValType::I64,
+                        ValType::I64
+                    ),
                     0x43 => {
-                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_xchg_u, ValType::I32, ValType::I32)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i32_atomic_rmw8_xchg_u,
+                            vm::op_i32_atomic_rmw8_xchg_u_shared,
+                            ValType::I32,
+                            ValType::I32
+                        )
                     }
                     0x44 => atomic_rmw!(
                         1,
                         vm::op_i32_atomic_rmw16_xchg_u,
+                        vm::op_i32_atomic_rmw16_xchg_u_shared,
                         ValType::I32,
                         ValType::I32
                     ),
                     0x45 => {
-                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_xchg_u, ValType::I64, ValType::I64)
+                        atomic_rmw!(
+                            0,
+                            vm::op_i64_atomic_rmw8_xchg_u,
+                            vm::op_i64_atomic_rmw8_xchg_u_shared,
+                            ValType::I64,
+                            ValType::I64
+                        )
                     }
                     0x46 => atomic_rmw!(
                         1,
                         vm::op_i64_atomic_rmw16_xchg_u,
+                        vm::op_i64_atomic_rmw16_xchg_u_shared,
                         ValType::I64,
                         ValType::I64
                     ),
                     0x47 => atomic_rmw!(
                         2,
                         vm::op_i64_atomic_rmw32_xchg_u,
+                        vm::op_i64_atomic_rmw32_xchg_u_shared,
                         ValType::I64,
                         ValType::I64
                     ),
                     0x48 => atomic_cmpxchg!(
                         2,
                         vm::op_i32_atomic_rmw_cmpxchg,
+                        vm::op_i32_atomic_rmw_cmpxchg_shared,
                         ValType::I32,
                         ValType::I32
                     ),
                     0x49 => atomic_cmpxchg!(
                         3,
                         vm::op_i64_atomic_rmw_cmpxchg,
+                        vm::op_i64_atomic_rmw_cmpxchg_shared,
                         ValType::I64,
                         ValType::I64
                     ),
                     0x4A => atomic_cmpxchg!(
                         0,
                         vm::op_i32_atomic_rmw8_cmpxchg_u,
+                        vm::op_i32_atomic_rmw8_cmpxchg_u_shared,
                         ValType::I32,
                         ValType::I32
                     ),
                     0x4B => atomic_cmpxchg!(
                         1,
                         vm::op_i32_atomic_rmw16_cmpxchg_u,
+                        vm::op_i32_atomic_rmw16_cmpxchg_u_shared,
                         ValType::I32,
                         ValType::I32
                     ),
                     0x4C => atomic_cmpxchg!(
                         0,
                         vm::op_i64_atomic_rmw8_cmpxchg_u,
+                        vm::op_i64_atomic_rmw8_cmpxchg_u_shared,
                         ValType::I64,
                         ValType::I64
                     ),
                     0x4D => atomic_cmpxchg!(
                         1,
                         vm::op_i64_atomic_rmw16_cmpxchg_u,
+                        vm::op_i64_atomic_rmw16_cmpxchg_u_shared,
                         ValType::I64,
                         ValType::I64
                     ),
                     0x4E => atomic_cmpxchg!(
                         2,
                         vm::op_i64_atomic_rmw32_cmpxchg_u,
+                        vm::op_i64_atomic_rmw32_cmpxchg_u_shared,
                         ValType::I64,
                         ValType::I64
                     ),
@@ -3349,5 +3720,183 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             globals,
             tables,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{common::FunctionBody, IoReadBinaryReader, WasmParser};
+
+    fn op_at(wat: &str, index: usize) -> crate::common::Op {
+        let bytes = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        let module = parser.parse_module().expect("module must parse");
+        let FunctionBody::Wasm(func) = &module.codes.0[0] else {
+            panic!("expected wasm function body");
+        };
+        unsafe { func.expr[index].op }
+    }
+
+    #[test]
+    fn parser_specializes_default_memory_load_handler() {
+        let local = op_at(
+            r#"(module (memory 1) (func (export "f") (param i32) (result i32) local.get 0 i32.load))"#,
+            2,
+        );
+        let shared = op_at(
+            r#"(module (memory 1 2 shared) (func (export "f") (param i32) (result i32) local.get 0 i32.load))"#,
+            2,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            local,
+            vm::op_i32_load_local as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            shared,
+            vm::op_i32_load_shared as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_bulk_memory_handler() {
+        let local = op_at(
+            r#"
+            (module
+              (memory 1)
+              (data "abcd")
+              (func (export "f") (param i32 i32 i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                memory.copy))
+            "#,
+            6,
+        );
+        let shared = op_at(
+            r#"
+            (module
+              (memory 1 2 shared)
+              (data "abcd")
+              (func (export "f") (param i32 i32 i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                memory.copy))
+            "#,
+            6,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            local,
+            vm::op_mem_copy_local as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            shared,
+            vm::op_mem_copy_shared as crate::common::Op
+        ));
+    }
+
+    #[cfg(feature = "simd")]
+    #[test]
+    fn parser_specializes_simd_memory_handler() {
+        let local = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result v128)
+                local.get 0
+                v128.load))
+            "#,
+            2,
+        );
+        let shared = op_at(
+            r#"
+            (module
+              (memory 1 2 shared)
+              (func (export "f") (param i32) (result v128)
+                local.get 0
+                v128.load))
+            "#,
+            2,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            local,
+            vm::simd::op_v128_load as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            shared,
+            vm::simd::op_v128_load_shared as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_atomic_wait_handler() {
+        let unshared = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i32 i64) (result i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                memory.atomic.wait32))
+            "#,
+            6,
+        );
+        let shared = op_at(
+            r#"
+            (module
+              (memory 1 2 shared)
+              (func (export "f") (param i32 i32 i64) (result i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                memory.atomic.wait32))
+            "#,
+            6,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            unshared,
+            vm::op_memory_atomic_wait32_unshared as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            shared,
+            vm::op_memory_atomic_wait32_shared as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_atomic_notify_handler() {
+        let unshared = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i32) (result i32)
+                local.get 0
+                local.get 1
+                memory.atomic.notify))
+            "#,
+            4,
+        );
+        let shared = op_at(
+            r#"
+            (module
+              (memory 1 2 shared)
+              (func (export "f") (param i32 i32) (result i32)
+                local.get 0
+                local.get 1
+                memory.atomic.notify))
+            "#,
+            4,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            unshared,
+            vm::op_memory_atomic_notify_unshared as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            shared,
+            vm::op_memory_atomic_notify_shared as crate::common::Op
+        ));
     }
 }

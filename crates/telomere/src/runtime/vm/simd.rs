@@ -1,6 +1,6 @@
 use crate::{
     common::stack::LaneType,
-    runtime::vm::{compute_memory_offset, store_internal, StoreBytes},
+    runtime::vm::{compute_memory_offset, store_internal_local, store_internal_shared, StoreBytes},
 };
 use telomere_macros::define_simd_operation;
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
@@ -11,28 +11,186 @@ use crate::{
     Stack, VMResult,
 };
 
-/// WebAssembly `v128.load`.
+/// Telomere internal SIMD local-memory push helper.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32] -> [v128]`.
-/// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Stack effect: internal specialized SIMD memory helper.
+/// Traps: propagates out-of-bounds memory traps from the local-memory access.
+/// Notes: Uses the cached local default-memory id and never decodes a tagged `MemoryHandle`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+/// - `ctx` must reference a live execution context whose active frame has local default memory.
+/// - `start` must be the validated effective address for the current instruction.
+/// - Callers must not retain borrows or guards across the tail-dispatch that follows this helper.
+#[inline(always)]
+unsafe fn push_memory_to_stack_local<const N: usize>(
+    ctx: &mut ExecuteContext,
+    start: usize,
+) -> VMResult<()> {
+    ctx.gc.local_push_memory_to_stack::<N>(
+        ctx.default_local_memory_id_unchecked(),
+        ctx.stack,
+        start,
+    )
+}
+
+/// Telomere internal SIMD shared-memory push helper.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal specialized SIMD memory helper.
+/// Traps: propagates out-of-bounds memory traps from the shared-memory access.
+/// Notes: Uses the cached shared default-memory id and never decodes a tagged `MemoryHandle`.
+///
+/// # Safety
+/// - `ctx` must reference a live execution context whose active frame has shared default memory.
+/// - `start` must be the validated effective address for the current instruction.
+/// - Callers must not retain borrows or guards across the tail-dispatch that follows this helper.
+#[inline(always)]
+unsafe fn push_memory_to_stack_shared<const N: usize>(
+    ctx: &mut ExecuteContext,
+    start: usize,
+) -> VMResult<()> {
+    ctx.gc.shared_push_memory_to_stack::<N>(
+        ctx.default_shared_memory_id_unchecked(),
+        ctx.stack,
+        start,
+    )
+}
+
+/// Telomere internal SIMD local-memory read helper.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal specialized SIMD memory helper.
+/// Traps: traps on memory index overflow or out-of-bounds local-memory access.
+/// Notes: Computes the effective address once and reads an unaligned byte array from local memory.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame has local default memory.
+/// - This helper must not retain borrows across the memory read.
+#[inline(always)]
+unsafe fn read_memory_bytes_local<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<[u8; N]> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    vm_try!(ctx.push_memory_to_stack::<16>(start));
+    ctx.gc
+        .local_read_u8_array::<N>(ctx.default_local_memory_id_unchecked(), start)
+}
+
+/// Telomere internal SIMD shared-memory read helper.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal specialized SIMD memory helper.
+/// Traps: traps on memory index overflow or out-of-bounds shared-memory access.
+/// Notes: Computes the effective address once and reads an unaligned byte array from shared memory.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame has shared default memory.
+/// - This helper must not retain borrows across the memory read.
+#[inline(always)]
+unsafe fn read_memory_bytes_shared<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<[u8; N]> {
+    let memarg = (*tail_code).operand.memarg;
+    let offset = ctx.stack.pop_u32();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    ctx.gc
+        .shared_read_u8_array::<N>(ctx.default_shared_memory_id_unchecked(), start)
+}
+
+macro_rules! define_shared_simd_memory_handler {
+    ($shared_name:ident, $mnemonic:literal, $impl:ident) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` on shared default memory.")]
+        ///
+        /// Spec:
+        /// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+        /// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+        /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+        ///
+        /// Stack effect: specialized SIMD memory handler.
+        /// Traps: traps on out-of-bounds memory access.
+        /// Notes: Uses the shared-memory specialized fast path selected by the parser and tail-dispatches with `call_next`.
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+        /// - `ctx` must reference a live execution context whose default memory is shared.
+        /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        pub unsafe fn $shared_name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            $impl::<true>(tail_code, ctx)
+        }
+    };
+}
+
+macro_rules! define_local_simd_memory_handler {
+    ($name:ident, $mnemonic:literal, $impl:ident) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "`.")]
+        ///
+        /// Spec:
+        /// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+        /// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+        /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+        ///
+        /// Stack effect: specialized SIMD memory handler.
+        /// Traps: traps on out-of-bounds memory access.
+        /// Notes: Uses the local-memory specialized fast path selected by the parser and tail-dispatches with `call_next`.
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+        /// - `ctx` must reference a live execution context whose default memory is local.
+        /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            $impl::<false>(tail_code, ctx)
+        }
+    };
+}
+
+/// Telomere internal SIMD handler implementation for `v128.load`.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal specialized SIMD handler.
+/// Traps: traps on memory index overflow or out-of-bounds memory access.
+/// Notes: `SHARED` selects the typed local/shared fast path chosen by the parser without decoding `MemoryHandle`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+#[inline(always)]
+unsafe fn op_v128_load_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let memarg = (*tail_code).operand.memarg;
+    let offset = ctx.stack.pop_u32();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    if SHARED {
+        vm_try!(push_memory_to_stack_shared::<16>(ctx, start));
+    } else {
+        vm_try!(push_memory_to_stack_local::<16>(ctx, start));
+    }
     call_next(tail_code, 1, ctx)
 }
+
+define_local_simd_memory_handler!(op_v128_load, "v128.load", op_v128_load_impl);
+define_shared_simd_memory_handler!(op_v128_load_shared, "v128.load", op_v128_load_impl);
 
 #[inline(always)]
 /// WebAssembly SIMD memory helper for lane-sized reads.
@@ -48,14 +206,15 @@ pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose validated operand stack matches this SIMD memory operation.
 /// - This helper must not retain borrows across the memory read or the follow-up stack push.
-unsafe fn read_memory_bytes<const N: usize>(
+unsafe fn read_memory_bytes<const N: usize, const SHARED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
-    let memarg = (*tail_code).operand.memarg;
-    let offset = ctx.stack.pop_u32();
-    let start = vm_try!(compute_memory_offset(memarg, offset));
-    ctx.read_memory_u8_array::<N>(start)
+    if SHARED {
+        read_memory_bytes_shared::<N>(tail_code, ctx)
+    } else {
+        read_memory_bytes_local::<N>(tail_code, ctx)
+    }
 }
 /// WebAssembly `v128.load8x8_s`.
 ///
@@ -72,8 +231,12 @@ unsafe fn read_memory_bytes<const N: usize>(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load8x8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+/// - `SHARED` must match the default memory kind selected for this handler.
+unsafe fn v128_load8x8_s_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let data = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
     let extended = [
         data[0] as i8 as i16,
         data[1] as i8 as i16,
@@ -87,6 +250,8 @@ pub unsafe fn v128_load8x8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     vm_try!(ctx.stack.push(i16x8::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load8x8_s, "v128.load8x8_s", v128_load8x8_s_impl);
+define_shared_simd_memory_handler!(v128_load8x8_s_shared, "v128.load8x8_s", v128_load8x8_s_impl);
 /// WebAssembly `v128.load8x8_u`.
 ///
 /// Spec:
@@ -102,8 +267,12 @@ pub unsafe fn v128_load8x8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load8x8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+/// - `SHARED` must match the default memory kind selected for this handler.
+unsafe fn v128_load8x8_u_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let data = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
     let extended = [
         data[0] as u16,
         data[1] as u16,
@@ -117,6 +286,8 @@ pub unsafe fn v128_load8x8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     vm_try!(ctx.stack.push(u16x8::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load8x8_u, "v128.load8x8_u", v128_load8x8_u_impl);
+define_shared_simd_memory_handler!(v128_load8x8_u_shared, "v128.load8x8_u", v128_load8x8_u_impl);
 
 /// WebAssembly `v128.load16x4_s`.
 ///
@@ -133,8 +304,11 @@ pub unsafe fn v128_load8x8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load16x4_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+unsafe fn v128_load16x4_s_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let data = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
     let i16s = [
         i16::from_le_bytes([data[0], data[1]]),
         i16::from_le_bytes([data[2], data[3]]),
@@ -151,6 +325,12 @@ pub unsafe fn v128_load16x4_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     vm_try!(ctx.stack.push(i32x4::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load16x4_s, "v128.load16x4_s", v128_load16x4_s_impl);
+define_shared_simd_memory_handler!(
+    v128_load16x4_s_shared,
+    "v128.load16x4_s",
+    v128_load16x4_s_impl
+);
 /// WebAssembly `v128.load16x4_u`.
 ///
 /// Spec:
@@ -166,8 +346,11 @@ pub unsafe fn v128_load16x4_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load16x4_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+unsafe fn v128_load16x4_u_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let data = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
     let u16s = [
         u16::from_le_bytes([data[0], data[1]]),
         u16::from_le_bytes([data[2], data[3]]),
@@ -184,6 +367,12 @@ pub unsafe fn v128_load16x4_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     vm_try!(ctx.stack.push(u32x4::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load16x4_u, "v128.load16x4_u", v128_load16x4_u_impl);
+define_shared_simd_memory_handler!(
+    v128_load16x4_u_shared,
+    "v128.load16x4_u",
+    v128_load16x4_u_impl
+);
 
 /// WebAssembly `v128.store`.
 ///
@@ -201,7 +390,33 @@ pub unsafe fn v128_load16x4_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, |ctx| {
+        StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
+    })
+}
+
+define_shared_simd_memory_handler!(v128_store_shared, "v128.store", v128_store_shared_impl);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.store` on shared memory.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal specialized SIMD handler.
+/// Traps: traps on memory index overflow or out-of-bounds shared-memory access.
+/// Notes: Materializes the store payload first and then writes through the typed shared-memory fast path.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame has shared default memory.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_store_shared_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    debug_assert!(SHARED);
+    store_internal_shared(tail_code, ctx, |ctx| {
         StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
     })
 }
@@ -221,8 +436,11 @@ pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load32x2_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+unsafe fn v128_load32x2_s_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let bytes = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
     let i32s = [
         i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
         i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
@@ -231,6 +449,12 @@ pub unsafe fn v128_load32x2_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     vm_try!(ctx.stack.push(i64x2::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load32x2_s, "v128.load32x2_s", v128_load32x2_s_impl);
+define_shared_simd_memory_handler!(
+    v128_load32x2_s_shared,
+    "v128.load32x2_s",
+    v128_load32x2_s_impl
+);
 /// WebAssembly `v128.load32x2_u`.
 ///
 /// Spec:
@@ -246,8 +470,11 @@ pub unsafe fn v128_load32x2_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load32x2_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+unsafe fn v128_load32x2_u_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let bytes = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
     let u32s = [
         u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
         u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
@@ -256,6 +483,12 @@ pub unsafe fn v128_load32x2_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     vm_try!(ctx.stack.push(u64x2::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load32x2_u, "v128.load32x2_u", v128_load32x2_u_impl);
+define_shared_simd_memory_handler!(
+    v128_load32x2_u_shared,
+    "v128.load32x2_u",
+    v128_load32x2_u_impl
+);
 
 /// WebAssembly `v128.load8_splat`.
 ///
@@ -272,11 +505,20 @@ pub unsafe fn v128_load32x2_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load8_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<1>(tail_code, ctx));
+unsafe fn v128_load8_splat_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let bytes = vm_try!(read_memory_bytes::<1, SHARED>(tail_code, ctx));
     vm_try!(ctx.stack.push(i8x16::from(bytes[0] as i8)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load8_splat, "v128.load8_splat", v128_load8_splat_impl);
+define_shared_simd_memory_handler!(
+    v128_load8_splat_shared,
+    "v128.load8_splat",
+    v128_load8_splat_impl
+);
 
 /// WebAssembly `v128.load16_splat`.
 ///
@@ -293,13 +535,26 @@ pub unsafe fn v128_load8_splat(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load16_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<2>(tail_code, ctx));
+unsafe fn v128_load16_splat_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let bytes = vm_try!(read_memory_bytes::<2, SHARED>(tail_code, ctx));
     vm_try!(ctx
         .stack
         .push(i16x8::from(i16::from_le_bytes([bytes[0], bytes[1]]))));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(
+    v128_load16_splat,
+    "v128.load16_splat",
+    v128_load16_splat_impl
+);
+define_shared_simd_memory_handler!(
+    v128_load16_splat_shared,
+    "v128.load16_splat",
+    v128_load16_splat_impl
+);
 
 /// WebAssembly `v128.load32_splat`.
 ///
@@ -316,13 +571,26 @@ pub unsafe fn v128_load16_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load32_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<4>(tail_code, ctx));
+unsafe fn v128_load32_splat_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let bytes = vm_try!(read_memory_bytes::<4, SHARED>(tail_code, ctx));
     vm_try!(ctx.stack.push(i32x4::from(i32::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3],
     ]))));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(
+    v128_load32_splat,
+    "v128.load32_splat",
+    v128_load32_splat_impl
+);
+define_shared_simd_memory_handler!(
+    v128_load32_splat_shared,
+    "v128.load32_splat",
+    v128_load32_splat_impl
+);
 
 /// WebAssembly `v128.load64_splat`.
 ///
@@ -339,13 +607,26 @@ pub unsafe fn v128_load32_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load64_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+unsafe fn v128_load64_splat_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let bytes = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
     vm_try!(ctx.stack.push(i64x2::from(i64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]))));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(
+    v128_load64_splat,
+    "v128.load64_splat",
+    v128_load64_splat_impl
+);
+define_shared_simd_memory_handler!(
+    v128_load64_splat_shared,
+    "v128.load64_splat",
+    v128_load64_splat_impl
+);
 
 /// WebAssembly `v128.const`.
 ///
@@ -391,15 +672,13 @@ fn replace_lane_bytes<const N: usize>(bytes: &mut [u8; 16], lane: usize, value: 
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose validated stack and memory layout satisfy this instruction.
 /// - This helper must not keep borrows, locks, or guards alive across the call into `call_next`.
-unsafe fn load_lane_internal<const N: usize>(
+unsafe fn load_lane_internal<const N: usize, const SHARED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let lane = (*tail_code.add(1)).operand.u32 as usize;
     let mut bytes = ctx.stack.pop_u128().to_le_bytes();
-    let offset = ctx.stack.pop_u32();
-    let start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
-    let data = vm_try!(ctx.read_memory_u8_array::<N>(start));
+    let data = vm_try!(read_memory_bytes::<N, SHARED>(tail_code, ctx));
     replace_lane_bytes::<N>(&mut bytes, lane, data);
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
     call_next(tail_code, 2, ctx)
@@ -418,7 +697,7 @@ unsafe fn load_lane_internal<const N: usize>(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose validated stack and memory layout satisfy this instruction.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn store_lane_internal<const N: usize>(
+unsafe fn store_lane_internal<const N: usize, const SHARED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
@@ -427,7 +706,19 @@ unsafe fn store_lane_internal<const N: usize>(
     let start = lane * N;
     let offset = ctx.stack.pop_u32();
     let mem_start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
-    vm_try!(ctx.write_memory_bytes(mem_start, &bytes[start..start + N]));
+    if SHARED {
+        vm_try!(ctx.gc.shared_write_bytes(
+            ctx.default_shared_memory_id_unchecked(),
+            mem_start,
+            &bytes[start..start + N],
+        ));
+    } else {
+        vm_try!(ctx.gc.local_write_bytes(
+            ctx.default_local_memory_id_unchecked(),
+            mem_start,
+            &bytes[start..start + N],
+        ));
+    }
     call_next(tail_code, 2, ctx)
 }
 
@@ -983,156 +1274,240 @@ pub unsafe fn f64x2_replace_lane(
     call_next(tail_code, 1, ctx)
 }
 
-/// WebAssembly `v128.load8_lane`.
+define_local_simd_memory_handler!(v128_load8_lane, "v128.load8_lane", v128_load8_lane_impl);
+define_shared_simd_memory_handler!(
+    v128_load8_lane_shared,
+    "v128.load8_lane",
+    v128_load8_lane_impl
+);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.load8_lane`.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32, v128] -> [v128]`.
+/// Stack effect: internal specialized SIMD handler.
 /// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Notes: Delegates to the typed lane-load fast path selected by `SHARED`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load8_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_lane_internal::<1>(tail_code, ctx)
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_load8_lane_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    load_lane_internal::<1, SHARED>(tail_code, ctx)
 }
 
-/// WebAssembly `v128.load16_lane`.
+define_local_simd_memory_handler!(v128_load16_lane, "v128.load16_lane", v128_load16_lane_impl);
+define_shared_simd_memory_handler!(
+    v128_load16_lane_shared,
+    "v128.load16_lane",
+    v128_load16_lane_impl
+);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.load16_lane`.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32, v128] -> [v128]`.
+/// Stack effect: internal specialized SIMD handler.
 /// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Notes: Delegates to the typed lane-load fast path selected by `SHARED`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load16_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_lane_internal::<2>(tail_code, ctx)
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_load16_lane_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    load_lane_internal::<2, SHARED>(tail_code, ctx)
 }
 
-/// WebAssembly `v128.load32_lane`.
+define_local_simd_memory_handler!(v128_load32_lane, "v128.load32_lane", v128_load32_lane_impl);
+define_shared_simd_memory_handler!(
+    v128_load32_lane_shared,
+    "v128.load32_lane",
+    v128_load32_lane_impl
+);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.load32_lane`.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32, v128] -> [v128]`.
+/// Stack effect: internal specialized SIMD handler.
 /// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Notes: Delegates to the typed lane-load fast path selected by `SHARED`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load32_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_lane_internal::<4>(tail_code, ctx)
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_load32_lane_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    load_lane_internal::<4, SHARED>(tail_code, ctx)
 }
 
-/// WebAssembly `v128.load64_lane`.
+define_local_simd_memory_handler!(v128_load64_lane, "v128.load64_lane", v128_load64_lane_impl);
+define_shared_simd_memory_handler!(
+    v128_load64_lane_shared,
+    "v128.load64_lane",
+    v128_load64_lane_impl
+);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.load64_lane`.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32, v128] -> [v128]`.
+/// Stack effect: internal specialized SIMD handler.
 /// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Notes: Delegates to the typed lane-load fast path selected by `SHARED`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load64_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_lane_internal::<8>(tail_code, ctx)
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_load64_lane_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    load_lane_internal::<8, SHARED>(tail_code, ctx)
 }
 
-/// WebAssembly `v128.store8_lane`.
+define_local_simd_memory_handler!(v128_store8_lane, "v128.store8_lane", v128_store8_lane_impl);
+define_shared_simd_memory_handler!(
+    v128_store8_lane_shared,
+    "v128.store8_lane",
+    v128_store8_lane_impl
+);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.store8_lane`.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32, v128] -> []`.
+/// Stack effect: internal specialized SIMD handler.
 /// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Notes: Delegates to the typed lane-store fast path selected by `SHARED`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_store8_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_lane_internal::<1>(tail_code, ctx)
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_store8_lane_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    store_lane_internal::<1, SHARED>(tail_code, ctx)
 }
 
-/// WebAssembly `v128.store16_lane`.
+define_local_simd_memory_handler!(
+    v128_store16_lane,
+    "v128.store16_lane",
+    v128_store16_lane_impl
+);
+define_shared_simd_memory_handler!(
+    v128_store16_lane_shared,
+    "v128.store16_lane",
+    v128_store16_lane_impl
+);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.store16_lane`.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32, v128] -> []`.
+/// Stack effect: internal specialized SIMD handler.
 /// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Notes: Delegates to the typed lane-store fast path selected by `SHARED`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_store16_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_lane_internal::<2>(tail_code, ctx)
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_store16_lane_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    store_lane_internal::<2, SHARED>(tail_code, ctx)
 }
 
-/// WebAssembly `v128.store32_lane`.
+define_local_simd_memory_handler!(
+    v128_store32_lane,
+    "v128.store32_lane",
+    v128_store32_lane_impl
+);
+define_shared_simd_memory_handler!(
+    v128_store32_lane_shared,
+    "v128.store32_lane",
+    v128_store32_lane_impl
+);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.store32_lane`.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32, v128] -> []`.
+/// Stack effect: internal specialized SIMD handler.
 /// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Notes: Delegates to the typed lane-store fast path selected by `SHARED`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_store32_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_lane_internal::<4>(tail_code, ctx)
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_store32_lane_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    store_lane_internal::<4, SHARED>(tail_code, ctx)
 }
 
-/// WebAssembly `v128.store64_lane`.
+define_local_simd_memory_handler!(
+    v128_store64_lane,
+    "v128.store64_lane",
+    v128_store64_lane_impl
+);
+define_shared_simd_memory_handler!(
+    v128_store64_lane_shared,
+    "v128.store64_lane",
+    v128_store64_lane_impl
+);
+
+#[inline(always)]
+/// Telomere internal SIMD handler implementation for `v128.store64_lane`.
 ///
 /// Spec:
-/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
-/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
 ///
-/// Stack effect: `[i32, v128] -> []`.
+/// Stack effect: internal specialized SIMD handler.
 /// Traps: traps on out-of-bounds memory access.
-/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+/// Notes: Delegates to the typed lane-store fast path selected by `SHARED`.
 ///
 /// # Safety
-/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
-/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
-/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_store64_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_lane_internal::<8>(tail_code, ctx)
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
+unsafe fn v128_store64_lane_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    store_lane_internal::<8, SHARED>(tail_code, ctx)
 }
 
 /// WebAssembly `v128.load32_zero`.
@@ -1150,13 +1525,22 @@ pub unsafe fn v128_store64_lane(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load32_zero(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<4>(tail_code, ctx));
+unsafe fn v128_load32_zero_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let bytes = vm_try!(read_memory_bytes::<4, SHARED>(tail_code, ctx));
     let mut result = [0u8; 16];
     result[0..4].copy_from_slice(&bytes);
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load32_zero, "v128.load32_zero", v128_load32_zero_impl);
+define_shared_simd_memory_handler!(
+    v128_load32_zero_shared,
+    "v128.load32_zero",
+    v128_load32_zero_impl
+);
 
 /// WebAssembly `v128.load64_zero`.
 ///
@@ -1173,13 +1557,22 @@ pub unsafe fn v128_load32_zero(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-pub unsafe fn v128_load64_zero(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+unsafe fn v128_load64_zero_impl<const SHARED: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let bytes = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
     let mut result = [0u8; 16];
     result[0..8].copy_from_slice(&bytes);
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
     call_next(tail_code, 1, ctx)
 }
+define_local_simd_memory_handler!(v128_load64_zero, "v128.load64_zero", v128_load64_zero_impl);
+define_shared_simd_memory_handler!(
+    v128_load64_zero_shared,
+    "v128.load64_zero",
+    v128_load64_zero_impl
+);
 
 /// WebAssembly `v128.not`.
 ///

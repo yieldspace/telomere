@@ -1,9 +1,24 @@
 use crate::binary::BinaryReader;
+use crate::common::Op;
 use crate::WasmParserError;
+use vstd::prelude::*;
 
 use super::{instruction_generator::InstructionGenerator, type_checker::TypeChecker};
 
+verus! {
+
+#[inline(always)]
+fn select_default_memory_family(shared: bool) -> (result: bool)
+    ensures
+        result == shared,
+{
+    shared
+}
+
+} // verus!
+
 pub(crate) struct SimdParserContext<'a, R: BinaryReader> {
+    pub(crate) default_memory_shared: bool,
     pub(crate) instrs: &'a mut InstructionGenerator,
     pub(crate) checker: &'a mut TypeChecker,
     pub(crate) reader: &'a mut R,
@@ -14,6 +29,14 @@ mod prelude {
     pub(crate) use crate::{
         binary::BinaryReader, common::Operand, parser::core::values, runtime::vm, WasmParserError,
     };
+}
+
+fn default_memory_op<R: BinaryReader>(ctx: &SimdParserContext<R>, local: Op, shared: Op) -> Op {
+    if select_default_memory_family(ctx.default_memory_shared) {
+        shared
+    } else {
+        local
+    }
 }
 
 macro_rules! unary_op_simd_parser {
@@ -128,7 +151,7 @@ macro_rules! replace_lane_parser {
 }
 
 macro_rules! load_lane_parser {
-    ($name: ident,$code: expr,$natural_align: expr,$lane_count: expr) => {
+    ($name: ident,$shared: ident,$code: expr,$natural_align: expr,$lane_count: expr) => {
         pub(crate) mod $name {
             use super::prelude::*;
             pub(crate) const CODE: u32 = $code;
@@ -141,7 +164,7 @@ macro_rules! load_lane_parser {
                 ctx.checker
                     .op(&[ValType::I32, ValType::V128], &[ValType::V128])?;
                 ctx.instrs.push_with_operand(
-                    vm::simd::$name,
+                    super::default_memory_op(ctx, vm::simd::$name, vm::simd::$shared),
                     &[Operand { memarg }, Operand { u32: lane as u32 }],
                 );
                 Ok(len + len2)
@@ -151,7 +174,7 @@ macro_rules! load_lane_parser {
 }
 
 macro_rules! store_lane_parser {
-    ($name: ident,$code: expr,$natural_align: expr,$lane_count: expr) => {
+    ($name: ident,$shared: ident,$code: expr,$natural_align: expr,$lane_count: expr) => {
         pub(crate) mod $name {
             use super::prelude::*;
             pub(crate) const CODE: u32 = $code;
@@ -163,7 +186,7 @@ macro_rules! store_lane_parser {
                 super::validate_lane(CODE, lane, $lane_count)?;
                 ctx.checker.op(&[ValType::I32, ValType::V128], &[])?;
                 ctx.instrs.push_with_operand(
-                    vm::simd::$name,
+                    super::default_memory_op(ctx, vm::simd::$name, vm::simd::$shared),
                     &[Operand { memarg }, Operand { u32: lane as u32 }],
                 );
                 Ok(len + len2)
@@ -173,7 +196,7 @@ macro_rules! store_lane_parser {
 }
 
 macro_rules! load_zero_parser {
-    ($name: ident,$code: expr,$natural_align: expr) => {
+    ($name: ident,$shared: ident,$code: expr,$natural_align: expr) => {
         pub(crate) mod $name {
             use super::prelude::*;
             pub(crate) const CODE: u32 = $code;
@@ -182,8 +205,10 @@ macro_rules! load_zero_parser {
             ) -> Result<usize, WasmParserError> {
                 let (len, memarg) = values::parse_memarg(ctx.reader, $natural_align)?;
                 ctx.checker.load_op(ValType::V128)?;
-                ctx.instrs
-                    .push_with_operand(vm::simd::$name, &[Operand { memarg }]);
+                ctx.instrs.push_with_operand(
+                    super::default_memory_op(ctx, vm::simd::$name, vm::simd::$shared),
+                    &[Operand { memarg }],
+                );
                 Ok(len)
             }
         }
@@ -198,8 +223,10 @@ pub(crate) mod v128_load {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 4)?; // TODO:
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::op_v128_load, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(ctx, vm::simd::op_v128_load, vm::simd::op_v128_load_shared),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -212,8 +239,14 @@ pub(crate) mod v128_load8x8_s {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load8x8_s, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load8x8_s,
+                vm::simd::v128_load8x8_s_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -226,8 +259,14 @@ pub(crate) mod v128_load8x8_u {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load8x8_u, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load8x8_u,
+                vm::simd::v128_load8x8_u_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -240,8 +279,14 @@ pub(crate) mod v128_load16x4_s {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load16x4_s, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load16x4_s,
+                vm::simd::v128_load16x4_s_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -254,8 +299,14 @@ pub(crate) mod v128_load16x4_u {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load16x4_u, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load16x4_u,
+                vm::simd::v128_load16x4_u_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -268,8 +319,14 @@ pub(crate) mod v128_load32x2_s {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load32x2_s, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load32x2_s,
+                vm::simd::v128_load32x2_s_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -282,8 +339,14 @@ pub(crate) mod v128_load32x2_u {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load32x2_u, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load32x2_u,
+                vm::simd::v128_load32x2_u_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -296,8 +359,14 @@ pub(crate) mod v128_load8_splat {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load8_splat, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load8_splat,
+                vm::simd::v128_load8_splat_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -310,8 +379,14 @@ pub(crate) mod v128_load16_splat {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load16_splat, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load16_splat,
+                vm::simd::v128_load16_splat_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -323,8 +398,14 @@ pub(crate) mod v128_load32_splat {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load32_splat, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load32_splat,
+                vm::simd::v128_load32_splat_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -336,8 +417,14 @@ pub(crate) mod v128_load64_splat {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 8)?;
         ctx.checker.load_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_load64_splat, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(
+                ctx,
+                vm::simd::v128_load64_splat,
+                vm::simd::v128_load64_splat_shared,
+            ),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -351,8 +438,10 @@ pub(crate) mod v128_store {
     ) -> Result<usize, WasmParserError> {
         let (len, memarg) = values::parse_memarg(ctx.reader, 4)?; // TODO:
         ctx.checker.store_op(ValType::V128)?;
-        ctx.instrs
-            .push_with_operand(vm::simd::v128_store, &[Operand { memarg }]);
+        ctx.instrs.push_with_operand(
+            super::default_memory_op(ctx, vm::simd::v128_store, vm::simd::v128_store_shared),
+            &[Operand { memarg }],
+        );
         Ok(len)
     }
 }
@@ -515,16 +604,16 @@ pub(crate) mod v128_any_true {
         Ok(0)
     }
 }
-load_lane_parser!(v128_load8_lane, 84, 0, 16);
-load_lane_parser!(v128_load16_lane, 85, 1, 8);
-load_lane_parser!(v128_load32_lane, 86, 2, 4);
-load_lane_parser!(v128_load64_lane, 87, 3, 2);
-store_lane_parser!(v128_store8_lane, 88, 0, 16);
-store_lane_parser!(v128_store16_lane, 89, 1, 8);
-store_lane_parser!(v128_store32_lane, 90, 2, 4);
-store_lane_parser!(v128_store64_lane, 91, 3, 2);
-load_zero_parser!(v128_load32_zero, 92, 2);
-load_zero_parser!(v128_load64_zero, 93, 3);
+load_lane_parser!(v128_load8_lane, v128_load8_lane_shared, 84, 0, 16);
+load_lane_parser!(v128_load16_lane, v128_load16_lane_shared, 85, 1, 8);
+load_lane_parser!(v128_load32_lane, v128_load32_lane_shared, 86, 2, 4);
+load_lane_parser!(v128_load64_lane, v128_load64_lane_shared, 87, 3, 2);
+store_lane_parser!(v128_store8_lane, v128_store8_lane_shared, 88, 0, 16);
+store_lane_parser!(v128_store16_lane, v128_store16_lane_shared, 89, 1, 8);
+store_lane_parser!(v128_store32_lane, v128_store32_lane_shared, 90, 2, 4);
+store_lane_parser!(v128_store64_lane, v128_store64_lane_shared, 91, 3, 2);
+load_zero_parser!(v128_load32_zero, v128_load32_zero_shared, 92, 2);
+load_zero_parser!(v128_load64_zero, v128_load64_zero_shared, 93, 3);
 
 binary_op_simd_parser!(f32x4_demote_f64x2_zero, 94);
 binary_op_simd_parser!(f64x2_promote_low_f32x4, 95);

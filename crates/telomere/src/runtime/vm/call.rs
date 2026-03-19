@@ -24,7 +24,13 @@ unsafe fn internal_op_call(
 ) -> VMResult<CallOutcome> {
     let funcinst = ctx.func_by_addr(funcaddr).clone();
     let instance = ctx.gc.instance(funcinst.instance);
-    let frame = CallFrameCache::from_parts(funcaddr, &funcinst, &instance.mems);
+    let memory0 = instance
+        .mems
+        .first()
+        .copied()
+        .filter(|addr| !addr.is_null())
+        .map(|addr| ctx.gc.memory_handle(addr));
+    let frame = CallFrameCache::from_parts(funcaddr, &funcinst, memory0);
     let module_addr = instance.module_addr;
     let module = ctx.gc.get_module(module_addr);
     let typeidx = module

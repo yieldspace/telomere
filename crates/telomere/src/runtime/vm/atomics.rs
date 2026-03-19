@@ -1,7 +1,7 @@
 use super::*;
+use crate::common::AtomicRmwOp;
 #[cfg(feature = "async-runtime")]
 use crate::common::AtomicWaitResult;
-use crate::common::{AtomicRmwOp, MemoryHandle};
 use vstd::prelude::*;
 
 verus! {
@@ -52,24 +52,6 @@ unsafe fn atomic_start(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
     compute_memory_offset(memarg, offset)
 }
 
-#[inline(always)]
-/// WebAssembly threads shared-memory handle helper.
-///
-/// Spec:
-/// - Threads: https://webassembly.github.io/threads/core/
-///
-/// Stack effect: internal runtime memory dispatch.
-/// Traps: propagates the trap behavior of the underlying memory lookup.
-/// Notes: Resolves the active memory handle for atomic operations.
-///
-/// # Safety
-/// - `ctx` must reference a live execution context whose active memory slot is valid for the current frame.
-/// - This helper must not hold a borrow across any follow-up atomic memory access.
-unsafe fn atomic_handle(ctx: &ExecuteContext) -> VMResult<MemoryHandle> {
-    debug_assert!(ctx.snapshot().has_default_memory());
-    ctx.memory_handle_result()
-}
-
 macro_rules! atomic_load_op {
     ($name:ident, $reader:ident, $push:ident, $cast:ty) => {
         #[doc = concat!("WebAssembly threads atomic load `", stringify!($name), "`.")]
@@ -87,8 +69,31 @@ macro_rules! atomic_load_op {
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(atomic_handle(ctx));
-            let value = vm_try!(ctx.gc.$reader(handle, start));
+            let value = vm_try!(ctx.gc.$reader(ctx.default_local_memory_id_unchecked(), start));
+            vm_try!(ctx.stack.$push(value as $cast));
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
+macro_rules! atomic_load_op_shared {
+    ($name:ident, $reader:ident, $push:ident, $cast:ty) => {
+        #[doc = concat!("WebAssembly threads atomic load `", stringify!($name), "` on shared default memory.")]
+        ///
+        /// Related spec:
+        /// - Threads: https://webassembly.github.io/threads/core/
+        ///
+        /// Stack effect: `[i32] -> [value]`.
+        /// Traps: traps on out-of-bounds access or unaligned access.
+        /// Notes: Observes the threads atomic memory model and tail-dispatches with `call_next`.
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+        /// - `ctx` must reference a live execution context whose default memory is shared.
+        /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let start = vm_try!(atomic_start(tail_code, ctx));
+            let value = vm_try!(ctx.gc.$reader(ctx.default_shared_memory_id_unchecked(), start));
             vm_try!(ctx.stack.$push(value as $cast));
             call_next(tail_code, 1, ctx)
         }
@@ -113,8 +118,39 @@ macro_rules! atomic_store_op {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(atomic_handle(ctx));
-            vm_try!(ctx.gc.$writer(handle, start, value));
+            vm_try!(ctx.gc.$writer(
+                ctx.default_local_memory_id_unchecked(),
+                start,
+                value,
+            ));
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
+macro_rules! atomic_store_op_shared {
+    ($name:ident, $pop:ident, $writer:ident, $ty:ty) => {
+        #[doc = concat!("WebAssembly threads atomic store `", stringify!($name), "` on shared default memory.")]
+        ///
+        /// Related spec:
+        /// - Threads: https://webassembly.github.io/threads/core/
+        ///
+        /// Stack effect: `[i32, value] -> []`.
+        /// Traps: traps on out-of-bounds access or unaligned access.
+        /// Notes: Performs a sequentially consistent store in the runtime memory model and tail-dispatches with `call_next`.
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+        /// - `ctx` must reference a live execution context whose default memory is shared.
+        /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let value = ctx.stack.$pop() as $ty;
+            let start = vm_try!(atomic_start(tail_code, ctx));
+            vm_try!(ctx.gc.$writer(
+                ctx.default_shared_memory_id_unchecked(),
+                start,
+                value,
+            ));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -138,8 +174,42 @@ macro_rules! atomic_rmw_op {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(atomic_handle(ctx));
-            let old = vm_try!(ctx.gc.$rmw(handle, start, $op, value));
+            let old = vm_try!(ctx.gc.$rmw(
+                ctx.default_local_memory_id_unchecked(),
+                start,
+                $op,
+                value,
+            ));
+            vm_try!(ctx.stack.$push(old as $push_ty));
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
+macro_rules! atomic_rmw_op_shared {
+    ($name:ident, $pop:ident, $rmw:ident, $push:ident, $pop_ty:ty, $push_ty:ty, $op:expr) => {
+        #[doc = concat!("WebAssembly threads atomic read-modify-write `", stringify!($name), "` on shared default memory.")]
+        ///
+        /// Related spec:
+        /// - Threads: https://webassembly.github.io/threads/core/
+        ///
+        /// Stack effect: `[i32, value] -> [old]`.
+        /// Traps: traps on out-of-bounds access or unaligned access.
+        /// Notes: Applies the RMW operation under the runtime's shared-memory linearization point, returns the previous value, and tail-dispatches with `call_next`.
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+        /// - `ctx` must reference a live execution context whose default memory is shared.
+        /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let value = ctx.stack.$pop() as $pop_ty;
+            let start = vm_try!(atomic_start(tail_code, ctx));
+            let old = vm_try!(ctx.gc.$rmw(
+                ctx.default_shared_memory_id_unchecked(),
+                start,
+                $op,
+                value,
+            ));
             vm_try!(ctx.stack.$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
@@ -165,34 +235,69 @@ macro_rules! atomic_cmpxchg_op {
             let value = ctx.stack.$pop() as $ty;
             let expected = ctx.stack.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(atomic_handle(ctx));
-            let old = vm_try!(ctx.gc.$cmpxchg(handle, start, expected, value));
+            let old = vm_try!(ctx.gc.$cmpxchg(
+                ctx.default_local_memory_id_unchecked(),
+                start,
+                expected,
+                value,
+            ));
             vm_try!(ctx.stack.$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
     };
 }
 
-atomic_load_op!(op_i32_atomic_load, atomic_load_u32, push_u32, u32);
-atomic_load_op!(op_i64_atomic_load, atomic_load_u64, push_u64, u64);
-atomic_load_op!(op_i32_atomic_load8_u, atomic_load_u8, push_u32, u32);
-atomic_load_op!(op_i32_atomic_load16_u, atomic_load_u16, push_u32, u32);
-atomic_load_op!(op_i64_atomic_load8_u, atomic_load_u8, push_u64, u64);
-atomic_load_op!(op_i64_atomic_load16_u, atomic_load_u16, push_u64, u64);
-atomic_load_op!(op_i64_atomic_load32_u, atomic_load_u32, push_u64, u64);
+macro_rules! atomic_cmpxchg_op_shared {
+    ($name:ident, $pop:ident, $cmpxchg:ident, $push:ident, $ty:ty, $push_ty:ty) => {
+        #[doc = concat!("WebAssembly threads atomic compare-exchange `", stringify!($name), "` on shared default memory.")]
+        ///
+        /// Related spec:
+        /// - Threads: https://webassembly.github.io/threads/core/
+        ///
+        /// Stack effect: `[i32, expected, replacement] -> [old]`.
+        /// Traps: traps on out-of-bounds access or unaligned access.
+        /// Notes: Compares the current memory value with `expected`, conditionally stores `replacement`, returns the observed old value, and tail-dispatches with `call_next`.
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+        /// - `ctx` must reference a live execution context whose default memory is shared.
+        /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let value = ctx.stack.$pop() as $ty;
+            let expected = ctx.stack.$pop() as $ty;
+            let start = vm_try!(atomic_start(tail_code, ctx));
+            let old = vm_try!(ctx.gc.$cmpxchg(
+                ctx.default_shared_memory_id_unchecked(),
+                start,
+                expected,
+                value,
+            ));
+            vm_try!(ctx.stack.$push(old as $push_ty));
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
 
-atomic_store_op!(op_i32_atomic_store, pop_u32, atomic_store_u32, u32);
-atomic_store_op!(op_i64_atomic_store, pop_u64, atomic_store_u64, u64);
-atomic_store_op!(op_i32_atomic_store8, pop_u32, atomic_store_u8, u8);
-atomic_store_op!(op_i32_atomic_store16, pop_u32, atomic_store_u16, u16);
-atomic_store_op!(op_i64_atomic_store8, pop_u64, atomic_store_u8, u8);
-atomic_store_op!(op_i64_atomic_store16, pop_u64, atomic_store_u16, u16);
-atomic_store_op!(op_i64_atomic_store32, pop_u64, atomic_store_u32, u32);
+atomic_load_op!(op_i32_atomic_load, local_atomic_load_u32, push_u32, u32);
+atomic_load_op!(op_i64_atomic_load, local_atomic_load_u64, push_u64, u64);
+atomic_load_op!(op_i32_atomic_load8_u, local_atomic_load_u8, push_u32, u32);
+atomic_load_op!(op_i32_atomic_load16_u, local_atomic_load_u16, push_u32, u32);
+atomic_load_op!(op_i64_atomic_load8_u, local_atomic_load_u8, push_u64, u64);
+atomic_load_op!(op_i64_atomic_load16_u, local_atomic_load_u16, push_u64, u64);
+atomic_load_op!(op_i64_atomic_load32_u, local_atomic_load_u32, push_u64, u64);
+
+atomic_store_op!(op_i32_atomic_store, pop_u32, local_atomic_store_u32, u32);
+atomic_store_op!(op_i64_atomic_store, pop_u64, local_atomic_store_u64, u64);
+atomic_store_op!(op_i32_atomic_store8, pop_u32, local_atomic_store_u8, u8);
+atomic_store_op!(op_i32_atomic_store16, pop_u32, local_atomic_store_u16, u16);
+atomic_store_op!(op_i64_atomic_store8, pop_u64, local_atomic_store_u8, u8);
+atomic_store_op!(op_i64_atomic_store16, pop_u64, local_atomic_store_u16, u16);
+atomic_store_op!(op_i64_atomic_store32, pop_u64, local_atomic_store_u32, u32);
 
 atomic_rmw_op!(
     op_i32_atomic_rmw_add,
     pop_u32,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -201,7 +306,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw_add,
     pop_u64,
-    atomic_rmw_u64,
+    local_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -210,7 +315,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw8_add_u,
     pop_u32,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -219,7 +324,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw16_add_u,
     pop_u32,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -228,7 +333,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw8_add_u,
     pop_u64,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -237,7 +342,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw16_add_u,
     pop_u64,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -246,7 +351,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw32_add_u,
     pop_u64,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -256,7 +361,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw_sub,
     pop_u32,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -265,7 +370,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw_sub,
     pop_u64,
-    atomic_rmw_u64,
+    local_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -274,7 +379,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw8_sub_u,
     pop_u32,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -283,7 +388,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw16_sub_u,
     pop_u32,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -292,7 +397,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw8_sub_u,
     pop_u64,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -301,7 +406,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw16_sub_u,
     pop_u64,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -310,7 +415,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw32_sub_u,
     pop_u64,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -320,7 +425,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw_and,
     pop_u32,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -329,7 +434,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw_and,
     pop_u64,
-    atomic_rmw_u64,
+    local_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -338,7 +443,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw8_and_u,
     pop_u32,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -347,7 +452,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw16_and_u,
     pop_u32,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -356,7 +461,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw8_and_u,
     pop_u64,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -365,7 +470,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw16_and_u,
     pop_u64,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -374,7 +479,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw32_and_u,
     pop_u64,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -384,7 +489,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw_or,
     pop_u32,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -393,7 +498,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw_or,
     pop_u64,
-    atomic_rmw_u64,
+    local_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -402,7 +507,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw8_or_u,
     pop_u32,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -411,7 +516,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw16_or_u,
     pop_u32,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -420,7 +525,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw8_or_u,
     pop_u64,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -429,7 +534,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw16_or_u,
     pop_u64,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -438,7 +543,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw32_or_u,
     pop_u64,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -448,7 +553,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw_xor,
     pop_u32,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -457,7 +562,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw_xor,
     pop_u64,
-    atomic_rmw_u64,
+    local_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -466,7 +571,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw8_xor_u,
     pop_u32,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -475,7 +580,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw16_xor_u,
     pop_u32,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -484,7 +589,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw8_xor_u,
     pop_u64,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -493,7 +598,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw16_xor_u,
     pop_u64,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -502,7 +607,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw32_xor_u,
     pop_u64,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -512,7 +617,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw_xchg,
     pop_u32,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -521,7 +626,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw_xchg,
     pop_u64,
-    atomic_rmw_u64,
+    local_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -530,7 +635,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw8_xchg_u,
     pop_u32,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -539,7 +644,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i32_atomic_rmw16_xchg_u,
     pop_u32,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -548,7 +653,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw8_xchg_u,
     pop_u64,
-    atomic_rmw_u8,
+    local_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -557,7 +662,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw16_xchg_u,
     pop_u64,
-    atomic_rmw_u16,
+    local_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -566,7 +671,7 @@ atomic_rmw_op!(
 atomic_rmw_op!(
     op_i64_atomic_rmw32_xchg_u,
     pop_u64,
-    atomic_rmw_u32,
+    local_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -576,7 +681,7 @@ atomic_rmw_op!(
 atomic_cmpxchg_op!(
     op_i32_atomic_rmw_cmpxchg,
     pop_u32,
-    atomic_cmpxchg_u32,
+    local_atomic_cmpxchg_u32,
     push_u32,
     u32,
     u32
@@ -584,7 +689,7 @@ atomic_cmpxchg_op!(
 atomic_cmpxchg_op!(
     op_i64_atomic_rmw_cmpxchg,
     pop_u64,
-    atomic_cmpxchg_u64,
+    local_atomic_cmpxchg_u64,
     push_u64,
     u64,
     u64
@@ -592,7 +697,7 @@ atomic_cmpxchg_op!(
 atomic_cmpxchg_op!(
     op_i32_atomic_rmw8_cmpxchg_u,
     pop_u32,
-    atomic_cmpxchg_u8,
+    local_atomic_cmpxchg_u8,
     push_u32,
     u8,
     u32
@@ -600,7 +705,7 @@ atomic_cmpxchg_op!(
 atomic_cmpxchg_op!(
     op_i32_atomic_rmw16_cmpxchg_u,
     pop_u32,
-    atomic_cmpxchg_u16,
+    local_atomic_cmpxchg_u16,
     push_u32,
     u16,
     u32
@@ -608,7 +713,7 @@ atomic_cmpxchg_op!(
 atomic_cmpxchg_op!(
     op_i64_atomic_rmw8_cmpxchg_u,
     pop_u64,
-    atomic_cmpxchg_u8,
+    local_atomic_cmpxchg_u8,
     push_u64,
     u8,
     u64
@@ -616,7 +721,7 @@ atomic_cmpxchg_op!(
 atomic_cmpxchg_op!(
     op_i64_atomic_rmw16_cmpxchg_u,
     pop_u64,
-    atomic_cmpxchg_u16,
+    local_atomic_cmpxchg_u16,
     push_u64,
     u16,
     u64
@@ -624,7 +729,528 @@ atomic_cmpxchg_op!(
 atomic_cmpxchg_op!(
     op_i64_atomic_rmw32_cmpxchg_u,
     pop_u64,
-    atomic_cmpxchg_u32,
+    local_atomic_cmpxchg_u32,
+    push_u64,
+    u32,
+    u64
+);
+
+atomic_load_op_shared!(
+    op_i32_atomic_load_shared,
+    shared_atomic_load_u32,
+    push_u32,
+    u32
+);
+atomic_load_op_shared!(
+    op_i64_atomic_load_shared,
+    shared_atomic_load_u64,
+    push_u64,
+    u64
+);
+atomic_load_op_shared!(
+    op_i32_atomic_load8_u_shared,
+    shared_atomic_load_u8,
+    push_u32,
+    u32
+);
+atomic_load_op_shared!(
+    op_i32_atomic_load16_u_shared,
+    shared_atomic_load_u16,
+    push_u32,
+    u32
+);
+atomic_load_op_shared!(
+    op_i64_atomic_load8_u_shared,
+    shared_atomic_load_u8,
+    push_u64,
+    u64
+);
+atomic_load_op_shared!(
+    op_i64_atomic_load16_u_shared,
+    shared_atomic_load_u16,
+    push_u64,
+    u64
+);
+atomic_load_op_shared!(
+    op_i64_atomic_load32_u_shared,
+    shared_atomic_load_u32,
+    push_u64,
+    u64
+);
+
+atomic_store_op_shared!(
+    op_i32_atomic_store_shared,
+    pop_u32,
+    shared_atomic_store_u32,
+    u32
+);
+atomic_store_op_shared!(
+    op_i64_atomic_store_shared,
+    pop_u64,
+    shared_atomic_store_u64,
+    u64
+);
+atomic_store_op_shared!(
+    op_i32_atomic_store8_shared,
+    pop_u32,
+    shared_atomic_store_u8,
+    u8
+);
+atomic_store_op_shared!(
+    op_i32_atomic_store16_shared,
+    pop_u32,
+    shared_atomic_store_u16,
+    u16
+);
+atomic_store_op_shared!(
+    op_i64_atomic_store8_shared,
+    pop_u64,
+    shared_atomic_store_u8,
+    u8
+);
+atomic_store_op_shared!(
+    op_i64_atomic_store16_shared,
+    pop_u64,
+    shared_atomic_store_u16,
+    u16
+);
+atomic_store_op_shared!(
+    op_i64_atomic_store32_shared,
+    pop_u64,
+    shared_atomic_store_u32,
+    u32
+);
+
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw_add_shared,
+    pop_u32,
+    shared_atomic_rmw_u32,
+    push_u32,
+    u32,
+    u32,
+    AtomicRmwOp::Add
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw_add_shared,
+    pop_u64,
+    shared_atomic_rmw_u64,
+    push_u64,
+    u64,
+    u64,
+    AtomicRmwOp::Add
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw8_add_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u8,
+    push_u32,
+    u8,
+    u32,
+    AtomicRmwOp::Add
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw16_add_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u16,
+    push_u32,
+    u16,
+    u32,
+    AtomicRmwOp::Add
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw8_add_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u8,
+    push_u64,
+    u8,
+    u64,
+    AtomicRmwOp::Add
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw16_add_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u16,
+    push_u64,
+    u16,
+    u64,
+    AtomicRmwOp::Add
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw32_add_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u32,
+    push_u64,
+    u32,
+    u64,
+    AtomicRmwOp::Add
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw_sub_shared,
+    pop_u32,
+    shared_atomic_rmw_u32,
+    push_u32,
+    u32,
+    u32,
+    AtomicRmwOp::Sub
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw_sub_shared,
+    pop_u64,
+    shared_atomic_rmw_u64,
+    push_u64,
+    u64,
+    u64,
+    AtomicRmwOp::Sub
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw8_sub_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u8,
+    push_u32,
+    u8,
+    u32,
+    AtomicRmwOp::Sub
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw16_sub_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u16,
+    push_u32,
+    u16,
+    u32,
+    AtomicRmwOp::Sub
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw8_sub_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u8,
+    push_u64,
+    u8,
+    u64,
+    AtomicRmwOp::Sub
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw16_sub_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u16,
+    push_u64,
+    u16,
+    u64,
+    AtomicRmwOp::Sub
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw32_sub_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u32,
+    push_u64,
+    u32,
+    u64,
+    AtomicRmwOp::Sub
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw_and_shared,
+    pop_u32,
+    shared_atomic_rmw_u32,
+    push_u32,
+    u32,
+    u32,
+    AtomicRmwOp::And
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw_and_shared,
+    pop_u64,
+    shared_atomic_rmw_u64,
+    push_u64,
+    u64,
+    u64,
+    AtomicRmwOp::And
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw8_and_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u8,
+    push_u32,
+    u8,
+    u32,
+    AtomicRmwOp::And
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw16_and_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u16,
+    push_u32,
+    u16,
+    u32,
+    AtomicRmwOp::And
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw8_and_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u8,
+    push_u64,
+    u8,
+    u64,
+    AtomicRmwOp::And
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw16_and_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u16,
+    push_u64,
+    u16,
+    u64,
+    AtomicRmwOp::And
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw32_and_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u32,
+    push_u64,
+    u32,
+    u64,
+    AtomicRmwOp::And
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw_or_shared,
+    pop_u32,
+    shared_atomic_rmw_u32,
+    push_u32,
+    u32,
+    u32,
+    AtomicRmwOp::Or
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw_or_shared,
+    pop_u64,
+    shared_atomic_rmw_u64,
+    push_u64,
+    u64,
+    u64,
+    AtomicRmwOp::Or
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw8_or_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u8,
+    push_u32,
+    u8,
+    u32,
+    AtomicRmwOp::Or
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw16_or_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u16,
+    push_u32,
+    u16,
+    u32,
+    AtomicRmwOp::Or
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw8_or_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u8,
+    push_u64,
+    u8,
+    u64,
+    AtomicRmwOp::Or
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw16_or_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u16,
+    push_u64,
+    u16,
+    u64,
+    AtomicRmwOp::Or
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw32_or_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u32,
+    push_u64,
+    u32,
+    u64,
+    AtomicRmwOp::Or
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw_xor_shared,
+    pop_u32,
+    shared_atomic_rmw_u32,
+    push_u32,
+    u32,
+    u32,
+    AtomicRmwOp::Xor
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw_xor_shared,
+    pop_u64,
+    shared_atomic_rmw_u64,
+    push_u64,
+    u64,
+    u64,
+    AtomicRmwOp::Xor
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw8_xor_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u8,
+    push_u32,
+    u8,
+    u32,
+    AtomicRmwOp::Xor
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw16_xor_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u16,
+    push_u32,
+    u16,
+    u32,
+    AtomicRmwOp::Xor
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw8_xor_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u8,
+    push_u64,
+    u8,
+    u64,
+    AtomicRmwOp::Xor
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw16_xor_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u16,
+    push_u64,
+    u16,
+    u64,
+    AtomicRmwOp::Xor
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw32_xor_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u32,
+    push_u64,
+    u32,
+    u64,
+    AtomicRmwOp::Xor
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw_xchg_shared,
+    pop_u32,
+    shared_atomic_rmw_u32,
+    push_u32,
+    u32,
+    u32,
+    AtomicRmwOp::Xchg
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw_xchg_shared,
+    pop_u64,
+    shared_atomic_rmw_u64,
+    push_u64,
+    u64,
+    u64,
+    AtomicRmwOp::Xchg
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw8_xchg_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u8,
+    push_u32,
+    u8,
+    u32,
+    AtomicRmwOp::Xchg
+);
+atomic_rmw_op_shared!(
+    op_i32_atomic_rmw16_xchg_u_shared,
+    pop_u32,
+    shared_atomic_rmw_u16,
+    push_u32,
+    u16,
+    u32,
+    AtomicRmwOp::Xchg
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw8_xchg_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u8,
+    push_u64,
+    u8,
+    u64,
+    AtomicRmwOp::Xchg
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw16_xchg_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u16,
+    push_u64,
+    u16,
+    u64,
+    AtomicRmwOp::Xchg
+);
+atomic_rmw_op_shared!(
+    op_i64_atomic_rmw32_xchg_u_shared,
+    pop_u64,
+    shared_atomic_rmw_u32,
+    push_u64,
+    u32,
+    u64,
+    AtomicRmwOp::Xchg
+);
+atomic_cmpxchg_op_shared!(
+    op_i32_atomic_rmw_cmpxchg_shared,
+    pop_u32,
+    shared_atomic_cmpxchg_u32,
+    push_u32,
+    u32,
+    u32
+);
+atomic_cmpxchg_op_shared!(
+    op_i64_atomic_rmw_cmpxchg_shared,
+    pop_u64,
+    shared_atomic_cmpxchg_u64,
+    push_u64,
+    u64,
+    u64
+);
+atomic_cmpxchg_op_shared!(
+    op_i32_atomic_rmw8_cmpxchg_u_shared,
+    pop_u32,
+    shared_atomic_cmpxchg_u8,
+    push_u32,
+    u8,
+    u32
+);
+atomic_cmpxchg_op_shared!(
+    op_i32_atomic_rmw16_cmpxchg_u_shared,
+    pop_u32,
+    shared_atomic_cmpxchg_u16,
+    push_u32,
+    u16,
+    u32
+);
+atomic_cmpxchg_op_shared!(
+    op_i64_atomic_rmw8_cmpxchg_u_shared,
+    pop_u64,
+    shared_atomic_cmpxchg_u8,
+    push_u64,
+    u8,
+    u64
+);
+atomic_cmpxchg_op_shared!(
+    op_i64_atomic_rmw16_cmpxchg_u_shared,
+    pop_u64,
+    shared_atomic_cmpxchg_u16,
+    push_u64,
+    u16,
+    u64
+);
+atomic_cmpxchg_op_shared!(
+    op_i64_atomic_rmw32_cmpxchg_u_shared,
+    pop_u64,
+    shared_atomic_cmpxchg_u32,
     push_u64,
     u32,
     u64
@@ -648,15 +1274,36 @@ pub unsafe fn op_memory_atomic_notify(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    let _count = ctx.stack.pop_u32();
+    let _start = vm_try!(atomic_start(tail_code, ctx));
+    let woken = 0;
+    vm_try!(ctx.stack.push_u32(woken));
+    call_next(tail_code, 1, ctx)
+}
+
+/// WebAssembly `memory.atomic.notify` on shared default memory.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i32] -> [i32]`.
+/// Traps: traps on out-of-bounds access or unaligned access.
+/// Notes: Uses the threads memory model and preserves the runtime wait/notify contract before tail-dispatching.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_memory_atomic_notify_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
     let count = ctx.stack.pop_u32();
     let start = vm_try!(atomic_start(tail_code, ctx));
-    let handle = vm_try!(atomic_handle(ctx));
-    let woken = match handle {
-        MemoryHandle::Local(_) => 0,
-        MemoryHandle::Shared(id) => {
-            vm_try!(ctx.gc.clone_shared_memory(id).notify_waiters(start, count))
-        }
-    };
+    let woken = vm_try!(ctx
+        .gc
+        .shared_memory(ctx.default_shared_memory_id_unchecked())
+        .notify_waiters(start, count));
     vm_try!(ctx.stack.push_u32(woken));
     call_next(tail_code, 1, ctx)
 }
@@ -716,35 +1363,57 @@ pub unsafe fn op_memory_atomic_wait32(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    let _timeout_ns = ctx.stack.pop_i64();
+    let _expected = ctx.stack.pop_u32();
+    let _start = vm_try!(atomic_start(tail_code, ctx));
+    VMResult::InvalidOperand
+}
+
+/// WebAssembly `memory.atomic.wait32` on shared default memory.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i32, i64] -> [i32]`.
+/// Traps: traps on out-of-bounds access or unaligned access.
+/// Notes: Uses the threads memory model and preserves the runtime wait/notify contract before tail-dispatching.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_memory_atomic_wait32_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
     let timeout_ns = ctx.stack.pop_i64();
     let expected = ctx.stack.pop_u32();
     let start = vm_try!(atomic_start(tail_code, ctx));
-    let handle = vm_try!(atomic_handle(ctx));
-    match handle {
-        MemoryHandle::Local(_) => VMResult::InvalidOperand,
-        MemoryHandle::Shared(id) => {
-            #[cfg(feature = "async-runtime")]
-            {
-                let shared = ctx.gc.clone_shared_memory(id);
-                match vm_try!(shared.register_wait32(start, expected)) {
-                    AtomicWaitResult::NotEqual => {
-                        vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-                        call_next(tail_code, 1, ctx)
-                    }
-                    AtomicWaitResult::Pending(wait) => {
-                        let resume_pc = tail_code.offset(1);
-                        push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-                        let _ = wait_effect(ctx, resume_pc);
-                        VMResult::Success(())
-                    }
-                }
+    #[cfg(feature = "async-runtime")]
+    {
+        let shared = ctx
+            .gc
+            .shared_memory(ctx.default_shared_memory_id_unchecked());
+        match vm_try!(shared.register_wait32(start, expected)) {
+            AtomicWaitResult::NotEqual => {
+                vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
+                call_next(tail_code, 1, ctx)
             }
-            #[cfg(not(feature = "async-runtime"))]
-            {
-                let _ = id;
-                VMResult::InvalidOperand
+            AtomicWaitResult::Pending(wait) => {
+                let resume_pc = tail_code.offset(1);
+                let shared = ctx
+                    .gc
+                    .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+                push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
+                let _ = wait_effect(ctx, resume_pc);
+                VMResult::Success(())
             }
         }
+    }
+    #[cfg(not(feature = "async-runtime"))]
+    {
+        let _ = (timeout_ns, expected, start);
+        VMResult::InvalidOperand
     }
 }
 
@@ -766,35 +1435,57 @@ pub unsafe fn op_memory_atomic_wait64(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    let _timeout_ns = ctx.stack.pop_i64();
+    let _expected = ctx.stack.pop_u64();
+    let _start = vm_try!(atomic_start(tail_code, ctx));
+    VMResult::InvalidOperand
+}
+
+/// WebAssembly `memory.atomic.wait64` on shared default memory.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i64, i64] -> [i32]`.
+/// Traps: traps on out-of-bounds access or unaligned access.
+/// Notes: Uses the threads memory model and preserves the runtime wait/notify contract before tail-dispatching.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_memory_atomic_wait64_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
     let timeout_ns = ctx.stack.pop_i64();
     let expected = ctx.stack.pop_u64();
     let start = vm_try!(atomic_start(tail_code, ctx));
-    let handle = vm_try!(atomic_handle(ctx));
-    match handle {
-        MemoryHandle::Local(_) => VMResult::InvalidOperand,
-        MemoryHandle::Shared(id) => {
-            #[cfg(feature = "async-runtime")]
-            {
-                let shared = ctx.gc.clone_shared_memory(id);
-                match vm_try!(shared.register_wait64(start, expected)) {
-                    AtomicWaitResult::NotEqual => {
-                        vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-                        call_next(tail_code, 1, ctx)
-                    }
-                    AtomicWaitResult::Pending(wait) => {
-                        let resume_pc = tail_code.offset(1);
-                        push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-                        let _ = wait_effect(ctx, resume_pc);
-                        VMResult::Success(())
-                    }
-                }
+    #[cfg(feature = "async-runtime")]
+    {
+        let shared = ctx
+            .gc
+            .shared_memory(ctx.default_shared_memory_id_unchecked());
+        match vm_try!(shared.register_wait64(start, expected)) {
+            AtomicWaitResult::NotEqual => {
+                vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
+                call_next(tail_code, 1, ctx)
             }
-            #[cfg(not(feature = "async-runtime"))]
-            {
-                let _ = id;
-                VMResult::InvalidOperand
+            AtomicWaitResult::Pending(wait) => {
+                let resume_pc = tail_code.offset(1);
+                let shared = ctx
+                    .gc
+                    .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+                push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
+                let _ = wait_effect(ctx, resume_pc);
+                VMResult::Success(())
             }
         }
+    }
+    #[cfg(not(feature = "async-runtime"))]
+    {
+        let _ = (timeout_ns, expected, start);
+        VMResult::InvalidOperand
     }
 }
 
@@ -813,8 +1504,48 @@ pub unsafe fn op_memory_atomic_wait64(
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
 pub unsafe fn op_atomic_fence(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    if let Some(handle) = ctx.memory_addr() {
-        ctx.gc.atomic_fence(handle);
-    }
+    ctx.gc
+        .local_atomic_fence(ctx.default_local_memory_id_unchecked());
     call_next(tail_code, 1, ctx)
 }
+
+/// WebAssembly `atomic.fence` on shared default memory.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[] -> []`.
+/// Traps: none.
+/// Notes: Uses the threads memory model and preserves the runtime wait/notify contract before tail-dispatching.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_atomic_fence_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    ctx.gc
+        .shared_atomic_fence(ctx.default_shared_memory_id_unchecked());
+    call_next(tail_code, 1, ctx)
+}
+
+pub(crate) use op_atomic_fence as op_atomic_fence_local;
+pub(crate) use op_i32_atomic_load as op_i32_atomic_load_local;
+pub(crate) use op_i32_atomic_load16_u as op_i32_atomic_load16_u_local;
+pub(crate) use op_i32_atomic_load8_u as op_i32_atomic_load8_u_local;
+pub(crate) use op_i32_atomic_store as op_i32_atomic_store_local;
+pub(crate) use op_i32_atomic_store16 as op_i32_atomic_store16_local;
+pub(crate) use op_i32_atomic_store8 as op_i32_atomic_store8_local;
+pub(crate) use op_i64_atomic_load as op_i64_atomic_load_local;
+pub(crate) use op_i64_atomic_load16_u as op_i64_atomic_load16_u_local;
+pub(crate) use op_i64_atomic_load32_u as op_i64_atomic_load32_u_local;
+pub(crate) use op_i64_atomic_load8_u as op_i64_atomic_load8_u_local;
+pub(crate) use op_i64_atomic_store as op_i64_atomic_store_local;
+pub(crate) use op_i64_atomic_store16 as op_i64_atomic_store16_local;
+pub(crate) use op_i64_atomic_store32 as op_i64_atomic_store32_local;
+pub(crate) use op_i64_atomic_store8 as op_i64_atomic_store8_local;
+pub(crate) use op_memory_atomic_notify as op_memory_atomic_notify_unshared;
+pub(crate) use op_memory_atomic_wait32 as op_memory_atomic_wait32_unshared;
+pub(crate) use op_memory_atomic_wait64 as op_memory_atomic_wait64_unshared;

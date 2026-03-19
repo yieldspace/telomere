@@ -12,6 +12,7 @@ pub use memory::{AtomicRmwOp, LocalMemoryObject, MemArg, Memory, SharedMemoryObj
 #[cfg(feature = "async-runtime")]
 pub use memory::{AtomicWaitResult, SharedWaitRegistration};
 pub(crate) mod stack;
+use stack::CachedMemoryKind;
 pub(crate) use stack::CallFrameCache;
 pub use stack::{LocalReference, Stack};
 mod registry;
@@ -19,6 +20,7 @@ pub use registry::Registry;
 pub(crate) mod store;
 pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
 pub use store::{InstanceHandle, MemoryHandle, Store, StoreState};
+use store::{LocalMemoryId, SharedMemoryId};
 pub(crate) mod gc;
 pub use gc::GcRef;
 
@@ -567,18 +569,21 @@ impl ExecuteContextSnapshot {
     }
 }
 
+fn snapshot_memory_kind(kind: CachedMemoryKind) -> SnapshotMemoryKind {
+    match kind {
+        CachedMemoryKind::None => SnapshotMemoryKind::None,
+        CachedMemoryKind::Local => SnapshotMemoryKind::Local,
+        CachedMemoryKind::Shared => SnapshotMemoryKind::Shared,
+    }
+}
+
 impl ExecuteContext<'_> {
     pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
-        let default_memory = match self.memory_addr() {
-            Some(MemoryHandle::Local(_)) => SnapshotMemoryKind::Local,
-            Some(MemoryHandle::Shared(_)) => SnapshotMemoryKind::Shared,
-            None => SnapshotMemoryKind::None,
-        };
-        let caller_memory = match self.caller_memory_addr() {
-            Some(MemoryHandle::Local(_)) => SnapshotMemoryKind::Local,
-            Some(MemoryHandle::Shared(_)) => SnapshotMemoryKind::Shared,
-            None => SnapshotMemoryKind::None,
-        };
+        let default_memory = snapshot_memory_kind(self.current_frame.memory0_kind);
+        let caller_memory = self
+            .caller_frame_cache()
+            .map(|frame| snapshot_memory_kind(frame.memory0_kind))
+            .unwrap_or(SnapshotMemoryKind::None);
         ExecuteContextSnapshot {
             default_memory,
             caller_memory,
@@ -597,8 +602,9 @@ impl ExecuteContext<'_> {
     }
 
     #[inline(always)]
-    fn memory_addr_from_gc_ref(&self, addr: GcRef) -> Option<MemoryHandle> {
-        (!addr.is_null()).then(|| self.gc.memory_handle(addr))
+    fn caller_frame_cache(&self) -> Option<CallFrameCache> {
+        let caller = self.caller_local_reference()?;
+        Some(self.stack.frame_cache(&caller))
     }
 
     pub fn func(&self) -> &FunctionInstanceData {
@@ -628,12 +634,61 @@ impl ExecuteContext<'_> {
         self.local_reference
     }
     pub fn memory_addr(&self) -> Option<MemoryHandle> {
-        self.memory_addr_from_gc_ref(self.current_frame.memory0_ref)
+        self.current_frame.memory0_handle()
+    }
+    #[inline(always)]
+    /// Returns the cached default local-memory id without decoding a tagged handle.
+    ///
+    /// # Safety
+    /// - The active frame must have a default memory and its cached kind must be `Local`.
+    /// - Callers must only use the returned id while `self.current_frame` remains the active frame.
+    pub unsafe fn default_local_memory_id_unchecked(&self) -> LocalMemoryId {
+        debug_assert_eq!(self.current_frame.memory0_kind, CachedMemoryKind::Local);
+        unsafe { LocalMemoryId::from_raw_unchecked(self.current_frame.memory0_raw) }
+    }
+    #[inline(always)]
+    /// Returns the cached default shared-memory id without decoding a tagged handle.
+    ///
+    /// # Safety
+    /// - The active frame must have a default memory and its cached kind must be `Shared`.
+    /// - Callers must only use the returned id while `self.current_frame` remains the active frame.
+    pub unsafe fn default_shared_memory_id_unchecked(&self) -> SharedMemoryId {
+        debug_assert_eq!(self.current_frame.memory0_kind, CachedMemoryKind::Shared);
+        unsafe { SharedMemoryId::from_raw_unchecked(self.current_frame.memory0_raw) }
+    }
+    #[inline(always)]
+    /// Returns the cached caller local-memory id without decoding a tagged handle.
+    ///
+    /// # Safety
+    /// - A caller frame must exist and its cached default memory kind must be `Local`.
+    /// - Callers must only use the returned id while that caller frame remains valid.
+    pub unsafe fn caller_local_memory_id_unchecked(&self) -> LocalMemoryId {
+        let frame = self
+            .caller_frame_cache()
+            .expect("caller frame cache required for caller local memory");
+        debug_assert_eq!(frame.memory0_kind, CachedMemoryKind::Local);
+        unsafe { LocalMemoryId::from_raw_unchecked(frame.memory0_raw) }
+    }
+    #[inline(always)]
+    /// Returns the cached caller shared-memory id without decoding a tagged handle.
+    ///
+    /// # Safety
+    /// - A caller frame must exist and its cached default memory kind must be `Shared`.
+    /// - Callers must only use the returned id while that caller frame remains valid.
+    pub unsafe fn caller_shared_memory_id_unchecked(&self) -> SharedMemoryId {
+        let frame = self
+            .caller_frame_cache()
+            .expect("caller frame cache required for caller shared memory");
+        debug_assert_eq!(frame.memory0_kind, CachedMemoryKind::Shared);
+        unsafe { SharedMemoryId::from_raw_unchecked(frame.memory0_raw) }
     }
     pub fn local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
-        match self.memory_addr()? {
-            MemoryHandle::Local(id) => Some(self.gc.local_memory_mut(id)),
-            MemoryHandle::Shared(_) => None,
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => Some(
+                self.gc
+                    .local_memory_mut(unsafe { self.default_local_memory_id_unchecked() }),
+            ),
+            CachedMemoryKind::None | CachedMemoryKind::Shared => None,
         }
     }
     pub fn memory(&mut self) -> Option<&mut Memory> {
@@ -642,7 +697,9 @@ impl ExecuteContext<'_> {
 
     #[inline(always)]
     pub fn memory_handle_result(&self) -> VMResult<MemoryHandle> {
-        VMResult::from_option(self.memory_addr(), || VMResult::MemoryIndexOutOfRange)
+        VMResult::from_option(self.current_frame.memory0_handle(), || {
+            VMResult::MemoryIndexOutOfRange
+        })
     }
 
     #[inline(always)]
@@ -743,15 +800,24 @@ impl ExecuteContext<'_> {
     }
 
     pub fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
-        let addr = self.current_frame.memory0_ref;
-        if addr.is_null() {
-            return None;
-        }
+        let handle = self.current_frame.memory0_handle()?;
+        let addr = self.gc.gc_ref_for_memory_handle(handle);
         Some(self.gc.with_memory_by_addr(addr, f))
     }
     pub fn memory_page_size(&self) -> Option<u32> {
-        let handle = self.memory_addr()?;
-        Some(self.gc.memory_page_size(handle))
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::None => None,
+            CachedMemoryKind::Local => Some(
+                self.gc
+                    .local_memory(unsafe { self.default_local_memory_id_unchecked() })
+                    .page_size(),
+            ),
+            CachedMemoryKind::Shared => Some(
+                self.gc
+                    .shared_memory(unsafe { self.default_shared_memory_id_unchecked() })
+                    .page_size(),
+            ),
+        }
     }
     pub fn caller_local_reference(&self) -> Option<LocalReference> {
         (self.local_reference.local_size != 0)
@@ -759,13 +825,16 @@ impl ExecuteContext<'_> {
             .filter(|reference| reference.local_size != 0)
     }
     pub fn caller_memory_addr(&self) -> Option<MemoryHandle> {
-        let caller = self.caller_local_reference()?;
-        self.memory_addr_from_gc_ref(self.stack.memory0_ref(&caller))
+        self.caller_frame_cache()?.memory0_handle()
     }
     pub fn caller_local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
-        match self.caller_memory_addr()? {
-            MemoryHandle::Local(id) => Some(self.gc.local_memory_mut(id)),
-            MemoryHandle::Shared(_) => None,
+        let frame = self.caller_frame_cache()?;
+        match frame.memory0_kind {
+            CachedMemoryKind::Local => Some(
+                self.gc
+                    .local_memory_mut(unsafe { self.caller_local_memory_id_unchecked() }),
+            ),
+            CachedMemoryKind::None | CachedMemoryKind::Shared => None,
         }
     }
     pub fn caller_memory(&mut self) -> Option<&mut Memory> {

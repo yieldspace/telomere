@@ -484,7 +484,16 @@ pub async fn instantiate(
                 let local_reference = vm_try!(stack.function_call(
                     0,
                     0,
-                    CallFrameCache::from_parts(funcaddr, funcinst, &func_instance.mems),
+                    CallFrameCache::from_parts(
+                        funcaddr,
+                        funcinst,
+                        func_instance
+                            .mems
+                            .first()
+                            .copied()
+                            .filter(|addr| !addr.is_null())
+                            .map(|addr| gc.memory_handle(addr)),
+                    ),
                     LocalReference {
                         local_size: 0,
                         local_top: 0
@@ -507,7 +516,16 @@ pub async fn instantiate(
                 let local_reference = vm_try!(stack.function_call(
                     0,
                     locals.byte_size(),
-                    CallFrameCache::from_parts(funcaddr, funcinst, &func_instance.mems),
+                    CallFrameCache::from_parts(
+                        funcaddr,
+                        funcinst,
+                        func_instance
+                            .mems
+                            .first()
+                            .copied()
+                            .filter(|addr| !addr.is_null())
+                            .map(|addr| gc.memory_handle(addr)),
+                    ),
                     LocalReference {
                         local_size: 0,
                         local_top: 0

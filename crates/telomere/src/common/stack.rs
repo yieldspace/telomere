@@ -9,7 +9,7 @@ use std::fmt::Debug;
 use super::{
     gc::GcRef,
     memory::trusted_copy_from_slice,
-    store::{FunctionInstanceData, InstanceId},
+    store::{FunctionInstanceData, InstanceId, LocalMemoryId, MemoryHandle, SharedMemoryId},
     Instr, StablePc, StoreInner,
 };
 
@@ -218,7 +218,16 @@ pub(crate) struct CallStackInfo {
     code_addr: GcRef,
     code_base: *const Instr,
     instance: InstanceId,
-    memory0_ref: GcRef,
+    memory0_kind: CachedMemoryKind,
+    memory0_raw: u32,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CachedMemoryKind {
+    None = 0,
+    Local = 1,
+    Shared = 2,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -226,7 +235,18 @@ pub(crate) struct CallFrameCache {
     pub(crate) code_addr: GcRef,
     pub(crate) code_base: *const Instr,
     pub(crate) instance: InstanceId,
-    pub(crate) memory0_ref: GcRef,
+    pub(crate) memory0_kind: CachedMemoryKind,
+    pub(crate) memory0_raw: u32,
+}
+
+impl CachedMemoryKind {
+    fn from_memory_handle(handle: Option<MemoryHandle>) -> (Self, u32) {
+        match handle {
+            Some(MemoryHandle::Local(id)) => (Self::Local, id.raw()),
+            Some(MemoryHandle::Shared(id)) => (Self::Shared, id.raw()),
+            None => (Self::None, 0),
+        }
+    }
 }
 
 impl CallFrameCache {
@@ -235,20 +255,35 @@ impl CallFrameCache {
             code_addr: GcRef(0),
             code_base: std::ptr::null(),
             instance: InstanceId::from_index(0),
-            memory0_ref: GcRef(0),
+            memory0_kind: CachedMemoryKind::None,
+            memory0_raw: 0,
         }
     }
 
     pub(crate) fn from_parts(
         code_addr: GcRef,
         func: &FunctionInstanceData,
-        memories: &[GcRef],
+        memory0: Option<MemoryHandle>,
     ) -> Self {
+        let (memory0_kind, memory0_raw) = CachedMemoryKind::from_memory_handle(memory0);
         Self {
             code_addr,
             code_base: func.code_pointer().unwrap_or(std::ptr::null()),
             instance: func.instance,
-            memory0_ref: memories.first().copied().unwrap_or(GcRef(0)),
+            memory0_kind,
+            memory0_raw,
+        }
+    }
+
+    pub(crate) fn memory0_handle(self) -> Option<MemoryHandle> {
+        match self.memory0_kind {
+            CachedMemoryKind::None => None,
+            CachedMemoryKind::Local => Some(MemoryHandle::Local(LocalMemoryId::from_raw(
+                self.memory0_raw,
+            ))),
+            CachedMemoryKind::Shared => Some(MemoryHandle::Shared(SharedMemoryId::from_raw(
+                self.memory0_raw,
+            ))),
         }
     }
 }
@@ -267,7 +302,13 @@ impl IntoCallFrameCache for GcRef {
     fn into_call_frame_cache(self, runtime: &StoreInner) -> CallFrameCache {
         let func = runtime.get_func(self);
         let instance = runtime.instance(func.instance);
-        CallFrameCache::from_parts(self, func, &instance.mems)
+        let memory0 = instance
+            .mems
+            .first()
+            .copied()
+            .filter(|addr| !addr.is_null())
+            .map(|addr| runtime.memory_handle(addr));
+        CallFrameCache::from_parts(self, func, memory0)
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -518,16 +559,14 @@ impl Stack {
     pub fn code_base(&self, reference: &LocalReference) -> *const Instr {
         self.call_stack_info(reference).code_base
     }
-    pub(crate) fn memory0_ref(&self, reference: &LocalReference) -> GcRef {
-        self.call_stack_info(reference).memory0_ref
-    }
     pub(crate) fn frame_cache(&self, reference: &LocalReference) -> CallFrameCache {
         let info = self.call_stack_info(reference);
         CallFrameCache {
             code_addr: info.code_addr,
             code_base: info.code_base,
             instance: info.instance,
-            memory0_ref: info.memory0_ref,
+            memory0_kind: info.memory0_kind,
+            memory0_raw: info.memory0_raw,
         }
     }
     pub fn function_call<F: IntoCallFrameCache>(
@@ -557,7 +596,8 @@ impl Stack {
             code_addr: frame.code_addr,
             code_base: frame.code_base,
             instance: frame.instance,
-            memory0_ref: frame.memory0_ref,
+            memory0_kind: frame.memory0_kind,
+            memory0_raw: frame.memory0_raw,
             prev_local_reference_top: prev_local_reference.local_top,
             prev_local_reference_size: prev_local_reference.local_size,
         };
@@ -643,7 +683,8 @@ impl Stack {
             code_addr: frame.code_addr,
             code_base: frame.code_base,
             instance: frame.instance,
-            memory0_ref: frame.memory0_ref,
+            memory0_kind: frame.memory0_kind,
+            memory0_raw: frame.memory0_raw,
             prev_local_reference_top,
             prev_local_reference_size,
         };

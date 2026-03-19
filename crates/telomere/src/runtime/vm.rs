@@ -256,7 +256,10 @@ fn invoke_host_function(
 }
 
 pub(crate) use atomics::*;
-pub(crate) use bulk_memory::{op_data_drop, op_mem_copy, op_mem_fill, op_mem_init};
+pub(crate) use bulk_memory::{
+    op_data_drop, op_mem_copy_local, op_mem_copy_shared, op_mem_fill_local, op_mem_fill_shared,
+    op_mem_init_local, op_mem_init_shared,
+};
 pub(crate) use call::{
     op_call, op_call_indirect, op_return_call, op_return_call_indirect, special_start_function_call,
 };
@@ -269,7 +272,7 @@ pub(crate) use numeric::*;
 pub(crate) use refs::*;
 pub(crate) use tables::*;
 
-/// Telomere runtime helper `store_internal`.
+/// Telomere runtime helper `store_internal_local`.
 ///
 /// Related spec:
 /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
@@ -283,7 +286,7 @@ pub(crate) use tables::*;
 /// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
 /// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
 /// - `make_operation` must not retain references into `ctx` after it returns because the helper will continue by tail-dispatching immediately after the write.
-pub(crate) unsafe fn store_internal(
+pub(crate) unsafe fn store_internal_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
@@ -294,10 +297,43 @@ pub(crate) unsafe fn store_internal(
     trace!("op_store: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    vm_try!(ctx.write_memory_bytes(start, bytes));
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, bytes,));
     call_next(tail_code, 1, ctx)
 }
 
+/// Telomere runtime helper `store_internal_shared`.
+///
+/// Related spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Materializes the store payload before consuming the address so the write can tail-dispatch through `call_next`.
+///
+/// # Safety
+/// - `tail_code` must reference the active decoded instruction stream for the current frame.
+/// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
+/// - The active frame must have shared default memory.
+/// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
+/// - `make_operation` must not retain references into `ctx` after it returns because the helper will continue by tail-dispatching immediately after the write.
+pub(crate) unsafe fn store_internal_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let memarg = (*tail_code).operand.memarg;
+    let operation = make_operation(ctx);
+    let offset = ctx.stack.pop_u32();
+    trace!("op_store_shared: {:?} {}", memarg, offset);
+    let bytes = operation.as_slice();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    vm_try!(ctx
+        .gc
+        .shared_write_bytes(ctx.default_shared_memory_id_unchecked(), start, bytes,));
+    call_next(tail_code, 1, ctx)
+}
 pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
@@ -332,7 +368,16 @@ pub async fn run_module_function(
             let code_addr = instance.funcs[idx.0 as usize];
             let funcinst = gc.get_func(code_addr);
             let func_instance = gc.instance(funcinst.instance);
-            let frame = CallFrameCache::from_parts(code_addr, funcinst, &func_instance.mems);
+            let frame = CallFrameCache::from_parts(
+                code_addr,
+                funcinst,
+                func_instance
+                    .mems
+                    .first()
+                    .copied()
+                    .filter(|addr| !addr.is_null())
+                    .map(|addr| gc.memory_handle(addr)),
+            );
             let mut stack = Stack::new(128 * 1024);
             let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
             let ft = module_inst
@@ -401,7 +446,16 @@ pub(crate) fn run_module_function_sync_with_gc(
             let code_addr = instance.funcs[idx.0 as usize];
             let funcinst = gc.get_func(code_addr);
             let func_instance = gc.instance(funcinst.instance);
-            let frame = CallFrameCache::from_parts(code_addr, funcinst, &func_instance.mems);
+            let frame = CallFrameCache::from_parts(
+                code_addr,
+                funcinst,
+                func_instance
+                    .mems
+                    .first()
+                    .copied()
+                    .filter(|addr| !addr.is_null())
+                    .map(|addr| gc.memory_handle(addr)),
+            );
             let mut stack = Stack::new(128 * 1024);
             let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
             let ft = module_inst

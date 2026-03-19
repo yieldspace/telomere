@@ -35,6 +35,14 @@ macro_rules! define_store_id {
                 Self(NonZeroU32::new(raw).expect("store arena ids are non-zero"))
             }
 
+            pub(crate) fn from_raw(raw: u32) -> Self {
+                Self(NonZeroU32::new(raw).expect("store arena ids are non-zero"))
+            }
+
+            pub(crate) unsafe fn from_raw_unchecked(raw: u32) -> Self {
+                Self(unsafe { NonZeroU32::new_unchecked(raw) })
+            }
+
             pub(crate) fn index(self) -> usize {
                 self.0.get() as usize - 1
             }
@@ -274,6 +282,142 @@ pub struct StoreInner {
     next_instance_id: u32,
 }
 
+macro_rules! define_store_local_shared_const_read {
+    ($local:ident, $shared:ident, $method:ident) => {
+        #[inline(always)]
+        pub(crate) fn $local<const N: usize>(
+            &mut self,
+            id: LocalMemoryId,
+            offset: usize,
+        ) -> VMResult<[u8; N]> {
+            self.local_memory(id).$method::<N>(offset)
+        }
+
+        #[inline(always)]
+        pub(crate) fn $shared<const N: usize>(
+            &mut self,
+            id: SharedMemoryId,
+            offset: usize,
+        ) -> VMResult<[u8; N]> {
+            self.shared_memory(id).$method::<N>(offset)
+        }
+    };
+}
+
+macro_rules! define_store_local_shared_const_stack {
+    ($local:ident, $shared:ident, $method:ident) => {
+        #[inline(always)]
+        pub(crate) fn $local<const N: usize>(
+            &mut self,
+            id: LocalMemoryId,
+            stack: &mut Stack,
+            offset: usize,
+        ) -> VMResult<()> {
+            self.local_memory(id).$method::<N>(stack, offset)
+        }
+
+        #[inline(always)]
+        pub(crate) fn $shared<const N: usize>(
+            &mut self,
+            id: SharedMemoryId,
+            stack: &mut Stack,
+            offset: usize,
+        ) -> VMResult<()> {
+            self.shared_memory(id).$method::<N>(stack, offset)
+        }
+    };
+}
+
+macro_rules! define_store_local_shared_read {
+    ($local:ident, $shared:ident, $method:ident, $ret:ty) => {
+        #[inline(always)]
+        pub(crate) fn $local(&mut self, id: LocalMemoryId, offset: usize) -> VMResult<$ret> {
+            self.local_memory(id).$method(offset)
+        }
+
+        #[inline(always)]
+        pub(crate) fn $shared(&mut self, id: SharedMemoryId, offset: usize) -> VMResult<$ret> {
+            self.shared_memory(id).$method(offset)
+        }
+    };
+}
+
+macro_rules! define_store_local_shared_store {
+    ($local:ident, $shared:ident, $method:ident, $arg:ty) => {
+        #[inline(always)]
+        pub(crate) fn $local(
+            &mut self,
+            id: LocalMemoryId,
+            offset: usize,
+            value: $arg,
+        ) -> VMResult<()> {
+            self.local_memory_mut(id).$method(offset, value)
+        }
+
+        #[inline(always)]
+        pub(crate) fn $shared(
+            &mut self,
+            id: SharedMemoryId,
+            offset: usize,
+            value: $arg,
+        ) -> VMResult<()> {
+            self.shared_memory(id).$method(offset, value)
+        }
+    };
+}
+
+macro_rules! define_store_local_shared_rmw {
+    ($local:ident, $shared:ident, $method:ident, $arg:ty, $ret:ty) => {
+        #[inline(always)]
+        pub(crate) fn $local(
+            &mut self,
+            id: LocalMemoryId,
+            offset: usize,
+            op: AtomicRmwOp,
+            value: $arg,
+        ) -> VMResult<$ret> {
+            self.local_memory_mut(id).$method(offset, op, value)
+        }
+
+        #[inline(always)]
+        pub(crate) fn $shared(
+            &mut self,
+            id: SharedMemoryId,
+            offset: usize,
+            op: AtomicRmwOp,
+            value: $arg,
+        ) -> VMResult<$ret> {
+            self.shared_memory(id).$method(offset, op, value)
+        }
+    };
+}
+
+macro_rules! define_store_local_shared_cmpxchg {
+    ($local:ident, $shared:ident, $method:ident, $arg:ty, $ret:ty) => {
+        #[inline(always)]
+        pub(crate) fn $local(
+            &mut self,
+            id: LocalMemoryId,
+            offset: usize,
+            expected: $arg,
+            value: $arg,
+        ) -> VMResult<$ret> {
+            self.local_memory_mut(id).$method(offset, expected, value)
+        }
+
+        #[inline(always)]
+        pub(crate) fn $shared(
+            &mut self,
+            id: SharedMemoryId,
+            offset: usize,
+            expected: $arg,
+            value: $arg,
+        ) -> VMResult<$ret> {
+            self.shared_memory(id).$method(offset, expected, value)
+        }
+    };
+}
+
 impl StoreInner {
     pub(crate) fn new() -> Self {
         Self {
@@ -500,6 +644,219 @@ impl StoreInner {
         }
     }
 
+    define_store_local_shared_const_read!(local_read_u8_array, shared_read_u8_array, read_u8_array);
+    define_store_local_shared_const_stack!(
+        local_push_memory_to_stack,
+        shared_push_memory_to_stack,
+        push_to_stack
+    );
+    define_store_local_shared_read!(local_read_u8_at, shared_read_u8_at, read_u8_at, u8);
+    define_store_local_shared_read!(local_read_i8_at, shared_read_i8_at, read_i8_at, i8);
+    define_store_local_shared_read!(local_read_u16_at, shared_read_u16_at, read_u16_at, u16);
+    define_store_local_shared_read!(local_read_i16_at, shared_read_i16_at, read_i16_at, i16);
+    define_store_local_shared_read!(local_read_u32_at, shared_read_u32_at, read_u32_at, u32);
+    define_store_local_shared_read!(local_read_i32_at, shared_read_i32_at, read_i32_at, i32);
+    define_store_local_shared_read!(local_read_u64_at, shared_read_u64_at, read_u64_at, u64);
+    define_store_local_shared_read!(local_read_i64_at, shared_read_i64_at, read_i64_at, i64);
+    define_store_local_shared_read!(local_read_f32_at, shared_read_f32_at, read_f32_at, f32);
+    define_store_local_shared_read!(local_read_f64_at, shared_read_f64_at, read_f64_at, f64);
+    define_store_local_shared_read!(
+        local_atomic_load_u8,
+        shared_atomic_load_u8,
+        atomic_load_u8,
+        u8
+    );
+    define_store_local_shared_read!(
+        local_atomic_load_u16,
+        shared_atomic_load_u16,
+        atomic_load_u16,
+        u16
+    );
+    define_store_local_shared_read!(
+        local_atomic_load_u32,
+        shared_atomic_load_u32,
+        atomic_load_u32,
+        u32
+    );
+    define_store_local_shared_read!(
+        local_atomic_load_u64,
+        shared_atomic_load_u64,
+        atomic_load_u64,
+        u64
+    );
+    define_store_local_shared_store!(
+        local_atomic_store_u8,
+        shared_atomic_store_u8,
+        atomic_store_u8,
+        u8
+    );
+    define_store_local_shared_store!(
+        local_atomic_store_u16,
+        shared_atomic_store_u16,
+        atomic_store_u16,
+        u16
+    );
+    define_store_local_shared_store!(
+        local_atomic_store_u32,
+        shared_atomic_store_u32,
+        atomic_store_u32,
+        u32
+    );
+    define_store_local_shared_store!(
+        local_atomic_store_u64,
+        shared_atomic_store_u64,
+        atomic_store_u64,
+        u64
+    );
+    define_store_local_shared_rmw!(
+        local_atomic_rmw_u8,
+        shared_atomic_rmw_u8,
+        atomic_rmw_u8,
+        u8,
+        u8
+    );
+    define_store_local_shared_rmw!(
+        local_atomic_rmw_u16,
+        shared_atomic_rmw_u16,
+        atomic_rmw_u16,
+        u16,
+        u16
+    );
+    define_store_local_shared_rmw!(
+        local_atomic_rmw_u32,
+        shared_atomic_rmw_u32,
+        atomic_rmw_u32,
+        u32,
+        u32
+    );
+    define_store_local_shared_rmw!(
+        local_atomic_rmw_u64,
+        shared_atomic_rmw_u64,
+        atomic_rmw_u64,
+        u64,
+        u64
+    );
+    define_store_local_shared_cmpxchg!(
+        local_atomic_cmpxchg_u8,
+        shared_atomic_cmpxchg_u8,
+        atomic_cmpxchg_u8,
+        u8,
+        u8
+    );
+    define_store_local_shared_cmpxchg!(
+        local_atomic_cmpxchg_u16,
+        shared_atomic_cmpxchg_u16,
+        atomic_cmpxchg_u16,
+        u16,
+        u16
+    );
+    define_store_local_shared_cmpxchg!(
+        local_atomic_cmpxchg_u32,
+        shared_atomic_cmpxchg_u32,
+        atomic_cmpxchg_u32,
+        u32,
+        u32
+    );
+    define_store_local_shared_cmpxchg!(
+        local_atomic_cmpxchg_u64,
+        shared_atomic_cmpxchg_u64,
+        atomic_cmpxchg_u64,
+        u64,
+        u64
+    );
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_fence(&mut self, id: LocalMemoryId) {
+        self.local_memory(id).atomic_fence();
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_fence(&mut self, id: SharedMemoryId) {
+        self.shared_memory(id).atomic_fence();
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_write_bytes(
+        &mut self,
+        id: LocalMemoryId,
+        offset: usize,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        self.local_memory_mut(id).write_bytes(offset, bytes)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_write_bytes(
+        &mut self,
+        id: SharedMemoryId,
+        offset: usize,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        self.shared_memory(id).write_bytes(offset, bytes)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_grow_memory(
+        &mut self,
+        id: LocalMemoryId,
+        page_size_delta: u32,
+    ) -> VMResult<i32> {
+        self.local_memory_mut(id).grow(page_size_delta)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_grow_memory(
+        &mut self,
+        id: SharedMemoryId,
+        page_size_delta: u32,
+    ) -> VMResult<i32> {
+        self.shared_memory(id).grow(page_size_delta)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_copy_memory(
+        &mut self,
+        id: LocalMemoryId,
+        dst: u32,
+        src: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.local_memory_mut(id).copy(dst, src, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_copy_memory(
+        &mut self,
+        id: SharedMemoryId,
+        dst: u32,
+        src: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.shared_memory(id).copy(dst, src, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_fill_memory(
+        &mut self,
+        id: LocalMemoryId,
+        ptr: u32,
+        len: u32,
+        data: u32,
+    ) -> VMResult<()> {
+        self.local_memory_mut(id).fill(ptr, len, data)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_fill_memory(
+        &mut self,
+        id: SharedMemoryId,
+        ptr: u32,
+        len: u32,
+        data: u32,
+    ) -> VMResult<()> {
+        self.shared_memory(id).fill(ptr, len, data)
+    }
+
     #[inline(always)]
     pub(crate) fn read_u8_array<const N: usize>(
         &mut self,
@@ -507,8 +864,8 @@ impl StoreInner {
         offset: usize,
     ) -> VMResult<[u8; N]> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_u8_array::<N>(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_u8_array::<N>(offset),
+            MemoryHandle::Local(id) => self.local_read_u8_array::<N>(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_u8_array::<N>(id, offset),
         }
     }
 
@@ -520,120 +877,120 @@ impl StoreInner {
         offset: usize,
     ) -> VMResult<()> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).push_to_stack::<N>(stack, offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).push_to_stack::<N>(stack, offset),
+            MemoryHandle::Local(id) => self.local_push_memory_to_stack::<N>(id, stack, offset),
+            MemoryHandle::Shared(id) => self.shared_push_memory_to_stack::<N>(id, stack, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_u8_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u8> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_u8_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_u8_at(offset),
+            MemoryHandle::Local(id) => self.local_read_u8_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_u8_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_i8_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<i8> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_i8_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_i8_at(offset),
+            MemoryHandle::Local(id) => self.local_read_i8_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_i8_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_u16_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u16> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_u16_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_u16_at(offset),
+            MemoryHandle::Local(id) => self.local_read_u16_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_u16_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_i16_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<i16> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_i16_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_i16_at(offset),
+            MemoryHandle::Local(id) => self.local_read_i16_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_i16_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_u32_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u32> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_u32_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_u32_at(offset),
+            MemoryHandle::Local(id) => self.local_read_u32_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_u32_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_i32_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<i32> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_i32_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_i32_at(offset),
+            MemoryHandle::Local(id) => self.local_read_i32_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_i32_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_u64_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u64> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_u64_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_u64_at(offset),
+            MemoryHandle::Local(id) => self.local_read_u64_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_u64_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_i64_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<i64> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_i64_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_i64_at(offset),
+            MemoryHandle::Local(id) => self.local_read_i64_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_i64_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_f32_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<f32> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_f32_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_f32_at(offset),
+            MemoryHandle::Local(id) => self.local_read_f32_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_f32_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn read_f64_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<f64> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).read_f64_at(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).read_f64_at(offset),
+            MemoryHandle::Local(id) => self.local_read_f64_at(id, offset),
+            MemoryHandle::Shared(id) => self.shared_read_f64_at(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn atomic_load_u8(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u8> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).atomic_load_u8(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_load_u8(offset),
+            MemoryHandle::Local(id) => self.local_atomic_load_u8(id, offset),
+            MemoryHandle::Shared(id) => self.shared_atomic_load_u8(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn atomic_load_u16(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u16> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).atomic_load_u16(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_load_u16(offset),
+            MemoryHandle::Local(id) => self.local_atomic_load_u16(id, offset),
+            MemoryHandle::Shared(id) => self.shared_atomic_load_u16(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn atomic_load_u32(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u32> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).atomic_load_u32(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_load_u32(offset),
+            MemoryHandle::Local(id) => self.local_atomic_load_u32(id, offset),
+            MemoryHandle::Shared(id) => self.shared_atomic_load_u32(id, offset),
         }
     }
 
     #[inline(always)]
     pub(crate) fn atomic_load_u64(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u64> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).atomic_load_u64(offset),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_load_u64(offset),
+            MemoryHandle::Local(id) => self.local_atomic_load_u64(id, offset),
+            MemoryHandle::Shared(id) => self.shared_atomic_load_u64(id, offset),
         }
     }
 
@@ -645,8 +1002,8 @@ impl StoreInner {
         value: u8,
     ) -> VMResult<()> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).atomic_store_u8(offset, value),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_store_u8(offset, value),
+            MemoryHandle::Local(id) => self.local_atomic_store_u8(id, offset, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_store_u8(id, offset, value),
         }
     }
 
@@ -658,8 +1015,8 @@ impl StoreInner {
         value: u16,
     ) -> VMResult<()> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).atomic_store_u16(offset, value),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_store_u16(offset, value),
+            MemoryHandle::Local(id) => self.local_atomic_store_u16(id, offset, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_store_u16(id, offset, value),
         }
     }
 
@@ -671,8 +1028,8 @@ impl StoreInner {
         value: u32,
     ) -> VMResult<()> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).atomic_store_u32(offset, value),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_store_u32(offset, value),
+            MemoryHandle::Local(id) => self.local_atomic_store_u32(id, offset, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_store_u32(id, offset, value),
         }
     }
 
@@ -684,8 +1041,8 @@ impl StoreInner {
         value: u64,
     ) -> VMResult<()> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).atomic_store_u64(offset, value),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_store_u64(offset, value),
+            MemoryHandle::Local(id) => self.local_atomic_store_u64(id, offset, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_store_u64(id, offset, value),
         }
     }
 
@@ -698,8 +1055,8 @@ impl StoreInner {
         value: u8,
     ) -> VMResult<u8> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).atomic_rmw_u8(offset, op, value),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_rmw_u8(offset, op, value),
+            MemoryHandle::Local(id) => self.local_atomic_rmw_u8(id, offset, op, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_rmw_u8(id, offset, op, value),
         }
     }
 
@@ -712,8 +1069,8 @@ impl StoreInner {
         value: u16,
     ) -> VMResult<u16> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).atomic_rmw_u16(offset, op, value),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_rmw_u16(offset, op, value),
+            MemoryHandle::Local(id) => self.local_atomic_rmw_u16(id, offset, op, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_rmw_u16(id, offset, op, value),
         }
     }
 
@@ -726,8 +1083,8 @@ impl StoreInner {
         value: u32,
     ) -> VMResult<u32> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).atomic_rmw_u32(offset, op, value),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_rmw_u32(offset, op, value),
+            MemoryHandle::Local(id) => self.local_atomic_rmw_u32(id, offset, op, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_rmw_u32(id, offset, op, value),
         }
     }
 
@@ -740,8 +1097,8 @@ impl StoreInner {
         value: u64,
     ) -> VMResult<u64> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).atomic_rmw_u64(offset, op, value),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_rmw_u64(offset, op, value),
+            MemoryHandle::Local(id) => self.local_atomic_rmw_u64(id, offset, op, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_rmw_u64(id, offset, op, value),
         }
     }
 
@@ -754,12 +1111,8 @@ impl StoreInner {
         value: u8,
     ) -> VMResult<u8> {
         match handle {
-            MemoryHandle::Local(id) => self
-                .local_memory_mut(id)
-                .atomic_cmpxchg_u8(offset, expected, value),
-            MemoryHandle::Shared(id) => self
-                .shared_memory(id)
-                .atomic_cmpxchg_u8(offset, expected, value),
+            MemoryHandle::Local(id) => self.local_atomic_cmpxchg_u8(id, offset, expected, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_cmpxchg_u8(id, offset, expected, value),
         }
     }
 
@@ -772,12 +1125,8 @@ impl StoreInner {
         value: u16,
     ) -> VMResult<u16> {
         match handle {
-            MemoryHandle::Local(id) => self
-                .local_memory_mut(id)
-                .atomic_cmpxchg_u16(offset, expected, value),
-            MemoryHandle::Shared(id) => self
-                .shared_memory(id)
-                .atomic_cmpxchg_u16(offset, expected, value),
+            MemoryHandle::Local(id) => self.local_atomic_cmpxchg_u16(id, offset, expected, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_cmpxchg_u16(id, offset, expected, value),
         }
     }
 
@@ -790,12 +1139,8 @@ impl StoreInner {
         value: u32,
     ) -> VMResult<u32> {
         match handle {
-            MemoryHandle::Local(id) => self
-                .local_memory_mut(id)
-                .atomic_cmpxchg_u32(offset, expected, value),
-            MemoryHandle::Shared(id) => self
-                .shared_memory(id)
-                .atomic_cmpxchg_u32(offset, expected, value),
+            MemoryHandle::Local(id) => self.local_atomic_cmpxchg_u32(id, offset, expected, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_cmpxchg_u32(id, offset, expected, value),
         }
     }
 
@@ -808,20 +1153,16 @@ impl StoreInner {
         value: u64,
     ) -> VMResult<u64> {
         match handle {
-            MemoryHandle::Local(id) => self
-                .local_memory_mut(id)
-                .atomic_cmpxchg_u64(offset, expected, value),
-            MemoryHandle::Shared(id) => self
-                .shared_memory(id)
-                .atomic_cmpxchg_u64(offset, expected, value),
+            MemoryHandle::Local(id) => self.local_atomic_cmpxchg_u64(id, offset, expected, value),
+            MemoryHandle::Shared(id) => self.shared_atomic_cmpxchg_u64(id, offset, expected, value),
         }
     }
 
     #[inline(always)]
     pub(crate) fn atomic_fence(&mut self, handle: MemoryHandle) {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).atomic_fence(),
-            MemoryHandle::Shared(id) => self.shared_memory(id).atomic_fence(),
+            MemoryHandle::Local(id) => self.local_atomic_fence(id),
+            MemoryHandle::Shared(id) => self.shared_atomic_fence(id),
         }
     }
 
@@ -833,8 +1174,8 @@ impl StoreInner {
         bytes: &[u8],
     ) -> VMResult<()> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).write_bytes(offset, bytes),
-            MemoryHandle::Shared(id) => self.shared_memory(id).write_bytes(offset, bytes),
+            MemoryHandle::Local(id) => self.local_write_bytes(id, offset, bytes),
+            MemoryHandle::Shared(id) => self.shared_write_bytes(id, offset, bytes),
         }
     }
 
@@ -845,8 +1186,8 @@ impl StoreInner {
         page_size_delta: u32,
     ) -> VMResult<i32> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).grow(page_size_delta),
-            MemoryHandle::Shared(id) => self.shared_memory(id).grow(page_size_delta),
+            MemoryHandle::Local(id) => self.local_grow_memory(id, page_size_delta),
+            MemoryHandle::Shared(id) => self.shared_grow_memory(id, page_size_delta),
         }
     }
 
@@ -859,8 +1200,8 @@ impl StoreInner {
         len: u32,
     ) -> VMResult<()> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).copy(dst, src, len),
-            MemoryHandle::Shared(id) => self.shared_memory(id).copy(dst, src, len),
+            MemoryHandle::Local(id) => self.local_copy_memory(id, dst, src, len),
+            MemoryHandle::Shared(id) => self.shared_copy_memory(id, dst, src, len),
         }
     }
 
@@ -873,8 +1214,8 @@ impl StoreInner {
         data: u32,
     ) -> VMResult<()> {
         match handle {
-            MemoryHandle::Local(id) => self.local_memory_mut(id).fill(ptr, len, data),
-            MemoryHandle::Shared(id) => self.shared_memory(id).fill(ptr, len, data),
+            MemoryHandle::Local(id) => self.local_fill_memory(id, ptr, len, data),
+            MemoryHandle::Shared(id) => self.shared_fill_memory(id, ptr, len, data),
         }
     }
 
@@ -920,8 +1261,8 @@ impl StoreInner {
         }
     }
 
-    pub(crate) fn shared_memory(&self, id: SharedMemoryId) -> &Arc<SharedMemoryObject> {
-        &self.shared_memories[id.index()]
+    pub(crate) fn shared_memory(&self, id: SharedMemoryId) -> &SharedMemoryObject {
+        self.shared_memories[id.index()].as_ref()
     }
 
     pub(crate) fn clone_shared_memory(&self, id: SharedMemoryId) -> Arc<SharedMemoryObject> {

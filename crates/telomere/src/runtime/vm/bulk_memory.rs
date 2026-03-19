@@ -1,7 +1,12 @@
 use super::*;
 
 #[inline(never)]
-fn mem_init_impl(ctx: &mut ExecuteContext, idx: u32, dst: u32, src: u32, len: u32) -> VMResult<()> {
+fn mem_init_bytes(
+    ctx: &mut ExecuteContext,
+    idx: u32,
+    src: u32,
+    len: u32,
+) -> VMResult<Option<Vec<u8>>> {
     let instance_id = ctx.instance_id();
     let copied = {
         let segments = ctx.store.lock_segments();
@@ -22,7 +27,39 @@ fn mem_init_impl(ctx: &mut ExecuteContext, idx: u32, dst: u32, src: u32, len: u3
             Some(data.to_vec())
         }
     };
-    ctx.write_memory_bytes(dst as usize, copied.as_deref().unwrap_or(&[]))
+    VMResult::Success(copied)
+}
+
+#[inline(never)]
+fn mem_init_impl_local(
+    ctx: &mut ExecuteContext,
+    idx: u32,
+    dst: u32,
+    src: u32,
+    len: u32,
+) -> VMResult<()> {
+    let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
+    ctx.gc.local_write_bytes(
+        unsafe { ctx.default_local_memory_id_unchecked() },
+        dst as usize,
+        copied.as_deref().unwrap_or(&[]),
+    )
+}
+
+#[inline(never)]
+fn mem_init_impl_shared(
+    ctx: &mut ExecuteContext,
+    idx: u32,
+    dst: u32,
+    src: u32,
+    len: u32,
+) -> VMResult<()> {
+    let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
+    ctx.gc.shared_write_bytes(
+        unsafe { ctx.default_shared_memory_id_unchecked() },
+        dst as usize,
+        copied.as_deref().unwrap_or(&[]),
+    )
 }
 
 #[inline(never)]
@@ -50,7 +87,7 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let len = ctx.stack.pop_u32();
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
-    vm_try!(mem_init_impl(ctx, idx, dst, src, len));
+    vm_try!(mem_init_impl_local(ctx, idx, dst, src, len));
     call_next(tail_code, 1, ctx)
 }
 
@@ -102,7 +139,9 @@ pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let src = ctx.stack.pop_u32();
     let dst = ctx.stack.pop_u32();
     trace!("op_mem_copy src: {src},dst: {dst},len: {len}");
-    vm_try!(ctx.copy_memory(dst, src, len));
+    vm_try!(ctx
+        .gc
+        .local_copy_memory(ctx.default_local_memory_id_unchecked(), dst, src, len,));
     call_next(tail_code, 0, ctx)
 }
 
@@ -125,6 +164,99 @@ pub unsafe fn op_mem_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let len = ctx.stack.pop_u32();
     let data = ctx.stack.pop_u32();
     let ptr = ctx.stack.pop_u32();
-    vm_try!(ctx.fill_memory(ptr, len, data));
+    vm_try!(ctx
+        .gc
+        .local_fill_memory(ctx.default_local_memory_id_unchecked(), ptr, len, data,));
     call_next(tail_code, 0, ctx)
 }
+
+/// WebAssembly `memory.init` on shared default memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[dst, src, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the shared-memory specialized fast path selected by the parser and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_mem_init_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    vm_try!(mem_init_impl_shared(ctx, idx, dst, src, len));
+    call_next(tail_code, 1, ctx)
+}
+
+/// WebAssembly `memory.copy` on shared default memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[dst, src, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the shared-memory specialized fast path selected by the parser and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_mem_copy_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    if wait_effect(ctx, ctx.cont) {
+        return VMResult::Success(());
+    }
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    trace!("op_mem_copy_shared src: {src},dst: {dst},len: {len}");
+    vm_try!(ctx
+        .gc
+        .shared_copy_memory(ctx.default_shared_memory_id_unchecked(), dst, src, len,));
+    call_next(tail_code, 0, ctx)
+}
+
+/// WebAssembly `memory.fill` on shared default memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[dst, value, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the shared-memory specialized fast path selected by the parser and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_mem_fill_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let len = ctx.stack.pop_u32();
+    let data = ctx.stack.pop_u32();
+    let ptr = ctx.stack.pop_u32();
+    vm_try!(ctx
+        .gc
+        .shared_fill_memory(ctx.default_shared_memory_id_unchecked(), ptr, len, data,));
+    call_next(tail_code, 0, ctx)
+}
+
+pub(crate) use op_mem_copy as op_mem_copy_local;
+pub(crate) use op_mem_fill as op_mem_fill_local;
+pub(crate) use op_mem_init as op_mem_init_local;

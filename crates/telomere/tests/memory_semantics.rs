@@ -18,6 +18,32 @@ async fn call_i32(
     }
 }
 
+async fn call_v128(
+    instance: &telomere::common::InstanceHandle,
+    store: &Store,
+    name: &str,
+    args: Vec<WasmValue>,
+) -> VMResult<u128> {
+    match run_module_function(instance, store, name, &ResultValue::new(args)).await {
+        VMResult::Success(values) => match values.iter().next() {
+            Some(WasmValue::V128(value)) => VMResult::Success(*value),
+            other => panic!("expected v128 result from {name}, got {other:?}"),
+        },
+        other => match vm_result_map_unit(other) {
+            VMResult::Success(_) => unreachable!(),
+            VMResult::Unreachable => VMResult::Unreachable,
+            VMResult::StackOverflow => VMResult::StackOverflow,
+            VMResult::MemoryIndexOutOfRange => VMResult::MemoryIndexOutOfRange,
+            VMResult::TableIndexOutOfRange => VMResult::TableIndexOutOfRange,
+            VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
+            VMResult::TableUninitialized => VMResult::TableUninitialized,
+            VMResult::Unlinkable => VMResult::Unlinkable,
+            VMResult::InvalidOperand => VMResult::InvalidOperand,
+            VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+        },
+    }
+}
+
 fn vm_result_map_unit(result: VMResult<ResultValue>) -> VMResult<i32> {
     match result {
         VMResult::Success(_) => unreachable!(),
@@ -299,6 +325,122 @@ async fn mem_copy_overlap_matches_memmove_semantics() {
         call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(3)]).await,
         0x03,
     );
+}
+
+#[tokio::test]
+async fn shared_mem_copy_overlap_matches_memmove_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1 2 shared)
+          (func (export "seed")
+            i32.const 0
+            i32.const 0x01
+            i32.store8
+            i32.const 1
+            i32.const 0x02
+            i32.store8
+            i32.const 2
+            i32.const 0x03
+            i32.store8
+            i32.const 3
+            i32.const 0x04
+            i32.store8)
+          (func (export "copy")
+            i32.const 1
+            i32.const 0
+            i32.const 3
+            memory.copy)
+          (func (export "byte_at") (param i32) (result i32)
+            local.get 0
+            i32.load8_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert!(matches!(
+        run_module_function(&instance, &store, "copy", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(0)]).await,
+        0x01,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(1)]).await,
+        0x01,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(2)]).await,
+        0x02,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(3)]).await,
+        0x03,
+    );
+}
+
+#[cfg(feature = "simd")]
+async fn assert_simd_memory_roundtrip(memory_decl: &str) {
+    let store = Store::new();
+    let registry = Registry::new();
+    let module = format!(
+        r#"
+        (module
+          (memory {memory_decl})
+          (func (export "seed")
+            i32.const 0
+            i32.const 0x11223344
+            i32.store)
+          (func (export "load_zero") (result v128)
+            i32.const 0
+            v128.load32_zero)
+          (func (export "store_lane")
+            i32.const 4
+            v128.const i32x4 0x11223344 0 0 0
+            v128.store8_lane 0)
+          (func (export "byte_at") (param i32) (result i32)
+            local.get 0
+            i32.load8_u))
+        "#
+    );
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    let value = match call_v128(&instance, &store, "load_zero", vec![]).await {
+        VMResult::Success(value) => value,
+        other => panic!("expected simd load success, got {other:?}"),
+    };
+    assert_eq!(value.to_le_bytes()[0..4], [0x44, 0x33, 0x22, 0x11]);
+    assert_eq!(value.to_le_bytes()[4..16], [0; 12]);
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "store_lane", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(4)]).await,
+        0x44,
+    );
+}
+
+#[cfg(feature = "simd")]
+#[tokio::test]
+async fn simd_memory_access_roundtrips_for_local_and_shared_default_memory() {
+    assert_simd_memory_roundtrip("1").await;
+    assert_simd_memory_roundtrip("1 2 shared").await;
 }
 
 #[tokio::test]
