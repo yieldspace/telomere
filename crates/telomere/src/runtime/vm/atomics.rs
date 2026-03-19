@@ -1,5 +1,3 @@
-#![allow(clippy::missing_safety_doc)]
-
 use super::*;
 #[cfg(feature = "async-runtime")]
 use crate::common::AtomicWaitResult;
@@ -35,6 +33,19 @@ fn wait_result_timed_out() -> (result: i32)
 } // verus!
 
 #[inline(always)]
+/// WebAssembly threads atomic offset helper.
+///
+/// Spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: consumes the memory offset operand and computes the effective address.
+/// Traps: traps on memory index overflow when computing the effective address.
+/// Notes: Reads the memarg from the active instruction and reuses the validated operand stack layout.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose validated stack layout matches this atomic memory instruction.
+/// - This helper must not retain borrows across the call boundary into memory access helpers.
 unsafe fn atomic_start(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<usize> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
@@ -42,12 +53,37 @@ unsafe fn atomic_start(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
 }
 
 #[inline(always)]
+/// WebAssembly threads shared-memory handle helper.
+///
+/// Spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: internal runtime memory dispatch.
+/// Traps: propagates the trap behavior of the underlying memory lookup.
+/// Notes: Resolves the active memory handle for atomic operations.
+///
+/// # Safety
+/// - `ctx` must reference a live execution context whose active memory slot is valid for the current frame.
+/// - This helper must not hold a borrow across any follow-up atomic memory access.
 unsafe fn atomic_handle(ctx: &ExecuteContext) -> VMResult<MemoryHandle> {
     ctx.memory_handle_result()
 }
 
 macro_rules! atomic_load_op {
     ($name:ident, $reader:ident, $push:ident, $cast:ty) => {
+        #[doc = concat!("WebAssembly threads atomic load `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- Threads: https://webassembly.github.io/threads/core/"]
+        #[doc = ""]
+        #[doc = "Stack effect: `[i32] -> [value]`."]
+        #[doc = "Traps: traps on out-of-bounds access or unaligned access."]
+        #[doc = "Notes: Observes the threads atomic memory model and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(atomic_start(tail_code, ctx));
             let handle = vm_try!(atomic_handle(ctx));
@@ -60,6 +96,19 @@ macro_rules! atomic_load_op {
 
 macro_rules! atomic_store_op {
     ($name:ident, $pop:ident, $writer:ident, $ty:ty) => {
+        #[doc = concat!("WebAssembly threads atomic store `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- Threads: https://webassembly.github.io/threads/core/"]
+        #[doc = ""]
+        #[doc = "Stack effect: `[i32, value] -> []`."]
+        #[doc = "Traps: traps on out-of-bounds access or unaligned access."]
+        #[doc = "Notes: Performs a sequentially consistent store in the runtime memory model and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
@@ -72,6 +121,19 @@ macro_rules! atomic_store_op {
 
 macro_rules! atomic_rmw_op {
     ($name:ident, $pop:ident, $rmw:ident, $push:ident, $pop_ty:ty, $push_ty:ty, $op:expr) => {
+        #[doc = concat!("WebAssembly threads atomic read-modify-write `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- Threads: https://webassembly.github.io/threads/core/"]
+        #[doc = ""]
+        #[doc = "Stack effect: `[i32, value] -> [old]`."]
+        #[doc = "Traps: traps on out-of-bounds access or unaligned access."]
+        #[doc = "Notes: Applies the RMW operation under the runtime's shared-memory linearization point, returns the previous value, and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
@@ -85,6 +147,19 @@ macro_rules! atomic_rmw_op {
 
 macro_rules! atomic_cmpxchg_op {
     ($name:ident, $pop:ident, $cmpxchg:ident, $push:ident, $ty:ty, $push_ty:ty) => {
+        #[doc = concat!("WebAssembly threads atomic compare-exchange `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- Threads: https://webassembly.github.io/threads/core/"]
+        #[doc = ""]
+        #[doc = "Stack effect: `[i32, expected, replacement] -> [old]`."]
+        #[doc = "Traps: traps on out-of-bounds access or unaligned access."]
+        #[doc = "Notes: Compares the current memory value with `expected`, conditionally stores `replacement`, returns the observed old value, and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack.$pop() as $ty;
             let expected = ctx.stack.$pop() as $ty;
@@ -554,6 +629,20 @@ atomic_cmpxchg_op!(
     u64
 );
 
+/// WebAssembly `memory.atomic.notify`.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i32] -> [i32]`.
+/// Traps: traps on out-of-bounds access or unaligned access.
+/// Notes: Uses the threads memory model and preserves the runtime wait/notify contract before tail-dispatching.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+/// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
 pub unsafe fn op_memory_atomic_notify(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -572,6 +661,19 @@ pub unsafe fn op_memory_atomic_notify(
 }
 
 #[cfg(feature = "async-runtime")]
+/// WebAssembly threads `memory.atomic.wait` completion helper.
+///
+/// Spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: internal async completion for wait operations.
+/// Traps: propagates the trap behavior of the underlying wait operation.
+/// Notes: Packages the wake result into the async runtime effect queue.
+///
+/// # Safety
+/// - `ctx` must reference a live execution context whose wait effect queue is available.
+/// - `shared` and `wait` must refer to a wait registration belonging to the active store and memory instance.
+/// - This helper must not keep locks or borrows alive while constructing the async completion.
 unsafe fn push_wait_effect(
     ctx: &mut ExecuteContext,
     shared: std::sync::Arc<crate::common::SharedMemoryObject>,
@@ -595,6 +697,20 @@ unsafe fn push_wait_effect(
     }));
 }
 
+/// WebAssembly `memory.atomic.wait32`.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i32, i64] -> [i32]`.
+/// Traps: traps on out-of-bounds access, unaligned access, or when used with unshared memory.
+/// Notes: Uses the threads memory model and preserves the runtime wait/notify contract before tail-dispatching.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+/// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
 pub unsafe fn op_memory_atomic_wait32(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -631,6 +747,20 @@ pub unsafe fn op_memory_atomic_wait32(
     }
 }
 
+/// WebAssembly `memory.atomic.wait64`.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i64, i64] -> [i32]`.
+/// Traps: traps on out-of-bounds access, unaligned access, or when used with unshared memory.
+/// Notes: Uses the threads memory model and preserves the runtime wait/notify contract before tail-dispatching.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+/// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
 pub unsafe fn op_memory_atomic_wait64(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -667,6 +797,20 @@ pub unsafe fn op_memory_atomic_wait64(
     }
 }
 
+/// WebAssembly `atomic.fence`.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[] -> []`.
+/// Traps: none.
+/// Notes: Uses the threads memory model and preserves the runtime wait/notify contract before tail-dispatching.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+/// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
 pub unsafe fn op_atomic_fence(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     if let Some(handle) = ctx.memory_addr() {
         ctx.gc.atomic_fence(handle);

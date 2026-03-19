@@ -11,6 +11,21 @@ use crate::{
     Stack, VMResult,
 };
 
+/// WebAssembly `v128.load`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
@@ -20,6 +35,19 @@ pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 }
 
 #[inline(always)]
+/// WebAssembly SIMD memory helper for lane-sized reads.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal SIMD memory helper.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Computes the effective address once and reads an unaligned byte array from the active memory.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose validated operand stack matches this SIMD memory operation.
+/// - This helper must not retain borrows across the memory read or the follow-up stack push.
 unsafe fn read_memory_bytes<const N: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -29,6 +57,21 @@ unsafe fn read_memory_bytes<const N: usize>(
     let start = vm_try!(compute_memory_offset(memarg, offset));
     ctx.read_memory_u8_array::<N>(start)
 }
+/// WebAssembly `v128.load8x8_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load8x8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
     let extended = [
@@ -44,6 +87,21 @@ pub unsafe fn v128_load8x8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     vm_try!(ctx.stack.push(i16x8::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+/// WebAssembly `v128.load8x8_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load8x8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
     let extended = [
@@ -60,6 +118,21 @@ pub unsafe fn v128_load8x8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.load16x4_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load16x4_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
     let i16s = [
@@ -78,6 +151,21 @@ pub unsafe fn v128_load16x4_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     vm_try!(ctx.stack.push(i32x4::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+/// WebAssembly `v128.load16x4_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load16x4_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
     let u16s = [
@@ -97,12 +185,42 @@ pub unsafe fn v128_load16x4_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.store`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
     })
 }
 
+/// WebAssembly `v128.load32x2_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load32x2_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
     let i32s = [
@@ -113,6 +231,21 @@ pub unsafe fn v128_load32x2_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     vm_try!(ctx.stack.push(i64x2::from(extended)));
     call_next(tail_code, 1, ctx)
 }
+/// WebAssembly `v128.load32x2_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load32x2_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
     let u32s = [
@@ -124,12 +257,42 @@ pub unsafe fn v128_load32x2_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.load8_splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load8_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<1>(tail_code, ctx));
     vm_try!(ctx.stack.push(i8x16::from(bytes[0] as i8)));
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.load16_splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load16_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<2>(tail_code, ctx));
     vm_try!(ctx
@@ -138,6 +301,21 @@ pub unsafe fn v128_load16_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.load32_splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load32_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<4>(tail_code, ctx));
     vm_try!(ctx.stack.push(i32x4::from(i32::from_le_bytes([
@@ -146,6 +324,21 @@ pub unsafe fn v128_load32_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.load64_splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load64_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
     vm_try!(ctx.stack.push(i64x2::from(i64::from_le_bytes([
@@ -154,6 +347,21 @@ pub unsafe fn v128_load64_splat(tail_code: *const Instr, ctx: &mut ExecuteContex
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.const`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let left_buf = &(*tail_code).operand.encoded;
     let right_buf = &(*tail_code.add(1)).operand.encoded;
@@ -170,6 +378,19 @@ fn replace_lane_bytes<const N: usize>(bytes: &mut [u8; 16], lane: usize, value: 
     bytes[start..start + N].copy_from_slice(&value);
 }
 
+/// WebAssembly SIMD lane-load helper.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal SIMD lane-load helper.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Reads a lane-aligned byte slice from memory and materializes it into the stack element type.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose validated stack and memory layout satisfy this instruction.
+/// - This helper must not keep borrows, locks, or guards alive across the call into `call_next`.
 unsafe fn load_lane_internal<const N: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -184,6 +405,19 @@ unsafe fn load_lane_internal<const N: usize>(
     call_next(tail_code, 2, ctx)
 }
 
+/// WebAssembly SIMD lane-store helper.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal SIMD lane-store helper.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Materializes the lane payload first, then performs the memory write through the shared store helper.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose validated stack and memory layout satisfy this instruction.
+/// - This helper must not keep borrows, locks, or guards alive across `call_next`.
 unsafe fn store_lane_internal<const N: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -197,6 +431,21 @@ unsafe fn store_lane_internal<const N: usize>(
     call_next(tail_code, 2, ctx)
 }
 
+/// WebAssembly `i8x16.shuffle`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i8x16_shuffle(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mut lanes = [0u8; 16];
     lanes[0..8].copy_from_slice(&(*tail_code).operand.encoded);
@@ -212,42 +461,147 @@ pub unsafe fn i8x16_shuffle(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     call_next(tail_code, 2, ctx)
 }
 
+/// WebAssembly `i8x16.splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i8x16_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let value = ctx.stack.pop_i32() as i8;
     vm_try!(ctx.stack.push(i8x16::from(value)));
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i16x8.splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let value = ctx.stack.pop_i32() as i16;
     vm_try!(ctx.stack.push(i16x8::from(value)));
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i32x4.splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let value = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push(i32x4::from(value)));
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i64x2.splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let value = ctx.stack.pop_i64();
     vm_try!(ctx.stack.push(i64x2::from(value)));
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `f32x4.splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f32x4_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let value = ctx.stack.pop_f32();
     vm_try!(ctx.stack.push(f32x4::from(value)));
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `f64x2.splat`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f64x2_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let value = ctx.stack.pop_f64();
     vm_try!(ctx.stack.push(f64x2::from(value)));
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i8x16.extract_lane_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [scalar]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i8x16_extract_lane_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -260,6 +614,21 @@ pub unsafe fn op_i8x16_extract_lane_s(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i8x16.extract_lane_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [scalar]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i8x16_extract_lane_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -270,6 +639,21 @@ pub unsafe fn i8x16_extract_lane_u(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i8x16.replace_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i8x16_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -282,6 +666,21 @@ pub unsafe fn i8x16_replace_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i16x8.extract_lane_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [scalar]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_extract_lane_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -294,6 +693,21 @@ pub unsafe fn i16x8_extract_lane_s(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i16x8.extract_lane_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [scalar]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_extract_lane_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -306,6 +720,21 @@ pub unsafe fn i16x8_extract_lane_u(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i16x8.replace_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -318,6 +747,21 @@ pub unsafe fn i16x8_replace_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32x4.extract_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [scalar]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_extract_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -333,6 +777,21 @@ pub unsafe fn i32x4_extract_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32x4.replace_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -345,6 +804,21 @@ pub unsafe fn i32x4_replace_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64x2.extract_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [scalar]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_extract_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -364,6 +838,21 @@ pub unsafe fn i64x2_extract_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64x2.replace_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -376,6 +865,21 @@ pub unsafe fn i64x2_replace_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `f32x4.extract_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [scalar]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f32x4_extract_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -391,6 +895,21 @@ pub unsafe fn f32x4_extract_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `f32x4.replace_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f32x4_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -403,6 +922,21 @@ pub unsafe fn f32x4_replace_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `f64x2.extract_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [scalar]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f64x2_extract_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -422,6 +956,21 @@ pub unsafe fn f64x2_extract_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `f64x2.replace_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, scalar] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f64x2_replace_lane(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -434,38 +983,173 @@ pub unsafe fn f64x2_replace_lane(
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.load8_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load8_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     load_lane_internal::<1>(tail_code, ctx)
 }
 
+/// WebAssembly `v128.load16_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load16_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     load_lane_internal::<2>(tail_code, ctx)
 }
 
+/// WebAssembly `v128.load32_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load32_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     load_lane_internal::<4>(tail_code, ctx)
 }
 
+/// WebAssembly `v128.load64_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load64_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     load_lane_internal::<8>(tail_code, ctx)
 }
 
+/// WebAssembly `v128.store8_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_store8_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_lane_internal::<1>(tail_code, ctx)
 }
 
+/// WebAssembly `v128.store16_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_store16_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_lane_internal::<2>(tail_code, ctx)
 }
 
+/// WebAssembly `v128.store32_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_store32_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_lane_internal::<4>(tail_code, ctx)
 }
 
+/// WebAssembly `v128.store64_lane`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_store64_lane(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_lane_internal::<8>(tail_code, ctx)
 }
 
+/// WebAssembly `v128.load32_zero`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load32_zero(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<4>(tail_code, ctx));
     let mut result = [0u8; 16];
@@ -474,6 +1158,21 @@ pub unsafe fn v128_load32_zero(tail_code: *const Instr, ctx: &mut ExecuteContext
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.load64_zero`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [v128]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_load64_zero(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
     let mut result = [0u8; 16];
@@ -482,35 +1181,125 @@ pub unsafe fn v128_load64_zero(tail_code: *const Instr, ctx: &mut ExecuteContext
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `v128.not`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_not(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     vm_try!(ctx.stack.push_u128(!b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `v128.and`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_and(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     let a = ctx.stack.pop_u128();
     vm_try!(ctx.stack.push_u128(a & b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `v128.andnot`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_andnot(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     let a = ctx.stack.pop_u128();
     vm_try!(ctx.stack.push_u128(a & !b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `v128.or`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_or(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     let a = ctx.stack.pop_u128();
     vm_try!(ctx.stack.push_u128(a | b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `v128.xor`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b = ctx.stack.pop_u128();
     let a = ctx.stack.pop_u128();
     vm_try!(ctx.stack.push_u128(a ^ b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `v128.any_true`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [i32]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_any_true(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = ctx.stack.pop_u128();
     let result = if v == 0 { 0 } else { 1 };
@@ -520,6 +1309,19 @@ pub unsafe fn v128_any_true(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 
 macro_rules! all_true_instruction {
     ($name: ident,$target: ident) => {
+        #[doc = concat!("WebAssembly SIMD handler `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- WebAssembly Core Spec: https://webassembly.github.io/spec/core/index.html"]
+        #[doc = ""]
+        #[doc = "Stack effect: see the validated SIMD operand and result shape for this handler."]
+        #[doc = "Traps: memory-using variants trap on out-of-bounds access; pure vector variants do not trap."]
+        #[doc = "Notes: This handler preserves direct-threaded execution and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let v: $target = ctx.stack.pop();
             let mut all_true = 0x01;
@@ -538,6 +1340,19 @@ all_true_instruction!(i32x4_all_true, i32x4);
 all_true_instruction!(i64x2_all_true, i64x2);
 macro_rules! bitmask_instruction {
     ($name: ident,$target: ident) => {
+        #[doc = concat!("WebAssembly SIMD handler `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- WebAssembly Core Spec: https://webassembly.github.io/spec/core/index.html"]
+        #[doc = ""]
+        #[doc = "Stack effect: see the validated SIMD operand and result shape for this handler."]
+        #[doc = "Traps: memory-using variants trap on out-of-bounds access; pure vector variants do not trap."]
+        #[doc = "Notes: This handler preserves direct-threaded execution and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let v: $target = ctx.stack.pop();
             let result = v.move_mask();
@@ -551,6 +1366,21 @@ bitmask_instruction!(i16x8_bitmask, i16x8);
 bitmask_instruction!(i32x4_bitmask, i32x4);
 bitmask_instruction!(i64x2_bitmask, i64x2);
 
+/// WebAssembly `v128.bitselect`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_v128_bitselect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mask = ctx.stack.pop_u128();
     let b = ctx.stack.pop_u128();
@@ -563,6 +1393,19 @@ pub unsafe fn op_v128_bitselect(tail_code: *const Instr, ctx: &mut ExecuteContex
 }
 macro_rules! shl_instruction {
     ($name: ident,$target: ident) => {
+        #[doc = concat!("WebAssembly SIMD handler `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- WebAssembly Core Spec: https://webassembly.github.io/spec/core/index.html"]
+        #[doc = ""]
+        #[doc = "Stack effect: see the validated SIMD operand and result shape for this handler."]
+        #[doc = "Traps: memory-using variants trap on out-of-bounds access; pure vector variants do not trap."]
+        #[doc = "Notes: This handler preserves direct-threaded execution and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let shift = ctx.stack.pop_u32();
             let v: $target = ctx.stack.pop();
@@ -582,6 +1425,19 @@ macro_rules! shl_instruction {
 
 macro_rules! shr_instruction {
     ($name: ident,$target: ident) => {
+        #[doc = concat!("WebAssembly SIMD handler `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- WebAssembly Core Spec: https://webassembly.github.io/spec/core/index.html"]
+        #[doc = ""]
+        #[doc = "Stack effect: see the validated SIMD operand and result shape for this handler."]
+        #[doc = "Traps: memory-using variants trap on out-of-bounds access; pure vector variants do not trap."]
+        #[doc = "Notes: This handler preserves direct-threaded execution and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let shift = ctx.stack.pop_u32();
             let v: $target = ctx.stack.pop();
@@ -612,6 +1468,21 @@ shr_instruction!(u8x16_shr, u8x16);
 shr_instruction!(u16x8_shr, u16x8);
 shr_instruction!(u32x4_shr, u32x4);
 shr_instruction!(u64x2_shr, u64x2);
+/// WebAssembly `i32x4.trunc_sat_f32x4_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_trunc_sat_f32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -622,6 +1493,21 @@ pub unsafe fn i32x4_trunc_sat_f32x4_s(
     vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i32x4.trunc_sat_f32x4_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_trunc_sat_f32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -637,6 +1523,21 @@ pub unsafe fn i32x4_trunc_sat_f32x4_u(
     ])));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i32x4.trunc_sat_f64x2_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_trunc_sat_f64x2_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -652,6 +1553,21 @@ pub unsafe fn i32x4_trunc_sat_f64x2_s(
     ])));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i32x4.trunc_sat_f64x2_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_trunc_sat_f64x2_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -668,6 +1584,21 @@ pub unsafe fn i32x4_trunc_sat_f64x2_u(
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `f32x4.convert_i32x4_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f32x4_convert_i32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -679,6 +1610,21 @@ pub unsafe fn f32x4_convert_i32x4_s(
     vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `f32x4.convert_i32x4_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f32x4_convert_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -691,6 +1637,21 @@ pub unsafe fn f32x4_convert_i32x4_u(
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `f64x2.convert_low_i32x4_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f64x2_convert_low_i32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -701,6 +1662,21 @@ pub unsafe fn f64x2_convert_low_i32x4_s(
     vm_try!(ctx.stack.push(result));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `f64x2.convert_low_i32x4_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f64x2_convert_low_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -714,6 +1690,19 @@ pub unsafe fn f64x2_convert_low_i32x4_u(
 }
 macro_rules! narrow_instruction {
     ($name: ident,$from: ident,$to: ident) => {
+        #[doc = concat!("WebAssembly SIMD handler `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- WebAssembly Core Spec: https://webassembly.github.io/spec/core/index.html"]
+        #[doc = ""]
+        #[doc = "Stack effect: see the validated SIMD operand and result shape for this handler."]
+        #[doc = "Traps: memory-using variants trap on out-of-bounds access; pure vector variants do not trap."]
+        #[doc = "Notes: This handler preserves direct-threaded execution and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             use crate::common::stack::StackOperation;
 
@@ -747,6 +1736,21 @@ narrow_instruction!(i8x16_narrow_i16x8_u, i16x8, u8x16);
 narrow_instruction!(i16x8_narrow_i32x4_s, i32x4, i16x8);
 narrow_instruction!(i16x8_narrow_i32x4_u, i32x4, u16x8);
 
+/// WebAssembly `f32x4.demote_f64x2_zero`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f32x4_demote_f64x2_zero(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -758,6 +1762,21 @@ pub unsafe fn f32x4_demote_f64x2_zero(
         .push(f32x4::from([a as f32, b as f32, 0.0f32, 0.0f32])));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `f64x2.promote_low_f32x4`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f64x2_promote_low_f32x4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -769,15 +1788,26 @@ pub unsafe fn f64x2_promote_low_f32x4(
 }
 macro_rules! extend_instruction {
     ($name: ident,$from: ident,$to: ident,$($index: expr),*)=> {
-        pub unsafe fn $name(    tail_code: *const Instr,
-            ctx: &mut ExecuteContext)->VMResult<()>{
-                let v: $from = ctx.stack.pop();
-                let v = v.to_array();
-                vm_try!(ctx.stack.push($to::from([$(v[$index] as <$to as LaneType>::BaseType),*])));
+        #[doc = concat!("WebAssembly SIMD handler `", stringify!($name), "`.")]
+        #[doc = ""]
+        #[doc = "Related spec:"]
+        #[doc = "- WebAssembly Core Spec: https://webassembly.github.io/spec/core/index.html"]
+        #[doc = ""]
+        #[doc = "Stack effect: see the validated SIMD operand and result shape for this handler."]
+        #[doc = "Traps: memory-using variants trap on out-of-bounds access; pure vector variants do not trap."]
+        #[doc = "Notes: This handler preserves direct-threaded execution and tail-dispatches with `call_next`."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+        #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
+        #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let v: $from = ctx.stack.pop();
+            let v = v.to_array();
+            vm_try!(ctx.stack.push($to::from([$(v[$index] as <$to as LaneType>::BaseType),*])));
 
-                call_next(tail_code, 0, ctx)
-
-            }
+            call_next(tail_code, 0, ctx)
+        }
     }
 }
 
@@ -844,6 +1874,19 @@ extend_instruction!(i64x2_extend_low_i32x4_u, u32x4, u64x2, 0, 1);
 extend_instruction!(i64x2_extend_high_i32x4_u, u32x4, u64x2, 2, 3);
 
 #[inline]
+/// WebAssembly SIMD unary helper.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal SIMD unary helper.
+/// Traps: traps only if the underlying stack push fails or the decoded instruction stream is invalid.
+/// Notes: Applies a lane-wise unary operation and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose validated stack layout satisfies this instruction.
+/// - This helper must not keep borrows or guards alive across the tail-dispatch it performs.
 unsafe fn handle_unary_op<T>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -861,6 +1904,19 @@ where
 }
 
 #[inline]
+/// WebAssembly SIMD binary helper.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal SIMD binary helper.
+/// Traps: traps only if the underlying stack push fails or the decoded instruction stream is invalid.
+/// Notes: Applies a lane-wise binary operation and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose validated stack layout satisfies this instruction.
+/// - This helper must not keep borrows or guards alive across the tail-dispatch it performs.
 unsafe fn handle_binary_op<T>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1153,6 +2209,21 @@ define_binary_simd_operation!(nearest, [f64x2], |a| {
     f64x2::from([arr[0].round_ties_even(), arr[1].round_ties_even()])
 });
 
+/// WebAssembly `i64x2.abs`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v: i64x2 = ctx.stack.pop();
     let [a, b] = v.to_array();
@@ -1162,6 +2233,21 @@ pub unsafe fn i64x2_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i64x2.neg`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v: i64x2 = ctx.stack.pop();
     let [a, b] = v.to_array();
@@ -1171,18 +2257,63 @@ pub unsafe fn i64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `f32x4.neg`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v: f32x4 = ctx.stack.pop();
     let [a, b, c, d] = v.to_array();
     vm_try!(ctx.stack.push(f32x4::from([-a, -b, -c, -d])));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `f64x2.neg`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v: f64x2 = ctx.stack.pop();
     let [a, b] = v.to_array();
     vm_try!(ctx.stack.push(f64x2::from([-a, -b])));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i8x16.neg`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i8x16_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     use std::ops::BitXor;
     let a: i8x16 = ctx.stack.pop();
@@ -1190,6 +2321,21 @@ pub unsafe fn i8x16_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     vm_try!(ctx.stack.push(a.bitxor(-i8x16::ONE) + i8x16::ONE));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i16x8.neg`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     use std::ops::BitXor;
     let a: i16x8 = ctx.stack.pop();
@@ -1197,6 +2343,21 @@ pub unsafe fn i16x8_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     vm_try!(ctx.stack.push(a.bitxor(-i16x8::ONE) + i16x8::ONE));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i32x4.neg`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     use std::ops::BitXor;
     let a: i32x4 = ctx.stack.pop();
@@ -1254,6 +2415,21 @@ define_unary_simd_operation!(ge, [f32x4, f64x2], |a, b| a.cmp_ge(b));
 define_simd_cmp_operation!(ge, [i8x16, u8x16, i16x8, u16x8, i32x4, u32x4], |a, b| a
     >= b);
 define_simd_cmp_operation!(ge, [i64x2], |a, b| a >= b);
+/// WebAssembly `i16x8.extadd_pairwise_i8x16`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_extadd_pairwise_i8x16(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1267,6 +2443,21 @@ pub unsafe fn i16x8_extadd_pairwise_i8x16(
     vm_try!(ctx.stack.push(i16x8::from(res)));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `u16x8.extadd_pairwise_i8x16`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u16x8_extadd_pairwise_i8x16(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1280,6 +2471,21 @@ pub unsafe fn u16x8_extadd_pairwise_i8x16(
     vm_try!(ctx.stack.push(u16x8::from(res)));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i32x4.extadd_pairwise_i16x8`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_extadd_pairwise_i16x8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1293,6 +2499,21 @@ pub unsafe fn i32x4_extadd_pairwise_i16x8(
     vm_try!(ctx.stack.push(i32x4::from(res)));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `u32x4.extadd_pairwise_i16x8`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u32x4_extadd_pairwise_i16x8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1377,6 +2598,21 @@ fn extend_high_u32x4_to_u64x2(input: u32x4) -> u64x2 {
     u64x2::from([arr[2] as u64, arr[3] as u64])
 }
 
+/// WebAssembly `i16x8.extmul_low`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: i8x16 = ctx.stack.pop();
     let b: i8x16 = ctx.stack.pop();
@@ -1386,6 +2622,21 @@ pub unsafe fn i16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext
     vm_try!(ctx.stack.push(a * b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i16x8.extmul_high`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: i8x16 = ctx.stack.pop();
     let b: i8x16 = ctx.stack.pop();
@@ -1395,6 +2646,21 @@ pub unsafe fn i16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
     vm_try!(ctx.stack.push(a * b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `u16x8.extmul_low`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: u8x16 = ctx.stack.pop();
     let b: u8x16 = ctx.stack.pop();
@@ -1404,6 +2670,21 @@ pub unsafe fn u16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext
     vm_try!(ctx.stack.push(a * b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `u16x8.extmul_high`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: u8x16 = ctx.stack.pop();
     let b: u8x16 = ctx.stack.pop();
@@ -1414,6 +2695,21 @@ pub unsafe fn u16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i32x4.extmul_low`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: i16x8 = ctx.stack.pop();
     let b: i16x8 = ctx.stack.pop();
@@ -1423,6 +2719,21 @@ pub unsafe fn i32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext
     vm_try!(ctx.stack.push(a * b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `i32x4.extmul_high`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: i16x8 = ctx.stack.pop();
     let b: i16x8 = ctx.stack.pop();
@@ -1433,6 +2744,21 @@ pub unsafe fn i32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i64x2.sub`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b: i64x2 = ctx.stack.pop();
     let a: i64x2 = ctx.stack.pop();
@@ -1444,6 +2770,21 @@ pub unsafe fn i64x2_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i64x2.mul`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let b: i64x2 = ctx.stack.pop();
     let a: i64x2 = ctx.stack.pop();
@@ -1454,6 +2795,21 @@ pub unsafe fn i64x2_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
         .push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `u32x4.extmul_low`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: u16x8 = ctx.stack.pop();
     let b: u16x8 = ctx.stack.pop();
@@ -1463,6 +2819,21 @@ pub unsafe fn u32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext
     vm_try!(ctx.stack.push(a * b));
     call_next(tail_code, 0, ctx)
 }
+/// WebAssembly `u32x4.extmul_high`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: u16x8 = ctx.stack.pop();
     let b: u16x8 = ctx.stack.pop();
@@ -1473,6 +2844,21 @@ pub unsafe fn u32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i64x2.extmul_low_i32x4_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_extmul_low_i32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1487,6 +2873,21 @@ pub unsafe fn i64x2_extmul_low_i32x4_s(
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i64x2.extmul_high_i32x4_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_extmul_high_i32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1501,6 +2902,21 @@ pub unsafe fn i64x2_extmul_high_i32x4_s(
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i64x2.extmul_low_i32x4_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_extmul_low_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1515,6 +2931,21 @@ pub unsafe fn i64x2_extmul_low_i32x4_u(
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i64x2.extmul_high_i32x4_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_extmul_high_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1529,6 +2960,21 @@ pub unsafe fn i64x2_extmul_high_i32x4_u(
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `i32x4.dot_i16x8`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[v128, v128] -> [v128]`.
+/// Traps: none.
+/// Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_dot_i16x8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let a: i16x8 = ctx.stack.pop();
     let b: i16x8 = ctx.stack.pop();

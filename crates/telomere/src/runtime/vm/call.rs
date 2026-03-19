@@ -1,10 +1,21 @@
-#![allow(clippy::missing_safety_doc)]
-
 use super::*;
 
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
+/// WebAssembly call-dispatch helper for direct-threaded function invocation.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal runtime call dispatch.
+/// Traps: propagates the trap behavior of the target instruction.
+/// Notes: Resolves the callee, prepares the frame cache, and returns either a concrete instruction pointer or a pending async host call.
+///
+/// # Safety
+/// - `return_addr` must remain valid for the duration of the helper and must point back into the active decoded instruction stream.
+/// - `ctx` must reference a live execution context for the same store and validated frame layout.
+/// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
 unsafe fn internal_op_call(
     return_addr: *const Instr,
     funcaddr: GcRef,
@@ -80,6 +91,21 @@ unsafe fn internal_op_call(
     }
 }
 
+/// WebAssembly `call`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[params] -> [results]`.
+/// Traps: traps if the target function cannot be invoked.
+/// Notes: Transfers control in the direct-threaded interpreter and keeps tail-dispatch compatible with `call_code` or `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     if wait_effect(ctx, ctx.cont) {
         return VMResult::Success(());
@@ -92,6 +118,19 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     }
 }
 
+/// WebAssembly `return_call`.
+///
+/// Related spec:
+/// - Tail-call: https://webassembly.github.io/tail-call/core/
+///
+/// Stack effect: `[params] -> [results]`.
+/// Traps: traps if the target function cannot be invoked.
+/// Notes: Transfers control in the direct-threaded interpreter and keeps tail-dispatch compatible with `call_code` or `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     if wait_effect(ctx, ctx.cont) {
         return VMResult::Success(());
@@ -105,6 +144,19 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 }
 
 #[inline(never)]
+/// WebAssembly indirect call-dispatch helper for direct-threaded function invocation.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal runtime call dispatch.
+/// Traps: traps on table index out of range, null function entries, or type mismatches.
+/// Notes: Resolves the table entry, validates the callee type, and forwards to the direct call helper.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context for the same store and validated frame layout.
+/// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
 unsafe fn internal_op_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -149,6 +201,21 @@ unsafe fn internal_op_call_indirect(
     VMResult::Success(outcome)
 }
 
+/// WebAssembly `call_indirect`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[params, i32] -> [results]`.
+/// Traps: traps on null or type-mismatched table entries.
+/// Notes: Transfers control in the direct-threaded interpreter and keeps tail-dispatch compatible with `call_code` or `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     if wait_effect(ctx, ctx.cont) {
         return VMResult::Success(());
@@ -159,6 +226,19 @@ pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext
     }
 }
 
+/// WebAssembly `return_call_indirect`.
+///
+/// Related spec:
+/// - Tail-call: https://webassembly.github.io/tail-call/core/
+///
+/// Stack effect: `[params, i32] -> [results]`.
+/// Traps: traps on null or type-mismatched table entries.
+/// Notes: Transfers control in the direct-threaded interpreter and keeps tail-dispatch compatible with `call_code` or `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_return_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -172,6 +252,21 @@ pub unsafe fn op_return_call_indirect(
     }
 }
 
+/// Telomere internal `special_start_function_call` trampoline.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `internal runtime continuation`.
+/// Traps: traps if the target function cannot be invoked.
+/// Notes: Transfers control in the direct-threaded interpreter and keeps tail-dispatch compatible with `call_code` or `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn special_start_function_call(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,

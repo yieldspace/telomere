@@ -1,22 +1,39 @@
-use std::path::PathBuf;
-
-use common::{instantiate_wat, run_wast};
+use common::instantiate_wat;
 use telomere::{run_module_function, Registry, ResultValue, Store, WasmValue};
 
 mod common;
 
-async fn run_test_file(name: &str) {
-    let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
-    d.push("tests/core-effect-test");
-    d.push(format!("{name}.wast"));
-    let wast = std::fs::read_to_string(d).unwrap();
-    run_wast(&wast).await;
-}
-
 #[tokio::test]
 async fn effect_bulk() {
-    run_test_file("effect-bulk").await;
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "test") (result i32)
+            i32.const 0
+            i32.const 1
+            i32.store
+            i32.const 1
+            i32.const 2
+            i32.store8
+            i32.const 2
+            i32.const 0
+            i32.const 2
+            memory.copy
+            i32.const 3
+            i32.load8_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(&instance, &store, "test", &ResultValue::new(vec![]))
+        .await
+        .unwrap();
+    assert_eq!(result.iter().collect::<Vec<_>>(), vec![&WasmValue::I32(2)]);
 }
 
 #[tokio::test]

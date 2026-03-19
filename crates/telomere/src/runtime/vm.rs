@@ -114,12 +114,38 @@ enum CallOutcome {
 }
 
 #[inline(always)]
+/// Telomere runtime helper `call_code`.
+///
+/// Related spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal runtime continuation dispatch.
+/// Traps: propagates the trap behavior of the target instruction.
+/// Notes: Updates `ctx.cont` and performs the direct-threaded tail jump into the next instruction.
+///
+/// # Safety
+/// - `tail_code` must reference the active decoded instruction stream for the current frame.
+/// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
+/// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
 pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     ctx.cont = tail_code;
     ((*tail_code).op)(tail_code.offset(1), ctx)
 }
 
 #[inline(always)]
+/// Telomere runtime helper `call_next`.
+///
+/// Related spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal runtime continuation dispatch.
+/// Traps: propagates the trap behavior of the target instruction.
+/// Notes: Advances from the current instruction by `consumed` operands and delegates to `call_code` without introducing non-tail cleanup.
+///
+/// # Safety
+/// - `tail_code` must reference the active decoded instruction stream for the current frame.
+/// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
+/// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
 pub(crate) unsafe fn call_next(
     tail_code: *const Instr,
     consumed: isize,
@@ -218,6 +244,20 @@ pub(crate) use numeric::*;
 pub(crate) use refs::*;
 pub(crate) use tables::*;
 
+/// Telomere runtime helper `store_internal`.
+///
+/// Related spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Materializes the store payload before consuming the address so the write can tail-dispatch through `call_next`.
+///
+/// # Safety
+/// - `tail_code` must reference the active decoded instruction stream for the current frame.
+/// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
+/// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
+/// - `make_operation` must not retain references into `ctx` after it returns because the helper will continue by tail-dispatching immediately after the write.
 pub(crate) unsafe fn store_internal(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

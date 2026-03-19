@@ -26,11 +26,18 @@ libc.workspace = true
 vstd = "0.0.0-2026-03-17-2326"
 
 [dev-dependencies]
+libtest-mimic = "0.8.2"
+syn = { version = "2.0.100", features = ["full"] }
 wast = { version = "243.0.0", features = ["component-model"] }
 wat = "1.243.0"
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
 [[bench]]
 name = "telomere_bench"
+harness = false
+
+[[test]]
+name = "wast"
+path = "tests/harnesses/wast.rs"
 harness = false
 
 

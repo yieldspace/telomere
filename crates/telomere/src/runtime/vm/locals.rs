@@ -1,7 +1,20 @@
-#![allow(clippy::missing_safety_doc)]
-
 use super::*;
 
+/// WebAssembly `drop`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[value] -> []`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let size = (*tail_code).operand.drop_size as usize;
     trace!("op_drop: {size}");
@@ -11,6 +24,19 @@ pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 }
 
 #[inline(never)]
+/// WebAssembly `select` helper for validated stack values.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: internal `select` operand handling.
+/// Traps: none.
+/// Notes: Reads the validated operands and materializes the selected value before the tail-dispatch wrapper continues.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose validated operand stack matches this `select` instruction.
+/// - This helper must not keep borrows or guards alive across the follow-up stack push.
 unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let x = (*tail_code).operand.select as usize;
     let cond = ctx.stack.pop_u32();
@@ -23,11 +49,41 @@ unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     VMResult::Success(())
 }
 
+/// WebAssembly `select`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[lhs, rhs, i32] -> [value]`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     vm_try!(internal_op_select(tail_code, ctx));
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.get`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[] -> [local]`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     vm_try!(ctx.stack.local_get4(&ctx.local_reference(), addr));
@@ -36,6 +92,21 @@ pub unsafe fn op_local_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.get`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[] -> [local]`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     vm_try!(ctx.stack.local_get8(&ctx.local_reference(), addr));
@@ -44,6 +115,21 @@ pub unsafe fn op_local_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.get`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[] -> [local]`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     vm_try!(ctx.stack.local_get16(&ctx.local_reference(), addr));
@@ -52,12 +138,42 @@ pub unsafe fn op_local_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.set`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[local] -> []`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     ctx.stack.local_set4(&ctx.local_reference(), addr);
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.set`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[local] -> []`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     ctx.stack.local_set8(&ctx.local_reference(), addr);
@@ -65,6 +181,21 @@ pub unsafe fn op_local_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.set`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[local] -> []`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_set16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     ctx.stack.local_set16(&ctx.local_reference(), addr);
@@ -72,12 +203,42 @@ pub unsafe fn op_local_set16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.tee`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[local] -> [local]`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_tee4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     ctx.stack.local_tee4(&ctx.local_reference(), addr);
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.tee`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[local] -> [local]`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     ctx.stack.local_tee8(&ctx.local_reference(), addr);
@@ -85,6 +246,21 @@ pub unsafe fn op_local_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `local.tee`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[local] -> [local]`.
+/// Traps: none.
+/// Notes: Reads or writes validated locals/stack slots and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_tee16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
     ctx.stack.local_tee16(&ctx.local_reference(), addr);

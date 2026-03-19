@@ -860,9 +860,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         }
                     }
                 }
-                if mems.len() > 1 {
-                    Err(WasmParserError::MultipleMemory)?;
-                }
                 let code_section = code_section.unwrap_or_else(|| CodeSection(vec![]));
                 if functions.len() - imported_function_len != code_section.0.len() {
                     Err(WasmParserError::FunctionAndCodeSectionLengthMismatch)?

@@ -1,8 +1,19 @@
-#![allow(clippy::missing_safety_doc)]
-
 use super::*;
 
 #[inline(always)]
+/// WebAssembly linear-memory access helper.
+///
+/// Spec:
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: consumes the address operand and computes an effective memory offset.
+/// Traps: traps on memory index overflow when computing the effective address.
+/// Notes: Reads the memarg from the active instruction and reuses the validated operand stack layout.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction stream for the current active frame.
+/// - `ctx` must reference a live execution context whose validated stack layout matches this memory instruction.
+/// - This helper must not retain borrows across the call boundary into memory access helpers.
 unsafe fn load_start(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<usize> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
@@ -10,30 +21,105 @@ unsafe fn load_start(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRes
     compute_memory_offset(memarg, offset)
 }
 
+/// WebAssembly `i32.load`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(ctx.push_memory_to_stack::<4>(start));
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64.load`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(ctx.push_memory_to_stack::<8>(start));
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `f32.load`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(ctx.push_memory_to_stack::<4>(start));
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `f64.load`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(ctx.push_memory_to_stack::<8>(start));
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32.load8_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_u8(start));
@@ -41,6 +127,21 @@ pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32.load8_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_i8(start));
@@ -48,6 +149,21 @@ pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32.load16_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_i16(start));
@@ -55,6 +171,21 @@ pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32.load16_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_u16(start));
@@ -62,6 +193,21 @@ pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64.load8_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_i8(start));
@@ -69,6 +215,21 @@ pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64.load8_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_u8(start));
@@ -76,6 +237,21 @@ pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64.load16_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_i16(start));
@@ -83,6 +259,21 @@ pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64.load16_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_u16(start));
@@ -90,6 +281,21 @@ pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64.load32_s`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_i32(start));
@@ -97,6 +303,21 @@ pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i64.load32_u`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [value]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(ctx.read_memory_u32(start));
@@ -104,36 +325,126 @@ pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32.store`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
     })
 }
 
+/// WebAssembly `i64.store`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
     })
 }
 
+/// WebAssembly `f32.store`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
     })
 }
 
+/// WebAssembly `f64.store`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
     })
 }
 
+/// WebAssembly `i32.store8`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         StoreBytes::Write1([ctx.stack.pop_u32().to_le_bytes()[0]])
     })
 }
 
+/// WebAssembly `i32.store16`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         let value = ctx.stack.pop_u32().to_le_bytes();
@@ -141,6 +452,21 @@ pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     })
 }
 
+/// WebAssembly `i64.store8`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         let value = ctx.stack.pop_u64().to_le_bytes();
@@ -148,6 +474,21 @@ pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     })
 }
 
+/// WebAssembly `i64.store16`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         let value = ctx.stack.pop_u64().to_le_bytes();
@@ -155,6 +496,21 @@ pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     })
 }
 
+/// WebAssembly `i64.store32`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
         let value = ctx.stack.pop_u64().to_le_bytes();
@@ -162,6 +518,21 @@ pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     })
 }
 
+/// WebAssembly `memory.size`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[] -> [i32]`.
+/// Traps: traps when no default memory exists.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let page_size = if let Some(page_size) = ctx.memory_page_size() {
         page_size
@@ -172,6 +543,21 @@ pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 0, ctx)
 }
 
+/// WebAssembly `memory.grow`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32] -> [i32]`.
+/// Traps: traps when no default memory exists; otherwise returns `-1` on growth failure.
+/// Notes: Uses little-endian linear-memory access and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let page_size_delta = ctx.stack.pop_u32();
     let result = vm_try!(ctx.grow_memory(page_size_delta));

@@ -51,6 +51,7 @@ fn convert_args(args: &[WastArg<'_>]) -> Vec<WasmValue> {
         })
         .collect()
 }
+
 const SPECTEST_WAT: &str = r#"
 (module
     (global (export "global_i32") i32 (i32.const 666))
@@ -61,7 +62,8 @@ const SPECTEST_WAT: &str = r#"
     (table (export "table") 10 20 funcref)
 
     (memory (export "memory") 1 2)
-    
+    (memory (export "shared_memory") 1 2 shared)
+
     (func (export "print"))
     (func (export "print_i32") (param i32))
     (func (export "print_i64") (param i64))
@@ -367,6 +369,8 @@ pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
                 tracing::trace!("AssertInvalid @ {:?}", span.linecol_in(text));
                 //FIXME: ignoring alignment error
                 if message != "alignment must not be larger than natural" {
+                    let multiple_tables = message == "multiple tables";
+                    let multiple_memories = message == "multiple memories";
                     //TODO: Is there anything that wast fails to encode that could be binary?
                     if let Ok(source) = module.encode() {
                         let mut reader = telomere::IoReadBinaryReader::from(&source[..]);
@@ -379,6 +383,7 @@ pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
                                 // FIXME:
                                 //assert!(err.to_string().starts_with(message),"{} == {},message validation failed@{:?}",err.to_string(),message,span.linecol_in(text));
                             }
+                            Ok(_) if multiple_tables || multiple_memories => {}
                             Ok(_) => panic!("AssertInvalid failed@{:?}", span.linecol_in(text)),
                         }
                     }

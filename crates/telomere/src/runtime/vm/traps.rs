@@ -5,6 +5,12 @@ use crate::VMResult;
 macro_rules! generate_trap_func {
     ($name: ident,$instrs_name: ident,$expr: expr) => {
         #[allow(dead_code)]
+        #[doc = concat!("Internal trap entrypoint `", stringify!($name), "`.\n")]
+        #[doc = "\n"]
+        #[doc = "Spec: [WebAssembly Core Spec](https://webassembly.github.io/spec/core/index.html)\n"]
+        #[doc = "\n"]
+        #[doc = "# Safety\n"]
+        #[doc = "`_tail_code` and `_ctx` are ignored; this function is only reached through the generated trap jump table.\n"]
         pub(crate) unsafe fn $name(
             _tail_code: *const Instr,
             _ctx: &mut ExecuteContext,
@@ -54,6 +60,12 @@ generate_trap_func!(traps_unlinkable, TRAPS_UNLINKABLE, VMResult::Unlinkable);
 generate_trap_func!(traps_unreachable, TRAPS_UNREACHABLE, VMResult::Unreachable);
 
 #[allow(dead_code)]
+#[doc = "Internal helper that maps a `VMResult` trap to its trap instruction.\n"]
+#[doc = "\n"]
+#[doc = "Spec: [WebAssembly Core Spec](https://webassembly.github.io/spec/core/index.html)\n"]
+#[doc = "\n"]
+#[doc = "# Safety\n"]
+#[doc = "`res` must be a trap variant; passing `VMResult::Success` is unreachable by construction.\n"]
 pub(crate) unsafe fn trap_func<T>(res: VMResult<T>) -> *const Instr {
     match res {
         VMResult::CallIndirectInvalidType => TRAPS_CALL_INDIRECT_INVALID_TYPE.as_ptr(),
