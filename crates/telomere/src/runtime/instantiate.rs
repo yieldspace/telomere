@@ -230,7 +230,7 @@ pub async fn instantiate(
         let instance_id = store.new_instance_id();
 
         // -> addr
-        let mut memory: Option<GcRef> = None;
+        let mut memories: Vec<GcRef> = Vec::new();
         let mut globals = vec![];
         let mut funcs: Vec<GcRef> = vec![];
         let mut tables = vec![];
@@ -300,24 +300,26 @@ pub async fn instantiate(
                     tables.push(ext_inst.tables.as_slice()[idx.0 as usize]);
                 }
                 (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                    memory = ext_inst.mems.as_slice().first().copied();
+                    let memory_addr = *vm_try!(VMResult::from_option(
+                        ext_inst.mems.as_slice().get(_idx.0 as usize),
+                        || {
+                            tracing::trace!("invalid instance memory");
+                            VMResult::Unlinkable
+                        }
+                    ));
                     let limits = ext_module.mems[_idx.0 as usize];
 
-                    if let Some(memory_addr) = memory {
-                        if mt.shared != limits.shared {
-                            tracing::trace!("import shared memory flag mismatch");
-                            return VMResult::Unlinkable;
-                        }
-                        let handle = gc.memory_handle(memory_addr);
-                        vm_try!(validate_limit(
-                            mt.limits,
-                            gc.memory_page_size(handle),
-                            limits.limits
-                        ))
-                    } else {
-                        tracing::trace!("invalid instance memory");
+                    if mt.shared != limits.shared {
+                        tracing::trace!("import shared memory flag mismatch");
                         return VMResult::Unlinkable;
                     }
+                    let handle = gc.memory_handle(memory_addr);
+                    vm_try!(validate_limit(
+                        mt.limits,
+                        gc.memory_page_size(handle),
+                        limits.limits
+                    ));
+                    memories.push(memory_addr);
                 }
                 _ => {
                     tracing::trace!("import other type objects");
@@ -341,38 +343,36 @@ pub async fn instantiate(
             funcs: Vec::new(),
             tables: Vec::new(),
             mems: Vec::new(),
+            memory_slots: Vec::new(),
         });
         let inst_addr = gc.gc_ref_for_instance(inst_id);
 
-        if memory.is_none() {
-            if let Some(mem) = mems.first() {
-                let limits = mem.limits;
-                memory = Some(if mem.shared {
-                    gc.new_shared_memory(limits.min, limits.max.unwrap_or(PAGE_SIZE_MAX as u32))
-                } else {
-                    gc.new_memory(limits.min, limits.max.unwrap_or(PAGE_SIZE_MAX as u32))
-                });
-            }
+        for mem in mems.iter().skip(memories.len()) {
+            let limits = mem.limits;
+            memories.push(if mem.shared {
+                gc.new_shared_memory(limits.min, limits.max.unwrap_or(PAGE_SIZE_MAX as u32))
+            } else {
+                gc.new_memory(limits.min, limits.max.unwrap_or(PAGE_SIZE_MAX as u32))
+            });
         }
 
         for (idx, d) in (0..).zip(data.0.into_iter()) {
             match &d.mode {
                 DataMode::Active(mem, offset) => {
-                    assert_eq!(mem.0, 0);
                     let offset =
                         vm_try!(execute_offset_const_expr(&mut gc, &globals, offset)) as usize;
-                    if let Some(memory) = &memory {
-                        vm_try!(gc.with_memory_by_addr(*memory, |memory| {
-                            if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
-                                slice.copy_from_slice(&d.init);
-                                VMResult::Success(())
-                            } else {
-                                VMResult::MemoryIndexOutOfRange
-                            }
+                    let memory =
+                        *vm_try!(VMResult::from_option(memories.get(mem.0 as usize), || {
+                            VMResult::MemoryIndexOutOfRange
                         }));
-                    } else {
-                        return VMResult::MemoryIndexOutOfRange;
-                    }
+                    vm_try!(gc.with_memory_by_addr(memory, |memory| {
+                        if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
+                            slice.copy_from_slice(&d.init);
+                            VMResult::Success(())
+                        } else {
+                            VMResult::MemoryIndexOutOfRange
+                        }
+                    }));
                     store.lock_segments().data.insert((instance_id, idx), d);
                 }
                 DataMode::Passive => {
@@ -463,7 +463,7 @@ pub async fn instantiate(
         let instance = Instance {
             module_addr: mod_addr,
             instance_id,
-            memory: memory.into_iter().collect::<Vec<_>>(),
+            memory: memories,
             tables,
             globals,
             funcs,
@@ -488,11 +488,10 @@ pub async fn instantiate(
                         funcaddr,
                         funcinst,
                         func_instance
-                            .mems
+                            .memory_slots
                             .first()
                             .copied()
-                            .filter(|addr| !addr.is_null())
-                            .map(|addr| gc.memory_handle(addr)),
+                            .and_then(|slot| slot.handle()),
                     ),
                     LocalReference {
                         local_size: 0,
@@ -520,11 +519,10 @@ pub async fn instantiate(
                         funcaddr,
                         funcinst,
                         func_instance
-                            .mems
+                            .memory_slots
                             .first()
                             .copied()
-                            .filter(|addr| !addr.is_null())
-                            .map(|addr| gc.memory_handle(addr)),
+                            .and_then(|slot| slot.handle()),
                     ),
                     LocalReference {
                         local_size: 0,
@@ -579,7 +577,7 @@ pub fn aliasing(
     let mut tables = vec![];
     let mut function_addrs = vec![];
     let mut global_addrs = vec![];
-    let mut mem_addr = None;
+    let mut memory_addrs = vec![];
     let mut table_addrs = vec![];
     let mut exports = vec![];
     for (modname, importname, exportname) in triplets {
@@ -628,7 +626,8 @@ pub fn aliasing(
                 let mt = ext_module.mems[idx.0 as usize];
                 let new_memidx = memories.len();
                 memories.push(mt);
-                mem_addr = Some(ext_instance.mems.as_slice()[idx.0 as usize]);
+                let addr = ext_instance.mems.as_slice()[idx.0 as usize];
+                memory_addrs.push(addr);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Mem(MemIdx(new_memidx as u32)),
@@ -656,11 +655,12 @@ pub fn aliasing(
     });
     let inst_id_handle = gc.alloc_instance(InstanceData {
         module_addr: mod_addr,
-        mems: mem_addr.into_iter().collect::<Vec<_>>(),
+        mems: memory_addrs,
         globals: global_addrs,
         funcs: function_addrs,
         tables: table_addrs,
         instance_id: inst_id,
+        memory_slots: Vec::new(),
     });
     VMResult::Success(InstanceHandle::new(store, inst_id_handle, inst_id))
 }

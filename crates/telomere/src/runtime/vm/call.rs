@@ -25,11 +25,10 @@ unsafe fn internal_op_call(
     let funcinst = ctx.func_by_addr(funcaddr).clone();
     let instance = ctx.gc.instance(funcinst.instance);
     let memory0 = instance
-        .mems
+        .memory_slots
         .first()
         .copied()
-        .filter(|addr| !addr.is_null())
-        .map(|addr| ctx.gc.memory_handle(addr));
+        .and_then(|slot| slot.handle());
     let frame = CallFrameCache::from_parts(funcaddr, &funcinst, memory0);
     let module_addr = instance.module_addr;
     let module = ctx.gc.get_module(module_addr);

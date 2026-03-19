@@ -74,6 +74,39 @@ impl MemoryHandle {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstanceMemorySlot {
+    None,
+    Local(LocalMemoryId),
+    Shared(SharedMemoryId),
+}
+
+impl InstanceMemorySlot {
+    pub(crate) fn from_handle(handle: Option<MemoryHandle>) -> Self {
+        match handle {
+            Some(MemoryHandle::Local(id)) => Self::Local(id),
+            Some(MemoryHandle::Shared(id)) => Self::Shared(id),
+            None => Self::None,
+        }
+    }
+
+    pub(crate) fn from_gc_ref(store: &StoreInner, addr: GcRef) -> Self {
+        if addr.is_null() {
+            Self::None
+        } else {
+            Self::from_handle(Some(store.memory_handle(addr)))
+        }
+    }
+
+    pub(crate) fn handle(self) -> Option<MemoryHandle> {
+        match self {
+            Self::None => None,
+            Self::Local(id) => Some(MemoryHandle::Local(id)),
+            Self::Shared(id) => Some(MemoryHandle::Shared(id)),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ModuleInstance {
     pub exports: ExportSection,
@@ -92,6 +125,7 @@ pub struct InstanceData {
     pub funcs: Vec<GcRef>,
     pub tables: Vec<GcRef>,
     pub mems: Vec<GcRef>,
+    pub memory_slots: Vec<InstanceMemorySlot>,
 }
 
 #[derive(Clone)]
@@ -495,6 +529,12 @@ impl StoreInner {
     ) {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Instance);
+        let memory_slots = instance
+            .memory
+            .iter()
+            .copied()
+            .map(|addr| InstanceMemorySlot::from_gc_ref(self, addr))
+            .collect();
         self.instances[index] = InstanceData {
             instance_id: instance.instance_id,
             module_addr: instance.module_addr,
@@ -502,6 +542,7 @@ impl StoreInner {
             funcs: instance.funcs.clone(),
             tables: instance.tables.clone(),
             mems: instance.memory.clone(),
+            memory_slots,
         };
     }
 
@@ -855,6 +896,105 @@ impl StoreInner {
         data: u32,
     ) -> VMResult<()> {
         self.shared_memory(id).fill(ptr, len, data)
+    }
+
+    #[inline(never)]
+    fn local_read_bytes_to_vec(
+        &self,
+        id: LocalMemoryId,
+        offset: u32,
+        len: u32,
+    ) -> VMResult<Vec<u8>> {
+        let start = offset as usize;
+        let end = vm_try!(VMResult::from_option(
+            start.checked_add(len as usize),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+        let bytes = vm_try!(VMResult::from_option(
+            self.local_memory(id).memory().get(start..end),
+            || VMResult::MemoryIndexOutOfRange
+        ));
+        VMResult::Success(bytes.to_vec())
+    }
+
+    #[inline(never)]
+    fn shared_read_bytes_to_vec(
+        &self,
+        id: SharedMemoryId,
+        offset: u32,
+        len: u32,
+    ) -> VMResult<Vec<u8>> {
+        let start = offset as usize;
+        let end = vm_try!(VMResult::from_option(
+            start.checked_add(len as usize),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+        self.shared_memory(id).with_memory(|memory| {
+            VMResult::Success(
+                vm_try!(VMResult::from_option(memory.get(start..end), || {
+                    VMResult::MemoryIndexOutOfRange
+                }))
+                .to_vec(),
+            )
+        })
+    }
+
+    #[inline(never)]
+    pub(crate) fn copy_memory_local_to_local(
+        &mut self,
+        dst: LocalMemoryId,
+        src: LocalMemoryId,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        if dst == src {
+            return self.local_copy_memory(dst, dst_offset, src_offset, len);
+        }
+        let bytes = vm_try!(self.local_read_bytes_to_vec(src, src_offset, len));
+        self.local_write_bytes(dst, dst_offset as usize, &bytes)
+    }
+
+    #[inline(never)]
+    pub(crate) fn copy_memory_local_to_shared(
+        &mut self,
+        dst: SharedMemoryId,
+        src: LocalMemoryId,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        let bytes = vm_try!(self.local_read_bytes_to_vec(src, src_offset, len));
+        self.shared_write_bytes(dst, dst_offset as usize, &bytes)
+    }
+
+    #[inline(never)]
+    pub(crate) fn copy_memory_shared_to_local(
+        &mut self,
+        dst: LocalMemoryId,
+        src: SharedMemoryId,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        let bytes = vm_try!(self.shared_read_bytes_to_vec(src, src_offset, len));
+        self.local_write_bytes(dst, dst_offset as usize, &bytes)
+    }
+
+    #[inline(never)]
+    pub(crate) fn copy_memory_shared_to_shared(
+        &mut self,
+        dst: SharedMemoryId,
+        src: SharedMemoryId,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        if dst == src {
+            return self.shared_copy_memory(dst, dst_offset, src_offset, len);
+        }
+        let bytes = vm_try!(self.shared_read_bytes_to_vec(src, src_offset, len));
+        self.shared_write_bytes(dst, dst_offset as usize, &bytes)
     }
 
     #[inline(always)]

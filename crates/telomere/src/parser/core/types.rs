@@ -152,6 +152,10 @@ pub fn parse_memtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, MemType)
     if limits.max.map(|max| max > 65536).unwrap_or_else(|| false) {
         Err(WasmParserError::InvalidMemorySize(limits))?
     }
+    #[cfg(not(feature = "threads"))]
+    if shared {
+        Err(WasmParserError::InvalidLimit)?
+    }
     if shared && limits.max.is_none() {
         Err(WasmParserError::InvalidLimit)?
     }

@@ -26,8 +26,10 @@ libc.workspace = true
 vstd = "0.0.0-2026-03-17-2326"
 
 [dev-dependencies]
+futures = "0.3.31"
 libtest-mimic = "0.8.2"
 syn = { version = "2.0.100", features = ["full"] }
+tokio.workspace = true
 wast = { version = "243.0.0", features = ["component-model"] }
 wat = "1.243.0"
 criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
@@ -42,7 +44,24 @@ harness = false
 
 
 [features]
-default = ["interpreter", "simd", "async-runtime"]
+default = [
+    "interpreter",
+    "simd",
+    "async-runtime",
+    "threads",
+    "tail-call",
+]
 interpreter = []
 simd = ["wide"]
 async-runtime = ["tokio", "futures"]
+threads = []
+tail-call = []
+multi-memory = []
+full = [
+    "interpreter",
+    "simd",
+    "async-runtime",
+    "threads",
+    "tail-call",
+    "multi-memory",
+]

@@ -38,12 +38,28 @@ fn mem_init_impl_local(
     src: u32,
     len: u32,
 ) -> VMResult<()> {
-    let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
-    ctx.gc.local_write_bytes(
+    mem_init_impl_local_with_id(
+        ctx,
         unsafe { ctx.default_local_memory_id_unchecked() },
-        dst as usize,
-        copied.as_deref().unwrap_or(&[]),
+        idx,
+        dst,
+        src,
+        len,
     )
+}
+
+#[inline(never)]
+fn mem_init_impl_local_with_id(
+    ctx: &mut ExecuteContext,
+    memory: crate::common::store::LocalMemoryId,
+    idx: u32,
+    dst: u32,
+    src: u32,
+    len: u32,
+) -> VMResult<()> {
+    let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
+    ctx.gc
+        .local_write_bytes(memory, dst as usize, copied.as_deref().unwrap_or(&[]))
 }
 
 #[inline(never)]
@@ -54,12 +70,28 @@ fn mem_init_impl_shared(
     src: u32,
     len: u32,
 ) -> VMResult<()> {
-    let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
-    ctx.gc.shared_write_bytes(
+    mem_init_impl_shared_with_id(
+        ctx,
         unsafe { ctx.default_shared_memory_id_unchecked() },
-        dst as usize,
-        copied.as_deref().unwrap_or(&[]),
+        idx,
+        dst,
+        src,
+        len,
     )
+}
+
+#[inline(never)]
+fn mem_init_impl_shared_with_id(
+    ctx: &mut ExecuteContext,
+    memory: crate::common::store::SharedMemoryId,
+    idx: u32,
+    dst: u32,
+    src: u32,
+    len: u32,
+) -> VMResult<()> {
+    let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
+    ctx.gc
+        .shared_write_bytes(memory, dst as usize, copied.as_deref().unwrap_or(&[]))
 }
 
 #[inline(never)]
@@ -255,6 +287,274 @@ pub unsafe fn op_mem_fill_shared(
         .gc
         .shared_fill_memory(ctx.default_shared_memory_id_unchecked(), ptr, len, data,));
     call_next(tail_code, 0, ctx)
+}
+
+/// WebAssembly `memory.init` on indexed local memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[dst, src, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the typed indexed local-memory fast path and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
+pub unsafe fn op_mem_init_indexed_local(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32;
+    let memidx = (*tail_code.add(1)).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    vm_try!(mem_init_impl_local_with_id(
+        ctx,
+        ctx.local_memory_id_at_unchecked(memidx),
+        idx,
+        dst,
+        src,
+        len,
+    ));
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `memory.init` on indexed shared memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[dst, src, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the typed indexed shared-memory fast path and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
+pub unsafe fn op_mem_init_indexed_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let idx = (*tail_code).operand.u32;
+    let memidx = (*tail_code.add(1)).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    vm_try!(mem_init_impl_shared_with_id(
+        ctx,
+        ctx.shared_memory_id_at_unchecked(memidx),
+        idx,
+        dst,
+        src,
+        len,
+    ));
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `memory.copy` from indexed local memory to indexed local memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[dst, src, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the typed indexed local-to-local fast path and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose indexed memory operands are in-bounds and local.
+pub unsafe fn op_mem_copy_indexed_local_local(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    if wait_effect(ctx, ctx.cont) {
+        return VMResult::Success(());
+    }
+    let dst_memidx = (*tail_code).operand.u32;
+    let src_memidx = (*tail_code.add(1)).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    vm_try!(ctx.gc.copy_memory_local_to_local(
+        ctx.local_memory_id_at_unchecked(dst_memidx),
+        ctx.local_memory_id_at_unchecked(src_memidx),
+        dst,
+        src,
+        len,
+    ));
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `memory.copy` from indexed shared memory to indexed local memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[dst, src, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the typed indexed shared-to-local path and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose destination memory is local and source memory is shared.
+pub unsafe fn op_mem_copy_indexed_local_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    if wait_effect(ctx, ctx.cont) {
+        return VMResult::Success(());
+    }
+    let dst_memidx = (*tail_code).operand.u32;
+    let src_memidx = (*tail_code.add(1)).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    vm_try!(ctx.gc.copy_memory_shared_to_local(
+        ctx.local_memory_id_at_unchecked(dst_memidx),
+        ctx.shared_memory_id_at_unchecked(src_memidx),
+        dst,
+        src,
+        len,
+    ));
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `memory.copy` from indexed local memory to indexed shared memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[dst, src, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the typed indexed local-to-shared path and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose destination memory is shared and source memory is local.
+pub unsafe fn op_mem_copy_indexed_shared_local(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    if wait_effect(ctx, ctx.cont) {
+        return VMResult::Success(());
+    }
+    let dst_memidx = (*tail_code).operand.u32;
+    let src_memidx = (*tail_code.add(1)).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    vm_try!(ctx.gc.copy_memory_local_to_shared(
+        ctx.shared_memory_id_at_unchecked(dst_memidx),
+        ctx.local_memory_id_at_unchecked(src_memidx),
+        dst,
+        src,
+        len,
+    ));
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `memory.copy` from indexed shared memory to indexed shared memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[dst, src, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the typed indexed shared-to-shared path and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose indexed memory operands are in-bounds and shared.
+pub unsafe fn op_mem_copy_indexed_shared_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    if wait_effect(ctx, ctx.cont) {
+        return VMResult::Success(());
+    }
+    let dst_memidx = (*tail_code).operand.u32;
+    let src_memidx = (*tail_code.add(1)).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let src = ctx.stack.pop_u32();
+    let dst = ctx.stack.pop_u32();
+    vm_try!(ctx.gc.copy_memory_shared_to_shared(
+        ctx.shared_memory_id_at_unchecked(dst_memidx),
+        ctx.shared_memory_id_at_unchecked(src_memidx),
+        dst,
+        src,
+        len,
+    ));
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `memory.fill` on indexed local memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[dst, value, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the typed indexed local-memory fast path and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
+pub unsafe fn op_mem_fill_indexed_local(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let memidx = (*tail_code).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let data = ctx.stack.pop_u32();
+    let ptr = ctx.stack.pop_u32();
+    vm_try!(ctx
+        .gc
+        .local_fill_memory(ctx.local_memory_id_at_unchecked(memidx), ptr, len, data,));
+    call_next(tail_code, 1, ctx)
+}
+
+/// WebAssembly `memory.fill` on indexed shared memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[dst, value, len] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the typed indexed shared-memory fast path and tail-dispatches with `call_next`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
+pub unsafe fn op_mem_fill_indexed_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let memidx = (*tail_code).operand.u32;
+    let len = ctx.stack.pop_u32();
+    let data = ctx.stack.pop_u32();
+    let ptr = ctx.stack.pop_u32();
+    vm_try!(ctx
+        .gc
+        .shared_fill_memory(ctx.shared_memory_id_at_unchecked(memidx), ptr, len, data,));
+    call_next(tail_code, 1, ctx)
 }
 
 pub(crate) use op_mem_copy as op_mem_copy_local;

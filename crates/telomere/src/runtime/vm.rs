@@ -227,19 +227,27 @@ fn start_async_host_call(
     return_addr: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<CallOutcome> {
-    let async_host = ctx.func().async_host_code_pointer();
-    let task_id = ctx.task_id;
-    let future = async_host(ctx);
-    ctx.effect.push_async_effect(Box::pin(async move {
-        AsyncResult {
-            task_id,
-            completion: AsyncCompletion::HostCall {
-                result: future.await,
-            },
-        }
-    }));
-    ctx.cont = return_addr;
-    VMResult::Success(CallOutcome::Pending)
+    #[cfg(feature = "async-runtime")]
+    {
+        let async_host = ctx.func().async_host_code_pointer();
+        let task_id = ctx.task_id;
+        let future = async_host(ctx);
+        ctx.effect.push_async_effect(Box::pin(async move {
+            AsyncResult {
+                task_id,
+                completion: AsyncCompletion::HostCall {
+                    result: future.await,
+                },
+            }
+        }));
+        ctx.cont = return_addr;
+        VMResult::Success(CallOutcome::Pending)
+    }
+    #[cfg(not(feature = "async-runtime"))]
+    {
+        let _ = (return_addr, ctx);
+        VMResult::InvalidOperand
+    }
 }
 
 fn invoke_host_function(
@@ -257,8 +265,11 @@ fn invoke_host_function(
 
 pub(crate) use atomics::*;
 pub(crate) use bulk_memory::{
-    op_data_drop, op_mem_copy_local, op_mem_copy_shared, op_mem_fill_local, op_mem_fill_shared,
-    op_mem_init_local, op_mem_init_shared,
+    op_data_drop, op_mem_copy_indexed_local_local, op_mem_copy_indexed_local_shared,
+    op_mem_copy_indexed_shared_local, op_mem_copy_indexed_shared_shared, op_mem_copy_local,
+    op_mem_copy_shared, op_mem_fill_indexed_local, op_mem_fill_indexed_shared, op_mem_fill_local,
+    op_mem_fill_shared, op_mem_init_indexed_local, op_mem_init_indexed_shared, op_mem_init_local,
+    op_mem_init_shared,
 };
 pub(crate) use call::{
     op_call, op_call_indirect, op_return_call, op_return_call_indirect, special_start_function_call,
@@ -334,6 +345,68 @@ pub(crate) unsafe fn store_internal_shared(
         .shared_write_bytes(ctx.default_shared_memory_id_unchecked(), start, bytes,));
     call_next(tail_code, 1, ctx)
 }
+
+/// Telomere runtime helper `store_internal_local_indexed`.
+///
+/// Related spec:
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the pre-decoded indexed local-memory fast path and tail-dispatches after consuming `memarg + memidx`.
+///
+/// # Safety
+/// - `tail_code` must reference the active decoded instruction stream for the current frame.
+/// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
+/// - The memory index operand at `tail_code.add(1)` must be in-bounds and refer to a local memory.
+/// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
+pub(crate) unsafe fn store_internal_local_indexed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let memarg = (*tail_code).operand.memarg;
+    let memidx = (*tail_code.add(1)).operand.u32;
+    let operation = make_operation(ctx);
+    let offset = ctx.stack.pop_u32();
+    let bytes = operation.as_slice();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.local_memory_id_at_unchecked(memidx), start, bytes));
+    call_next(tail_code, 2, ctx)
+}
+
+/// Telomere runtime helper `store_internal_shared_indexed`.
+///
+/// Related spec:
+/// - Execution: https://webassembly.github.io/multi-memory/core/exec/instructions.html
+///
+/// Stack effect: `[i32, value] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the pre-decoded indexed shared-memory fast path and tail-dispatches after consuming `memarg + memidx`.
+///
+/// # Safety
+/// - `tail_code` must reference the active decoded instruction stream for the current frame.
+/// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
+/// - The memory index operand at `tail_code.add(1)` must be in-bounds and refer to a shared memory.
+/// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
+pub(crate) unsafe fn store_internal_shared_indexed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let memarg = (*tail_code).operand.memarg;
+    let memidx = (*tail_code.add(1)).operand.u32;
+    let operation = make_operation(ctx);
+    let offset = ctx.stack.pop_u32();
+    let bytes = operation.as_slice();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    vm_try!(ctx
+        .gc
+        .shared_write_bytes(ctx.shared_memory_id_at_unchecked(memidx), start, bytes));
+    call_next(tail_code, 2, ctx)
+}
 pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
 };
@@ -372,11 +445,10 @@ pub async fn run_module_function(
                 code_addr,
                 funcinst,
                 func_instance
-                    .mems
+                    .memory_slots
                     .first()
                     .copied()
-                    .filter(|addr| !addr.is_null())
-                    .map(|addr| gc.memory_handle(addr)),
+                    .and_then(|slot| slot.handle()),
             );
             let mut stack = Stack::new(128 * 1024);
             let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
@@ -450,11 +522,10 @@ pub(crate) fn run_module_function_sync_with_gc(
                 code_addr,
                 funcinst,
                 func_instance
-                    .mems
+                    .memory_slots
                     .first()
                     .copied()
-                    .filter(|addr| !addr.is_null())
-                    .map(|addr| gc.memory_handle(addr)),
+                    .and_then(|slot| slot.handle()),
             );
             let mut stack = Stack::new(128 * 1024);
             let tidx = module_inst.functions.get(idx.0 as usize).unwrap();

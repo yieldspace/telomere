@@ -1,3 +1,5 @@
+#![cfg(feature = "async-runtime")]
+
 mod common;
 
 use common::{instantiate_wat, run_wast_with};

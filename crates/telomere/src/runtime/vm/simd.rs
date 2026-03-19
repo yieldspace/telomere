@@ -1,6 +1,9 @@
 use crate::{
     common::stack::LaneType,
-    runtime::vm::{compute_memory_offset, store_internal_local, store_internal_shared, StoreBytes},
+    runtime::vm::{
+        compute_memory_offset, store_internal_local, store_internal_local_indexed,
+        store_internal_shared, store_internal_shared_indexed, StoreBytes,
+    },
 };
 use telomere_macros::define_simd_operation;
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
@@ -61,6 +64,34 @@ unsafe fn push_memory_to_stack_shared<const N: usize>(
     )
 }
 
+#[inline(always)]
+unsafe fn push_memory_to_stack_local_indexed<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    start: usize,
+) -> VMResult<()> {
+    let memidx = (*tail_code.add(1)).operand.u32;
+    ctx.gc.local_push_memory_to_stack::<N>(
+        ctx.local_memory_id_at_unchecked(memidx),
+        ctx.stack,
+        start,
+    )
+}
+
+#[inline(always)]
+unsafe fn push_memory_to_stack_shared_indexed<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    start: usize,
+) -> VMResult<()> {
+    let memidx = (*tail_code.add(1)).operand.u32;
+    ctx.gc.shared_push_memory_to_stack::<N>(
+        ctx.shared_memory_id_at_unchecked(memidx),
+        ctx.stack,
+        start,
+    )
+}
+
 /// Telomere internal SIMD local-memory read helper.
 ///
 /// Spec:
@@ -111,6 +142,32 @@ unsafe fn read_memory_bytes_shared<const N: usize>(
         .shared_read_u8_array::<N>(ctx.default_shared_memory_id_unchecked(), start)
 }
 
+#[inline(always)]
+unsafe fn read_memory_bytes_local_indexed<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<[u8; N]> {
+    let memarg = (*tail_code).operand.memarg;
+    let offset = ctx.stack.pop_u32();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    let memidx = (*tail_code.add(1)).operand.u32;
+    ctx.gc
+        .local_read_u8_array::<N>(ctx.local_memory_id_at_unchecked(memidx), start)
+}
+
+#[inline(always)]
+unsafe fn read_memory_bytes_shared_indexed<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<[u8; N]> {
+    let memarg = (*tail_code).operand.memarg;
+    let offset = ctx.stack.pop_u32();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    let memidx = (*tail_code.add(1)).operand.u32;
+    ctx.gc
+        .shared_read_u8_array::<N>(ctx.shared_memory_id_at_unchecked(memidx), start)
+}
+
 macro_rules! define_shared_simd_memory_handler {
     ($shared_name:ident, $mnemonic:literal, $impl:ident) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` on shared default memory.")]
@@ -132,7 +189,7 @@ macro_rules! define_shared_simd_memory_handler {
             tail_code: *const Instr,
             ctx: &mut ExecuteContext,
         ) -> VMResult<()> {
-            $impl::<true>(tail_code, ctx)
+            $impl::<true, false>(tail_code, ctx)
         }
     };
 }
@@ -155,7 +212,56 @@ macro_rules! define_local_simd_memory_handler {
         /// - `ctx` must reference a live execution context whose default memory is local.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            $impl::<false>(tail_code, ctx)
+            $impl::<false, false>(tail_code, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_shared_simd_memory_handler {
+    ($shared_name:ident, $mnemonic:literal, $impl:ident) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` on shared indexed memory.")]
+        ///
+        /// Spec:
+        /// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+        /// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+        /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+        ///
+        /// Stack effect: specialized SIMD memory handler.
+        /// Traps: traps on out-of-bounds memory access.
+        /// Notes: Uses the shared-memory specialized fast path selected by the parser for `memidx > 0`.
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+        /// - `ctx` must reference a live execution context whose selected indexed memory is shared.
+        /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        pub unsafe fn $shared_name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            $impl::<true, true>(tail_code, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_local_simd_memory_handler {
+    ($name:ident, $mnemonic:literal, $impl:ident) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` on indexed local memory.")]
+        ///
+        /// Spec:
+        /// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+        /// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+        /// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+        ///
+        /// Stack effect: specialized SIMD memory handler.
+        /// Traps: traps on out-of-bounds memory access.
+        /// Notes: Uses the local-memory specialized fast path selected by the parser for `memidx > 0`.
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+        /// - `ctx` must reference a live execution context whose selected indexed memory is local.
+        /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            $impl::<false, true>(tail_code, ctx)
         }
     };
 }
@@ -174,23 +280,41 @@ macro_rules! define_local_simd_memory_handler {
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
 #[inline(always)]
-unsafe fn op_v128_load_impl<const SHARED: bool>(
+unsafe fn op_v128_load_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack.pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    if SHARED {
+    if SHARED && INDEXED {
+        vm_try!(push_memory_to_stack_shared_indexed::<16>(
+            tail_code, ctx, start
+        ));
+    } else if SHARED {
         vm_try!(push_memory_to_stack_shared::<16>(ctx, start));
+    } else if INDEXED {
+        vm_try!(push_memory_to_stack_local_indexed::<16>(
+            tail_code, ctx, start
+        ));
     } else {
         vm_try!(push_memory_to_stack_local::<16>(ctx, start));
     }
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 
 define_local_simd_memory_handler!(op_v128_load, "v128.load", op_v128_load_impl);
 define_shared_simd_memory_handler!(op_v128_load_shared, "v128.load", op_v128_load_impl);
+define_indexed_local_simd_memory_handler!(
+    op_v128_load_indexed_local,
+    "v128.load",
+    op_v128_load_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    op_v128_load_indexed_shared,
+    "v128.load",
+    op_v128_load_impl
+);
 
 #[inline(always)]
 /// WebAssembly SIMD memory helper for lane-sized reads.
@@ -206,12 +330,16 @@ define_shared_simd_memory_handler!(op_v128_load_shared, "v128.load", op_v128_loa
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose validated operand stack matches this SIMD memory operation.
 /// - This helper must not retain borrows across the memory read or the follow-up stack push.
-unsafe fn read_memory_bytes<const N: usize, const SHARED: bool>(
+unsafe fn read_memory_bytes<const N: usize, const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
-    if SHARED {
+    if SHARED && INDEXED {
+        read_memory_bytes_shared_indexed::<N>(tail_code, ctx)
+    } else if SHARED {
         read_memory_bytes_shared::<N>(tail_code, ctx)
+    } else if INDEXED {
+        read_memory_bytes_local_indexed::<N>(tail_code, ctx)
     } else {
         read_memory_bytes_local::<N>(tail_code, ctx)
     }
@@ -232,11 +360,11 @@ unsafe fn read_memory_bytes<const N: usize, const SHARED: bool>(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - `SHARED` must match the default memory kind selected for this handler.
-unsafe fn v128_load8x8_s_impl<const SHARED: bool>(
+unsafe fn v128_load8x8_s_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let data = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
+    let data = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     let extended = [
         data[0] as i8 as i16,
         data[1] as i8 as i16,
@@ -248,10 +376,20 @@ unsafe fn v128_load8x8_s_impl<const SHARED: bool>(
         data[7] as i8 as i16,
     ];
     vm_try!(ctx.stack.push(i16x8::from(extended)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load8x8_s, "v128.load8x8_s", v128_load8x8_s_impl);
 define_shared_simd_memory_handler!(v128_load8x8_s_shared, "v128.load8x8_s", v128_load8x8_s_impl);
+define_indexed_local_simd_memory_handler!(
+    v128_load8x8_s_indexed_local,
+    "v128.load8x8_s",
+    v128_load8x8_s_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load8x8_s_indexed_shared,
+    "v128.load8x8_s",
+    v128_load8x8_s_impl
+);
 /// WebAssembly `v128.load8x8_u`.
 ///
 /// Spec:
@@ -268,11 +406,11 @@ define_shared_simd_memory_handler!(v128_load8x8_s_shared, "v128.load8x8_s", v128
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - `SHARED` must match the default memory kind selected for this handler.
-unsafe fn v128_load8x8_u_impl<const SHARED: bool>(
+unsafe fn v128_load8x8_u_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let data = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
+    let data = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     let extended = [
         data[0] as u16,
         data[1] as u16,
@@ -284,10 +422,20 @@ unsafe fn v128_load8x8_u_impl<const SHARED: bool>(
         data[7] as u16,
     ];
     vm_try!(ctx.stack.push(u16x8::from(extended)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load8x8_u, "v128.load8x8_u", v128_load8x8_u_impl);
 define_shared_simd_memory_handler!(v128_load8x8_u_shared, "v128.load8x8_u", v128_load8x8_u_impl);
+define_indexed_local_simd_memory_handler!(
+    v128_load8x8_u_indexed_local,
+    "v128.load8x8_u",
+    v128_load8x8_u_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load8x8_u_indexed_shared,
+    "v128.load8x8_u",
+    v128_load8x8_u_impl
+);
 
 /// WebAssembly `v128.load16x4_s`.
 ///
@@ -304,11 +452,11 @@ define_shared_simd_memory_handler!(v128_load8x8_u_shared, "v128.load8x8_u", v128
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load16x4_s_impl<const SHARED: bool>(
+unsafe fn v128_load16x4_s_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let data = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
+    let data = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     let i16s = [
         i16::from_le_bytes([data[0], data[1]]),
         i16::from_le_bytes([data[2], data[3]]),
@@ -323,11 +471,21 @@ unsafe fn v128_load16x4_s_impl<const SHARED: bool>(
         i16s[3] as i32,
     ];
     vm_try!(ctx.stack.push(i32x4::from(extended)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load16x4_s, "v128.load16x4_s", v128_load16x4_s_impl);
 define_shared_simd_memory_handler!(
     v128_load16x4_s_shared,
+    "v128.load16x4_s",
+    v128_load16x4_s_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load16x4_s_indexed_local,
+    "v128.load16x4_s",
+    v128_load16x4_s_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load16x4_s_indexed_shared,
     "v128.load16x4_s",
     v128_load16x4_s_impl
 );
@@ -346,11 +504,11 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load16x4_u_impl<const SHARED: bool>(
+unsafe fn v128_load16x4_u_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let data = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
+    let data = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     let u16s = [
         u16::from_le_bytes([data[0], data[1]]),
         u16::from_le_bytes([data[2], data[3]]),
@@ -365,11 +523,21 @@ unsafe fn v128_load16x4_u_impl<const SHARED: bool>(
         u16s[3] as u32,
     ];
     vm_try!(ctx.stack.push(u32x4::from(extended)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load16x4_u, "v128.load16x4_u", v128_load16x4_u_impl);
 define_shared_simd_memory_handler!(
     v128_load16x4_u_shared,
+    "v128.load16x4_u",
+    v128_load16x4_u_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load16x4_u_indexed_local,
+    "v128.load16x4_u",
+    v128_load16x4_u_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load16x4_u_indexed_shared,
     "v128.load16x4_u",
     v128_load16x4_u_impl
 );
@@ -395,6 +563,30 @@ pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
     })
 }
 
+/// WebAssembly `v128.store` on indexed local memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the indexed local-memory SIMD fast path selected by the parser for `memidx > 0`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose selected indexed memory is local.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn v128_store_indexed_local(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    store_internal_local_indexed(tail_code, ctx, |ctx| {
+        StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
+    })
+}
+
 define_shared_simd_memory_handler!(v128_store_shared, "v128.store", v128_store_shared_impl);
 
 #[inline(always)]
@@ -411,12 +603,37 @@ define_shared_simd_memory_handler!(v128_store_shared, "v128.store", v128_store_s
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame has shared default memory.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_store_shared_impl<const SHARED: bool>(
+unsafe fn v128_store_shared_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     debug_assert!(SHARED);
+    debug_assert!(!INDEXED);
     store_internal_shared(tail_code, ctx, |ctx| {
+        StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
+    })
+}
+
+/// WebAssembly `v128.store` on indexed shared memory.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/multi-memory/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/multi-memory/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/threads/core/exec/instructions.html
+///
+/// Stack effect: `[i32, v128] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: Uses the indexed shared-memory SIMD fast path selected by the parser for `memidx > 0`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose selected indexed memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn v128_store_indexed_shared(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    store_internal_shared_indexed(tail_code, ctx, |ctx| {
         StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
     })
 }
@@ -436,22 +653,32 @@ unsafe fn v128_store_shared_impl<const SHARED: bool>(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load32x2_s_impl<const SHARED: bool>(
+unsafe fn v128_load32x2_s_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
+    let bytes = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     let i32s = [
         i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
         i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
     ];
     let extended = [i32s[0] as i64, i32s[1] as i64];
     vm_try!(ctx.stack.push(i64x2::from(extended)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load32x2_s, "v128.load32x2_s", v128_load32x2_s_impl);
 define_shared_simd_memory_handler!(
     v128_load32x2_s_shared,
+    "v128.load32x2_s",
+    v128_load32x2_s_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load32x2_s_indexed_local,
+    "v128.load32x2_s",
+    v128_load32x2_s_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load32x2_s_indexed_shared,
     "v128.load32x2_s",
     v128_load32x2_s_impl
 );
@@ -470,22 +697,32 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load32x2_u_impl<const SHARED: bool>(
+unsafe fn v128_load32x2_u_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
+    let bytes = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     let u32s = [
         u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
         u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
     ];
     let extended = [u32s[0] as u64, u32s[1] as u64];
     vm_try!(ctx.stack.push(u64x2::from(extended)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load32x2_u, "v128.load32x2_u", v128_load32x2_u_impl);
 define_shared_simd_memory_handler!(
     v128_load32x2_u_shared,
+    "v128.load32x2_u",
+    v128_load32x2_u_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load32x2_u_indexed_local,
+    "v128.load32x2_u",
+    v128_load32x2_u_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load32x2_u_indexed_shared,
     "v128.load32x2_u",
     v128_load32x2_u_impl
 );
@@ -505,17 +742,27 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load8_splat_impl<const SHARED: bool>(
+unsafe fn v128_load8_splat_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<1, SHARED>(tail_code, ctx));
+    let bytes = vm_try!(read_memory_bytes::<1, SHARED, INDEXED>(tail_code, ctx));
     vm_try!(ctx.stack.push(i8x16::from(bytes[0] as i8)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load8_splat, "v128.load8_splat", v128_load8_splat_impl);
 define_shared_simd_memory_handler!(
     v128_load8_splat_shared,
+    "v128.load8_splat",
+    v128_load8_splat_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load8_splat_indexed_local,
+    "v128.load8_splat",
+    v128_load8_splat_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load8_splat_indexed_shared,
     "v128.load8_splat",
     v128_load8_splat_impl
 );
@@ -535,15 +782,15 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load16_splat_impl<const SHARED: bool>(
+unsafe fn v128_load16_splat_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<2, SHARED>(tail_code, ctx));
+    let bytes = vm_try!(read_memory_bytes::<2, SHARED, INDEXED>(tail_code, ctx));
     vm_try!(ctx
         .stack
         .push(i16x8::from(i16::from_le_bytes([bytes[0], bytes[1]]))));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(
     v128_load16_splat,
@@ -552,6 +799,16 @@ define_local_simd_memory_handler!(
 );
 define_shared_simd_memory_handler!(
     v128_load16_splat_shared,
+    "v128.load16_splat",
+    v128_load16_splat_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load16_splat_indexed_local,
+    "v128.load16_splat",
+    v128_load16_splat_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load16_splat_indexed_shared,
     "v128.load16_splat",
     v128_load16_splat_impl
 );
@@ -571,15 +828,15 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load32_splat_impl<const SHARED: bool>(
+unsafe fn v128_load32_splat_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<4, SHARED>(tail_code, ctx));
+    let bytes = vm_try!(read_memory_bytes::<4, SHARED, INDEXED>(tail_code, ctx));
     vm_try!(ctx.stack.push(i32x4::from(i32::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3],
     ]))));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(
     v128_load32_splat,
@@ -588,6 +845,16 @@ define_local_simd_memory_handler!(
 );
 define_shared_simd_memory_handler!(
     v128_load32_splat_shared,
+    "v128.load32_splat",
+    v128_load32_splat_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load32_splat_indexed_local,
+    "v128.load32_splat",
+    v128_load32_splat_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load32_splat_indexed_shared,
     "v128.load32_splat",
     v128_load32_splat_impl
 );
@@ -607,15 +874,15 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load64_splat_impl<const SHARED: bool>(
+unsafe fn v128_load64_splat_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
+    let bytes = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     vm_try!(ctx.stack.push(i64x2::from(i64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]))));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(
     v128_load64_splat,
@@ -624,6 +891,16 @@ define_local_simd_memory_handler!(
 );
 define_shared_simd_memory_handler!(
     v128_load64_splat_shared,
+    "v128.load64_splat",
+    v128_load64_splat_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load64_splat_indexed_local,
+    "v128.load64_splat",
+    v128_load64_splat_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load64_splat_indexed_shared,
     "v128.load64_splat",
     v128_load64_splat_impl
 );
@@ -672,16 +949,16 @@ fn replace_lane_bytes<const N: usize>(bytes: &mut [u8; 16], lane: usize, value: 
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose validated stack and memory layout satisfy this instruction.
 /// - This helper must not keep borrows, locks, or guards alive across the call into `call_next`.
-unsafe fn load_lane_internal<const N: usize, const SHARED: bool>(
+unsafe fn load_lane_internal<const N: usize, const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let lane = (*tail_code.add(1)).operand.u32 as usize;
     let mut bytes = ctx.stack.pop_u128().to_le_bytes();
-    let data = vm_try!(read_memory_bytes::<N, SHARED>(tail_code, ctx));
+    let data = vm_try!(read_memory_bytes::<N, SHARED, INDEXED>(tail_code, ctx));
     replace_lane_bytes::<N>(&mut bytes, lane, data);
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
-    call_next(tail_code, 2, ctx)
+    call_next(tail_code, if INDEXED { 3 } else { 2 }, ctx)
 }
 
 /// WebAssembly SIMD lane-store helper.
@@ -697,7 +974,7 @@ unsafe fn load_lane_internal<const N: usize, const SHARED: bool>(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose validated stack and memory layout satisfy this instruction.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn store_lane_internal<const N: usize, const SHARED: bool>(
+unsafe fn store_lane_internal<const N: usize, const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
@@ -706,9 +983,23 @@ unsafe fn store_lane_internal<const N: usize, const SHARED: bool>(
     let start = lane * N;
     let offset = ctx.stack.pop_u32();
     let mem_start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
-    if SHARED {
+    if SHARED && INDEXED {
+        let memidx = (*tail_code.add(2)).operand.u32;
+        vm_try!(ctx.gc.shared_write_bytes(
+            ctx.shared_memory_id_at_unchecked(memidx),
+            mem_start,
+            &bytes[start..start + N],
+        ));
+    } else if SHARED {
         vm_try!(ctx.gc.shared_write_bytes(
             ctx.default_shared_memory_id_unchecked(),
+            mem_start,
+            &bytes[start..start + N],
+        ));
+    } else if INDEXED {
+        let memidx = (*tail_code.add(2)).operand.u32;
+        vm_try!(ctx.gc.local_write_bytes(
+            ctx.local_memory_id_at_unchecked(memidx),
             mem_start,
             &bytes[start..start + N],
         ));
@@ -719,7 +1010,7 @@ unsafe fn store_lane_internal<const N: usize, const SHARED: bool>(
             &bytes[start..start + N],
         ));
     }
-    call_next(tail_code, 2, ctx)
+    call_next(tail_code, if INDEXED { 3 } else { 2 }, ctx)
 }
 
 /// WebAssembly `i8x16.shuffle`.
@@ -1295,12 +1586,22 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_load8_lane_impl<const SHARED: bool>(
+unsafe fn v128_load8_lane_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    load_lane_internal::<1, SHARED>(tail_code, ctx)
+    load_lane_internal::<1, SHARED, INDEXED>(tail_code, ctx)
 }
+define_indexed_local_simd_memory_handler!(
+    v128_load8_lane_indexed_local,
+    "v128.load8_lane",
+    v128_load8_lane_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load8_lane_indexed_shared,
+    "v128.load8_lane",
+    v128_load8_lane_impl
+);
 
 define_local_simd_memory_handler!(v128_load16_lane, "v128.load16_lane", v128_load16_lane_impl);
 define_shared_simd_memory_handler!(
@@ -1323,12 +1624,22 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_load16_lane_impl<const SHARED: bool>(
+unsafe fn v128_load16_lane_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    load_lane_internal::<2, SHARED>(tail_code, ctx)
+    load_lane_internal::<2, SHARED, INDEXED>(tail_code, ctx)
 }
+define_indexed_local_simd_memory_handler!(
+    v128_load16_lane_indexed_local,
+    "v128.load16_lane",
+    v128_load16_lane_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load16_lane_indexed_shared,
+    "v128.load16_lane",
+    v128_load16_lane_impl
+);
 
 define_local_simd_memory_handler!(v128_load32_lane, "v128.load32_lane", v128_load32_lane_impl);
 define_shared_simd_memory_handler!(
@@ -1351,12 +1662,22 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_load32_lane_impl<const SHARED: bool>(
+unsafe fn v128_load32_lane_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    load_lane_internal::<4, SHARED>(tail_code, ctx)
+    load_lane_internal::<4, SHARED, INDEXED>(tail_code, ctx)
 }
+define_indexed_local_simd_memory_handler!(
+    v128_load32_lane_indexed_local,
+    "v128.load32_lane",
+    v128_load32_lane_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load32_lane_indexed_shared,
+    "v128.load32_lane",
+    v128_load32_lane_impl
+);
 
 define_local_simd_memory_handler!(v128_load64_lane, "v128.load64_lane", v128_load64_lane_impl);
 define_shared_simd_memory_handler!(
@@ -1379,12 +1700,22 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_load64_lane_impl<const SHARED: bool>(
+unsafe fn v128_load64_lane_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    load_lane_internal::<8, SHARED>(tail_code, ctx)
+    load_lane_internal::<8, SHARED, INDEXED>(tail_code, ctx)
 }
+define_indexed_local_simd_memory_handler!(
+    v128_load64_lane_indexed_local,
+    "v128.load64_lane",
+    v128_load64_lane_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load64_lane_indexed_shared,
+    "v128.load64_lane",
+    v128_load64_lane_impl
+);
 
 define_local_simd_memory_handler!(v128_store8_lane, "v128.store8_lane", v128_store8_lane_impl);
 define_shared_simd_memory_handler!(
@@ -1407,12 +1738,22 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_store8_lane_impl<const SHARED: bool>(
+unsafe fn v128_store8_lane_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    store_lane_internal::<1, SHARED>(tail_code, ctx)
+    store_lane_internal::<1, SHARED, INDEXED>(tail_code, ctx)
 }
+define_indexed_local_simd_memory_handler!(
+    v128_store8_lane_indexed_local,
+    "v128.store8_lane",
+    v128_store8_lane_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_store8_lane_indexed_shared,
+    "v128.store8_lane",
+    v128_store8_lane_impl
+);
 
 define_local_simd_memory_handler!(
     v128_store16_lane,
@@ -1439,12 +1780,22 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_store16_lane_impl<const SHARED: bool>(
+unsafe fn v128_store16_lane_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    store_lane_internal::<2, SHARED>(tail_code, ctx)
+    store_lane_internal::<2, SHARED, INDEXED>(tail_code, ctx)
 }
+define_indexed_local_simd_memory_handler!(
+    v128_store16_lane_indexed_local,
+    "v128.store16_lane",
+    v128_store16_lane_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_store16_lane_indexed_shared,
+    "v128.store16_lane",
+    v128_store16_lane_impl
+);
 
 define_local_simd_memory_handler!(
     v128_store32_lane,
@@ -1471,12 +1822,22 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_store32_lane_impl<const SHARED: bool>(
+unsafe fn v128_store32_lane_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    store_lane_internal::<4, SHARED>(tail_code, ctx)
+    store_lane_internal::<4, SHARED, INDEXED>(tail_code, ctx)
 }
+define_indexed_local_simd_memory_handler!(
+    v128_store32_lane_indexed_local,
+    "v128.store32_lane",
+    v128_store32_lane_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_store32_lane_indexed_shared,
+    "v128.store32_lane",
+    v128_store32_lane_impl
+);
 
 define_local_simd_memory_handler!(
     v128_store64_lane,
@@ -1503,12 +1864,22 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context whose active frame default memory matches `SHARED`.
 /// - This helper must not keep borrows, locks, or guards alive across `call_next`.
-unsafe fn v128_store64_lane_impl<const SHARED: bool>(
+unsafe fn v128_store64_lane_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    store_lane_internal::<8, SHARED>(tail_code, ctx)
+    store_lane_internal::<8, SHARED, INDEXED>(tail_code, ctx)
 }
+define_indexed_local_simd_memory_handler!(
+    v128_store64_lane_indexed_local,
+    "v128.store64_lane",
+    v128_store64_lane_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_store64_lane_indexed_shared,
+    "v128.store64_lane",
+    v128_store64_lane_impl
+);
 
 /// WebAssembly `v128.load32_zero`.
 ///
@@ -1525,19 +1896,29 @@ unsafe fn v128_store64_lane_impl<const SHARED: bool>(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load32_zero_impl<const SHARED: bool>(
+unsafe fn v128_load32_zero_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<4, SHARED>(tail_code, ctx));
+    let bytes = vm_try!(read_memory_bytes::<4, SHARED, INDEXED>(tail_code, ctx));
     let mut result = [0u8; 16];
     result[0..4].copy_from_slice(&bytes);
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load32_zero, "v128.load32_zero", v128_load32_zero_impl);
 define_shared_simd_memory_handler!(
     v128_load32_zero_shared,
+    "v128.load32_zero",
+    v128_load32_zero_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load32_zero_indexed_local,
+    "v128.load32_zero",
+    v128_load32_zero_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load32_zero_indexed_shared,
     "v128.load32_zero",
     v128_load32_zero_impl
 );
@@ -1557,19 +1938,29 @@ define_shared_simd_memory_handler!(
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
-unsafe fn v128_load64_zero_impl<const SHARED: bool>(
+unsafe fn v128_load64_zero_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let bytes = vm_try!(read_memory_bytes::<8, SHARED>(tail_code, ctx));
+    let bytes = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     let mut result = [0u8; 16];
     result[0..8].copy_from_slice(&bytes);
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
-    call_next(tail_code, 1, ctx)
+    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
 }
 define_local_simd_memory_handler!(v128_load64_zero, "v128.load64_zero", v128_load64_zero_impl);
 define_shared_simd_memory_handler!(
     v128_load64_zero_shared,
+    "v128.load64_zero",
+    v128_load64_zero_impl
+);
+define_indexed_local_simd_memory_handler!(
+    v128_load64_zero_indexed_local,
+    "v128.load64_zero",
+    v128_load64_zero_impl
+);
+define_indexed_shared_simd_memory_handler!(
+    v128_load64_zero_indexed_shared,
     "v128.load64_zero",
     v128_load64_zero_impl
 );

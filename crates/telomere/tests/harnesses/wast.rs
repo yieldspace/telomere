@@ -15,12 +15,50 @@ use common::run_wast;
 
 // `labels` / `names` are existing wast parser limitations.
 const ROOT_SKIP: &[&str] = &["labels", "names"];
-const PROPOSAL_ALLOWLIST: &[&str] = &["threads", "tail-call"];
-const PROPOSAL_ONLY: &[&str] = &[
-    "proposals/threads/atomic",
-    "proposals/tail-call/return_call",
-    "proposals/tail-call/return_call_indirect",
-];
+
+#[allow(clippy::vec_init_then_push)]
+fn proposal_allowlist() -> Vec<&'static str> {
+    let mut families = Vec::new();
+    #[cfg(feature = "threads")]
+    families.push("threads");
+    #[cfg(feature = "tail-call")]
+    families.push("tail-call");
+    #[cfg(feature = "multi-memory")]
+    families.push("wasm-3.0");
+    families
+}
+
+#[allow(clippy::vec_init_then_push)]
+fn proposal_only() -> Vec<&'static str> {
+    let mut fixtures = Vec::new();
+    #[cfg(feature = "threads")]
+    fixtures.push("proposals/threads/atomic");
+    #[cfg(feature = "tail-call")]
+    {
+        fixtures.push("proposals/tail-call/return_call");
+        fixtures.push("proposals/tail-call/return_call_indirect");
+    }
+    #[cfg(feature = "multi-memory")]
+    {
+        fixtures.extend([
+            "proposals/wasm-3.0/memory-multi",
+            "proposals/wasm-3.0/load2",
+            "proposals/wasm-3.0/memory_copy0",
+            "proposals/wasm-3.0/memory_copy1",
+            "proposals/wasm-3.0/memory_fill0",
+            "proposals/wasm-3.0/memory_init0",
+            "proposals/wasm-3.0/memory_size0",
+            "proposals/wasm-3.0/memory_size1",
+            "proposals/wasm-3.0/memory_size2",
+            "proposals/wasm-3.0/memory_size3",
+            "proposals/wasm-3.0/memory_trap0",
+            "proposals/wasm-3.0/memory_trap1",
+        ]);
+        #[cfg(feature = "simd")]
+        fixtures.push("proposals/wasm-3.0/simd_memory-multi");
+    }
+    fixtures
+}
 #[derive(Clone)]
 struct Case {
     name: String,
@@ -96,6 +134,14 @@ fn collect_root_cases(suite_dir: &Path) -> (Vec<Case>, HashSet<String>) {
         if ROOT_SKIP.contains(&stem.as_str()) {
             continue;
         }
+        #[cfg(not(feature = "simd"))]
+        if stem.starts_with("simd") {
+            continue;
+        }
+        #[cfg(feature = "multi-memory")]
+        if matches!(stem.as_str(), "memory" | "binary" | "binary-leb128") {
+            continue;
+        }
 
         root_names.insert(stem.clone());
         cases.push(Case {
@@ -109,11 +155,19 @@ fn collect_root_cases(suite_dir: &Path) -> (Vec<Case>, HashSet<String>) {
 
 fn collect_proposal_cases(suite_dir: &Path, root_names: &HashSet<String>) -> Vec<Case> {
     let mut cases = Vec::new();
+    let proposal_only = proposal_only();
 
-    for family in PROPOSAL_ALLOWLIST {
+    for family in proposal_allowlist() {
         let family_dir = suite_dir.join("proposals").join(family);
         if family_dir.is_dir() {
-            collect_proposal_cases_in_dir(suite_dir, &family_dir, root_names, &mut cases);
+            collect_proposal_cases_in_dir(
+                family,
+                suite_dir,
+                &family_dir,
+                root_names,
+                &proposal_only,
+                &mut cases,
+            );
         }
     }
 
@@ -121,15 +175,24 @@ fn collect_proposal_cases(suite_dir: &Path, root_names: &HashSet<String>) -> Vec
 }
 
 fn collect_proposal_cases_in_dir(
+    family: &str,
     suite_dir: &Path,
     dir: &Path,
     root_names: &HashSet<String>,
+    proposal_only: &[&str],
     cases: &mut Vec<Case>,
 ) {
     for entry in sorted_dir_entries(dir) {
         let path = entry.path();
         if path.is_dir() {
-            collect_proposal_cases_in_dir(suite_dir, &path, root_names, cases);
+            collect_proposal_cases_in_dir(
+                family,
+                suite_dir,
+                &path,
+                root_names,
+                proposal_only,
+                cases,
+            );
             continue;
         }
 
@@ -139,7 +202,12 @@ fn collect_proposal_cases_in_dir(
 
         let rel = relative_fixture_key(suite_dir, &path);
         let stem = file_stem(&path);
-        if root_names.contains(&stem) || PROPOSAL_ONLY.contains(&rel.as_str()) {
+        let include = if family == "wasm-3.0" {
+            proposal_only.contains(&rel.as_str())
+        } else {
+            root_names.contains(&stem) || proposal_only.contains(&rel.as_str())
+        };
+        if include {
             cases.push(Case {
                 name: normalize_name(&rel),
                 fixture: path,

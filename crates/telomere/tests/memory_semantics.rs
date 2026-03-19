@@ -327,6 +327,7 @@ async fn mem_copy_overlap_matches_memmove_semantics() {
     );
 }
 
+#[cfg(feature = "threads")]
 #[tokio::test]
 async fn shared_mem_copy_overlap_matches_memmove_semantics() {
     let store = Store::new();
@@ -438,8 +439,13 @@ async fn assert_simd_memory_roundtrip(memory_decl: &str) {
 
 #[cfg(feature = "simd")]
 #[tokio::test]
-async fn simd_memory_access_roundtrips_for_local_and_shared_default_memory() {
+async fn simd_memory_access_roundtrips_for_local_default_memory() {
     assert_simd_memory_roundtrip("1").await;
+}
+
+#[cfg(all(feature = "simd", feature = "threads"))]
+#[tokio::test]
+async fn simd_memory_access_roundtrips_for_shared_default_memory() {
     assert_simd_memory_roundtrip("1 2 shared").await;
 }
 
@@ -472,4 +478,150 @@ async fn memory_grow_returns_previous_page_count_and_minus_one_on_limit() {
         call_i32(&instance, &store, "grow", vec![WasmValue::I32(1)]).await,
         -1,
     );
+}
+
+#[cfg(feature = "multi-memory")]
+#[tokio::test]
+async fn indexed_local_memory_ops_support_nonzero_memidx() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (memory $dst 1 2)
+          (data $payload "\44\33\22\11")
+          (func (export "init_dst")
+            (memory.init $dst $payload (i32.const 8) (i32.const 0) (i32.const 4)))
+          (func (export "load_dst") (result i32)
+            (i32.load $dst (i32.const 8)))
+          (func (export "fill_dst")
+            (memory.fill $dst (i32.const 12) (i32.const 0xaa) (i32.const 4)))
+          (func (export "byte_dst") (param i32) (result i32)
+            (i32.load8_u $dst (local.get 0)))
+          (func (export "size_dst") (result i32)
+            (memory.size $dst))
+          (func (export "grow_dst") (param i32) (result i32)
+            (memory.grow $dst (local.get 0))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let store_result =
+        run_module_function(&instance, &store, "init_dst", &ResultValue::new(vec![])).await;
+    assert!(
+        matches!(store_result, VMResult::Success(_)),
+        "store result: {store_result:?}"
+    );
+    assert_success_i32(call_i32(&instance, &store, "size_dst", vec![]).await, 1);
+    assert_success_i32(
+        call_i32(&instance, &store, "grow_dst", vec![WasmValue::I32(1)]).await,
+        1,
+    );
+    assert_success_i32(call_i32(&instance, &store, "size_dst", vec![]).await, 2);
+    assert_success_i32(
+        call_i32(&instance, &store, "load_dst", vec![]).await,
+        0x1122_3344,
+    );
+    assert!(matches!(
+        run_module_function(&instance, &store, "fill_dst", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_dst", vec![WasmValue::I32(12)]).await,
+        0xaa,
+    );
+}
+
+#[cfg(all(feature = "multi-memory", feature = "threads"))]
+#[tokio::test]
+async fn indexed_cross_memory_copy_supports_local_to_shared() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (memory $src 1)
+          (memory $dst 1 2 shared)
+          (func (export "seed_src")
+            (i32.store $src (i32.const 0) (i32.const 0x55667788)))
+          (func (export "copy_to_dst")
+            (memory.copy $dst $src (i32.const 12) (i32.const 0) (i32.const 4)))
+          (func (export "load_dst") (result i32)
+            (i32.load $dst (i32.const 12))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed_src", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert!(matches!(
+        run_module_function(&instance, &store, "copy_to_dst", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "load_dst", vec![]).await,
+        0x5566_7788,
+    );
+}
+
+#[cfg(all(feature = "multi-memory", feature = "simd"))]
+async fn assert_indexed_simd_memory_roundtrip(memory_decl: &str) {
+    let store = Store::new();
+    let registry = Registry::new();
+    let module = format!(
+        r#"
+        (module
+          (memory 1)
+          (memory $m {memory_decl})
+          (func (export "seed")
+            (i32.store $m (i32.const 0) (i32.const 0x11223344)))
+          (func (export "load_zero") (result v128)
+            (v128.load32_zero $m (i32.const 0)))
+          (func (export "store_lane")
+            (v128.store8_lane $m 0 (i32.const 4) (v128.const i32x4 0x11223344 0 0 0)))
+          (func (export "byte_at") (param i32) (result i32)
+            (i32.load8_u $m (local.get 0))))
+        "#
+    );
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    let value = match call_v128(&instance, &store, "load_zero", vec![]).await {
+        VMResult::Success(value) => value,
+        other => panic!("expected simd load success, got {other:?}"),
+    };
+    assert_eq!(value.to_le_bytes()[0..4], [0x44, 0x33, 0x22, 0x11]);
+    assert_eq!(value.to_le_bytes()[4..16], [0; 12]);
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "store_lane", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(4)]).await,
+        0x44,
+    );
+}
+
+#[cfg(all(feature = "multi-memory", feature = "simd"))]
+#[tokio::test]
+async fn indexed_simd_memory_access_roundtrips_for_local_nonzero_memidx() {
+    assert_indexed_simd_memory_roundtrip("1").await;
+}
+
+#[cfg(all(feature = "multi-memory", feature = "threads", feature = "simd"))]
+#[tokio::test]
+async fn indexed_simd_memory_access_roundtrips_for_shared_nonzero_memidx() {
+    assert_indexed_simd_memory_roundtrip("1 2 shared").await;
 }

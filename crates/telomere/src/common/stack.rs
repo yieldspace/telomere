@@ -1,6 +1,7 @@
 #![allow(private_interfaces)]
 
 use vstd::prelude::*;
+#[cfg(feature = "simd")]
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::VMResult;
@@ -9,7 +10,10 @@ use std::fmt::Debug;
 use super::{
     gc::GcRef,
     memory::trusted_copy_from_slice,
-    store::{FunctionInstanceData, InstanceId, LocalMemoryId, MemoryHandle, SharedMemoryId},
+    store::{
+        FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId, MemoryHandle,
+        SharedMemoryId,
+    },
     Instr, StablePc, StoreInner,
 };
 
@@ -189,15 +193,25 @@ macro_rules! impl_lane_type {
         }
     };
 }
+#[cfg(feature = "simd")]
 impl_lane_type!(f32x4, f32);
+#[cfg(feature = "simd")]
 impl_lane_type!(f64x2, f64);
+#[cfg(feature = "simd")]
 impl_lane_type!(i8x16, i8);
+#[cfg(feature = "simd")]
 impl_lane_type!(i16x8, i16);
+#[cfg(feature = "simd")]
 impl_lane_type!(i32x4, i32);
+#[cfg(feature = "simd")]
 impl_lane_type!(i64x2, i64);
+#[cfg(feature = "simd")]
 impl_lane_type!(u8x16, u8);
+#[cfg(feature = "simd")]
 impl_lane_type!(u16x8, u16);
+#[cfg(feature = "simd")]
 impl_lane_type!(u32x4, u32);
+#[cfg(feature = "simd")]
 impl_lane_type!(u64x2, u64);
 
 pub struct Stack {
@@ -303,11 +317,11 @@ impl IntoCallFrameCache for GcRef {
         let func = runtime.get_func(self);
         let instance = runtime.instance(func.instance);
         let memory0 = instance
-            .mems
+            .memory_slots
             .first()
             .copied()
-            .filter(|addr| !addr.is_null())
-            .map(|addr| runtime.memory_handle(addr));
+            .unwrap_or(InstanceMemorySlot::None)
+            .handle();
         CallFrameCache::from_parts(self, func, memory0)
     }
 }
@@ -761,14 +775,23 @@ macro_rules! stack_operation_wide {
         }
     };
 }
+#[cfg(feature = "simd")]
 stack_operation_wide!(f32x4);
+#[cfg(feature = "simd")]
 stack_operation_wide!(f64x2);
-
+#[cfg(feature = "simd")]
 stack_operation_wide!(i8x16);
+#[cfg(feature = "simd")]
 stack_operation_wide!(i16x8);
+#[cfg(feature = "simd")]
 stack_operation_wide!(i32x4);
+#[cfg(feature = "simd")]
 stack_operation_wide!(i64x2);
+#[cfg(feature = "simd")]
 stack_operation_wide!(u8x16);
+#[cfg(feature = "simd")]
 stack_operation_wide!(u16x8);
+#[cfg(feature = "simd")]
 stack_operation_wide!(u32x4);
+#[cfg(feature = "simd")]
 stack_operation_wide!(u64x2);

@@ -20,7 +20,7 @@ pub use registry::Registry;
 pub(crate) mod store;
 pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
 pub use store::{InstanceHandle, MemoryHandle, Store, StoreState};
-use store::{LocalMemoryId, SharedMemoryId};
+use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};
 pub(crate) mod gc;
 pub use gc::GcRef;
 
@@ -637,6 +637,10 @@ impl ExecuteContext<'_> {
         self.current_frame.memory0_handle()
     }
     #[inline(always)]
+    fn memory_slot_at(&self, memidx: u32) -> Option<InstanceMemorySlot> {
+        self.instance().memory_slots.get(memidx as usize).copied()
+    }
+    #[inline(always)]
     /// Returns the cached default local-memory id without decoding a tagged handle.
     ///
     /// # Safety
@@ -681,6 +685,34 @@ impl ExecuteContext<'_> {
             .expect("caller frame cache required for caller shared memory");
         debug_assert_eq!(frame.memory0_kind, CachedMemoryKind::Shared);
         unsafe { SharedMemoryId::from_raw_unchecked(frame.memory0_raw) }
+    }
+    #[inline(always)]
+    /// Returns the typed local-memory id for `memidx` without decoding a tagged handle.
+    ///
+    /// # Safety
+    /// - `memidx` must be in-bounds for the active instance memory list.
+    /// - The memory at `memidx` must be local.
+    pub unsafe fn local_memory_id_at_unchecked(&self, memidx: u32) -> LocalMemoryId {
+        let slot = unsafe { self.memory_slot_at(memidx).unwrap_unchecked() };
+        debug_assert!(matches!(slot, InstanceMemorySlot::Local(_)));
+        match slot {
+            InstanceMemorySlot::Local(id) => id,
+            _ => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+    #[inline(always)]
+    /// Returns the typed shared-memory id for `memidx` without decoding a tagged handle.
+    ///
+    /// # Safety
+    /// - `memidx` must be in-bounds for the active instance memory list.
+    /// - The memory at `memidx` must be shared.
+    pub unsafe fn shared_memory_id_at_unchecked(&self, memidx: u32) -> SharedMemoryId {
+        let slot = unsafe { self.memory_slot_at(memidx).unwrap_unchecked() };
+        debug_assert!(matches!(slot, InstanceMemorySlot::Shared(_)));
+        match slot {
+            InstanceMemorySlot::Shared(id) => id,
+            _ => unsafe { std::hint::unreachable_unchecked() },
+        }
     }
     pub fn local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
         match self.current_frame.memory0_kind {

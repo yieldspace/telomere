@@ -22,6 +22,7 @@ use crate::{
 
 use super::base::WasmBaseParser;
 use super::custom_section::CustomSectionParser;
+#[cfg(feature = "simd")]
 use super::simd_instruction::v128_const;
 use super::validate::{assert_memory, assert_valtype, validate_active_elem};
 use super::{Result, WasmParserError};
@@ -238,12 +239,20 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     (1 + len, ConstExpr::FuncRef(idx))
                 }
                 0xFD => {
-                    let (len, code) = self.parse_u32()?;
-                    if code == v128_const::CODE {
-                        let v = self.reader.read_exact::<16>()?;
-                        (1 + len + 16, ConstExpr::V128(u128::from_le_bytes(v)))
-                    } else {
-                        Err(WasmParserError::InvalidConstInstruction(0xFD))? //FIXME:
+                    #[cfg(not(feature = "simd"))]
+                    {
+                        Err(WasmParserError::InvalidConstInstruction(0xFD))?
+                    }
+                    #[cfg(feature = "simd")]
+                    {
+                        let (len, code) = self.parse_u32()?;
+                        if code == v128_const::CODE {
+                            let v = self.reader.read_exact::<16>()?;
+                            (1 + len + 16, ConstExpr::V128(u128::from_le_bytes(v)))
+                        } else {
+                            Err(WasmParserError::InvalidConstInstruction(0xFD))?
+                            //FIXME:
+                        }
                     }
                 }
                 unknown => Err(WasmParserError::InvalidConstInstruction(unknown))?,
@@ -928,6 +937,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             }
                         }
                     }
+                    #[cfg(not(feature = "multi-memory"))]
+                    if mems.len() > 1 {
+                        Err(WasmParserError::MultipleMemory)?
+                    }
                     imported_global_len = globals.len();
                     imported_function_len = functions.len();
                     import_section = Some(section);
@@ -947,6 +960,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     let section = self.parse_section_body(Self::parse_memory_section)?;
                     for mt in section {
                         mems.push(mt);
+                    }
+                    #[cfg(not(feature = "multi-memory"))]
+                    if mems.len() > 1 {
+                        Err(WasmParserError::MultipleMemory)?
                     }
                 }
                 WasmSectionType::Global => {

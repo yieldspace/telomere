@@ -1,8 +1,12 @@
+#![cfg(feature = "threads")]
+
 mod common;
 
 use common::instantiate_wat;
+#[cfg(feature = "async-runtime")]
+use telomere::common::AtomicWaitResult;
 use telomere::{
-    common::{AtomicRmwOp, AtomicWaitResult, SharedMemoryObject},
+    common::{AtomicRmwOp, SharedMemoryObject},
     run_module_function, Registry, ResultValue, Store, VMResult, WasmValue,
 };
 
@@ -83,6 +87,7 @@ async fn unshared_wait_traps_and_notify_returns_zero() {
     ));
 }
 
+#[cfg(feature = "async-runtime")]
 #[tokio::test]
 async fn shared_wait_notify_is_fifo_and_timeout_removes_waiter() {
     let shared = SharedMemoryObject::new(1, 1);
@@ -179,4 +184,58 @@ async fn misaligned_atomic_store_traps_without_partial_write() {
         unwrap_success(call_i32(&instance, &store, "load0", vec![]).await),
         0x1122_3344
     );
+}
+
+#[cfg(feature = "multi-memory")]
+#[tokio::test]
+async fn indexed_shared_atomic_ops_use_nonzero_memidx() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (memory $m 1 2 shared)
+          (func (export "seed") (param i32)
+            (i32.atomic.store $m (i32.const 0) (local.get 0)))
+          (func (export "load0") (result i32)
+            (i32.atomic.load $m (i32.const 0)))
+          (func (export "notify0") (result i32)
+            (memory.atomic.notify $m (i32.const 0) (i32.const 1)))
+          (func (export "wait_not_equal") (result i32)
+            (memory.atomic.wait32 $m (i32.const 0) (i32.const 99) (i64.const 0))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(7)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_eq!(
+        unwrap_success(call_i32(&instance, &store, "load0", vec![]).await),
+        7
+    );
+    assert_eq!(
+        unwrap_success(call_i32(&instance, &store, "notify0", vec![]).await),
+        0
+    );
+    #[cfg(feature = "async-runtime")]
+    assert_eq!(
+        unwrap_success(call_i32(&instance, &store, "wait_not_equal", vec![]).await),
+        1
+    );
+    #[cfg(not(feature = "async-runtime"))]
+    assert!(matches!(
+        call_i32(&instance, &store, "wait_not_equal", vec![]).await,
+        VMResult::InvalidOperand
+    ));
 }

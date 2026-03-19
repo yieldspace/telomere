@@ -1,3 +1,5 @@
+#![cfg(feature = "threads")]
+
 mod common;
 
 use common::instantiate_wat;

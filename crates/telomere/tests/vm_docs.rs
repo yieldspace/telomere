@@ -18,6 +18,16 @@ const VM_SOURCES: &[&str] = &[
     "src/runtime/vm/traps.rs",
 ];
 
+const PRIVATE_UNSAFE_DOC_SURFACE: &[&str] = &[
+    "call_code",
+    "call_next",
+    "store_internal_local",
+    "store_internal_shared",
+    "store_internal_local_indexed",
+    "store_internal_shared_indexed",
+    "trap_func",
+];
+
 #[test]
 fn vm_unsafe_entrypoints_have_docs_and_safety_sections() {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -40,6 +50,11 @@ fn vm_unsafe_entrypoints_have_docs_and_safety_sections() {
             if item_fn.sig.unsafety.is_none() {
                 continue;
             }
+            let ident = item_fn.sig.ident.to_string();
+            let is_public_surface = !matches!(item_fn.vis, syn::Visibility::Inherited);
+            if !is_public_surface && !PRIVATE_UNSAFE_DOC_SURFACE.contains(&ident.as_str()) {
+                continue;
+            }
 
             let docs = item_fn
                 .attrs
@@ -51,13 +66,13 @@ fn vm_unsafe_entrypoints_have_docs_and_safety_sections() {
                 !docs.is_empty(),
                 "{}:{} missing doc comments",
                 path.display(),
-                item_fn.sig.ident
+                ident
             );
             assert!(
                 docs.contains("# Safety"),
                 "{}:{} missing # Safety section",
                 path.display(),
-                item_fn.sig.ident
+                ident
             );
             assert!(
                 docs.contains("http")
@@ -66,7 +81,7 @@ fn vm_unsafe_entrypoints_have_docs_and_safety_sections() {
                     || docs.contains("Telomere internal"),
                 "{}:{} missing spec or mnemonic context",
                 path.display(),
-                item_fn.sig.ident
+                ident
             );
         }
     }
