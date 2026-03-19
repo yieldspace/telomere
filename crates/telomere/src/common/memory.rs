@@ -19,6 +19,40 @@ use super::{Stack, VMResult, PAGE_SIZE};
 
 verus! {
 
+pub open spec fn spec_offset_result(memarg_offset: u32, offset: u32) -> Option<int> {
+    if memarg_offset as int + offset as int <= u32::MAX as int {
+        Some(memarg_offset as int + offset as int)
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+pub exec fn checked_memory_offset(memarg_offset: u32, offset: u32) -> (result: Option<usize>)
+    ensures
+        match spec_offset_result(memarg_offset, offset) {
+            Some(value) => result == Some(value as usize),
+            None => result == Option::<usize>::None,
+        },
+{
+    let sum = memarg_offset as u64 + offset as u64;
+    if sum <= u32::MAX as u64 {
+        Some(sum as usize)
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+pub exec fn atomic_alignment_valid(offset: usize, alignment: usize) -> (result: bool)
+    requires
+        alignment != 0,
+    ensures
+        result == (offset % alignment == 0),
+{
+    offset % alignment == 0
+}
+
 pub open spec fn spec_write_range(data: Seq<u8>, start: int, bytes: Seq<u8>) -> Seq<u8> {
     Seq::new(
         data.len(),
@@ -49,6 +83,68 @@ pub open spec fn spec_copy_within_range(data: Seq<u8>, dst: int, src: int, len: 
     spec_write_range(data, dst, data.subrange(src, src + len))
 }
 
+pub open spec fn spec_read_range(data: Seq<u8>, start: int, len: int) -> Seq<u8>
+    recommends
+        0 <= start,
+        0 <= len,
+        start + len <= data.len(),
+{
+    data.subrange(start, start + len)
+}
+
+pub closed spec fn spec_le_u16(bytes: Seq<u8>) -> u16
+    recommends
+        bytes.len() == 2,
+{
+    (bytes[0] as u16) | ((bytes[1] as u16) << 8)
+}
+
+pub closed spec fn spec_le_u32(bytes: Seq<u8>) -> u32
+    recommends
+        bytes.len() == 4,
+{
+    (bytes[0] as u32)
+        | ((bytes[1] as u32) << 8)
+        | ((bytes[2] as u32) << 16)
+        | ((bytes[3] as u32) << 24)
+}
+
+pub closed spec fn spec_le_u64(bytes: Seq<u8>) -> u64
+    recommends
+        bytes.len() == 8,
+{
+    (bytes[0] as u64)
+        | ((bytes[1] as u64) << 8)
+        | ((bytes[2] as u64) << 16)
+        | ((bytes[3] as u64) << 24)
+        | ((bytes[4] as u64) << 32)
+        | ((bytes[5] as u64) << 40)
+        | ((bytes[6] as u64) << 48)
+        | ((bytes[7] as u64) << 56)
+}
+
+pub closed spec fn spec_le_u128(bytes: Seq<u8>) -> u128
+    recommends
+        bytes.len() == 16,
+{
+    (bytes[0] as u128)
+        | ((bytes[1] as u128) << 8)
+        | ((bytes[2] as u128) << 16)
+        | ((bytes[3] as u128) << 24)
+        | ((bytes[4] as u128) << 32)
+        | ((bytes[5] as u128) << 40)
+        | ((bytes[6] as u128) << 48)
+        | ((bytes[7] as u128) << 56)
+        | ((bytes[8] as u128) << 64)
+        | ((bytes[9] as u128) << 72)
+        | ((bytes[10] as u128) << 80)
+        | ((bytes[11] as u128) << 88)
+        | ((bytes[12] as u128) << 96)
+        | ((bytes[13] as u128) << 104)
+        | ((bytes[14] as u128) << 112)
+        | ((bytes[15] as u128) << 120)
+}
+
 pub proof fn lemma_write_range_preserves_len(data: Seq<u8>, start: int, bytes: Seq<u8>)
     ensures
         spec_write_range(data, start, bytes).len() == data.len(),
@@ -64,6 +160,44 @@ pub proof fn lemma_fill_range_preserves_len(data: Seq<u8>, start: int, len: int,
 pub proof fn lemma_copy_within_preserves_len(data: Seq<u8>, dst: int, src: int, len: int)
     ensures
         spec_copy_within_range(data, dst, src, len).len() == data.len(),
+{
+}
+
+pub proof fn lemma_write_range_updates_written_bytes(data: Seq<u8>, start: int, bytes: Seq<u8>, i: int)
+    requires
+        0 <= start,
+        0 <= i < bytes.len(),
+        start + bytes.len() <= data.len(),
+    ensures
+        spec_write_range(data, start, bytes)[start + i] == bytes[i],
+{
+}
+
+pub proof fn lemma_fill_range_updates_written_bytes(data: Seq<u8>, start: int, len: int, value: u8, i: int)
+    requires
+        0 <= start,
+        0 <= i < len,
+        start + len <= data.len(),
+    ensures
+        spec_fill_range(data, start, len, value)[start + i] == value,
+{
+}
+
+pub proof fn lemma_write_range_preserves_outside_bytes(data: Seq<u8>, start: int, bytes: Seq<u8>, i: int)
+    requires
+        0 <= i < data.len(),
+        i < start || start + bytes.len() <= i,
+    ensures
+        spec_write_range(data, start, bytes)[i] == data[i],
+{
+}
+
+pub proof fn lemma_fill_range_preserves_outside_bytes(data: Seq<u8>, start: int, len: int, value: u8, i: int)
+    requires
+        0 <= i < data.len(),
+        i < start || start + len <= i,
+    ensures
+        spec_fill_range(data, start, len, value)[i] == data[i],
 {
 }
 
@@ -103,6 +237,50 @@ pub exec fn trusted_copy_within(dst: &mut [u8], src_start: usize, src_end: usize
         ),
 {
     dst.copy_within(src_start..src_end, dst_start);
+}
+
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_read_u16(src: &[u8]) -> (value: u16)
+    requires
+        src@.len() == 2,
+    ensures
+        value == spec_le_u16(src@),
+{
+    unsafe { u16::from_le(src.as_ptr().cast::<u16>().read_unaligned()) }
+}
+
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_read_u32(src: &[u8]) -> (value: u32)
+    requires
+        src@.len() == 4,
+    ensures
+        value == spec_le_u32(src@),
+{
+    unsafe { u32::from_le(src.as_ptr().cast::<u32>().read_unaligned()) }
+}
+
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_read_u64(src: &[u8]) -> (value: u64)
+    requires
+        src@.len() == 8,
+    ensures
+        value == spec_le_u64(src@),
+{
+    unsafe { u64::from_le(src.as_ptr().cast::<u64>().read_unaligned()) }
+}
+
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_read_u128(src: &[u8]) -> (value: u128)
+    requires
+        src@.len() == 16,
+    ensures
+        value == spec_le_u128(src@),
+{
+    unsafe { u128::from_le(src.as_ptr().cast::<u128>().read_unaligned()) }
 }
 
 } // verus!
@@ -172,6 +350,62 @@ impl AtomicRmwOp {
         }
     }
 }
+
+verus! {
+
+pub closed spec fn spec_atomic_cmpxchg_u8(old: u8, expected: u8, value: u8) -> u8 {
+    if old == expected { value } else { old }
+}
+
+pub closed spec fn spec_atomic_cmpxchg_u16(old: u16, expected: u16, value: u16) -> u16 {
+    if old == expected { value } else { old }
+}
+
+pub closed spec fn spec_atomic_cmpxchg_u32(old: u32, expected: u32, value: u32) -> u32 {
+    if old == expected { value } else { old }
+}
+
+pub closed spec fn spec_atomic_cmpxchg_u64(old: u64, expected: u64, value: u64) -> u64 {
+    if old == expected { value } else { old }
+}
+
+pub open spec fn spec_wait_queue_push(queue: Seq<u64>, waiter_id: u64) -> Seq<u64> {
+    queue.push(waiter_id)
+}
+
+pub closed spec fn spec_wait_queue_wake_count(queue_len: nat, count: u32) -> nat {
+    if queue_len < count as nat {
+        queue_len
+    } else {
+        count as nat
+    }
+}
+
+pub open spec fn spec_wait_queue_remaining(queue: Seq<u64>, count: u32) -> Seq<u64>
+    recommends
+        spec_wait_queue_wake_count(queue.len() as nat, count) <= queue.len(),
+{
+    queue.subrange(
+        spec_wait_queue_wake_count(queue.len() as nat, count) as int,
+        queue.len() as int,
+    )
+}
+
+pub proof fn lemma_wait_queue_push_appends(queue: Seq<u64>, waiter_id: u64)
+    ensures
+        spec_wait_queue_push(queue, waiter_id).len() == queue.len() + 1,
+        spec_wait_queue_push(queue, waiter_id)[queue.len() as int] == waiter_id,
+{
+}
+
+pub proof fn lemma_wait_queue_notify_count_bounded(queue_len: nat, count: u32)
+    ensures
+        spec_wait_queue_wake_count(queue_len, count) <= queue_len,
+        spec_wait_queue_wake_count(queue_len, count) <= count as nat,
+{
+}
+
+} // verus!
 
 #[cfg(feature = "async-runtime")]
 #[derive(Debug)]
@@ -328,15 +562,14 @@ impl Drop for MmapRegion {
 unsafe impl Send for MmapRegion {}
 
 fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
-    VMResult::from_option(
-        memarg.offset.checked_add(offset).map(|v| v as usize),
-        || VMResult::MemoryIndexOutOfRange,
-    )
+    VMResult::from_option(checked_memory_offset(memarg.offset, offset), || {
+        VMResult::MemoryIndexOutOfRange
+    })
 }
 
 #[inline(always)]
 fn ensure_atomic_alignment(offset: usize, alignment: usize) -> VMResult<()> {
-    if offset % alignment == 0 {
+    if atomic_alignment_valid(offset, alignment) {
         VMResult::Success(())
     } else {
         VMResult::UnalignedAtomic
@@ -443,21 +676,6 @@ impl Memory {
     }
 
     #[inline(always)]
-    fn read_scalar<T: Copy>(&self, offset: usize) -> VMResult<T> {
-        let last = vm_try!(VMResult::from_option(
-            offset.checked_add(std::mem::size_of::<T>()),
-            || VMResult::MemoryIndexOutOfRange
-        ));
-        let ptr = vm_try!(VMResult::from_option(
-            self.slice().get(offset..last),
-            || { VMResult::MemoryIndexOutOfRange }
-        ))
-        .as_ptr()
-        .cast::<T>();
-        VMResult::Success(unsafe { std::ptr::read_unaligned(ptr) })
-    }
-
-    #[inline(always)]
     pub fn read_u8_at(&self, offset: usize) -> VMResult<u8> {
         VMResult::Success(*vm_try!(VMResult::from_option(
             self.slice().get(offset),
@@ -472,32 +690,53 @@ impl Memory {
 
     #[inline(always)]
     pub fn read_u16_at(&self, offset: usize) -> VMResult<u16> {
-        VMResult::Success(u16::from_le(vm_try!(self.read_scalar(offset))))
+        let last = vm_try!(VMResult::from_option(offset.checked_add(2), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        let bytes = vm_try!(VMResult::from_option(
+            self.slice().get(offset..last),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+        VMResult::Success(trusted_read_u16(bytes))
     }
 
     #[inline(always)]
     pub fn read_i16_at(&self, offset: usize) -> VMResult<i16> {
-        VMResult::Success(i16::from_le(vm_try!(self.read_scalar(offset))))
+        VMResult::Success(vm_try!(self.read_u16_at(offset)) as i16)
     }
 
     #[inline(always)]
     pub fn read_u32_at(&self, offset: usize) -> VMResult<u32> {
-        VMResult::Success(u32::from_le(vm_try!(self.read_scalar(offset))))
+        let last = vm_try!(VMResult::from_option(offset.checked_add(4), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        let bytes = vm_try!(VMResult::from_option(
+            self.slice().get(offset..last),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+        VMResult::Success(trusted_read_u32(bytes))
     }
 
     #[inline(always)]
     pub fn read_i32_at(&self, offset: usize) -> VMResult<i32> {
-        VMResult::Success(i32::from_le(vm_try!(self.read_scalar(offset))))
+        VMResult::Success(vm_try!(self.read_u32_at(offset)) as i32)
     }
 
     #[inline(always)]
     pub fn read_u64_at(&self, offset: usize) -> VMResult<u64> {
-        VMResult::Success(u64::from_le(vm_try!(self.read_scalar(offset))))
+        let last = vm_try!(VMResult::from_option(offset.checked_add(8), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        let bytes = vm_try!(VMResult::from_option(
+            self.slice().get(offset..last),
+            || { VMResult::MemoryIndexOutOfRange }
+        ));
+        VMResult::Success(trusted_read_u64(bytes))
     }
 
     #[inline(always)]
     pub fn read_i64_at(&self, offset: usize) -> VMResult<i64> {
-        VMResult::Success(i64::from_le(vm_try!(self.read_scalar(offset))))
+        VMResult::Success(vm_try!(self.read_u64_at(offset)) as i64)
     }
 
     #[inline(always)]
@@ -582,9 +821,14 @@ impl Memory {
     }
 
     pub fn read_u128(&self, memarg: MemArg, offset: u32) -> VMResult<u128> {
-        VMResult::Success(u128::from_le_bytes(vm_try!(
-            self.read_u8_array::<16>(vm_try!(compute_offset(memarg, offset)))
-        )))
+        let start = vm_try!(compute_offset(memarg, offset));
+        let last = vm_try!(VMResult::from_option(start.checked_add(16), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        let bytes = vm_try!(VMResult::from_option(self.slice().get(start..last), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        VMResult::Success(trusted_read_u128(bytes))
     }
 
     pub fn read_f32(&self, memarg: MemArg, offset: u32) -> VMResult<f32> {

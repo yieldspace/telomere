@@ -545,7 +545,48 @@ pub struct ExecuteContext<'a> {
     pub cont: *const Instr,
     pub task_id: u32,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SnapshotMemoryKind {
+    None,
+    Local,
+    Shared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExecuteContextSnapshot {
+    pub(crate) default_memory: SnapshotMemoryKind,
+    pub(crate) caller_memory: SnapshotMemoryKind,
+    pub(crate) cont_addr: usize,
+    pub(crate) task_id: u32,
+}
+
+impl ExecuteContextSnapshot {
+    pub(crate) fn has_default_memory(self) -> bool {
+        !matches!(self.default_memory, SnapshotMemoryKind::None)
+    }
+}
+
 impl ExecuteContext<'_> {
+    pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
+        let default_memory = match self.memory_addr() {
+            Some(MemoryHandle::Local(_)) => SnapshotMemoryKind::Local,
+            Some(MemoryHandle::Shared(_)) => SnapshotMemoryKind::Shared,
+            None => SnapshotMemoryKind::None,
+        };
+        let caller_memory = match self.caller_memory_addr() {
+            Some(MemoryHandle::Local(_)) => SnapshotMemoryKind::Local,
+            Some(MemoryHandle::Shared(_)) => SnapshotMemoryKind::Shared,
+            None => SnapshotMemoryKind::None,
+        };
+        ExecuteContextSnapshot {
+            default_memory,
+            caller_memory,
+            cont_addr: self.cont as usize,
+            task_id: self.task_id,
+        }
+    }
+
     pub fn set_local_reference(&mut self, local_reference: LocalReference) {
         self.local_reference = local_reference;
         if local_reference.local_size as usize

@@ -135,3 +135,48 @@ fn shared_atomic_rmw_cmpxchg_and_alignment_follow_contracts() {
         VMResult::UnalignedAtomic
     ));
 }
+
+#[tokio::test]
+async fn misaligned_atomic_store_traps_without_partial_write() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed")
+            i32.const 0
+            i32.const 0x11223344
+            i32.store)
+          (func (export "misaligned_store")
+            i32.const 1
+            i32.const 0xaabbccdd
+            i32.atomic.store)
+          (func (export "load0") (result i32)
+            i32.const 0
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "misaligned_store",
+            &ResultValue::new(vec![])
+        )
+        .await,
+        VMResult::UnalignedAtomic
+    ));
+    assert_eq!(
+        unwrap_success(call_i32(&instance, &store, "load0", vec![]).await),
+        0x1122_3344
+    );
+}

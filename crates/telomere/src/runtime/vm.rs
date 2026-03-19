@@ -22,8 +22,37 @@ use crate::{
     runtime::scheduler::{ReadyFlag, Scheduler, SyncRunError, Task},
     Store,
 };
+use vstd::prelude::*;
 
 use super::memory_effect::{AsyncCompletion, AsyncResult};
+
+verus! {
+
+pub open spec fn spec_compute_memory_offset_result(memarg_offset: u32, offset: u32) -> Option<int> {
+    if memarg_offset as int + offset as int <= u32::MAX as int {
+        Some(memarg_offset as int + offset as int)
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+fn checked_compute_memory_offset(memarg_offset: u32, offset: u32) -> (result: Option<usize>)
+    ensures
+        match spec_compute_memory_offset_result(memarg_offset, offset) {
+            Some(value) => result == Some(value as usize),
+            None => result == Option::<usize>::None,
+        },
+{
+    let sum = memarg_offset as u64 + offset as u64;
+    if sum <= u32::MAX as u64 {
+        Some(sum as usize)
+    } else {
+        None
+    }
+}
+
+} // verus!
 
 #[inline(always)]
 fn wait_effect(ctx: &mut ExecuteContext, cont: *const Instr) -> bool {
@@ -99,13 +128,9 @@ impl StoreBytes {
 
 #[inline(always)]
 pub(crate) fn compute_memory_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
-    VMResult::from_option(
-        memarg
-            .offset
-            .checked_add(offset)
-            .map(|value| value as usize),
-        || VMResult::MemoryIndexOutOfRange,
-    )
+    VMResult::from_option(checked_compute_memory_offset(memarg.offset, offset), || {
+        VMResult::MemoryIndexOutOfRange
+    })
 }
 
 enum CallOutcome {

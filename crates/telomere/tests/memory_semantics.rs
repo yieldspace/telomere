@@ -240,6 +240,68 @@ async fn mem_copy_and_init_traps_leave_memory_unchanged() {
 }
 
 #[tokio::test]
+async fn mem_copy_overlap_matches_memmove_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed")
+            i32.const 0
+            i32.const 0x01
+            i32.store8
+            i32.const 1
+            i32.const 0x02
+            i32.store8
+            i32.const 2
+            i32.const 0x03
+            i32.store8
+            i32.const 3
+            i32.const 0x04
+            i32.store8)
+          (func (export "copy")
+            i32.const 1
+            i32.const 0
+            i32.const 3
+            memory.copy)
+          (func (export "byte_at") (param i32) (result i32)
+            local.get 0
+            i32.load8_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert!(matches!(
+        run_module_function(&instance, &store, "copy", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(0)]).await,
+        0x01,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(1)]).await,
+        0x01,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(2)]).await,
+        0x02,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(3)]).await,
+        0x03,
+    );
+}
+
+#[tokio::test]
 async fn memory_grow_returns_previous_page_count_and_minus_one_on_limit() {
     let store = Store::new();
     let registry = Registry::new();

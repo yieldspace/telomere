@@ -66,6 +66,7 @@ unsafe fn atomic_start(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
 /// - `ctx` must reference a live execution context whose active memory slot is valid for the current frame.
 /// - This helper must not hold a borrow across any follow-up atomic memory access.
 unsafe fn atomic_handle(ctx: &ExecuteContext) -> VMResult<MemoryHandle> {
+    debug_assert!(ctx.snapshot().has_default_memory());
     ctx.memory_handle_result()
 }
 
