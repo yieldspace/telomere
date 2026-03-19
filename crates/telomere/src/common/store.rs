@@ -1,11 +1,17 @@
+#![allow(dead_code, private_interfaces)]
+
 use super::{
-    gc::{GcRef, MemoryPool},
-    Data, Elem, ExportSection, FuncType, GlobalType, MemType, TableType, TypeIdx,
+    gc::GcRef,
+    memory::{LocalMemoryObject, SharedMemoryObject},
+    AsyncHostFunction, Data, Elem, ExportSection, FuncType, GlobalType, HostFunction, Instr,
+    LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
     cell::RefCell,
     collections::HashMap,
+    fmt,
+    num::NonZeroU32,
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicU32, Ordering},
@@ -14,10 +20,53 @@ use std::{
 };
 
 thread_local! {
-    static ACTIVE_STORE_GC: RefCell<Vec<(*const (), *mut MemoryPool)>> = const { RefCell::new(Vec::new()) };
+    static ACTIVE_STORE_RUNTIME: RefCell<Vec<(*const (), *mut StoreInner)>> = const { RefCell::new(Vec::new()) };
+    static ACTIVE_STORE_REENTRY: RefCell<Vec<*const ()>> = const { RefCell::new(Vec::new()) };
 }
 
-#[derive(Debug)]
+macro_rules! define_store_id {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub(crate) struct $name(NonZeroU32);
+
+        impl $name {
+            pub(crate) fn from_index(index: usize) -> Self {
+                let raw = u32::try_from(index + 1).expect("store arena index overflow");
+                Self(NonZeroU32::new(raw).expect("store arena ids are non-zero"))
+            }
+
+            pub(crate) fn index(self) -> usize {
+                self.0.get() as usize - 1
+            }
+
+            pub(crate) fn raw(self) -> u32 {
+                self.0.get()
+            }
+        }
+    };
+}
+
+define_store_id!(ModuleId);
+define_store_id!(InstanceId);
+define_store_id!(FuncId);
+define_store_id!(GlobalId);
+define_store_id!(TableId);
+define_store_id!(LocalMemoryId);
+define_store_id!(SharedMemoryId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MemoryHandle {
+    Local(LocalMemoryId),
+    Shared(SharedMemoryId),
+}
+
+impl MemoryHandle {
+    pub(crate) fn is_shared(self) -> bool {
+        matches!(self, Self::Shared(_))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ModuleInstance {
     pub exports: ExportSection,
     pub tables: Vec<TableType>,
@@ -27,67 +76,731 @@ pub struct ModuleInstance {
     pub mems: Vec<MemType>,
 }
 
+#[derive(Debug, Clone)]
+pub struct InstanceData {
+    pub instance_id: u32,
+    pub module_addr: GcRef,
+    pub globals: Vec<GcRef>,
+    pub funcs: Vec<GcRef>,
+    pub tables: Vec<GcRef>,
+    pub mems: Vec<GcRef>,
+}
+
+#[derive(Clone)]
+pub(crate) enum FunctionBody {
+    Wasm {
+        locals: LocalsData,
+        code: Arc<[Instr]>,
+    },
+    Host(HostFunction),
+    AsyncHost(AsyncHostFunction),
+}
+
+impl fmt::Debug for FunctionBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Wasm { locals, code } => f
+                .debug_struct("Wasm")
+                .field("locals", locals)
+                .field("code_len", &code.len())
+                .finish(),
+            Self::Host(_) => f.write_str("Host(..)"),
+            Self::AsyncHost(_) => f.write_str("AsyncHost(..)"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionInstanceData {
+    pub instance: InstanceId,
+    pub funcidx: u32,
+    pub body: FunctionBody,
+}
+
+impl FunctionInstanceData {
+    pub fn is_host_func(&self) -> bool {
+        matches!(
+            self.body,
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_)
+        )
+    }
+
+    pub fn is_async_host_func(&self) -> bool {
+        matches!(self.body, FunctionBody::AsyncHost(_))
+    }
+
+    pub fn locals(&self) -> LocalsData {
+        match &self.body {
+            FunctionBody::Wasm { locals, .. } => locals.clone(),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => LocalsData::default(),
+        }
+    }
+
+    pub(crate) fn code(&self) -> Option<&[Instr]> {
+        match &self.body {
+            FunctionBody::Wasm { code, .. } => Some(code.as_ref()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
+        }
+    }
+
+    pub fn code_pointer(&self) -> Option<*const Instr> {
+        self.code().map(|code| code.as_ptr())
+    }
+
+    pub(crate) fn locals_and_code_offset<R>(&self, _runtime: &R) -> (LocalsData, usize) {
+        (self.locals(), 0)
+    }
+
+    pub fn host_code_pointer(&self) -> HostFunction {
+        match self.body {
+            FunctionBody::Host(fp) => fp,
+            FunctionBody::Wasm { .. } | FunctionBody::AsyncHost(_) => {
+                unreachable!("host code pointer requested for non-host function")
+            }
+        }
+    }
+
+    pub fn async_host_code_pointer(&self) -> AsyncHostFunction {
+        match self.body {
+            FunctionBody::AsyncHost(fp) => fp,
+            FunctionBody::Wasm { .. } | FunctionBody::Host(_) => {
+                unreachable!("async host code pointer requested for non-async function")
+            }
+        }
+    }
+
+    pub(crate) fn replace_host_code_pointer(&mut self, fp: HostFunction) {
+        self.body = FunctionBody::Host(fp);
+    }
+
+    pub(crate) fn replace_async_host_code_pointer(&mut self, fp: AsyncHostFunction) {
+        self.body = FunctionBody::AsyncHost(fp);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum GlobalValue {
+    Bytes4([u8; 4]),
+    Bytes8([u8; 8]),
+    Bytes16([u8; 16]),
+    Ref(u32),
+}
+
+impl GlobalValue {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Bytes4(bytes) => bytes,
+            Self::Bytes8(bytes) => bytes,
+            Self::Bytes16(bytes) => bytes,
+            Self::Ref(raw) => unsafe {
+                std::slice::from_raw_parts(raw as *const u32 as *const u8, 4)
+            },
+        }
+    }
+
+    pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
+        match self {
+            Self::Bytes4(bytes) => bytes,
+            Self::Bytes8(bytes) => bytes,
+            Self::Bytes16(bytes) => bytes,
+            Self::Ref(raw) => unsafe {
+                std::slice::from_raw_parts_mut(raw as *mut u32 as *mut u8, 4)
+            },
+        }
+    }
+}
+
+pub(crate) fn func_ref_raw(func: FuncId) -> u32 {
+    func.raw()
+}
+
+pub(crate) fn raw_to_func_id(raw: u32) -> Option<FuncId> {
+    NonZeroU32::new(raw).map(FuncId)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+enum ObjectKind {
+    Module = 1,
+    Instance = 2,
+    Function = 3,
+    Table = 4,
+    Global = 5,
+    LocalMemory = 6,
+    SharedMemory = 7,
+}
+
+const OBJECT_KIND_SHIFT: u32 = 29;
+const OBJECT_INDEX_MASK: u32 = (1 << OBJECT_KIND_SHIFT) - 1;
+
+fn encode_object_ref(kind: ObjectKind, raw: u32) -> GcRef {
+    GcRef(((kind as u32) << OBJECT_KIND_SHIFT) | raw)
+}
+
+fn decode_object_ref(addr: GcRef) -> (ObjectKind, usize) {
+    let raw = addr.get();
+    let kind = match raw >> OBJECT_KIND_SHIFT {
+        1 => ObjectKind::Module,
+        2 => ObjectKind::Instance,
+        3 => ObjectKind::Function,
+        4 => ObjectKind::Table,
+        5 => ObjectKind::Global,
+        6 => ObjectKind::LocalMemory,
+        7 => ObjectKind::SharedMemory,
+        _ => panic!("invalid runtime object ref: {raw}"),
+    };
+    let index = (raw & OBJECT_INDEX_MASK)
+        .checked_sub(1)
+        .expect("runtime object refs are 1-based") as usize;
+    (kind, index)
+}
+
 #[derive(Default)]
 pub struct StoreSegments {
     pub data: HashMap<(u32, u32), Data>,
     pub elems: HashMap<(u32, u32), Elem>,
 }
 
-pub struct Store {
-    gc: Arc<Mutex<MemoryPool>>,
-    identity: Arc<()>,
-    segments: Mutex<StoreSegments>,
-    next_instance_id: AtomicU32,
-    pub state: StoreState,
+#[derive(Default)]
+pub struct StoreInner {
+    modules: Vec<ModuleInstance>,
+    instances: Vec<InstanceData>,
+    funcs: Vec<FunctionInstanceData>,
+    tables: Vec<super::TableInstance>,
+    globals: Vec<GlobalValue>,
+    local_memories: Vec<LocalMemoryObject>,
+    shared_memories: Vec<Arc<SharedMemoryObject>>,
+    pub(crate) segments: StoreSegments,
+    next_instance_id: u32,
 }
-impl Default for Store {
-    fn default() -> Self {
-        Self::new()
+
+impl StoreInner {
+    pub(crate) fn new() -> Self {
+        Self {
+            next_instance_id: 1,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn new_instance_id(&mut self) -> u32 {
+        let id = self.next_instance_id;
+        self.next_instance_id = self
+            .next_instance_id
+            .checked_add(1)
+            .expect("instance id overflow");
+        id
+    }
+
+    pub(crate) fn alloc_module(&mut self, module: ModuleInstance) -> ModuleId {
+        let id = ModuleId::from_index(self.modules.len());
+        self.modules.push(module);
+        id
+    }
+
+    pub(crate) fn module(&self, id: ModuleId) -> &ModuleInstance {
+        &self.modules[id.index()]
+    }
+
+    pub(crate) fn new_module(&mut self, module: ModuleInstance) -> GcRef {
+        let id = self.alloc_module(module);
+        encode_object_ref(ObjectKind::Module, id.raw())
+    }
+
+    pub(crate) fn get_module(&self, addr: GcRef) -> &ModuleInstance {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Module);
+        &self.modules[index]
+    }
+
+    pub(crate) fn alloc_instance(&mut self, instance: InstanceData) -> InstanceId {
+        let id = InstanceId::from_index(self.instances.len());
+        self.instances.push(instance);
+        id
+    }
+
+    pub(crate) fn instance(&self, id: InstanceId) -> &InstanceData {
+        &self.instances[id.index()]
+    }
+
+    pub(crate) fn new_instance(&mut self, instance: &InstanceData) -> GcRef {
+        let id = InstanceId::from_index(self.instances.len());
+        self.instances.push(instance.clone());
+        encode_object_ref(ObjectKind::Instance, id.raw())
+    }
+
+    pub(crate) fn gc_ref_for_instance(&self, id: InstanceId) -> GcRef {
+        encode_object_ref(ObjectKind::Instance, id.raw())
+    }
+
+    pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Instance);
+        &self.instances[index] as *const InstanceData
+    }
+
+    pub(crate) fn get_instance(&self, addr: GcRef) -> &InstanceData {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Instance);
+        &self.instances[index]
+    }
+
+    pub(crate) unsafe fn place_instance_unchecked(
+        &mut self,
+        addr: GcRef,
+        instance: &super::Instance,
+    ) {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Instance);
+        self.instances[index] = InstanceData {
+            instance_id: instance.instance_id,
+            module_addr: instance.module_addr,
+            globals: instance.globals.clone(),
+            funcs: instance.funcs.clone(),
+            tables: instance.tables.clone(),
+            mems: instance.memory.clone(),
+        };
+    }
+
+    pub(crate) fn alloc_func(&mut self, func: FunctionInstanceData) -> FuncId {
+        let id = FuncId::from_index(self.funcs.len());
+        self.funcs.push(func);
+        id
+    }
+
+    pub(crate) fn func(&self, id: FuncId) -> &FunctionInstanceData {
+        &self.funcs[id.index()]
+    }
+
+    pub(crate) fn get_func(&self, addr: GcRef) -> &FunctionInstanceData {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Function);
+        &self.funcs[index]
+    }
+
+    pub(crate) fn func_mut(&mut self, id: FuncId) -> &mut FunctionInstanceData {
+        &mut self.funcs[id.index()]
+    }
+
+    pub(crate) fn get_func_mut(&mut self, addr: GcRef) -> &mut FunctionInstanceData {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Function);
+        &mut self.funcs[index]
+    }
+
+    pub(crate) fn new_func(&mut self, func: &FunctionInstanceData) -> GcRef {
+        let id = self.alloc_func(func.clone());
+        encode_object_ref(ObjectKind::Function, id.raw())
+    }
+
+    pub(crate) fn alloc_table(&mut self, table: super::TableInstance) -> TableId {
+        let id = TableId::from_index(self.tables.len());
+        self.tables.push(table);
+        id
+    }
+
+    pub(crate) fn table(&self, id: TableId) -> &super::TableInstance {
+        &self.tables[id.index()]
+    }
+
+    pub(crate) fn new_table(&mut self, table_type: TableType) -> GcRef {
+        let id = self.alloc_table(super::TableInstance::new(table_type));
+        encode_object_ref(ObjectKind::Table, id.raw())
+    }
+
+    pub(crate) fn get_table(&mut self, addr: GcRef) -> &mut super::TableInstance {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Table);
+        &mut self.tables[index]
+    }
+
+    pub(crate) fn table_mut(&mut self, id: TableId) -> &mut super::TableInstance {
+        &mut self.tables[id.index()]
+    }
+
+    pub(crate) fn alloc_global(&mut self, global: GlobalValue) -> GlobalId {
+        let id = GlobalId::from_index(self.globals.len());
+        self.globals.push(global);
+        id
+    }
+
+    pub(crate) fn global(&self, id: GlobalId) -> &GlobalValue {
+        &self.globals[id.index()]
+    }
+
+    pub(crate) fn new_global_ref(&mut self, global_ref: GcRef) -> GcRef {
+        let id = self.alloc_global(GlobalValue::Ref(global_ref.get()));
+        encode_object_ref(ObjectKind::Global, id.raw())
+    }
+
+    pub(crate) fn new_global_data4(&mut self, data: u32) -> GcRef {
+        let id = self.alloc_global(GlobalValue::Bytes4(data.to_le_bytes()));
+        encode_object_ref(ObjectKind::Global, id.raw())
+    }
+
+    pub(crate) fn new_global_data8(&mut self, data: u64) -> GcRef {
+        let id = self.alloc_global(GlobalValue::Bytes8(data.to_le_bytes()));
+        encode_object_ref(ObjectKind::Global, id.raw())
+    }
+
+    pub(crate) fn new_global_data16(&mut self, data: u128) -> GcRef {
+        let id = self.alloc_global(GlobalValue::Bytes16(data.to_le_bytes()));
+        encode_object_ref(ObjectKind::Global, id.raw())
+    }
+
+    pub(crate) fn get_global(&self, addr: GcRef) -> &[u8] {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Global);
+        self.globals[index].as_bytes()
+    }
+
+    pub(crate) fn global_mut(&mut self, id: GlobalId) -> &mut GlobalValue {
+        &mut self.globals[id.index()]
+    }
+
+    pub(crate) fn get_global_mut(&mut self, addr: GcRef) -> &mut [u8] {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Global);
+        self.globals[index].as_bytes_mut()
+    }
+
+    pub(crate) fn copy_object(&mut self, item: GcRef) -> GcRef {
+        let (kind, index) = decode_object_ref(item);
+        assert_eq!(kind, ObjectKind::Global);
+        let copied = self.globals[index].clone();
+        let id = self.alloc_global(copied);
+        encode_object_ref(ObjectKind::Global, id.raw())
+    }
+
+    pub(crate) fn alloc_local_memory(&mut self, memory: LocalMemoryObject) -> MemoryHandle {
+        let id = LocalMemoryId::from_index(self.local_memories.len());
+        self.local_memories.push(memory);
+        MemoryHandle::Local(id)
+    }
+
+    pub(crate) fn new_memory(&mut self, page_count: u32, max_page_size: u32) -> GcRef {
+        let handle = self.alloc_local_memory(LocalMemoryObject::new(page_count, max_page_size));
+        self.gc_ref_for_memory_handle(handle)
+    }
+
+    pub(crate) fn alloc_shared_memory(&mut self, memory: Arc<SharedMemoryObject>) -> MemoryHandle {
+        let id = SharedMemoryId::from_index(self.shared_memories.len());
+        self.shared_memories.push(memory);
+        MemoryHandle::Shared(id)
+    }
+
+    pub(crate) fn new_shared_memory(&mut self, page_count: u32, max_page_size: u32) -> GcRef {
+        let handle = self.alloc_shared_memory(SharedMemoryObject::new(page_count, max_page_size));
+        self.gc_ref_for_memory_handle(handle)
+    }
+
+    pub(crate) fn memory_page_size(&self, handle: MemoryHandle) -> u32 {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memories[id.index()].page_size(),
+            MemoryHandle::Shared(id) => self.shared_memories[id.index()].page_size(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u8_array<const N: usize>(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<[u8; N]> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_u8_array::<N>(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_u8_array::<N>(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_memory_to_stack<const N: usize>(
+        &mut self,
+        handle: MemoryHandle,
+        stack: &mut Stack,
+        offset: usize,
+    ) -> VMResult<()> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).push_to_stack::<N>(stack, offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).push_to_stack::<N>(stack, offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u8_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u8> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_u8_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_u8_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i8_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<i8> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_i8_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_i8_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u16_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u16> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_u16_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_u16_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i16_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<i16> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_i16_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_i16_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u32_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u32> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_u32_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_u32_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i32_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<i32> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_i32_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_i32_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u64_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<u64> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_u64_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_u64_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i64_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<i64> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_i64_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_i64_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_f32_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<f32> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_f32_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_f32_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_f64_at(&mut self, handle: MemoryHandle, offset: usize) -> VMResult<f64> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).read_f64_at(offset),
+            MemoryHandle::Shared(id) => self.shared_memory(id).read_f64_at(offset),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_bytes(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory_mut(id).write_bytes(offset, bytes),
+            MemoryHandle::Shared(id) => self.shared_memory(id).write_bytes(offset, bytes),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn grow_memory(
+        &mut self,
+        handle: MemoryHandle,
+        page_size_delta: u32,
+    ) -> VMResult<i32> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory_mut(id).grow(page_size_delta),
+            MemoryHandle::Shared(id) => self.shared_memory(id).grow(page_size_delta),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_memory(
+        &mut self,
+        handle: MemoryHandle,
+        dst: u32,
+        src: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory_mut(id).copy(dst, src, len),
+            MemoryHandle::Shared(id) => self.shared_memory(id).copy(dst, src, len),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fill_memory(
+        &mut self,
+        handle: MemoryHandle,
+        ptr: u32,
+        len: u32,
+        data: u32,
+    ) -> VMResult<()> {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory_mut(id).fill(ptr, len, data),
+            MemoryHandle::Shared(id) => self.shared_memory(id).fill(ptr, len, data),
+        }
+    }
+
+    pub(crate) fn memory_handle(&self, addr: GcRef) -> MemoryHandle {
+        let (kind, index) = decode_object_ref(addr);
+        match kind {
+            ObjectKind::LocalMemory => MemoryHandle::Local(LocalMemoryId::from_index(index)),
+            ObjectKind::SharedMemory => MemoryHandle::Shared(SharedMemoryId::from_index(index)),
+            _ => panic!("invalid memory ref: {:?}", addr),
+        }
+    }
+
+    pub(crate) fn gc_ref_for_memory_handle(&self, handle: MemoryHandle) -> GcRef {
+        match handle {
+            MemoryHandle::Local(id) => encode_object_ref(ObjectKind::LocalMemory, id.raw()),
+            MemoryHandle::Shared(id) => encode_object_ref(ObjectKind::SharedMemory, id.raw()),
+        }
+    }
+
+    pub(crate) fn local_memory(&self, id: LocalMemoryId) -> &LocalMemoryObject {
+        &self.local_memories[id.index()]
+    }
+
+    pub(crate) fn local_memory_mut(&mut self, id: LocalMemoryId) -> &mut LocalMemoryObject {
+        &mut self.local_memories[id.index()]
+    }
+
+    pub(crate) fn get_memory(&mut self, addr: GcRef) -> &mut super::Memory {
+        match self.memory_handle(addr) {
+            MemoryHandle::Local(id) => self.local_memory_mut(id).memory_mut(),
+            MemoryHandle::Shared(_) => panic!("shared memory requires shared memory APIs"),
+        }
+    }
+
+    pub(crate) fn with_memory_by_addr<T>(
+        &mut self,
+        addr: GcRef,
+        f: impl FnOnce(&mut super::Memory) -> T,
+    ) -> T {
+        match self.memory_handle(addr) {
+            MemoryHandle::Local(id) => f(self.local_memory_mut(id).memory_mut()),
+            MemoryHandle::Shared(id) => self.shared_memory(id).with_memory(f),
+        }
+    }
+
+    pub(crate) fn shared_memory(&self, id: SharedMemoryId) -> &Arc<SharedMemoryObject> {
+        &self.shared_memories[id.index()]
     }
 }
 
-pub struct StoreGcGuard<'a> {
-    guard: MutexGuard<'a, MemoryPool>,
-    identity: *const (),
+#[derive(Debug, Clone)]
+pub struct InstanceHandle {
+    pub(crate) store_identity: Weak<()>,
+    pub(crate) instance: InstanceId,
+    pub(crate) instance_id: u32,
+    pub(crate) gc_ref: GcRef,
 }
 
-impl<'a> StoreGcGuard<'a> {
-    fn new(identity: &Arc<()>, mut guard: MutexGuard<'a, MemoryPool>) -> Self {
-        let identity_ptr = Arc::as_ptr(identity);
-        let gc_ptr = (&mut *guard) as *mut MemoryPool;
-        ACTIVE_STORE_GC.with(|active| active.borrow_mut().push((identity_ptr, gc_ptr)));
+impl InstanceHandle {
+    pub(crate) fn new(store: &Store, instance: InstanceId, instance_id: u32) -> Self {
         Self {
-            guard,
-            identity: identity_ptr,
+            store_identity: store.identity_weak(),
+            instance,
+            instance_id,
+            gc_ref: encode_object_ref(ObjectKind::Instance, instance.raw()),
+        }
+    }
+
+    pub(crate) fn matches_store(&self, store: &Store) -> bool {
+        store.matches_identity(&self.store_identity)
+    }
+
+    pub(crate) fn instance_id(&self) -> u32 {
+        self.instance_id
+    }
+
+    pub(crate) fn get_gc_ref_with_pool<R>(&self, store: &Store, _runtime: &R) -> Option<GcRef> {
+        self.matches_store(store).then_some(self.gc_ref)
+    }
+}
+
+#[derive(Clone)]
+pub struct StoreReentryToken {
+    store_identity: Weak<()>,
+}
+
+#[derive(Debug)]
+pub(crate) enum StoreExecutionError {
+    ReentrantCallDenied(&'static str),
+}
+
+impl fmt::Display for StoreExecutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReentrantCallDenied(api) => write!(
+                f,
+                "{api} is unsupported while the same store execution is already active on this thread"
+            ),
         }
     }
 }
 
-impl Deref for StoreGcGuard<'_> {
-    type Target = MemoryPool;
+pub(crate) struct StoreRuntimeGuard<'a> {
+    guard: MutexGuard<'a, StoreInner>,
+    identity: *const (),
+}
+
+impl Deref for StoreRuntimeGuard<'_> {
+    type Target = StoreInner;
 
     fn deref(&self) -> &Self::Target {
         &self.guard
     }
 }
 
-impl DerefMut for StoreGcGuard<'_> {
+impl DerefMut for StoreRuntimeGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.guard
     }
 }
 
-impl Drop for StoreGcGuard<'_> {
+impl Drop for StoreRuntimeGuard<'_> {
     fn drop(&mut self) {
-        ACTIVE_STORE_GC.with(|active| {
+        ACTIVE_STORE_RUNTIME.with(|active| {
             let mut active = active.borrow_mut();
             let index = active
                 .iter()
                 .rposition(|(identity, _)| *identity == self.identity)
-                .expect("store GC guard stack must stay balanced");
+                .expect("store runtime stack must stay balanced");
             let (identity, _) = active.remove(index);
             debug_assert_eq!(identity, self.identity);
         });
+    }
+}
+
+pub struct Store {
+    runtime: Arc<Mutex<StoreInner>>,
+    identity: Arc<()>,
+    segments: Mutex<StoreSegments>,
+    next_instance_id: AtomicU32,
+    pub state: StoreState,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -97,8 +810,8 @@ impl Store {
     }
 
     pub fn new_with_state(state: StoreState) -> Self {
-        Store {
-            gc: Arc::new(Mutex::new(MemoryPool::new())),
+        Self {
+            runtime: Arc::new(Mutex::new(StoreInner::new())),
             identity: Arc::new(()),
             segments: Mutex::new(StoreSegments::default()),
             next_instance_id: AtomicU32::new(1),
@@ -106,46 +819,107 @@ impl Store {
         }
     }
 
-    fn assert_no_same_thread_gc_reentry(&self, api_name: &str) {
-        assert!(
-            !self.has_active_gc_on_current_thread(),
-            "{api_name} is unsupported while the same store GC is already active on this thread"
-        );
-    }
-    fn lock_gc_unchecked(&self) -> StoreGcGuard<'_> {
-        StoreGcGuard::new(&self.identity, self.gc.lock())
-    }
-
-    pub fn lock_gc(&self) -> StoreGcGuard<'_> {
-        self.assert_no_same_thread_gc_reentry("lock_gc");
-        self.lock_gc_unchecked()
+    pub(crate) fn lock_runtime_unchecked(&self) -> StoreRuntimeGuard<'_> {
+        let mut guard = self.runtime.lock();
+        let identity_ptr = Arc::as_ptr(&self.identity);
+        let runtime_ptr = (&mut *guard) as *mut StoreInner;
+        ACTIVE_STORE_RUNTIME.with(|active| active.borrow_mut().push((identity_ptr, runtime_ptr)));
+        StoreRuntimeGuard {
+            guard,
+            identity: identity_ptr,
+        }
     }
 
-    pub fn lock_segments(&self) -> MutexGuard<'_, StoreSegments> {
-        self.segments.lock()
+    pub(crate) fn lock_runtime(
+        &self,
+        api_name: &'static str,
+    ) -> Result<StoreRuntimeGuard<'_>, StoreExecutionError> {
+        if self.has_active_runtime_on_current_thread() {
+            return Err(StoreExecutionError::ReentrantCallDenied(api_name));
+        }
+        Ok(self.lock_runtime_unchecked())
     }
 
-    pub fn with_gc<T>(&self, f: impl FnOnce(&mut MemoryPool) -> T) -> T {
-        self.assert_no_same_thread_gc_reentry("with_gc");
-        let mut gc = self.lock_gc_unchecked();
-        f(&mut gc)
+    pub(crate) fn with_runtime<T>(
+        &self,
+        api_name: &'static str,
+        f: impl FnOnce(&mut StoreInner) -> T,
+    ) -> Result<T, StoreExecutionError> {
+        let mut runtime = self.lock_runtime(api_name)?;
+        Ok(f(&mut runtime))
     }
 
-    pub fn with_segments<T>(&self, f: impl FnOnce(&mut StoreSegments) -> T) -> T {
-        let mut segments = self.lock_segments();
-        f(&mut segments)
+    pub(crate) fn with_active_runtime<T>(&self, f: impl FnOnce(&mut StoreInner) -> T) -> Option<T> {
+        let identity_ptr = Arc::as_ptr(&self.identity);
+        ACTIVE_STORE_RUNTIME.with(|active| {
+            let active = active.borrow();
+            let (_, runtime_ptr) = active
+                .iter()
+                .rev()
+                .find(|(identity, _)| *identity == identity_ptr)?;
+            // SAFETY: only used for explicit nested sync reentry on the current thread.
+            Some(unsafe { f(&mut **runtime_ptr) })
+        })
     }
 
-    pub(crate) fn new_instance_id(&self) -> u32 {
-        self.next_instance_id.fetch_add(1, Ordering::Relaxed)
+    pub(crate) fn current_reentry_token(&self) -> Option<StoreReentryToken> {
+        self.has_active_runtime_on_current_thread()
+            .then(|| StoreReentryToken {
+                store_identity: self.identity_weak(),
+            })
     }
 
-    pub(crate) fn gc_weak(&self) -> Weak<Mutex<MemoryPool>> {
-        Arc::downgrade(&self.gc)
+    pub(crate) fn with_reentry_token<T>(token: &StoreReentryToken, f: impl FnOnce() -> T) -> T {
+        let identity = token
+            .store_identity
+            .upgrade()
+            .map(|identity| Arc::as_ptr(&identity))
+            .unwrap_or(std::ptr::null());
+        ACTIVE_STORE_REENTRY.with(|stack| stack.borrow_mut().push(identity));
+        struct ReentryGuard;
+        impl Drop for ReentryGuard {
+            fn drop(&mut self) {
+                ACTIVE_STORE_REENTRY.with(|stack| {
+                    stack
+                        .borrow_mut()
+                        .pop()
+                        .expect("store reentry stack must stay balanced");
+                });
+            }
+        }
+        let _guard = ReentryGuard;
+        f()
+    }
+
+    pub(crate) fn can_reenter_current_thread(&self) -> bool {
+        let identity_ptr = Arc::as_ptr(&self.identity);
+        ACTIVE_STORE_REENTRY.with(|stack| stack.borrow().iter().rev().any(|it| *it == identity_ptr))
     }
 
     pub(crate) fn identity_weak(&self) -> Weak<()> {
         Arc::downgrade(&self.identity)
+    }
+
+    pub(crate) fn lock_gc(&self) -> StoreRuntimeGuard<'_> {
+        self.lock_runtime("lock_gc")
+            .expect("lock_gc is unsupported while the same store execution is already active on this thread")
+    }
+
+    pub(crate) fn with_gc<T>(&self, f: impl FnOnce(&mut StoreInner) -> T) -> T {
+        let mut runtime = self.lock_gc();
+        f(&mut runtime)
+    }
+
+    pub(crate) fn has_active_gc_on_current_thread(&self) -> bool {
+        self.has_active_runtime_on_current_thread()
+    }
+
+    pub(crate) fn lock_segments(&self) -> MutexGuard<'_, StoreSegments> {
+        self.segments.lock()
+    }
+
+    pub(crate) fn new_instance_id(&self) -> u32 {
+        self.next_instance_id.fetch_add(1, Ordering::Relaxed)
     }
 
     pub(crate) fn matches_identity(&self, identity: &Weak<()>) -> bool {
@@ -154,35 +928,20 @@ impl Store {
             .is_some_and(|identity| Arc::ptr_eq(&self.identity, &identity))
     }
 
-    pub(crate) fn has_active_gc_on_current_thread(&self) -> bool {
-        has_active_gc_for_identity(&self.identity_weak())
+    pub(crate) fn has_active_runtime_on_current_thread(&self) -> bool {
+        let identity_ptr = Arc::as_ptr(&self.identity);
+        ACTIVE_STORE_RUNTIME.with(|active| {
+            active
+                .borrow()
+                .iter()
+                .rev()
+                .any(|(identity, _)| *identity == identity_ptr)
+        })
     }
 }
 
-fn active_gc_ptr_for_identity(identity: &Weak<()>) -> Option<*mut MemoryPool> {
-    let identity = identity.upgrade()?;
-    let identity_ptr = Arc::as_ptr(&identity);
-    ACTIVE_STORE_GC.with(|active| {
-        let active = active.borrow();
-        active
-            .iter()
-            .rev()
-            .find_map(|(active_identity, gc)| (*active_identity == identity_ptr).then_some(*gc))
-    })
-}
-
-pub(crate) fn has_active_gc_for_identity(identity: &Weak<()>) -> bool {
-    active_gc_ptr_for_identity(identity).is_some()
-}
-
-pub(crate) fn clear_active_root_slot_for_identity(identity: &Weak<()>, slot: u32) -> bool {
-    let Some(gc) = active_gc_ptr_for_identity(identity) else {
-        return false;
-    };
-    unsafe {
-        (*gc).write_root_slot(slot, GcRef(0));
-    }
-    true
+pub(crate) fn clear_active_root_slot_for_identity(_identity: &Weak<()>, _slot: u32) -> bool {
+    false
 }
 
 #[derive(Default, Clone, Copy)]
@@ -197,7 +956,6 @@ impl StoreState {
     where
         T: Sync,
     {
-        // SAFETY: a `'static` reference is valid for the lifetime of the store.
         unsafe { Self::from_ptr(data as *const T) }
     }
 
@@ -224,19 +982,8 @@ impl StoreState {
 }
 
 #[cfg(test)]
-mod test {
-    use super::{has_active_gc_for_identity, Store, StoreState};
-    use std::panic::{self, AssertUnwindSafe};
-
-    fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-        match payload.downcast::<String>() {
-            Ok(message) => *message,
-            Err(payload) => match payload.downcast::<&'static str>() {
-                Ok(message) => (*message).to_owned(),
-                Err(_) => "<non-string panic payload>".to_owned(),
-            },
-        }
-    }
+mod tests {
+    use super::{Store, StoreState};
 
     #[test]
     fn test_state() {
@@ -247,51 +994,16 @@ mod test {
     }
 
     #[test]
-    fn non_lifo_store_gc_drop_keeps_other_store_active() {
-        let store_a = Store::new();
-        let store_b = Store::new();
-        let identity_a = store_a.identity_weak();
-        let identity_b = store_b.identity_weak();
-
-        let guard_a = store_a.lock_gc();
-        let guard_b = store_b.lock_gc();
-
-        assert!(has_active_gc_for_identity(&identity_a));
-        assert!(has_active_gc_for_identity(&identity_b));
-
-        drop(guard_a);
-
-        assert!(!has_active_gc_for_identity(&identity_a));
-        assert!(has_active_gc_for_identity(&identity_b));
-
-        drop(guard_b);
-
-        assert!(!has_active_gc_for_identity(&identity_b));
-    }
-
-    #[test]
-    fn lock_gc_panics_on_same_thread_reentry() {
+    fn runtime_guard_rejects_same_thread_reentry() {
         let store = Store::new();
-        let _guard = store.lock_gc();
-
-        let panic = panic::catch_unwind(AssertUnwindSafe(|| {
-            let _reentered = store.lock_gc();
-        }))
-        .expect_err("lock_gc should panic on same-thread same-store reentry");
-
-        assert!(panic_message(panic).contains("lock_gc"));
-    }
-
-    #[test]
-    fn with_gc_panics_on_same_thread_reentry() {
-        let store = Store::new();
-        let _guard = store.lock_gc();
-
-        let panic = panic::catch_unwind(AssertUnwindSafe(|| {
-            store.with_gc(|_| ());
-        }))
-        .expect_err("with_gc should panic on same-thread same-store reentry");
-
-        assert!(panic_message(panic).contains("with_gc"));
+        let _guard = store.lock_runtime("lock_runtime").unwrap();
+        let err = match store.lock_runtime("lock_runtime") {
+            Ok(_) => panic!("lock_runtime should fail closed during same-thread reentry"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.to_string(),
+            "lock_runtime is unsupported while the same store execution is already active on this thread"
+        );
     }
 }

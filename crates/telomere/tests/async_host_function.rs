@@ -31,7 +31,7 @@ fn async_add_one(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<ScalarState>() }.unwrap();
@@ -55,7 +55,7 @@ fn async_swap_results(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 12, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<RoundTripState>() }.unwrap();
@@ -78,7 +78,7 @@ fn async_init(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         unsafe { state.get::<StartState>() }
@@ -105,7 +105,7 @@ fn async_double(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<CallIndirectState>() }.unwrap();
@@ -119,7 +119,7 @@ fn async_fail(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
     let (_prev_local_ref, _return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.local_reference = _prev_local_ref;
+    ctx.set_local_reference(_prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         VMResult::InvalidOperand
@@ -138,7 +138,7 @@ fn sync_add_two(ctx: &mut ExecuteContext) -> VMResult<*const telomere::common::I
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
 }
 
@@ -209,11 +209,9 @@ async fn sync_run_rejects_async_host_imports() {
         &registry,
     )
     .await;
-    let mut gc = store.lock_gc();
-    let result = telomere::component_support::runtime::run_module_function_sync_with_gc(
+    let result = telomere::component_support::runtime::run_core_export_sync_reentrant(
         &instance,
         &store,
-        &mut gc,
         "run",
         &ResultValue::new(vec![WasmValue::I32(41)]),
     );

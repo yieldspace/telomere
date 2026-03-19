@@ -4,12 +4,14 @@ use crate::VMResult;
 
 macro_rules! generate_trap_func {
     ($name: ident,$instrs_name: ident,$expr: expr) => {
+        #[allow(dead_code)]
         pub(crate) unsafe fn $name(
             _tail_code: *const Instr,
             _ctx: &mut ExecuteContext,
         ) -> VMResult<()> {
             $expr
         }
+        #[allow(dead_code)]
         pub(crate) const $instrs_name: [Instr; 1] = [Instr { op: $name }];
     };
 }
@@ -46,6 +48,7 @@ generate_trap_func!(
 generate_trap_func!(traps_unlinkable, TRAPS_UNLINKABLE, VMResult::Unlinkable);
 generate_trap_func!(traps_unreachable, TRAPS_UNREACHABLE, VMResult::Unreachable);
 
+#[allow(dead_code)]
 pub(crate) unsafe fn trap_func<T>(res: VMResult<T>) -> *const Instr {
     match res {
         VMResult::CallIndirectInvalidType => TRAPS_CALL_INDIRECT_INVALID_TYPE.as_ptr(),

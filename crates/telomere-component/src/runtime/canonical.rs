@@ -1,4 +1,3 @@
-use super::host::with_active_component_host_gc_ptr;
 use super::*;
 
 pub(super) fn direct_wasm_to_component_value(
@@ -1858,16 +1857,9 @@ fn read_memory(
     ptr: u32,
     len: usize,
 ) -> Result<Vec<u8>, ComponentError> {
-    with_active_component_host_gc_ptr(|gc| {
-        let mut owned_gc = None;
-        let gc = match gc {
-            Some(gc) => gc,
-            None => &mut *owned_gc.get_or_insert_with(|| store.lock_gc()),
-        };
-        let addr = memory_addr(store, memory, gc)?;
-        crate::support::common::read_memory(gc, addr, ptr, len)
-            .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))
-    })
+    let memory = memory_addr(store, memory)?;
+    crate::support::common::read_memory(store, &memory, ptr, len)
+        .ok_or_else(|| ComponentError::Trap("memory access out of bounds".to_owned()))
 }
 
 fn write_memory(
@@ -1876,21 +1868,14 @@ fn write_memory(
     ptr: u32,
     bytes: &[u8],
 ) -> Result<(), ComponentError> {
-    with_active_component_host_gc_ptr(|gc| {
-        let mut owned_gc = None;
-        let gc = match gc {
-            Some(gc) => gc,
-            None => &mut *owned_gc.get_or_insert_with(|| store.lock_gc()),
-        };
-        let addr = memory_addr(store, memory, gc)?;
-        if crate::support::common::write_memory(gc, addr, ptr, bytes) {
-            Ok(())
-        } else {
-            Err(ComponentError::Trap(
-                "memory access out of bounds".to_owned(),
-            ))
-        }
-    })
+    let memory = memory_addr(store, memory)?;
+    if crate::support::common::write_memory(store, &memory, ptr, bytes) {
+        Ok(())
+    } else {
+        Err(ComponentError::Trap(
+            "memory access out of bounds".to_owned(),
+        ))
+    }
 }
 
 fn write_flat_values(
@@ -1934,9 +1919,8 @@ fn write_flat_values(
 fn memory_addr(
     store: &Store,
     memory: &CoreExportRef,
-    gc: &mut crate::support::common::gc::MemoryPool,
-) -> Result<crate::support::common::gc::GcRef, ComponentError> {
-    crate::support::common::memory_export_addr(&memory.instance, store, &memory.export_name, gc)
+) -> Result<crate::support::common::CoreMemoryHandle, ComponentError> {
+    crate::support::common::memory_export(&memory.instance, store, &memory.export_name)
         .map_err(ComponentError::Link)
 }
 

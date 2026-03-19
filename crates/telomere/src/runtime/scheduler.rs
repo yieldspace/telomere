@@ -1,6 +1,6 @@
 use super::memory_effect::{AsyncCompletion, AsyncEffect, AsyncEffectFuture, AsyncResult, Effect};
 use crate::{
-    common::{gc::MemoryPool, ExecuteContext, LocalReference, StablePc},
+    common::{CallFrameCache, ExecuteContext, LocalReference, StablePc, StoreInner},
     Stack, Store, VMResult,
 };
 use futures::{future::FusedFuture, stream::FuturesUnordered};
@@ -282,9 +282,17 @@ impl<'a> Scheduler<'a> {
                 let fp = pc.resolve(&gc, &stack, local_reference);
 
                 let (res, cont, local_reference) = {
+                    let current_frame = if local_reference.local_size as usize
+                        >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
+                    {
+                        stack.frame_cache(&local_reference)
+                    } else {
+                        CallFrameCache::dummy()
+                    };
                     let mut ec = ExecuteContext {
                         gc: &mut gc,
                         local_reference,
+                        current_frame,
                         stack: &mut stack,
                         store: self.store,
                         effect: EffectSupplier {
@@ -352,11 +360,11 @@ impl<'a> Scheduler<'a> {
                     }
                 }
             }
-            self.processing_effect(&mut gc);
+            self.processing_effect();
         }
     }
 
-    pub fn run_sync_with_gc(&mut self, gc: &mut MemoryPool) -> Result<(), SyncRunError> {
+    pub fn run_sync_with_gc(&mut self, gc: &mut StoreInner) -> Result<(), SyncRunError> {
         while !self.tasks.is_empty() {
             while self.ready_count != 0 {
                 trace!("task ready count: {:?}", self.ready_count);
@@ -378,9 +386,17 @@ impl<'a> Scheduler<'a> {
                 let fp = pc.resolve(gc, &stack, local_reference);
 
                 let (res, cont, local_reference) = {
+                    let current_frame = if local_reference.local_size as usize
+                        >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
+                    {
+                        stack.frame_cache(&local_reference)
+                    } else {
+                        CallFrameCache::dummy()
+                    };
                     let mut ec = ExecuteContext {
                         gc,
                         local_reference,
+                        current_frame,
                         stack: &mut stack,
                         store: self.store,
                         effect: EffectSupplier {
@@ -448,7 +464,7 @@ impl<'a> Scheduler<'a> {
                     }
                 }
             }
-            self.processing_effect(gc);
+            self.processing_effect();
             if self.tasks.is_empty() {
                 break;
             }
@@ -466,7 +482,7 @@ impl<'a> Scheduler<'a> {
         Ok(())
     }
 
-    fn processing_effect(&mut self, _gc: &mut MemoryPool) {
+    fn processing_effect(&mut self) {
         while let Some(effect) = self.effects.pop_front() {
             match effect {
                 #[cfg(feature = "async-runtime")]

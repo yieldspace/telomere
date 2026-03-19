@@ -1,5 +1,7 @@
 # ランタイムにおけるガベージコレクション
 
+> 現状メモ: このドキュメントは `MemoryPool` / `GcRef` を中心にしていた旧 core runtime の説明です。2026-03 の issue #106 以降、core runtime の正本は store-local arena と `mmap` linear memory に移っており、shared memory も別オブジェクトとして管理されます。最新の前提は [runtime-memory.md](./runtime-memory.md) を参照してください。
+
 ## 概要
 
 このランタイムは、マーク・コンパクト方式のガベージコレクションを採用しています。特に、Lisp2アルゴリズムを用いており、メモリ管理の最適化を目指し、ガベージコレクションによるパフォーマンスオーバーヘッドを最小化しています。

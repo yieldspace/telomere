@@ -1,6 +1,6 @@
 use crate::{
     common::stack::LaneType,
-    runtime::vm::{compute_memory_offset, load_internal, store_internal, StoreBytes},
+    runtime::vm::{compute_memory_offset, store_internal, StoreBytes},
 };
 use telomere_macros::define_simd_operation;
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
@@ -12,81 +12,89 @@ use crate::{
 };
 
 pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<16>(tail_code, ctx, |stack, data, next| {
-        trap_func!(stack.push_slice(data));
-        next
-    })
+    let memarg = (*tail_code).operand.memarg;
+    let offset = ctx.stack.pop_u32();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    vm_try!(ctx.push_memory_to_stack::<16>(start));
+    call_next(tail_code, 1, ctx)
+}
+
+#[inline(always)]
+unsafe fn read_memory_bytes<const N: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<[u8; N]> {
+    let memarg = (*tail_code).operand.memarg;
+    let offset = ctx.stack.pop_u32();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    ctx.read_memory_u8_array::<N>(start)
 }
 pub unsafe fn v128_load8x8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<8>(tail_code, ctx, |stack, data, next| {
-        let extended = [
-            data[0] as i8 as i16,
-            data[1] as i8 as i16,
-            data[2] as i8 as i16,
-            data[3] as i8 as i16,
-            data[4] as i8 as i16,
-            data[5] as i8 as i16,
-            data[6] as i8 as i16,
-            data[7] as i8 as i16,
-        ];
-        trap_func!(stack.push(i16x8::from(extended)));
-        next
-    })
+    let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+    let extended = [
+        data[0] as i8 as i16,
+        data[1] as i8 as i16,
+        data[2] as i8 as i16,
+        data[3] as i8 as i16,
+        data[4] as i8 as i16,
+        data[5] as i8 as i16,
+        data[6] as i8 as i16,
+        data[7] as i8 as i16,
+    ];
+    vm_try!(ctx.stack.push(i16x8::from(extended)));
+    call_next(tail_code, 1, ctx)
 }
 pub unsafe fn v128_load8x8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<8>(tail_code, ctx, |stack, data, next| {
-        let extended = [
-            data[0] as u16,
-            data[1] as u16,
-            data[2] as u16,
-            data[3] as u16,
-            data[4] as u16,
-            data[5] as u16,
-            data[6] as u16,
-            data[7] as u16,
-        ];
-        trap_func!(stack.push(u16x8::from(extended)));
-        next
-    })
+    let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+    let extended = [
+        data[0] as u16,
+        data[1] as u16,
+        data[2] as u16,
+        data[3] as u16,
+        data[4] as u16,
+        data[5] as u16,
+        data[6] as u16,
+        data[7] as u16,
+    ];
+    vm_try!(ctx.stack.push(u16x8::from(extended)));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_load16x4_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<8>(tail_code, ctx, |stack, data, next| {
-        let i16s = [
-            i16::from_le_bytes([data[0], data[1]]),
-            i16::from_le_bytes([data[2], data[3]]),
-            i16::from_le_bytes([data[4], data[5]]),
-            i16::from_le_bytes([data[6], data[7]]),
-        ];
+    let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+    let i16s = [
+        i16::from_le_bytes([data[0], data[1]]),
+        i16::from_le_bytes([data[2], data[3]]),
+        i16::from_le_bytes([data[4], data[5]]),
+        i16::from_le_bytes([data[6], data[7]]),
+    ];
 
-        let extended = [
-            i16s[0] as i32,
-            i16s[1] as i32,
-            i16s[2] as i32,
-            i16s[3] as i32,
-        ];
-        trap_func!(stack.push(i32x4::from(extended)));
-        next
-    })
+    let extended = [
+        i16s[0] as i32,
+        i16s[1] as i32,
+        i16s[2] as i32,
+        i16s[3] as i32,
+    ];
+    vm_try!(ctx.stack.push(i32x4::from(extended)));
+    call_next(tail_code, 1, ctx)
 }
 pub unsafe fn v128_load16x4_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<8>(tail_code, ctx, |stack, data, next| {
-        let u16s = [
-            u16::from_le_bytes([data[0], data[1]]),
-            u16::from_le_bytes([data[2], data[3]]),
-            u16::from_le_bytes([data[4], data[5]]),
-            u16::from_le_bytes([data[6], data[7]]),
-        ];
+    let data = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+    let u16s = [
+        u16::from_le_bytes([data[0], data[1]]),
+        u16::from_le_bytes([data[2], data[3]]),
+        u16::from_le_bytes([data[4], data[5]]),
+        u16::from_le_bytes([data[6], data[7]]),
+    ];
 
-        let extended = [
-            u16s[0] as u32,
-            u16s[1] as u32,
-            u16s[2] as u32,
-            u16s[3] as u32,
-        ];
-        trap_func!(stack.push(u32x4::from(extended)));
-        next
-    })
+    let extended = [
+        u16s[0] as u32,
+        u16s[1] as u32,
+        u16s[2] as u32,
+        u16s[3] as u32,
+    ];
+    vm_try!(ctx.stack.push(u32x4::from(extended)));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -96,66 +104,54 @@ pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 }
 
 pub unsafe fn v128_load32x2_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<8>(tail_code, ctx, |stack, bytes, next| {
-        let i32s = [
-            i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-            i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
-        ];
-
-        let extended = [i32s[0] as i64, i32s[1] as i64];
-
-        let v = i64x2::from(extended);
-        trap_func!(stack.push(v));
-        next
-    })
+    let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+    let i32s = [
+        i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+    ];
+    let extended = [i32s[0] as i64, i32s[1] as i64];
+    vm_try!(ctx.stack.push(i64x2::from(extended)));
+    call_next(tail_code, 1, ctx)
 }
 pub unsafe fn v128_load32x2_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<8>(tail_code, ctx, |stack, bytes, next| {
-        let u32s = [
-            u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-            u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
-        ];
-
-        let extended = [u32s[0] as u64, u32s[1] as u64];
-
-        let v = u64x2::from(extended);
-        trap_func!(stack.push(v));
-        next
-    })
+    let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+    let u32s = [
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+    ];
+    let extended = [u32s[0] as u64, u32s[1] as u64];
+    vm_try!(ctx.stack.push(u64x2::from(extended)));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_load8_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<1>(tail_code, ctx, |stack, bytes, next| {
-        let v = i8x16::from(bytes[0] as i8);
-        trap_func!(stack.push(v));
-        next
-    })
+    let bytes = vm_try!(read_memory_bytes::<1>(tail_code, ctx));
+    vm_try!(ctx.stack.push(i8x16::from(bytes[0] as i8)));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_load16_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<2>(tail_code, ctx, |stack, bytes, next| {
-        let v = i16x8::from(i16::from_le_bytes([bytes[0], bytes[1]]));
-        trap_func!(stack.push(v));
-        next
-    })
+    let bytes = vm_try!(read_memory_bytes::<2>(tail_code, ctx));
+    vm_try!(ctx
+        .stack
+        .push(i16x8::from(i16::from_le_bytes([bytes[0], bytes[1]]))));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_load32_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<4>(tail_code, ctx, |stack, bytes, next| {
-        let v = i32x4::from(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
-        trap_func!(stack.push(v));
-        next
-    })
+    let bytes = vm_try!(read_memory_bytes::<4>(tail_code, ctx));
+    vm_try!(ctx.stack.push(i32x4::from(i32::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3],
+    ]))));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_load64_splat(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<8>(tail_code, ctx, |stack, bytes, next| {
-        let v = i64x2::from(i64::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ]));
-        trap_func!(stack.push(v));
-        next
-    })
+    let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+    vm_try!(ctx.stack.push(i64x2::from(i64::from_le_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]))));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -181,15 +177,8 @@ unsafe fn load_lane_internal<const N: usize>(
     let lane = (*tail_code.add(1)).operand.u32 as usize;
     let mut bytes = ctx.stack.pop_u128().to_le_bytes();
     let offset = ctx.stack.pop_u32();
-    let data = {
-        let memory = if let Some(memory) = ctx.memory() {
-            memory
-        } else {
-            return VMResult::MemoryIndexOutOfRange;
-        };
-        let start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
-        vm_try!(memory.read_u8_array::<N>(start))
-    };
+    let start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
+    let data = vm_try!(ctx.read_memory_u8_array::<N>(start));
     replace_lane_bytes::<N>(&mut bytes, lane, data);
     vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
     call_next(tail_code, 2, ctx)
@@ -203,20 +192,8 @@ unsafe fn store_lane_internal<const N: usize>(
     let bytes = ctx.stack.pop_u128().to_le_bytes();
     let start = lane * N;
     let offset = ctx.stack.pop_u32();
-    let memory = if let Some(memory) = ctx.memory() {
-        memory
-    } else {
-        return VMResult::MemoryIndexOutOfRange;
-    };
     let mem_start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
-    let mem_end = vm_try!(VMResult::from_option(mem_start.checked_add(N), || {
-        VMResult::MemoryIndexOutOfRange
-    }));
-    let target = vm_try!(VMResult::from_option(
-        memory.get_mut(mem_start..mem_end),
-        || { VMResult::MemoryIndexOutOfRange }
-    ));
-    target.copy_from_slice(&bytes[start..start + N]);
+    vm_try!(ctx.write_memory_bytes(mem_start, &bytes[start..start + N]));
     call_next(tail_code, 2, ctx)
 }
 
@@ -490,21 +467,19 @@ pub unsafe fn v128_store64_lane(tail_code: *const Instr, ctx: &mut ExecuteContex
 }
 
 pub unsafe fn v128_load32_zero(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<4>(tail_code, ctx, |stack, bytes, next| {
-        let mut result = [0u8; 16];
-        result[0..4].copy_from_slice(bytes);
-        trap_func!(stack.push_u128(u128::from_le_bytes(result)));
-        next
-    })
+    let bytes = vm_try!(read_memory_bytes::<4>(tail_code, ctx));
+    let mut result = [0u8; 16];
+    result[0..4].copy_from_slice(&bytes);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_load64_zero(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    load_internal::<8>(tail_code, ctx, |stack, bytes, next| {
-        let mut result = [0u8; 16];
-        result[0..8].copy_from_slice(bytes);
-        trap_func!(stack.push_u128(u128::from_le_bytes(result)));
-        next
-    })
+    let bytes = vm_try!(read_memory_bytes::<8>(tail_code, ctx));
+    let mut result = [0u8; 16];
+    result[0..8].copy_from_slice(&bytes);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(result)));
+    call_next(tail_code, 1, ctx)
 }
 
 pub unsafe fn v128_not(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {

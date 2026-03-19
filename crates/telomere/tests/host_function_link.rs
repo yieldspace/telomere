@@ -1,8 +1,11 @@
 mod common;
 use common::{instantiate_wat, run_wast_with};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Mutex,
+};
 use telomere::{
-    common::{ExecuteContext, Instr, StoreState},
+    common::{ExecuteContext, InstanceHandle, Instr, StoreState},
     link_host_function_with_export_name, link_host_function_with_function_idx, vm_try, Registry,
     Store, VMResult,
 };
@@ -20,43 +23,85 @@ const CALL_PRINT_WAST: &str = r#"
     (invoke "wasm_print")
     "#;
 
+struct LinkState {
+    counter: AtomicUsize,
+    host: Mutex<Option<InstanceHandle>>,
+}
+
+fn link_state<'a>(ctx: &'a ExecuteContext<'a>) -> &'a LinkState {
+    unsafe { ctx.store.state.get::<LinkState>() }
+        .expect("host function tests require LinkState in StoreState")
+}
+
 fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
-    unsafe { ctx.store.state.get::<AtomicUsize>() }
-        .expect("host function tests require an AtomicUsize in StoreState")
+    &link_state(ctx).counter
+}
+
+fn finish_host_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
+}
+
+fn host_instance(ctx: &ExecuteContext) -> InstanceHandle {
+    link_state(ctx)
+        .host
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("host instance must be recorded before invoking the test host function")
 }
 
 fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     print_counter(ctx).fetch_add(1, Ordering::SeqCst);
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.local_reference = prev_local_ref;
-    VMResult::Success(return_addr)
+    finish_host_call(ctx)
+}
+
+fn relink_by_function_idx(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let host = host_instance(ctx);
+    link_host_function_with_function_idx(&host, 0, print, ctx.store);
+    finish_host_call(ctx)
+}
+
+fn relink_by_export_name(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let host = host_instance(ctx);
+    link_host_function_with_export_name(&host, "print", print, ctx.store);
+    finish_host_call(ctx)
 }
 
 #[tokio::test]
 async fn test_print() {
-    let counter = Box::new(AtomicUsize::new(0));
+    let counter = Box::new(LinkState {
+        counter: AtomicUsize::new(0),
+        host: Mutex::new(None),
+    });
     let store = Store::new_with_state(unsafe {
-        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+        StoreState::from_ptr(counter.as_ref() as *const LinkState)
     });
     let mut registry = Registry::new();
     let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
     registry.register("host", host.clone());
+    *counter.host.lock().unwrap() = Some(host.clone());
     link_host_function_with_function_idx(&host, 0, print, &store);
     run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert_eq!(counter.counter.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn test_imported_host_start() {
-    let counter = Box::new(AtomicUsize::new(0));
+    let counter = Box::new(LinkState {
+        counter: AtomicUsize::new(0),
+        host: Mutex::new(None),
+    });
     let store = Store::new_with_state(unsafe {
-        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+        StoreState::from_ptr(counter.as_ref() as *const LinkState)
     });
     let mut registry = Registry::new();
     let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
     registry.register("host", host.clone());
+    *counter.host.lock().unwrap() = Some(host.clone());
     link_host_function_with_function_idx(&host, 0, print, &store);
 
     let _instance = instantiate_wat(
@@ -71,45 +116,45 @@ async fn test_imported_host_start() {
     )
     .await;
 
-    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert_eq!(counter.counter.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn test_reentrant_link_host_function_with_function_idx_fails_closed() {
-    let counter = Box::new(AtomicUsize::new(0));
+    let counter = Box::new(LinkState {
+        counter: AtomicUsize::new(0),
+        host: Mutex::new(None),
+    });
     let store = Store::new_with_state(unsafe {
-        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+        StoreState::from_ptr(counter.as_ref() as *const LinkState)
     });
     let mut registry = Registry::new();
     let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
     registry.register("host", host.clone());
-
-    {
-        let _gc = store.lock_gc();
-        link_host_function_with_function_idx(&host, 0, print, &store);
-    }
+    *counter.host.lock().unwrap() = Some(host.clone());
+    link_host_function_with_function_idx(&host, 0, relink_by_function_idx, &store);
 
     run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 0);
+    assert_eq!(counter.counter.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn test_reentrant_link_host_function_with_export_name_fails_closed() {
-    let counter = Box::new(AtomicUsize::new(0));
+    let counter = Box::new(LinkState {
+        counter: AtomicUsize::new(0),
+        host: Mutex::new(None),
+    });
     let store = Store::new_with_state(unsafe {
-        StoreState::from_ptr(counter.as_ref() as *const AtomicUsize)
+        StoreState::from_ptr(counter.as_ref() as *const LinkState)
     });
     let mut registry = Registry::new();
     let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
     registry.register("host", host.clone());
-
-    {
-        let _gc = store.lock_gc();
-        link_host_function_with_export_name(&host, "print", print, &store);
-    }
+    *counter.host.lock().unwrap() = Some(host.clone());
+    link_host_function_with_function_idx(&host, 0, relink_by_export_name, &store);
 
     run_wast_with(CALL_PRINT_WAST, &store, &mut registry).await;
-    assert_eq!(counter.load(Ordering::SeqCst), 0);
+    assert_eq!(counter.counter.load(Ordering::SeqCst), 0);
 }
 
 const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
@@ -126,12 +171,19 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let arg = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push_i32(arg + 40));
     let funcidx = 1;
-    let func_addr = ctx.instance().funcs.as_slice(ctx.gc)[funcidx];
-
-    let func = ctx.func_by_addr(func_addr);
-    if func.is_host_func() {
-        let fp = func.host_code_pointer(ctx.gc);
-        ctx.local_reference = vm_try!(ctx.stack.function_call(
+    let func_addr = ctx.instance().funcs.as_slice()[funcidx];
+    let (is_host, host_fp, locals_size, instr) = {
+        let func = ctx.func_by_addr(func_addr);
+        (
+            func.is_host_func(),
+            func.is_host_func().then(|| func.host_code_pointer()),
+            func.locals().byte_size(),
+            func.code_pointer(),
+        )
+    };
+    if is_host {
+        let fp = host_fp.expect("host function must expose a host code pointer");
+        let local_reference = vm_try!(ctx.stack.function_call(
             4,
             0,
             func_addr,
@@ -139,18 +191,19 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             TAIL_CALL_FUNCTION_RETURN.as_ptr(),
             ctx.gc,
         ));
+        ctx.set_local_reference(local_reference);
         fp(ctx)
     } else {
-        let (locals_data, code_offset) = func.locals_and_code_offset(ctx.gc);
-        let instr = unsafe { ctx.gc.get_value::<Instr>(func.body, code_offset) };
-        ctx.local_reference = vm_try!(ctx.stack.function_call(
+        let instr = instr.expect("wasm function must expose a code pointer");
+        let local_reference = vm_try!(ctx.stack.function_call(
             4,
-            locals_data.byte_size(),
+            locals_size,
             func_addr,
             ctx.local_reference,
             TAIL_CALL_FUNCTION_RETURN.as_ptr(),
             ctx.gc,
         ));
+        ctx.set_local_reference(local_reference);
         VMResult::Success(instr)
     }
 }
@@ -195,7 +248,7 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
 }
 #[tokio::test]

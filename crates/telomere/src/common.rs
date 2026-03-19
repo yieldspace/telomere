@@ -1,26 +1,24 @@
+#![allow(private_interfaces)]
+
 #[macro_use]
 mod vm_result;
-use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
+use std::{fmt::Display, future::Future, pin::Pin};
 
 use custom_section::NameSubSection;
 
-use gc::FunctionInstanceData;
-use gc::GcRootHandle;
-use gc::InstanceData;
-use gc::MemoryPool;
 pub use vm_result::VMResult;
 mod memory;
-pub use memory::{MemArg, Memory};
+pub use memory::{LocalMemoryObject, MemArg, Memory, SharedMemoryObject};
 pub(crate) mod stack;
+pub(crate) use stack::CallFrameCache;
 pub use stack::{LocalReference, Stack};
 mod registry;
 pub use registry::Registry;
 pub(crate) mod store;
-pub(crate) use store::ModuleInstance;
+pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
+pub use store::{InstanceHandle, MemoryHandle, Store, StoreState};
 pub(crate) mod gc;
 pub use gc::GcRef;
-
-pub use store::{Store, StoreState};
 
 use crate::runtime::scheduler::EffectSupplier;
 use crate::WasmParserError;
@@ -195,8 +193,16 @@ pub struct Limits {
     pub min: u32,
     pub max: Option<u32>,
 }
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MemType(pub Limits);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemType {
+    pub limits: Limits,
+    pub shared: bool,
+}
+impl MemType {
+    pub const fn new(limits: Limits, shared: bool) -> Self {
+        Self { limits, shared }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefType {
     FuncRef,
@@ -422,25 +428,25 @@ impl StablePc {
     }
 
     pub(crate) fn from_raw_in_frame(
-        gc: &MemoryPool,
+        runtime: &StoreInner,
         stack: &Stack,
         local_reference: LocalReference,
         ptr: *const Instr,
     ) -> Self {
-        Self::relative_index_for_ptr(gc, stack, local_reference, ptr)
+        Self::relative_index_for_ptr(runtime, stack, local_reference, ptr)
             .map(Self::from_relative_index)
             .unwrap_or_else(|| Self::from_stable_ptr(ptr))
     }
 
     pub(crate) fn resolve(
         self,
-        gc: &MemoryPool,
+        runtime: &StoreInner,
         stack: &Stack,
         local_reference: LocalReference,
     ) -> *const Instr {
         match self.relative_index() {
             Some(index) => {
-                let (base, len) = Self::current_frame_code_range(gc, stack, local_reference)
+                let (base, len) = Self::current_frame_code_range(runtime, stack, local_reference)
                     .expect("relative continuation must resolve against a wasm frame");
                 debug_assert!(index < len);
                 unsafe { base.add(index) }
@@ -454,7 +460,7 @@ impl StablePc {
     }
 
     fn current_frame_code_range(
-        gc: &MemoryPool,
+        runtime: &StoreInner,
         stack: &Stack,
         local_reference: LocalReference,
     ) -> Option<(*const Instr, usize)> {
@@ -462,28 +468,23 @@ impl StablePc {
         if frame_size < std::mem::size_of::<crate::common::stack::CallStackInfo>() {
             return None;
         }
-        let code_addr = stack.code_addr(&local_reference);
-        let funcinst = unsafe { gc.get_func(code_addr) };
-        if funcinst.is_host_func() {
+        let code_base = stack.code_base(&local_reference);
+        if code_base.is_null() {
             return None;
         }
-        let (_locals, code_offset) = funcinst.locals_and_code_offset(gc);
-        let total_words = gc.read_header(funcinst.body).word_size() as usize;
-        let code_words = total_words.checked_sub(code_offset)?;
-        let instr_len = code_words / word_size::<Instr>();
-        Some((
-            unsafe { gc.get_value::<Instr>(funcinst.body, code_offset) },
-            instr_len,
-        ))
+        let code_addr = stack.code_addr(&local_reference);
+        let funcinst = runtime.get_func(code_addr);
+        let code = funcinst.code()?;
+        Some((code_base, code.len()))
     }
 
     fn relative_index_for_ptr(
-        gc: &MemoryPool,
+        runtime: &StoreInner,
         stack: &Stack,
         local_reference: LocalReference,
         ptr: *const Instr,
     ) -> Option<usize> {
-        let (base, instr_len) = Self::current_frame_code_range(gc, stack, local_reference)?;
+        let (base, instr_len) = Self::current_frame_code_range(runtime, stack, local_reference)?;
         let instr_size = std::mem::size_of::<Instr>();
         let base_addr = base as usize;
         let ptr_addr = ptr as usize;
@@ -535,61 +536,203 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     pub local_reference: LocalReference,
+    pub(crate) current_frame: CallFrameCache,
     pub store: &'a Store,
-    pub gc: &'a mut MemoryPool,
+    pub gc: &'a mut StoreInner,
     pub effect: EffectSupplier<'a>,
     pub cont: *const Instr,
     pub task_id: u32,
 }
 impl ExecuteContext<'_> {
+    pub fn set_local_reference(&mut self, local_reference: LocalReference) {
+        self.local_reference = local_reference;
+        if local_reference.local_size as usize
+            >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
+        {
+            self.current_frame = self.stack.frame_cache(&local_reference);
+        }
+    }
+
+    #[inline(always)]
+    fn memory_addr_from_gc_ref(&self, addr: GcRef) -> Option<MemoryHandle> {
+        (!addr.is_null()).then(|| self.gc.memory_handle(addr))
+    }
+
     pub fn func(&self) -> &FunctionInstanceData {
-        let code_addr = self.stack.code_addr(&self.local_reference());
-        unsafe { self.gc.get_func(code_addr) }
+        self.gc.get_func(self.current_frame.code_addr)
     }
     pub fn func_by_addr(&self, addr: GcRef) -> &FunctionInstanceData {
-        unsafe { self.gc.get_func(addr) }
+        self.gc.get_func(addr)
     }
     pub(crate) fn code(&self) -> *const Instr {
-        let func = self.func();
-        let (_local_data, offset) = func.locals_and_code_offset(self.gc);
-        unsafe { self.gc.get_value::<Instr>(func.body, offset) }
+        let code = self.current_frame.code_base;
+        debug_assert!(!code.is_null(), "wasm frame must have a code base");
+        code
     }
     pub fn module(&self) -> &ModuleInstance {
-        unsafe { self.gc.get_module(self.instance().module_addr) }
+        self.gc.get_module(self.instance().module_addr)
     }
     pub fn instance_addr(&self) -> GcRef {
-        self.func().instance_addr
+        self.gc.gc_ref_for_instance(self.current_frame.instance)
     }
     pub fn instance_id(&self) -> u32 {
         self.instance().instance_id
     }
     pub fn instance(&self) -> &InstanceData {
-        unsafe { &*self.gc.get_instance_unchecked(self.instance_addr()) }
+        self.gc.instance(self.current_frame.instance)
     }
     pub fn local_reference(&self) -> LocalReference {
         self.local_reference
     }
-    pub fn memory_addr(&self) -> Option<GcRef> {
-        self.instance().mems.as_slice(self.gc).first().copied()
+    pub fn memory_addr(&self) -> Option<MemoryHandle> {
+        self.memory_addr_from_gc_ref(self.current_frame.memory0_ref)
+    }
+    pub fn local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
+        match self.memory_addr()? {
+            MemoryHandle::Local(id) => Some(self.gc.local_memory_mut(id)),
+            MemoryHandle::Shared(_) => None,
+        }
     }
     pub fn memory(&mut self) -> Option<&mut Memory> {
-        self.memory_addr().map(|v| unsafe { self.gc.get_memory(v) })
+        self.local_memory().map(LocalMemoryObject::memory_mut)
+    }
+
+    #[inline(always)]
+    pub fn memory_handle_result(&self) -> VMResult<MemoryHandle> {
+        VMResult::from_option(self.memory_addr(), || VMResult::MemoryIndexOutOfRange)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_u8_array<const N: usize>(&mut self, offset: usize) -> VMResult<[u8; N]> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_u8_array::<N>(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn push_memory_to_stack<const N: usize>(&mut self, offset: usize) -> VMResult<()> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc
+            .push_memory_to_stack::<N>(handle, self.stack, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_u8(&mut self, offset: usize) -> VMResult<u8> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_u8_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_i8(&mut self, offset: usize) -> VMResult<i8> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_i8_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_u16(&mut self, offset: usize) -> VMResult<u16> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_u16_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_i16(&mut self, offset: usize) -> VMResult<i16> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_i16_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_u32(&mut self, offset: usize) -> VMResult<u32> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_u32_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_i32(&mut self, offset: usize) -> VMResult<i32> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_i32_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_u64(&mut self, offset: usize) -> VMResult<u64> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_u64_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_i64(&mut self, offset: usize) -> VMResult<i64> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_i64_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_f32(&mut self, offset: usize) -> VMResult<f32> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_f32_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn read_memory_f64(&mut self, offset: usize) -> VMResult<f64> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.read_f64_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub fn write_memory_bytes(&mut self, offset: usize, bytes: &[u8]) -> VMResult<()> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.write_bytes(handle, offset, bytes)
+    }
+
+    #[inline(always)]
+    pub fn grow_memory(&mut self, page_size_delta: u32) -> VMResult<i32> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.grow_memory(handle, page_size_delta)
+    }
+
+    #[inline(always)]
+    pub fn copy_memory(&mut self, dst: u32, src: u32, len: u32) -> VMResult<()> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.copy_memory(handle, dst, src, len)
+    }
+
+    #[inline(always)]
+    pub fn fill_memory(&mut self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
+        let handle = vm_try!(self.memory_handle_result());
+        self.gc.fill_memory(handle, ptr, len, data)
+    }
+
+    pub fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
+        let addr = self.current_frame.memory0_ref;
+        if addr.is_null() {
+            return None;
+        }
+        Some(self.gc.with_memory_by_addr(addr, f))
+    }
+    pub fn memory_page_size(&self) -> Option<u32> {
+        let handle = self.memory_addr()?;
+        Some(self.gc.memory_page_size(handle))
     }
     pub fn caller_local_reference(&self) -> Option<LocalReference> {
         (self.local_reference.local_size != 0)
             .then(|| self.stack.previous_local_reference(&self.local_reference))
             .filter(|reference| reference.local_size != 0)
     }
-    pub fn caller_memory_addr(&self) -> Option<GcRef> {
+    pub fn caller_memory_addr(&self) -> Option<MemoryHandle> {
         let caller = self.caller_local_reference()?;
-        let code_addr = self.stack.code_addr(&caller);
-        let func = self.func_by_addr(code_addr);
-        let instance = unsafe { &*self.gc.get_instance_unchecked(func.instance_addr) };
-        instance.mems.as_slice(self.gc).first().copied()
+        self.memory_addr_from_gc_ref(self.stack.memory0_ref(&caller))
+    }
+    pub fn caller_local_memory(&mut self) -> Option<&mut LocalMemoryObject> {
+        match self.caller_memory_addr()? {
+            MemoryHandle::Local(id) => Some(self.gc.local_memory_mut(id)),
+            MemoryHandle::Shared(_) => None,
+        }
     }
     pub fn caller_memory(&mut self) -> Option<&mut Memory> {
-        self.caller_memory_addr()
-            .map(|addr| unsafe { self.gc.get_memory(addr) })
+        self.caller_local_memory()
+            .map(LocalMemoryObject::memory_mut)
+    }
+    pub fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
+        let handle = self.caller_memory_addr()?;
+        let addr = self.gc.gc_ref_for_memory_handle(handle);
+        Some(self.gc.with_memory_by_addr(addr, f))
     }
     pub fn return_slot(&mut self) -> ReturnSlot {
         let local_ref = self.local_reference();
@@ -597,345 +740,8 @@ impl ExecuteContext<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct InstanceHandle(pub(crate) Arc<GcRootHandle>);
-impl InstanceHandle {
-    pub(crate) fn get_gc_ref_with_pool(
-        &self,
-        store: &Store,
-        pool_ref: &MemoryPool,
-    ) -> Option<GcRef> {
-        if !store.matches_identity(&self.0.store_identity) {
-            return None;
-        }
-        Some(pool_ref.read_root_slot(self.0.slot.get()))
-    }
-
-    pub(crate) fn from_root_slot(store: &Store, slot: u32) -> Self {
-        Self(Arc::new(GcRootHandle::new(
-            slot,
-            store.gc_weak(),
-            store.identity_weak(),
-        )))
-    }
-}
-
-#[cfg(test)]
-mod instance_handle_tests {
-    use super::{
-        gc::{Header, ObjectType},
-        GcRef, InstanceHandle, LocalReference, StablePc, Stack, Store, VMResult, WasmValue,
-    };
-    use crate::{
-        aliasing, get_global, instantiate, run_module_function, IoReadBinaryReader, Module,
-        Registry, ResultValue, WasmParser,
-    };
-    use futures::executor::block_on;
-
-    fn parse_module(wat: &str) -> Module {
-        let source = wat::parse_str(wat).expect("wat must parse");
-        let mut reader = IoReadBinaryReader::from(&source[..]);
-        let mut parser = WasmParser::new(&mut reader);
-        parser.parse_module().expect("module must parse")
-    }
-
-    async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
-        instantiate(parse_module(wat), store, registry)
-            .await
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn dropped_instance_handle_releases_root_slot() {
-        let store = Store::new();
-        let registry = Registry::new();
-        let handle = instantiate_wat(
-            r#"
-            (module
-              (global (export "g") i32 (i32.const 42)))
-            "#,
-            &store,
-            &registry,
-        )
-        .await;
-        let slot = handle.0.slot.get();
-        assert_ne!(store.lock_gc().read_root_slot(slot), GcRef(0));
-
-        drop(handle);
-
-        assert_eq!(store.lock_gc().read_root_slot(slot), GcRef(0));
-    }
-
-    #[tokio::test]
-    async fn dropped_instance_handle_releases_root_slot_while_store_gc_is_active() {
-        let store = Store::new();
-        let registry = Registry::new();
-        let handle = instantiate_wat(
-            r#"
-            (module
-              (global (export "g") i32 (i32.const 42)))
-            "#,
-            &store,
-            &registry,
-        )
-        .await;
-        let slot = handle.0.slot.get();
-        let gc = store.lock_gc();
-        assert_ne!(gc.read_root_slot(slot), GcRef(0));
-
-        drop(handle);
-
-        assert_eq!(gc.read_root_slot(slot), GcRef(0));
-    }
-
-    #[tokio::test]
-    async fn foreign_store_handle_resolution_fails_closed() {
-        let store_a = Store::new();
-        let store_b = Store::new();
-        let registry = Registry::new();
-        let handle = instantiate_wat(
-            r#"
-            (module
-              (global (export "g") i32 (i32.const 42)))
-            "#,
-            &store_a,
-            &registry,
-        )
-        .await;
-
-        assert!(matches!(
-            get_global(&handle, &store_b, "g"),
-            VMResult::Unlinkable
-        ));
-        assert!(matches!(
-            get_global(&handle, &store_a, "g"),
-            VMResult::Success(WasmValue::I32(42))
-        ));
-    }
-
-    #[tokio::test]
-    async fn same_thread_reentrant_get_global_fails_closed() {
-        let store = Store::new();
-        let registry = Registry::new();
-        let handle = instantiate_wat(
-            r#"
-            (module
-              (global (export "g") i32 (i32.const 42)))
-            "#,
-            &store,
-            &registry,
-        )
-        .await;
-        let _gc = store.lock_gc();
-
-        assert!(matches!(
-            get_global(&handle, &store, "g"),
-            VMResult::Unlinkable
-        ));
-    }
-
-    #[tokio::test]
-    async fn same_thread_reentrant_run_module_function_fails_closed() {
-        let store = Store::new();
-        let registry = Registry::new();
-        let handle = instantiate_wat(
-            r#"
-            (module
-              (func (export "f") (result i32) (i32.const 42)))
-            "#,
-            &store,
-            &registry,
-        )
-        .await;
-        let _gc = store.lock_gc();
-
-        assert!(matches!(
-            block_on(run_module_function(
-                &handle,
-                &store,
-                "f",
-                &ResultValue::new(vec![]),
-            )),
-            VMResult::Unlinkable
-        ));
-    }
-
-    #[tokio::test]
-    async fn failed_instantiate_does_not_leak_root_slots() {
-        let store = Store::new();
-        let registry = Registry::new();
-        let module = parse_module(
-            r#"
-            (module
-              (import "env" "missing" (func)))
-            "#,
-        );
-
-        for _ in 0..3 {
-            assert!(matches!(
-                instantiate(module.clone(), &store, &registry).await,
-                VMResult::Unlinkable
-            ));
-        }
-
-        assert_eq!(store.lock_gc().reserve_root_slot(), 1);
-    }
-
-    #[test]
-    fn failed_aliasing_does_not_leak_root_slots() {
-        let store = Store::new();
-        let registry = Registry::new();
-        let triplets = [("missing".to_owned(), "x".to_owned(), "y".to_owned())];
-
-        for _ in 0..3 {
-            assert!(matches!(
-                aliasing(&registry, &triplets, &store),
-                VMResult::Unlinkable
-            ));
-        }
-
-        assert_eq!(store.lock_gc().reserve_root_slot(), 1);
-    }
-
-    #[tokio::test]
-    async fn stable_pc_relative_continuation_survives_memory_pool_growth() {
-        let store = Store::new();
-        let registry = Registry::new();
-        let handle = instantiate_wat(
-            r#"
-            (module
-              (func (export "f") (result i32)
-                i32.const 42))
-            "#,
-            &store,
-            &registry,
-        )
-        .await;
-        let mut gc = store.lock_gc();
-        let instance_gc_ref = handle.get_gc_ref_with_pool(&store, &gc).unwrap();
-        let instance = unsafe { &*gc.get_instance_unchecked(instance_gc_ref) };
-        let func_addr = instance.funcs.as_slice(&gc)[0];
-        let func = unsafe { gc.get_func(func_addr) };
-        let (locals, code_offset) = func.locals_and_code_offset(&gc);
-        let mut stack = Stack::new(256);
-        let local_reference = stack
-            .function_call(
-                0,
-                locals.byte_size(),
-                func_addr,
-                LocalReference {
-                    local_size: 0,
-                    local_top: 0,
-                },
-                &crate::runtime::vm::VM_END as *const super::Instr,
-                &gc,
-            )
-            .unwrap();
-        let raw = unsafe { gc.get_value::<super::Instr>(func.body, code_offset) };
-        let first_instr = unsafe { *raw };
-        let stable = StablePc::from_raw_in_frame(&gc, &stack, local_reference, raw);
-
-        let mut reallocated = false;
-        while !reallocated {
-            let old_ptr = gc.memory.as_ptr();
-            gc.allocate(Header::new(ObjectType::Raw, 4096).initialized());
-            reallocated = gc.memory.as_ptr() != old_ptr;
-        }
-
-        let resolved = stable.resolve(&gc, &stack, local_reference);
-        assert_eq!(unsafe { first_instr.op as usize }, unsafe {
-            (*resolved).op as usize
-        });
-        assert_eq!(
-            stable,
-            StablePc::from_raw_in_frame(&gc, &stack, local_reference, resolved)
-        );
-    }
-
-    #[tokio::test]
-    async fn stack_return_continuation_survives_memory_pool_growth() {
-        let store = Store::new();
-        let registry = Registry::new();
-        let handle = instantiate_wat(
-            r#"
-            (module
-              (func (export "f") (result i32)
-                i32.const 1
-                drop
-                i32.const 42))
-            "#,
-            &store,
-            &registry,
-        )
-        .await;
-        let mut gc = store.lock_gc();
-        let instance_gc_ref = handle.get_gc_ref_with_pool(&store, &gc).unwrap();
-        let instance = unsafe { &*gc.get_instance_unchecked(instance_gc_ref) };
-        let func_addr = instance.funcs.as_slice(&gc)[0];
-        let func = unsafe { gc.get_func(func_addr) };
-        let (locals, code_offset) = func.locals_and_code_offset(&gc);
-        let mut stack = Stack::new(256);
-        let caller_reference = stack
-            .function_call(
-                0,
-                locals.byte_size(),
-                func_addr,
-                LocalReference {
-                    local_size: 0,
-                    local_top: 0,
-                },
-                &crate::runtime::vm::VM_END as *const super::Instr,
-                &gc,
-            )
-            .unwrap();
-        let caller_entry = unsafe { gc.get_value::<super::Instr>(func.body, code_offset) };
-        let return_addr = unsafe { caller_entry.add(2) };
-        let callee_reference = stack
-            .function_call(0, 0, func_addr, caller_reference, return_addr, &gc)
-            .unwrap();
-        let expected = unsafe { *return_addr };
-
-        let mut reallocated = false;
-        while !reallocated {
-            let old_ptr = gc.memory.as_ptr();
-            gc.allocate(Header::new(ObjectType::Raw, 4096).initialized());
-            reallocated = gc.memory.as_ptr() != old_ptr;
-        }
-
-        let (prev_local_reference, resolved_return_addr) =
-            stack.function_return(&callee_reference, 0, &gc);
-        let prev_local_top = prev_local_reference.local_top;
-        let prev_local_size = prev_local_reference.local_size;
-        let caller_local_top = caller_reference.local_top;
-        let caller_local_size = caller_reference.local_size;
-        assert_eq!(prev_local_top, caller_local_top);
-        assert_eq!(prev_local_size, caller_local_size);
-        assert_eq!(unsafe { expected.op as usize }, unsafe {
-            (*resolved_return_addr).op as usize
-        });
-    }
-
-    #[test]
-    fn stable_pc_static_continuation_round_trips() {
-        let stack = Stack::new(0);
-        let gc = crate::common::gc::MemoryPool::new();
-        let pc = StablePc::from_stable_ptr(&crate::runtime::vm::VM_END as *const super::Instr);
-        assert_eq!(
-            pc.resolve(
-                &gc,
-                &stack,
-                LocalReference {
-                    local_size: 0,
-                    local_top: 0,
-                }
-            ),
-            &crate::runtime::vm::VM_END as *const super::Instr
-        );
-    }
-}
-
 pub fn execute_elem_init_const_expr(
-    gc: &mut MemoryPool,
+    runtime: &mut StoreInner,
     globals: &[GcRef],
     funcs: &[GcRef],
     exprs: &[ConstExpr],
@@ -976,7 +782,7 @@ pub fn execute_elem_init_const_expr(
                 VMResult::Unlinkable
             }));
             let mut buf = [0u8; 4];
-            buf.copy_from_slice(unsafe { gc.get_global(addr) });
+            buf.copy_from_slice(runtime.get_global(addr));
             VMResult::Success(GcRef(u32::from_le_bytes(buf)))
         }
         unknown => todo!("{unknown:?}"),

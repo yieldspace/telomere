@@ -21,7 +21,7 @@ fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
 }
 
@@ -74,10 +74,18 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let arg1 = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push_i32(arg1 + 40));
     let func_addr = GcRef(arg0);
-    let func = ctx.func_by_addr(func_addr);
-    if func.is_host_func() {
-        let f = func.host_code_pointer(ctx.gc);
-        ctx.local_reference = vm_try!(ctx.stack.function_call(
+    let (is_host, host_fp, locals_size, ptr) = {
+        let func = ctx.func_by_addr(func_addr);
+        (
+            func.is_host_func(),
+            func.is_host_func().then(|| func.host_code_pointer()),
+            func.locals().byte_size(),
+            func.code_pointer(),
+        )
+    };
+    if is_host {
+        let f = host_fp.expect("host function must expose a host code pointer");
+        let local_reference = vm_try!(ctx.stack.function_call(
             4,
             0,
             func_addr,
@@ -85,19 +93,19 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             TAIL_CALL_FUNCTION_RETURN.as_ptr(),
             ctx.gc,
         ));
+        ctx.set_local_reference(local_reference);
         f(ctx)
     } else {
-        let (locals_data, code_offset) = func.locals_and_code_offset(ctx.gc);
-        let code_addr = func.body;
-        ctx.local_reference = vm_try!(ctx.stack.function_call(
+        let local_reference = vm_try!(ctx.stack.function_call(
             4,
-            locals_data.byte_size(),
+            locals_size,
             func_addr,
             ctx.local_reference,
             TAIL_CALL_FUNCTION_RETURN.as_ptr(),
             ctx.gc,
         ));
-        let ptr = unsafe { ctx.gc.get_value::<Instr>(code_addr, code_offset) };
+        ctx.set_local_reference(local_reference);
+        let ptr = ptr.expect("wasm function must expose a code pointer");
         VMResult::Success(ptr)
     }
 }
@@ -146,7 +154,7 @@ fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
 }
 #[tokio::test]

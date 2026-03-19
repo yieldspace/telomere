@@ -22,11 +22,15 @@ fn resolve_test_file(name: &str) -> PathBuf {
     path
 }
 
-async fn run_test_file(name: &str) {
+async fn run_test_file_inner(name: &str) {
     let path = resolve_test_file(name);
     let wast = std::fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
     run_wast(&wast).await;
+}
+
+async fn run_test_file(name: &'static str) {
+    run_test_file_inner(name).await;
 }
 
 #[test]
@@ -84,6 +88,11 @@ async fn br_table() {
 #[test]
 async fn memory() {
     run_test_file("memory").await;
+}
+
+#[test]
+async fn threads_memory() {
+    run_test_file("proposals/threads/memory").await;
 }
 
 #[test]

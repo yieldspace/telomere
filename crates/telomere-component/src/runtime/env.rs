@@ -260,7 +260,7 @@ impl RuntimeEnv {
                 Rc::new(ResolvedCallable::Lifted {
                     core,
                     func_type,
-                    options,
+                    options: Box::new(options),
                     program: self.program.clone(),
                 })
             }

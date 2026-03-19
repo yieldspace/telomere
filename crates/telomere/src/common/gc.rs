@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 mod view;
 pub use view::*;
 mod root_handle;

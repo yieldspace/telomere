@@ -250,7 +250,12 @@ fn assert_table_matches(expected: &CoreTableType, actual: &CoreTableType) -> Par
 }
 
 fn assert_memory_matches(expected: &CoreMemoryType, actual: &CoreMemoryType) -> ParseResult<()> {
-    assert_limits_match(expected.0, actual.0)
+    if expected.shared != actual.shared {
+        return Err(ComponentParseError::TypeMismatch(
+            "core module import mismatch".to_owned(),
+        ));
+    }
+    assert_limits_match(expected.limits, actual.limits)
 }
 
 fn assert_global_matches(expected: &CoreGlobalType, actual: &CoreGlobalType) -> ParseResult<()> {

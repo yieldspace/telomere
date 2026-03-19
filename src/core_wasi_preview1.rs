@@ -259,17 +259,13 @@ pub(crate) async fn run(
         format!("failed to instantiate `{}`", path.display()),
     )?;
 
-    let start_result = {
-        let mut gc = store.lock_gc();
-        telomere::component_support::runtime::run_module_function_sync_with_gc(
-            &instance,
-            &store,
-            &mut gc,
-            START_EXPORT,
-            &ResultValue::new(vec![]),
-        )
-        .map_err(|error| anyhow!("failed to invoke `{START_EXPORT}` synchronously: {error}"))?
-    };
+    let start_result = telomere::component_support::runtime::run_core_export_sync_reentrant(
+        &instance,
+        &store,
+        START_EXPORT,
+        &ResultValue::new(vec![]),
+    )
+    .map_err(|error| anyhow!("failed to invoke `{START_EXPORT}` synchronously: {error}"))?;
     match start_result {
         VMResult::Success(_) => Ok(ExitCode::from(state.exit_code().unwrap_or(0))),
         _ if state.exit_code().is_some() => Ok(ExitCode::from(state.exit_code().unwrap())),
@@ -442,7 +438,7 @@ fn return_errno(ctx: &mut ExecuteContext, errno: u32) -> VMResult<*const Instr> 
         std::mem::size_of::<u32>(),
         ctx.gc,
     );
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
 }
 
@@ -692,7 +688,7 @@ fn host_proc_exit(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
                 .function_return_in_place(&local_reference, 0, ctx.gc);
         local_reference = prev_local_ref;
     }
-    ctx.local_reference = local_reference;
+    ctx.set_local_reference(local_reference);
 
     VMResult::Success(PROC_EXIT_PROGRAM.as_ptr())
 }
@@ -842,6 +838,53 @@ mod tests {
                 if
                   i32.const 4
                   return
+                end
+                i32.const 0))
+            "#,
+        );
+        let result = invoke_export(module, "check", &["one".to_owned(), "two".to_owned()]).await;
+
+        assert_eq!(expect_single_i32(&result), 0);
+    }
+
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "caller-memory regression is validated in release"
+    )]
+    #[tokio::test]
+    async fn preview1_runner_repeated_args_sizes_get_keeps_caller_memory() {
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "args_sizes_get" (func $args_sizes_get (param i32 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                (local $remaining i32)
+                i32.const 256
+                local.set $remaining
+                block $done
+                  loop $loop
+                    local.get $remaining
+                    i32.eqz
+                    br_if $done
+                    i32.const 0
+                    i32.const 4
+                    call $args_sizes_get
+                    drop
+                    i32.const 0
+                    i32.load
+                    i32.const 3
+                    i32.ne
+                    if
+                      i32.const 1
+                      return
+                    end
+                    local.get $remaining
+                    i32.const 1
+                    i32.sub
+                    local.set $remaining
+                    br $loop
+                  end
                 end
                 i32.const 0))
             "#,

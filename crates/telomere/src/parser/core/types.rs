@@ -103,7 +103,48 @@ pub fn parse_global_type<R: BinaryReader>(reader: &mut R) -> Result<(usize, Glob
 }
 
 pub fn parse_memtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, MemType)> {
-    let (len, limits) = parse_limits(reader)?;
+    let flag = reader.read_exact_one()?;
+    let (len, limits, shared) = match flag {
+        0x00 => {
+            let (len, min) = parse_u32(reader)?;
+            (1 + len, Limits { min, max: None }, false)
+        }
+        0x01 => {
+            let (len, min) = parse_u32(reader)?;
+            let (len2, max) = parse_u32(reader)?;
+            if min > max {
+                Err(WasmParserError::InvalidLimit)?
+            }
+            (
+                1 + len + len2,
+                Limits {
+                    min,
+                    max: Some(max),
+                },
+                false,
+            )
+        }
+        0x02 => {
+            let (len, min) = parse_u32(reader)?;
+            (1 + len, Limits { min, max: None }, true)
+        }
+        0x03 => {
+            let (len, min) = parse_u32(reader)?;
+            let (len2, max) = parse_u32(reader)?;
+            if min > max {
+                Err(WasmParserError::InvalidLimit)?
+            }
+            (
+                1 + len + len2,
+                Limits {
+                    min,
+                    max: Some(max),
+                },
+                true,
+            )
+        }
+        _ => Err(WasmParserError::InvalidLimit)?,
+    };
 
     if limits.min > 65536 {
         Err(WasmParserError::InvalidMemorySize(limits))?
@@ -111,7 +152,10 @@ pub fn parse_memtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, MemType)
     if limits.max.map(|max| max > 65536).unwrap_or_else(|| false) {
         Err(WasmParserError::InvalidMemorySize(limits))?
     }
-    Ok((len, MemType(limits)))
+    if shared && limits.max.is_none() {
+        Err(WasmParserError::InvalidLimit)?
+    }
+    Ok((len, MemType::new(limits, shared)))
 }
 pub fn parse_block_type(reader: &mut impl BinaryReader) -> Result<(usize, BlockType)> {
     let (len, v) = Leb128Parser::new(reader).parse_i64(33)?;
