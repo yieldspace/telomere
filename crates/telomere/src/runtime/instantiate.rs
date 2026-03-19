@@ -497,6 +497,7 @@ pub async fn instantiate(
                     ready_flag: ReadyFlag::Ready,
                     fp: StablePc::from_stable_ptr(vm::START_HOST_FUNCTION_PROGRAM.as_ptr()),
                     pending_effects: 0,
+                    terminal_result: None,
                 });
             } else {
                 let (locals, _offset) = funcinst.locals_and_code_offset(&gc);
@@ -519,6 +520,7 @@ pub async fn instantiate(
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
                     pending_effects: 0,
+                    terminal_result: None,
                 });
             }
             true

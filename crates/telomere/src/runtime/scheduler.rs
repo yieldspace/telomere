@@ -1,12 +1,6 @@
-use super::{
-    memory_effect::{
-        AsyncCompletion, AsyncEffect, AsyncEffectFuture, AsyncResult, AtomicFlag, Effect,
-        MemoryEffect, Operation, ReadOperationHandler, Target, WriteOperation,
-    },
-    vm::traps::TRAPS_MEMORY_INDEX_OUT_OF_RANGE,
-};
+use super::memory_effect::{AsyncCompletion, AsyncEffect, AsyncEffectFuture, AsyncResult, Effect};
 use crate::{
-    common::{gc::MemoryPool, ExecuteContext, GcRef, LocalReference, MemArg, StablePc},
+    common::{gc::MemoryPool, ExecuteContext, LocalReference, StablePc},
     Stack, Store, VMResult,
 };
 use futures::{future::FusedFuture, stream::FuturesUnordered};
@@ -17,13 +11,6 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     task::{Poll, Waker},
 };
-
-fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
-    VMResult::from_option(
-        memarg.offset.checked_add(offset).map(|v| v as usize),
-        || VMResult::MemoryIndexOutOfRange,
-    )
-}
 
 fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
     match result {
@@ -52,6 +39,7 @@ pub(crate) struct Task {
     pub pending_effects: u32,
     pub ready_flag: ReadyFlag,
     pub fp: StablePc,
+    pub terminal_result: Option<VMResult<()>>,
 }
 
 #[derive(Debug)]
@@ -136,7 +124,7 @@ pub struct EffectSupplier<'a> {
     effects: &'a mut VecDeque<Effect>,
 }
 impl EffectSupplier<'_> {
-    pub(crate) fn get_pending_count(&self) -> u32 {
+    pub fn get_pending_count(&self) -> u32 {
         *self.pending_effects
     }
 
@@ -145,69 +133,6 @@ impl EffectSupplier<'_> {
         self.effects
             .push_back(Effect::AsyncEffect(AsyncEffect { future }));
         *self.pending_effects += 1;
-    }
-}
-fn write_operation_size(op: &WriteOperation) -> usize {
-    match op {
-        WriteOperation::Write1(_) => 1,
-        WriteOperation::Write2(_) => 2,
-        WriteOperation::Write4(_) => 4,
-        WriteOperation::Write8(_) => 8,
-        WriteOperation::Write16(_) => 16,
-    }
-}
-impl EffectSupplier<'_> {
-    pub(crate) fn push_non_atomic_memory_read_effect(
-        &mut self,
-        task_id: u32,
-        addr: GcRef,
-        memarg: MemArg,
-        offset: u32,
-        size: u32,
-        handler: ReadOperationHandler,
-    ) -> VMResult<()> {
-        trace!("push_non_atomic_memory_read_effect");
-        let start = vm_try!(compute_offset(memarg, offset));
-        let end = vm_try!(VMResult::from_option(
-            start.checked_add(size as usize),
-            || VMResult::MemoryIndexOutOfRange
-        ));
-        self.effects.push_back(Effect::MemoryEffect(MemoryEffect {
-            task_id,
-            target: Target::Memory(addr, start..end),
-            atomic: AtomicFlag::NonAtomic,
-            operation: Operation::Read(handler),
-        }));
-        *self.pending_effects += 1;
-        VMResult::Success(())
-    }
-    pub(crate) fn push_non_atomic_memory_write_effect(
-        &mut self,
-        task_id: u32,
-        addr: GcRef,
-        memarg: MemArg,
-        offset: u32,
-        gc: &mut MemoryPool,
-        operation: WriteOperation,
-    ) -> VMResult<()> {
-        trace!("push_non_atomic_memory_write_effect");
-        let size = write_operation_size(&operation);
-        let start = vm_try!(compute_offset(memarg, offset));
-        let end = vm_try!(VMResult::from_option(start.checked_add(size), || {
-            VMResult::MemoryIndexOutOfRange
-        }));
-        vm_try!(VMResult::from_option(
-            unsafe { gc.get_memory(addr).get_mut(start as usize..end as usize) },
-            || VMResult::MemoryIndexOutOfRange
-        ));
-        self.effects.push_back(Effect::MemoryEffect(MemoryEffect {
-            task_id,
-            target: Target::Memory(addr, start..end),
-            atomic: AtomicFlag::NonAtomic,
-            operation: Operation::Write(operation),
-        }));
-        *self.pending_effects += 1;
-        VMResult::Success(())
     }
 }
 
@@ -231,59 +156,6 @@ impl<'a> Scheduler<'a> {
             self.notify.wake();
         }
     }
-    unsafe fn handle_memory_effect(&mut self, gc: &mut MemoryPool, effect: MemoryEffect) {
-        trace!("{:?}", self.tasks);
-        let task = self
-            .tasks
-            .iter_mut()
-            .find(|v| v.task_id == effect.task_id)
-            .unwrap();
-
-        match effect {
-            MemoryEffect {
-                task_id: _,
-                target: Target::Memory(addr, range),
-                atomic: AtomicFlag::NonAtomic,
-                operation: Operation::Read(handler),
-            } => {
-                let cont = task.fp.resolve(gc, &task.stack, task.local_reference);
-                let next = if let Some(data) =
-                    unsafe { gc.get_memory(addr).get(range.start..range.end) }
-                {
-                    handler(&mut task.stack, data, cont)
-                } else {
-                    TRAPS_MEMORY_INDEX_OUT_OF_RANGE.as_ptr()
-                };
-                task.fp = StablePc::from_raw_in_frame(gc, &task.stack, task.local_reference, next);
-
-                task.pending_effects -= 1;
-                if task.pending_effects == 0 {
-                    task.ready_flag = ReadyFlag::Ready;
-                    self.ready_count += 1;
-                    self.notify.wake();
-                }
-            }
-            MemoryEffect {
-                task_id: _,
-                target: Target::Memory(addr, range),
-                atomic: AtomicFlag::NonAtomic,
-                operation: Operation::Write(operation),
-            } => {
-                let dst = unsafe { gc.get_memory(addr).get_mut(range.start..range.end) };
-                if let Some(dst) = dst {
-                    dst.copy_from_slice(operation.get());
-                } else {
-                    unreachable!()
-                }
-                task.pending_effects -= 1;
-                if task.pending_effects == 0 {
-                    task.ready_flag = ReadyFlag::Ready;
-                    self.ready_count += 1;
-                    self.notify.wake();
-                }
-            }
-        }
-    }
     #[cfg(feature = "async-runtime")]
     unsafe fn handle_async_effect_call(&mut self, effect: AsyncEffect) {
         self.async_tasks.push(effect.future);
@@ -298,12 +170,28 @@ impl<'a> Scheduler<'a> {
         };
         match ret.completion {
             AsyncCompletion::Continue { fp } => {
-                let task = self.tasks.get_mut(task_index).unwrap();
-                task.pending_effects -= 1;
-                task.ready_flag = ReadyFlag::Ready;
-                task.fp = fp;
-                self.ready_count += 1;
-                self.notify.wake();
+                let mut complete_result = None;
+                {
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    task.pending_effects -= 1;
+                    task.fp = fp;
+                    if task.pending_effects == 0 {
+                        if let Some(result) = task.terminal_result.take() {
+                            complete_result = Some(result);
+                        } else {
+                            task.ready_flag = ReadyFlag::Ready;
+                            self.ready_count += 1;
+                            self.notify.wake();
+                        }
+                    }
+                }
+                if let Some(result) = complete_result {
+                    let task = self.tasks.remove(task_index).unwrap();
+                    self.completed_tasks.push(CompletedTask {
+                        stack: task.stack,
+                        result,
+                    });
+                }
             }
             AsyncCompletion::HostCall { result } => match result {
                 VMResult::Success(fp) => {
@@ -312,19 +200,41 @@ impl<'a> Scheduler<'a> {
                         let task = self.tasks.get_mut(task_index).unwrap();
                         StablePc::from_raw_in_frame(&gc, &task.stack, task.local_reference, fp)
                     };
-                    let task = self.tasks.get_mut(task_index).unwrap();
-                    task.pending_effects -= 1;
-                    task.ready_flag = ReadyFlag::Ready;
-                    task.fp = fp;
-                    self.ready_count += 1;
-                    self.notify.wake();
+                    let mut complete_result = None;
+                    {
+                        let task = self.tasks.get_mut(task_index).unwrap();
+                        task.pending_effects -= 1;
+                        task.fp = fp;
+                        if task.pending_effects == 0 {
+                            if let Some(result) = task.terminal_result.take() {
+                                complete_result = Some(result);
+                            } else {
+                                task.ready_flag = ReadyFlag::Ready;
+                                self.ready_count += 1;
+                                self.notify.wake();
+                            }
+                        }
+                    }
+                    if let Some(result) = complete_result {
+                        let task = self.tasks.remove(task_index).unwrap();
+                        self.completed_tasks.push(CompletedTask {
+                            stack: task.stack,
+                            result,
+                        });
+                    }
                 }
                 other => {
-                    let task = self.tasks.remove(task_index).unwrap();
-                    self.completed_tasks.push(CompletedTask {
-                        stack: task.stack,
-                        result: vm_result_to_unit(other),
-                    });
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    task.pending_effects -= 1;
+                    if task.pending_effects == 0 {
+                        let task = self.tasks.remove(task_index).unwrap();
+                        self.completed_tasks.push(CompletedTask {
+                            stack: task.stack,
+                            result: vm_result_to_unit(other),
+                        });
+                    } else {
+                        task.terminal_result = Some(vm_result_to_unit(other));
+                    }
                 }
             },
         }
@@ -371,25 +281,26 @@ impl<'a> Scheduler<'a> {
                 } = task;
                 let fp = pc.resolve(&gc, &stack, local_reference);
 
-                let mut ec = ExecuteContext {
-                    gc: &mut gc,
-                    local_reference,
-                    stack: &mut stack,
-                    store: self.store,
-                    effect: EffectSupplier {
-                        pending_effects: &mut pending_effects,
-                        effects: &mut self.effects,
-                    },
-                    cont: fp,
-                    task_id,
+                let (res, cont, local_reference) = {
+                    let mut ec = ExecuteContext {
+                        gc: &mut gc,
+                        local_reference,
+                        stack: &mut stack,
+                        store: self.store,
+                        effect: EffectSupplier {
+                            pending_effects: &mut pending_effects,
+                            effects: &mut self.effects,
+                        },
+                        cont: fp,
+                        task_id,
+                    };
+                    let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
+                    (res, ec.cont, ec.local_reference)
                 };
-                let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
-                let cont = ec.cont;
-                let local_reference = ec.local_reference;
                 match res {
                     VMResult::Success(()) => {
                         if !cont.is_null() {
-                            trace!("continue task: {}", ec.task_id);
+                            trace!("continue task: {}", task_id);
                             let new_task = Task {
                                 local_reference,
                                 fp: StablePc::from_raw_in_frame(&gc, &stack, local_reference, cont),
@@ -397,22 +308,47 @@ impl<'a> Scheduler<'a> {
                                 task_id,
                                 stack,
                                 pending_effects,
+                                terminal_result: None,
                             };
                             self.tasks.push_back(new_task);
                         } else {
-                            trace!("complte task: {}", ec.task_id);
-                            self.completed_tasks.push(CompletedTask {
-                                stack,
-                                result: VMResult::Success(()),
-                            })
+                            if pending_effects == 0 {
+                                trace!("complte task: {}", task_id);
+                                self.completed_tasks.push(CompletedTask {
+                                    stack,
+                                    result: VMResult::Success(()),
+                                })
+                            } else {
+                                self.tasks.push_back(Task {
+                                    local_reference,
+                                    fp: pc,
+                                    ready_flag: ReadyFlag::NonReady,
+                                    task_id,
+                                    stack,
+                                    pending_effects,
+                                    terminal_result: Some(VMResult::Success(())),
+                                });
+                            }
                         }
                     }
                     other => {
-                        trace!("trap task: {}", ec.task_id);
-                        self.completed_tasks.push(CompletedTask {
-                            stack,
-                            result: other,
-                        })
+                        if pending_effects == 0 {
+                            trace!("trap task: {}", task_id);
+                            self.completed_tasks.push(CompletedTask {
+                                stack,
+                                result: other,
+                            })
+                        } else {
+                            self.tasks.push_back(Task {
+                                local_reference,
+                                fp: pc,
+                                ready_flag: ReadyFlag::NonReady,
+                                task_id,
+                                stack,
+                                pending_effects,
+                                terminal_result: Some(other),
+                            });
+                        }
                     }
                 }
             }
@@ -441,25 +377,26 @@ impl<'a> Scheduler<'a> {
                 } = task;
                 let fp = pc.resolve(gc, &stack, local_reference);
 
-                let mut ec = ExecuteContext {
-                    gc,
-                    local_reference,
-                    stack: &mut stack,
-                    store: self.store,
-                    effect: EffectSupplier {
-                        pending_effects: &mut pending_effects,
-                        effects: &mut self.effects,
-                    },
-                    cont: fp,
-                    task_id,
+                let (res, cont, local_reference) = {
+                    let mut ec = ExecuteContext {
+                        gc,
+                        local_reference,
+                        stack: &mut stack,
+                        store: self.store,
+                        effect: EffectSupplier {
+                            pending_effects: &mut pending_effects,
+                            effects: &mut self.effects,
+                        },
+                        cont: fp,
+                        task_id,
+                    };
+                    let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
+                    (res, ec.cont, ec.local_reference)
                 };
-                let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
-                let cont = ec.cont;
-                let local_reference = ec.local_reference;
                 match res {
                     VMResult::Success(()) => {
                         if !cont.is_null() {
-                            trace!("continue task: {}", ec.task_id);
+                            trace!("continue task: {}", task_id);
                             let new_task = Task {
                                 local_reference,
                                 fp: StablePc::from_raw_in_frame(gc, &stack, local_reference, cont),
@@ -467,22 +404,47 @@ impl<'a> Scheduler<'a> {
                                 task_id,
                                 stack,
                                 pending_effects,
+                                terminal_result: None,
                             };
                             self.tasks.push_back(new_task);
                         } else {
-                            trace!("complte task: {}", ec.task_id);
-                            self.completed_tasks.push(CompletedTask {
-                                stack,
-                                result: VMResult::Success(()),
-                            })
+                            if pending_effects == 0 {
+                                trace!("complte task: {}", task_id);
+                                self.completed_tasks.push(CompletedTask {
+                                    stack,
+                                    result: VMResult::Success(()),
+                                })
+                            } else {
+                                self.tasks.push_back(Task {
+                                    local_reference,
+                                    fp: pc,
+                                    ready_flag: ReadyFlag::NonReady,
+                                    task_id,
+                                    stack,
+                                    pending_effects,
+                                    terminal_result: Some(VMResult::Success(())),
+                                });
+                            }
                         }
                     }
                     other => {
-                        trace!("trap task: {}", ec.task_id);
-                        self.completed_tasks.push(CompletedTask {
-                            stack,
-                            result: other,
-                        })
+                        if pending_effects == 0 {
+                            trace!("trap task: {}", task_id);
+                            self.completed_tasks.push(CompletedTask {
+                                stack,
+                                result: other,
+                            })
+                        } else {
+                            self.tasks.push_back(Task {
+                                local_reference,
+                                fp: pc,
+                                ready_flag: ReadyFlag::NonReady,
+                                task_id,
+                                stack,
+                                pending_effects,
+                                terminal_result: Some(other),
+                            });
+                        }
                     }
                 }
             }
@@ -504,12 +466,9 @@ impl<'a> Scheduler<'a> {
         Ok(())
     }
 
-    fn processing_effect(&mut self, gc: &mut MemoryPool) {
+    fn processing_effect(&mut self, _gc: &mut MemoryPool) {
         while let Some(effect) = self.effects.pop_front() {
             match effect {
-                Effect::MemoryEffect(effect) => {
-                    unsafe { self.handle_memory_effect(gc, effect) };
-                }
                 #[cfg(feature = "async-runtime")]
                 Effect::AsyncEffect(effect) => {
                     unsafe { self.handle_async_effect_call(effect) };
@@ -555,6 +514,7 @@ mod tests {
                 pending_effects: 1,
                 ready_flag: ReadyFlag::NonReady,
                 fp: StablePc::from_stable_ptr(async_end_program.as_ptr()),
+                terminal_result: None,
             });
             scheduler
                 .effects
