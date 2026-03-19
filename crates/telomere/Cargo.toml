@@ -6,6 +6,8 @@ rust-version.workspace = true
 authors.workspace = true
 keywords.workspace = true
 
+[package.metadata.verus]
+verify = true
 
 [dependencies]
 wide = { version = "0.7.32", optional = true }
@@ -21,6 +23,7 @@ futures = { version = "0.3.31", optional = true }
 tokio = { workspace = true, optional = true }
 parking_lot = "0.12.5"
 libc.workspace = true
+vstd = "0.0.0-2026-03-17-2326"
 
 [dev-dependencies]
 wast = { version = "243.0.0", features = ["component-model"] }

@@ -423,6 +423,12 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+
+[[package]]
+name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
@@ -444,12 +450,22 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
 name = "indexmap"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
+dependencies = [
+ "autocfg",
+ "hashbrown 0.12.3",
+]
+
+[[package]]
+name = "indexmap"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
 dependencies = [
  "equivalent",
- "hashbrown",
+ "hashbrown 0.16.1",
  "serde",
  "serde_core",
 ]
@@ -684,9 +700,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.95"
+version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
+checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
 ]
@@ -915,6 +931,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "synstructure"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "telomere"
 version = "0.1.0"
 dependencies = [
@@ -931,6 +958,7 @@ dependencies = [
  "tokio",
  "tracing",
  "union-find",
+ "vstd",
  "wast",
  "wat",
  "wide",
@@ -1092,7 +1120,7 @@ version = "0.25.4+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7193cbd0ce53dc966037f54351dbbcf0d5a642c7f0038c382ef9e677ce8c13f2"
 dependencies = [
- "indexmap",
+ "indexmap 2.13.0",
  "toml_datetime",
  "toml_parser",
  "winnow",
@@ -1205,6 +1233,70 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
+name = "verus_builtin"
+version = "0.0.0-2026-03-17-2326"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7ab914ab490975465ecb3286edceecb0743c3628ddeefcdf25158683e83e2fe"
+
+[[package]]
+name = "verus_builtin_macros"
+version = "0.0.0-2026-03-17-2326"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46f1f1ee124e0bcb5cec79836ff015d138ea53bff51839a85b8364cdc8b79232"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "synstructure",
+ "verus_prettyplease",
+ "verus_syn",
+]
+
+[[package]]
+name = "verus_prettyplease"
+version = "0.0.0-2026-03-15-0111"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eadebc1e3b522b32c178fd2fb882e691880ff983415497232c74aa9b72bc0b65"
+dependencies = [
+ "proc-macro2",
+ "verus_syn",
+]
+
+[[package]]
+name = "verus_state_machines_macros"
+version = "0.0.0-2026-03-15-0111"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b824c6405f8e8a063ca4a26fca1f454cb02de0c1c4da685e3e7f1974899129d5"
+dependencies = [
+ "indexmap 1.9.3",
+ "proc-macro2",
+ "quote",
+ "verus_syn",
+]
+
+[[package]]
+name = "verus_syn"
+version = "0.0.0-2026-03-15-0111"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1694faf01f89e1abc996da7b8d24a4e0d1ebd70147dc659e7a5dd680af696772"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "vstd"
+version = "0.0.0-2026-03-17-2326"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13bbf59dfaa6a7bcb327412c778a5d2b2c226dc65473a981ae6ec53a04c75aba"
+dependencies = [
+ "verus_builtin",
+ "verus_builtin_macros",
+ "verus_state_machines_macros",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1304,7 +1396,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6d8db401b0528ec316dfbe579e6ab4152d61739cfe076706d2009127970159d"
 dependencies = [
  "bitflags",
- "indexmap",
+ "indexmap 2.13.0",
  "semver",
 ]
 
@@ -1315,7 +1407,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f08c9adee0428b7bddf3890fc27e015ac4b761cc608c822667102b8bfd6995e"
 dependencies = [
  "bitflags",
- "indexmap",
+ "indexmap 2.13.0",
  "semver",
 ]
 
@@ -1502,9 +1594,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330698718e82983499419494dd1e3d7811a457a9bf9f69734e8c5f07a2547929"
 dependencies = [
  "anyhow",
- "hashbrown",
+ "hashbrown 0.16.1",
  "id-arena",
- "indexmap",
+ "indexmap 2.13.0",
  "log",
  "semver",
  "serde",

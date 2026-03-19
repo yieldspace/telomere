@@ -1,0 +1,270 @@
+mod common;
+
+use common::instantiate_wat;
+use telomere::{run_module_function, Registry, ResultValue, Store, VMResult, WasmValue};
+
+async fn call_i32(
+    instance: &telomere::common::InstanceHandle,
+    store: &Store,
+    name: &str,
+    args: Vec<WasmValue>,
+) -> VMResult<i32> {
+    match run_module_function(instance, store, name, &ResultValue::new(args)).await {
+        VMResult::Success(values) => match values.iter().next() {
+            Some(WasmValue::I32(value)) => VMResult::Success(*value),
+            other => panic!("expected i32 result from {name}, got {other:?}"),
+        },
+        other => vm_result_map_unit(other),
+    }
+}
+
+fn vm_result_map_unit(result: VMResult<ResultValue>) -> VMResult<i32> {
+    match result {
+        VMResult::Success(_) => unreachable!(),
+        VMResult::Unreachable => VMResult::Unreachable,
+        VMResult::StackOverflow => VMResult::StackOverflow,
+        VMResult::MemoryIndexOutOfRange => VMResult::MemoryIndexOutOfRange,
+        VMResult::TableIndexOutOfRange => VMResult::TableIndexOutOfRange,
+        VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
+        VMResult::TableUninitialized => VMResult::TableUninitialized,
+        VMResult::Unlinkable => VMResult::Unlinkable,
+        VMResult::InvalidOperand => VMResult::InvalidOperand,
+    }
+}
+
+fn assert_success_i32(result: VMResult<i32>, expected: i32) {
+    match result {
+        VMResult::Success(actual) => assert_eq!(actual, expected),
+        other => panic!("expected Success({expected}), got {other:?}"),
+    }
+}
+
+fn assert_memory_oob(result: VMResult<ResultValue>) {
+    assert!(
+        matches!(result, VMResult::MemoryIndexOutOfRange),
+        "expected MemoryIndexOutOfRange, got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn load_store_follow_wasm_little_endian() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "store") (param i32)
+            i32.const 0
+            local.get 0
+            i32.store)
+          (func (export "load") (result i32)
+            i32.const 0
+            i32.load)
+          (func (export "byte_at") (param i32) (result i32)
+            local.get 0
+            i32.load8_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "store",
+            &ResultValue::new(vec![WasmValue::I32(0x1234_5678)])
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+
+    assert_success_i32(
+        call_i32(&instance, &store, "load", vec![]).await,
+        0x1234_5678,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(0)]).await,
+        0x78,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(1)]).await,
+        0x56,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(2)]).await,
+        0x34,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(3)]).await,
+        0x12,
+    );
+}
+
+#[tokio::test]
+async fn mem_fill_trap_leaves_memory_unchanged() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed")
+            i32.const 0xff00
+            i32.const 0x11
+            i32.store8
+            i32.const 0xffff
+            i32.const 0x22
+            i32.store8)
+          (func (export "fill") (param i32 i32 i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            memory.fill)
+          (func (export "byte_at") (param i32) (result i32)
+            local.get 0
+            i32.load8_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_memory_oob(
+        run_module_function(
+            &instance,
+            &store,
+            "fill",
+            &ResultValue::new(vec![
+                WasmValue::I32(0xff00),
+                WasmValue::I32(0xaa),
+                WasmValue::I32(0x101),
+            ]),
+        )
+        .await,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(0xff00)]).await,
+        0x11,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(0xffff)]).await,
+        0x22,
+    );
+}
+
+#[tokio::test]
+async fn mem_copy_and_init_traps_leave_memory_unchanged() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data $payload "AB")
+          (func (export "seed")
+            i32.const 0
+            i32.const 0x33
+            i32.store8
+            i32.const 1
+            i32.const 0x44
+            i32.store8
+            i32.const 0xffff
+            i32.const 0x55
+            i32.store8)
+          (func (export "copy") (param i32 i32 i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            memory.copy)
+          (func (export "init") (param i32 i32 i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            memory.init $payload)
+          (func (export "byte_at") (param i32) (result i32)
+            local.get 0
+            i32.load8_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_memory_oob(
+        run_module_function(
+            &instance,
+            &store,
+            "copy",
+            &ResultValue::new(vec![
+                WasmValue::I32(0xffff),
+                WasmValue::I32(0),
+                WasmValue::I32(2),
+            ]),
+        )
+        .await,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(0xffff)]).await,
+        0x55,
+    );
+
+    assert_memory_oob(
+        run_module_function(
+            &instance,
+            &store,
+            "init",
+            &ResultValue::new(vec![
+                WasmValue::I32(0xffff),
+                WasmValue::I32(0),
+                WasmValue::I32(2),
+            ]),
+        )
+        .await,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(0xffff)]).await,
+        0x55,
+    );
+}
+
+#[tokio::test]
+async fn memory_grow_returns_previous_page_count_and_minus_one_on_limit() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1 2)
+          (func (export "grow") (param i32) (result i32)
+            local.get 0
+            memory.grow)
+          (func (export "size") (result i32)
+            memory.size))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_success_i32(call_i32(&instance, &store, "size", vec![]).await, 1);
+    assert_success_i32(
+        call_i32(&instance, &store, "grow", vec![WasmValue::I32(1)]).await,
+        1,
+    );
+    assert_success_i32(call_i32(&instance, &store, "size", vec![]).await, 2);
+    assert_success_i32(
+        call_i32(&instance, &store, "grow", vec![WasmValue::I32(1)]).await,
+        -1,
+    );
+}

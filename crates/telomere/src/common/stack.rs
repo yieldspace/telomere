@@ -1,5 +1,6 @@
 #![allow(private_interfaces)]
 
+use vstd::prelude::*;
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::VMResult;
@@ -7,9 +8,172 @@ use std::fmt::Debug;
 
 use super::{
     gc::GcRef,
+    memory::trusted_copy_from_slice,
     store::{FunctionInstanceData, InstanceId},
     Instr, StablePc, StoreInner,
 };
+
+verus! {
+
+pub closed spec fn spec_stack_u32_to_le_bytes(x: u32) -> Seq<u8> {
+    seq![
+        (x & 0xff) as u8,
+        ((x >> 8) & 0xff) as u8,
+        ((x >> 16) & 0xff) as u8,
+        ((x >> 24) & 0xff) as u8,
+    ]
+}
+
+pub closed spec fn spec_stack_u32_from_le_bytes(s: Seq<u8>) -> u32
+    recommends
+        s.len() == 4,
+{
+    (s[0] as u32) | (s[1] as u32) << 8 | (s[2] as u32) << 16 | (s[3] as u32) << 24
+}
+
+pub closed spec fn spec_stack_u64_to_le_bytes(x: u64) -> Seq<u8> {
+    seq![
+        (x & 0xff) as u8,
+        ((x >> 8) & 0xff) as u8,
+        ((x >> 16) & 0xff) as u8,
+        ((x >> 24) & 0xff) as u8,
+        ((x >> 32) & 0xff) as u8,
+        ((x >> 40) & 0xff) as u8,
+        ((x >> 48) & 0xff) as u8,
+        ((x >> 56) & 0xff) as u8,
+    ]
+}
+
+pub closed spec fn spec_stack_u64_from_le_bytes(s: Seq<u8>) -> u64
+    recommends
+        s.len() == 8,
+{
+    (s[0] as u64)
+        | (s[1] as u64) << 8
+        | (s[2] as u64) << 16
+        | (s[3] as u64) << 24
+        | (s[4] as u64) << 32
+        | (s[5] as u64) << 40
+        | (s[6] as u64) << 48
+        | (s[7] as u64) << 56
+}
+
+pub closed spec fn spec_stack_u128_to_le_bytes(x: u128) -> Seq<u8> {
+    seq![
+        (x & 0xff) as u8,
+        ((x >> 8) & 0xff) as u8,
+        ((x >> 16) & 0xff) as u8,
+        ((x >> 24) & 0xff) as u8,
+        ((x >> 32) & 0xff) as u8,
+        ((x >> 40) & 0xff) as u8,
+        ((x >> 48) & 0xff) as u8,
+        ((x >> 56) & 0xff) as u8,
+        ((x >> 64) & 0xff) as u8,
+        ((x >> 72) & 0xff) as u8,
+        ((x >> 80) & 0xff) as u8,
+        ((x >> 88) & 0xff) as u8,
+        ((x >> 96) & 0xff) as u8,
+        ((x >> 104) & 0xff) as u8,
+        ((x >> 112) & 0xff) as u8,
+        ((x >> 120) & 0xff) as u8,
+    ]
+}
+
+pub closed spec fn spec_stack_u128_from_le_bytes(s: Seq<u8>) -> u128
+    recommends
+        s.len() == 16,
+{
+    (s[0] as u128)
+        | (s[1] as u128) << 8
+        | (s[2] as u128) << 16
+        | (s[3] as u128) << 24
+        | (s[4] as u128) << 32
+        | (s[5] as u128) << 40
+        | (s[6] as u128) << 48
+        | (s[7] as u128) << 56
+        | (s[8] as u128) << 64
+        | (s[9] as u128) << 72
+        | (s[10] as u128) << 80
+        | (s[11] as u128) << 88
+        | (s[12] as u128) << 96
+        | (s[13] as u128) << 104
+        | (s[14] as u128) << 112
+        | (s[15] as u128) << 120
+}
+
+#[verifier::external_body]
+#[inline(always)]
+fn trusted_write_u32(dst: &mut [u8], value: u32)
+    requires
+        old(dst)@.len() == 4,
+    ensures
+        dst@ == spec_stack_u32_to_le_bytes(value),
+{
+    unsafe {
+        dst.as_mut_ptr().cast::<u32>().write_unaligned(value.to_le());
+    }
+}
+
+#[verifier::external_body]
+#[inline(always)]
+fn trusted_write_u64(dst: &mut [u8], value: u64)
+    requires
+        old(dst)@.len() == 8,
+    ensures
+        dst@ == spec_stack_u64_to_le_bytes(value),
+{
+    unsafe {
+        dst.as_mut_ptr().cast::<u64>().write_unaligned(value.to_le());
+    }
+}
+
+#[verifier::external_body]
+#[inline(always)]
+fn trusted_write_u128(dst: &mut [u8], value: u128)
+    requires
+        old(dst)@.len() == 16,
+    ensures
+        dst@ == spec_stack_u128_to_le_bytes(value),
+{
+    unsafe {
+        dst.as_mut_ptr().cast::<u128>().write_unaligned(value.to_le());
+    }
+}
+
+#[verifier::external_body]
+#[inline(always)]
+fn trusted_read_u32(src: &[u8]) -> (value: u32)
+    requires
+        src@.len() == 4,
+    ensures
+        value == spec_stack_u32_from_le_bytes(src@),
+{
+    unsafe { u32::from_le(src.as_ptr().cast::<u32>().read_unaligned()) }
+}
+
+#[verifier::external_body]
+#[inline(always)]
+fn trusted_read_u64(src: &[u8]) -> (value: u64)
+    requires
+        src@.len() == 8,
+    ensures
+        value == spec_stack_u64_from_le_bytes(src@),
+{
+    unsafe { u64::from_le(src.as_ptr().cast::<u64>().read_unaligned()) }
+}
+
+#[verifier::external_body]
+#[inline(always)]
+fn trusted_read_u128(src: &[u8]) -> (value: u128)
+    requires
+        src@.len() == 16,
+    ensures
+        value == spec_stack_u128_from_le_bytes(src@),
+{
+    unsafe { u128::from_le(src.as_ptr().cast::<u128>().read_unaligned()) }
+}
+
+} // verus!
 
 pub(crate) trait LaneType
 where
@@ -138,70 +302,26 @@ impl Stack {
             || VMResult::StackOverflow
         )))
     }
-    #[inline(always)]
-    fn reserve_top(&mut self, n: usize) -> VMResult<*mut u8> {
-        let last = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
-            VMResult::StackOverflow
-        }));
-        if last > self.memory.len() {
-            return VMResult::StackOverflow;
-        }
-        let ptr = unsafe { self.memory.as_mut_ptr().add(self.top) };
-        self.top = last;
-        VMResult::Success(ptr)
-    }
-
-    #[inline(always)]
-    fn local_src_ptr(
-        &self,
-        reference: &LocalReference,
-        local_addr: usize,
-        size: usize,
-    ) -> *const u8 {
-        debug_assert!(reference.local_top + local_addr + size <= self.memory.len());
-        unsafe { self.memory.as_ptr().add(reference.local_top + local_addr) }
-    }
-
-    #[inline(always)]
-    fn local_dst_ptr(
-        &mut self,
-        reference: &LocalReference,
-        local_addr: usize,
-        size: usize,
-    ) -> *mut u8 {
-        debug_assert!(reference.local_top + local_addr + size <= self.memory.len());
-        unsafe {
-            self.memory
-                .as_mut_ptr()
-                .add(reference.local_top + local_addr)
-        }
-    }
     pub fn push_u8_array<const N: usize>(&mut self, v: [u8; N]) -> VMResult<()> {
-        unsafe { std::ptr::copy(v.as_ptr(), vm_try!(self.get_memory(N)).as_mut_ptr(), N) };
+        trusted_copy_from_slice(vm_try!(self.get_memory(N)), &v);
         self.add_top(N)
     }
 
     pub fn push_slice(&mut self, v: &[u8]) -> VMResult<()> {
-        unsafe {
-            std::ptr::copy(
-                v.as_ptr(),
-                vm_try!(self.get_memory(v.len())).as_mut_ptr(),
-                v.len(),
-            )
-        };
+        trusted_copy_from_slice(vm_try!(self.get_memory(v.len())), v);
         self.add_top(v.len())
     }
     pub fn pop_u8_array<const N: usize>(&mut self) -> [u8; N] {
         self.sub_top(N);
         let mut arr = [0u8; N];
-        unsafe { std::ptr::copy(self.memory.as_ptr().add(self.top), arr.as_mut_ptr(), N) };
+        trusted_copy_from_slice(&mut arr, &self.memory[self.top..self.top + N]);
         arr
     }
     pub fn pop_u8_array_generic<const N: usize>(&mut self, n: usize) -> [u8; N] {
         self.sub_top(n);
 
         let mut arr = [0u8; N];
-        unsafe { std::ptr::copy(self.memory.as_ptr().add(self.top), arr.as_mut_ptr(), N) };
+        trusted_copy_from_slice(&mut arr, &self.memory[self.top..self.top + N]);
         arr
     }
     pub fn drop(&mut self, n: usize) -> &[u8] {
@@ -210,65 +330,29 @@ impl Stack {
         (&self.memory[self.top..self.top + n]) as _
     }
     pub fn push_u32(&mut self, v: u32) -> VMResult<()> {
-        unsafe {
-            vm_try!(self.reserve_top(4))
-                .cast::<u32>()
-                .write_unaligned(v.to_le());
-        }
-        VMResult::Success(())
+        trusted_write_u32(vm_try!(self.get_memory(4)), v);
+        self.add_top(4)
     }
     pub fn pop_u32(&mut self) -> u32 {
         self.sub_top(4);
-        unsafe {
-            u32::from_le(
-                self.memory
-                    .as_ptr()
-                    .add(self.top)
-                    .cast::<u32>()
-                    .read_unaligned(),
-            )
-        }
+        trusted_read_u32(&self.memory[self.top..self.top + 4])
     }
     pub fn push_u64(&mut self, v: u64) -> VMResult<()> {
-        unsafe {
-            vm_try!(self.reserve_top(8))
-                .cast::<u64>()
-                .write_unaligned(v.to_le());
-        }
-        VMResult::Success(())
+        trusted_write_u64(vm_try!(self.get_memory(8)), v);
+        self.add_top(8)
     }
 
     pub fn push_u128(&mut self, v: u128) -> VMResult<()> {
-        unsafe {
-            vm_try!(self.reserve_top(16))
-                .cast::<u128>()
-                .write_unaligned(v.to_le());
-        }
-        VMResult::Success(())
+        trusted_write_u128(vm_try!(self.get_memory(16)), v);
+        self.add_top(16)
     }
     pub fn pop_u128(&mut self) -> u128 {
         self.sub_top(16);
-        unsafe {
-            u128::from_le(
-                self.memory
-                    .as_ptr()
-                    .add(self.top)
-                    .cast::<u128>()
-                    .read_unaligned(),
-            )
-        }
+        trusted_read_u128(&self.memory[self.top..self.top + 16])
     }
     pub fn pop_u64(&mut self) -> u64 {
         self.sub_top(8);
-        unsafe {
-            u64::from_le(
-                self.memory
-                    .as_ptr()
-                    .add(self.top)
-                    .cast::<u64>()
-                    .read_unaligned(),
-            )
-        }
+        trusted_read_u64(&self.memory[self.top..self.top + 8])
     }
     pub fn push_i32(&mut self, v: i32) -> VMResult<()> {
         self.push_u32(v as u32)
@@ -318,39 +402,17 @@ impl Stack {
     }
     #[inline(always)]
     pub fn local_get4(&mut self, reference: &LocalReference, local_addr: usize) -> VMResult<()> {
-        let dst = vm_try!(self.reserve_top(4));
-        unsafe {
-            dst.cast::<u32>().write_unaligned(
-                self.local_src_ptr(reference, local_addr, 4)
-                    .cast::<u32>()
-                    .read_unaligned(),
-            );
-        }
-        VMResult::Success(())
+        self.push_u32(trusted_read_u32(self.local_bytes(reference, local_addr, 4)))
     }
     #[inline(always)]
     pub fn local_get8(&mut self, reference: &LocalReference, local_addr: usize) -> VMResult<()> {
-        let dst = vm_try!(self.reserve_top(8));
-        unsafe {
-            dst.cast::<u64>().write_unaligned(
-                self.local_src_ptr(reference, local_addr, 8)
-                    .cast::<u64>()
-                    .read_unaligned(),
-            );
-        }
-        VMResult::Success(())
+        self.push_u64(trusted_read_u64(self.local_bytes(reference, local_addr, 8)))
     }
     #[inline(always)]
     pub fn local_get16(&mut self, reference: &LocalReference, local_addr: usize) -> VMResult<()> {
-        let dst = vm_try!(self.reserve_top(16));
-        unsafe {
-            dst.cast::<u128>().write_unaligned(
-                self.local_src_ptr(reference, local_addr, 16)
-                    .cast::<u128>()
-                    .read_unaligned(),
-            );
-        }
-        VMResult::Success(())
+        self.push_u128(trusted_read_u128(
+            self.local_bytes(reference, local_addr, 16),
+        ))
     }
     pub fn local_set(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
         self.top -= size;
@@ -359,48 +421,21 @@ impl Stack {
     }
     #[inline(always)]
     pub fn local_set4(&mut self, reference: &LocalReference, local_addr: usize) {
-        self.top -= 4;
-        unsafe {
-            self.local_dst_ptr(reference, local_addr, 4)
-                .cast::<u32>()
-                .write_unaligned(
-                    self.memory
-                        .as_ptr()
-                        .add(self.top)
-                        .cast::<u32>()
-                        .read_unaligned(),
-                );
-        }
+        let value = self.pop_u32();
+        let start = reference.local_top + local_addr;
+        trusted_write_u32(&mut self.memory[start..start + 4], value);
     }
     #[inline(always)]
     pub fn local_set8(&mut self, reference: &LocalReference, local_addr: usize) {
-        self.top -= 8;
-        unsafe {
-            self.local_dst_ptr(reference, local_addr, 8)
-                .cast::<u64>()
-                .write_unaligned(
-                    self.memory
-                        .as_ptr()
-                        .add(self.top)
-                        .cast::<u64>()
-                        .read_unaligned(),
-                );
-        }
+        let value = self.pop_u64();
+        let start = reference.local_top + local_addr;
+        trusted_write_u64(&mut self.memory[start..start + 8], value);
     }
     #[inline(always)]
     pub fn local_set16(&mut self, reference: &LocalReference, local_addr: usize) {
-        self.top -= 16;
-        unsafe {
-            self.local_dst_ptr(reference, local_addr, 16)
-                .cast::<u128>()
-                .write_unaligned(
-                    self.memory
-                        .as_ptr()
-                        .add(self.top)
-                        .cast::<u128>()
-                        .read_unaligned(),
-                );
-        }
+        let value = self.pop_u128();
+        let start = reference.local_top + local_addr;
+        trusted_write_u128(&mut self.memory[start..start + 16], value);
     }
     pub fn local_bytes(&self, reference: &LocalReference, local_addr: usize, size: usize) -> &[u8] {
         &self.memory[reference.local_top + local_addr..reference.local_top + local_addr + size]
@@ -430,45 +465,21 @@ impl Stack {
     }
     #[inline(always)]
     pub fn local_tee4(&mut self, reference: &LocalReference, local_addr: usize) {
-        unsafe {
-            self.local_dst_ptr(reference, local_addr, 4)
-                .cast::<u32>()
-                .write_unaligned(
-                    self.memory
-                        .as_ptr()
-                        .add(self.top - 4)
-                        .cast::<u32>()
-                        .read_unaligned(),
-                );
-        }
+        let value = trusted_read_u32(&self.memory[self.top - 4..self.top]);
+        let start = reference.local_top + local_addr;
+        trusted_write_u32(&mut self.memory[start..start + 4], value);
     }
     #[inline(always)]
     pub fn local_tee8(&mut self, reference: &LocalReference, local_addr: usize) {
-        unsafe {
-            self.local_dst_ptr(reference, local_addr, 8)
-                .cast::<u64>()
-                .write_unaligned(
-                    self.memory
-                        .as_ptr()
-                        .add(self.top - 8)
-                        .cast::<u64>()
-                        .read_unaligned(),
-                );
-        }
+        let value = trusted_read_u64(&self.memory[self.top - 8..self.top]);
+        let start = reference.local_top + local_addr;
+        trusted_write_u64(&mut self.memory[start..start + 8], value);
     }
     #[inline(always)]
     pub fn local_tee16(&mut self, reference: &LocalReference, local_addr: usize) {
-        unsafe {
-            self.local_dst_ptr(reference, local_addr, 16)
-                .cast::<u128>()
-                .write_unaligned(
-                    self.memory
-                        .as_ptr()
-                        .add(self.top - 16)
-                        .cast::<u128>()
-                        .read_unaligned(),
-                );
-        }
+        let value = trusted_read_u128(&self.memory[self.top - 16..self.top]);
+        let start = reference.local_top + local_addr;
+        trusted_write_u128(&mut self.memory[start..start + 16], value);
     }
     fn call_stack_info(&self, reference: &LocalReference) -> CallStackInfo {
         let info_top = reference.local_top + reference.local_size as usize
@@ -487,7 +498,7 @@ impl Stack {
         let bytes = unsafe {
             std::slice::from_raw_parts((&info as *const CallStackInfo).cast::<u8>(), size)
         };
-        vm_try!(self.get_memory(size)).copy_from_slice(bytes);
+        trusted_copy_from_slice(vm_try!(self.get_memory(size)), bytes);
         self.add_top(size)
     }
     pub(crate) fn previous_local_reference(&self, reference: &LocalReference) -> LocalReference {

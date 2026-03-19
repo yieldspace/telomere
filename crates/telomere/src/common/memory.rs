@@ -1,8 +1,99 @@
 use std::{fmt, ptr::NonNull, slice::SliceIndex, sync::Arc};
 
 use parking_lot::Mutex;
+use vstd::prelude::*;
 
 use super::{Stack, VMResult, PAGE_SIZE};
+
+verus! {
+
+pub open spec fn spec_write_range(data: Seq<u8>, start: int, bytes: Seq<u8>) -> Seq<u8> {
+    Seq::new(
+        data.len(),
+        |i: int| {
+            if start <= i && i < start + bytes.len() {
+                bytes[i - start]
+            } else {
+                data[i]
+            }
+        },
+    )
+}
+
+pub open spec fn spec_fill_range(data: Seq<u8>, start: int, len: int, value: u8) -> Seq<u8> {
+    Seq::new(
+        data.len(),
+        |i: int| {
+            if start <= i && i < start + len {
+                value
+            } else {
+                data[i]
+            }
+        },
+    )
+}
+
+pub open spec fn spec_copy_within_range(data: Seq<u8>, dst: int, src: int, len: int) -> Seq<u8> {
+    spec_write_range(data, dst, data.subrange(src, src + len))
+}
+
+pub proof fn lemma_write_range_preserves_len(data: Seq<u8>, start: int, bytes: Seq<u8>)
+    ensures
+        spec_write_range(data, start, bytes).len() == data.len(),
+{
+}
+
+pub proof fn lemma_fill_range_preserves_len(data: Seq<u8>, start: int, len: int, value: u8)
+    ensures
+        spec_fill_range(data, start, len, value).len() == data.len(),
+{
+}
+
+pub proof fn lemma_copy_within_preserves_len(data: Seq<u8>, dst: int, src: int, len: int)
+    ensures
+        spec_copy_within_range(data, dst, src, len).len() == data.len(),
+{
+}
+
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_copy_from_slice(dst: &mut [u8], src: &[u8])
+    requires
+        old(dst)@.len() == src@.len(),
+    ensures
+        dst@ == src@,
+{
+    dst.copy_from_slice(src);
+}
+
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_fill_slice(dst: &mut [u8], value: u8)
+    ensures
+        dst@ == spec_fill_range(old(dst)@, 0, old(dst)@.len() as int, value),
+{
+    dst.fill(value);
+}
+
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_copy_within(dst: &mut [u8], src_start: usize, src_end: usize, dst_start: usize)
+    requires
+        src_start <= src_end,
+        src_end as int <= old(dst)@.len(),
+        dst_start as int + (src_end as int - src_start as int) <= old(dst)@.len(),
+    ensures
+        dst@ == spec_copy_within_range(
+            old(dst)@,
+            dst_start as int,
+            src_start as int,
+            src_end as int - src_start as int,
+        ),
+{
+    dst.copy_within(src_start..src_end, dst_start);
+}
+
+} // verus!
 
 #[derive(Debug, Clone, Copy)]
 pub struct MemArg {
@@ -137,7 +228,7 @@ impl Memory {
             self.slice_mut().get_mut(offset..end),
             || { VMResult::MemoryIndexOutOfRange }
         ));
-        target.copy_from_slice(bytes);
+        trusted_copy_from_slice(target, bytes);
         VMResult::Success(())
     }
 
@@ -158,10 +249,13 @@ impl Memory {
         let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
             VMResult::MemoryIndexOutOfRange
         }));
-        arr.copy_from_slice(vm_try!(VMResult::from_option(
-            self.slice().get(offset..last),
-            || { VMResult::MemoryIndexOutOfRange }
-        )));
+        trusted_copy_from_slice(
+            &mut arr[..],
+            vm_try!(VMResult::from_option(
+                self.slice().get(offset..last),
+                || { VMResult::MemoryIndexOutOfRange }
+            )),
+        );
         VMResult::Success(arr)
     }
 
@@ -239,11 +333,11 @@ impl Memory {
         let last = vm_try!(VMResult::from_option(offset.checked_add(n), || {
             VMResult::MemoryIndexOutOfRange
         }));
-        vm_try!(VMResult::from_option(
+        let dst = vm_try!(VMResult::from_option(
             self.slice_mut().get_mut(offset..last),
             || VMResult::MemoryIndexOutOfRange
-        ))
-        .copy_from_slice(value);
+        ));
+        trusted_copy_from_slice(dst, value);
         VMResult::Success(())
     }
 
@@ -365,7 +459,7 @@ impl Memory {
             self.slice_mut().get_mut(ptr as usize..last as usize),
             || { VMResult::MemoryIndexOutOfRange }
         ));
-        slice.fill(data as u8);
+        trusted_fill_slice(slice, data as u8);
         VMResult::Success(())
     }
 
@@ -382,8 +476,7 @@ impl Memory {
         if dst_last > self.data_size() {
             return VMResult::MemoryIndexOutOfRange;
         }
-        self.slice_mut()
-            .copy_within(src as usize..src_last, dst as usize);
+        trusted_copy_within(self.slice_mut(), src as usize, src_last, dst as usize);
         VMResult::Success(())
     }
 }
