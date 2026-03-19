@@ -18,6 +18,7 @@ fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::Unreachable => VMResult::Unreachable,
         VMResult::StackOverflow => VMResult::StackOverflow,
         VMResult::MemoryIndexOutOfRange => VMResult::MemoryIndexOutOfRange,
+        VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::TableIndexOutOfRange => VMResult::TableIndexOutOfRange,
         VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
         VMResult::TableUninitialized => VMResult::TableUninitialized,
@@ -183,6 +184,35 @@ impl<'a> Scheduler<'a> {
                             self.ready_count += 1;
                             self.notify.wake();
                         }
+                    }
+                }
+                if let Some(result) = complete_result {
+                    let task = self.tasks.remove(task_index).unwrap();
+                    self.completed_tasks.push(CompletedTask {
+                        stack: task.stack,
+                        result,
+                    });
+                }
+            }
+            AsyncCompletion::ContinueWithI32 { fp, value } => {
+                let mut complete_result = None;
+                {
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    let push_result = task.stack.push_i32(value);
+                    task.pending_effects -= 1;
+                    task.fp = fp;
+                    if task.pending_effects == 0 {
+                        if let Some(result) = task.terminal_result.take() {
+                            complete_result = Some(result);
+                        } else {
+                            complete_result = Some(vm_result_to_unit(push_result));
+                        }
+                    } else if push_result.is_err() {
+                        task.terminal_result = Some(vm_result_to_unit(push_result));
+                    } else {
+                        task.ready_flag = ReadyFlag::Ready;
+                        self.ready_count += 1;
+                        self.notify.wake();
                     }
                 }
                 if let Some(result) = complete_result {

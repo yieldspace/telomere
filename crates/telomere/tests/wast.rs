@@ -96,6 +96,11 @@ async fn threads_memory() {
 }
 
 #[test]
+async fn threads_atomic() {
+    run_test_file("proposals/threads/atomic").await;
+}
+
+#[test]
 async fn if_() {
     run_test_file("if").await;
 }

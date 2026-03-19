@@ -74,3 +74,15 @@ pub fn parse_memarg<R: BinaryReader>(
     let (len2, offset) = parse_u32(reader)?;
     Ok((len + len2, MemArg { align, offset }))
 }
+
+pub fn parse_memarg_exact<R: BinaryReader>(
+    reader: &mut R,
+    natural_align_log2: u32,
+) -> Result<(usize, MemArg)> {
+    let (len, align) = parse_u32(reader)?;
+    if align != natural_align_log2 {
+        Err(WasmParserError::InvalidAlignment(align))?;
+    }
+    let (len2, offset) = parse_u32(reader)?;
+    Ok((len + len2, MemArg { align, offset }))
+}

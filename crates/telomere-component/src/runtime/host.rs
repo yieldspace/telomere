@@ -535,5 +535,8 @@ pub(super) fn vm_result_to_component_error(
         CoreVMResult::InvalidOperand => {
             ComponentError::Runtime(format!("{context} failed: invalid operand"))
         }
+        CoreVMResult::UnalignedAtomic => {
+            ComponentError::Trap(format!("{context} trapped: unaligned atomic"))
+        }
     }
 }

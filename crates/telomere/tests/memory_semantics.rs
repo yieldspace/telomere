@@ -29,6 +29,7 @@ fn vm_result_map_unit(result: VMResult<ResultValue>) -> VMResult<i32> {
         VMResult::TableUninitialized => VMResult::TableUninitialized,
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
+        VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
     }
 }
 

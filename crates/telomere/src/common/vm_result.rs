@@ -5,6 +5,7 @@ pub enum VMResult<V> {
     Unreachable,
     StackOverflow,
     MemoryIndexOutOfRange,
+    UnalignedAtomic,
     TableIndexOutOfRange,
     CallIndirectInvalidType,
     TableUninitialized,
@@ -19,6 +20,7 @@ macro_rules! vm_try {
             VMResult::Unreachable => return VMResult::Unreachable,
             VMResult::StackOverflow => return VMResult::StackOverflow,
             VMResult::MemoryIndexOutOfRange => return VMResult::MemoryIndexOutOfRange,
+            VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
             VMResult::TableIndexOutOfRange => return VMResult::TableIndexOutOfRange,
             VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
             VMResult::TableUninitialized => return VMResult::TableUninitialized,
@@ -45,6 +47,9 @@ impl<V> VMResult<V> {
             }
             VMResult::MemoryIndexOutOfRange => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: MemoryIndexOutOfRange",)
+            }
+            VMResult::UnalignedAtomic => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: UnalignedAtomic")
             }
             VMResult::TableIndexOutOfRange => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: TableIndexOutOfRange",)

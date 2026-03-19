@@ -500,6 +500,7 @@ fn describe_vm_result<T>(result: &VMResult<T>) -> &'static str {
         VMResult::TableUninitialized => "table uninitialized",
         VMResult::Unlinkable => "unlinkable",
         VMResult::InvalidOperand => "invalid operand",
+        VMResult::UnalignedAtomic => "unaligned atomic",
     }
 }
 

@@ -149,3 +149,7 @@ pub unsafe fn special_function_vm_end(
     ctx.cont = std::ptr::null();
     VMResult::Success(())
 }
+
+pub unsafe fn op_unreachable(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
+    VMResult::Unreachable
+}

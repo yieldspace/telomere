@@ -145,6 +145,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
     fn parse_memarg(&mut self, natural_align: u32) -> Result<(usize, MemArg)> {
         values::parse_memarg(self.reader, natural_align)
     }
+
+    fn parse_atomic_memarg(&mut self, natural_align_log2: u32) -> Result<(usize, MemArg)> {
+        values::parse_memarg_exact(self.reader, natural_align_log2)
+    }
     #[allow(clippy::too_many_arguments)]
     fn parse_inst(
         &mut self,
@@ -3019,6 +3023,277 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 #[cfg(not(feature = "simd"))]
                 {
                     return Err(WasmParserError::invalid_instruction1(0xFD));
+                }
+            }
+            0xFE => {
+                let (len, next) = self.parse_u32()?;
+                macro_rules! atomic_load {
+                    ($align:expr, $op:path, $ty:expr) => {{
+                        assert_memory(self.mems)?;
+                        let (len2, memarg) = self.parse_atomic_memarg($align)?;
+                        instrs.push(Instr { op: $op });
+                        instrs.push(Instr {
+                            operand: Operand { memarg },
+                        });
+                        checker.load_op($ty)?;
+                        (1 + len + len2, false)
+                    }};
+                }
+                macro_rules! atomic_store {
+                    ($align:expr, $op:path, $ty:expr) => {{
+                        assert_memory(self.mems)?;
+                        let (len2, memarg) = self.parse_atomic_memarg($align)?;
+                        instrs.push(Instr { op: $op });
+                        instrs.push(Instr {
+                            operand: Operand { memarg },
+                        });
+                        checker.store_op($ty)?;
+                        (1 + len + len2, false)
+                    }};
+                }
+                macro_rules! atomic_rmw {
+                    ($align:expr, $op:path, $value_ty:expr, $result_ty:expr) => {{
+                        assert_memory(self.mems)?;
+                        let (len2, memarg) = self.parse_atomic_memarg($align)?;
+                        instrs.push(Instr { op: $op });
+                        instrs.push(Instr {
+                            operand: Operand { memarg },
+                        });
+                        checker.op(&[ValType::I32, $value_ty], &[$result_ty])?;
+                        (1 + len + len2, false)
+                    }};
+                }
+                macro_rules! atomic_cmpxchg {
+                    ($align:expr, $op:path, $value_ty:expr, $result_ty:expr) => {{
+                        assert_memory(self.mems)?;
+                        let (len2, memarg) = self.parse_atomic_memarg($align)?;
+                        instrs.push(Instr { op: $op });
+                        instrs.push(Instr {
+                            operand: Operand { memarg },
+                        });
+                        checker.op(&[ValType::I32, $value_ty, $value_ty], &[$result_ty])?;
+                        (1 + len + len2, false)
+                    }};
+                }
+                match next {
+                    0x00 => {
+                        assert_memory(self.mems)?;
+                        let (len2, memarg) = self.parse_atomic_memarg(2)?;
+                        instrs.push(Instr {
+                            op: vm::op_memory_atomic_notify,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { memarg },
+                        });
+                        checker.op(&[ValType::I32, ValType::I32], &[ValType::I32])?;
+                        (1 + len + len2, false)
+                    }
+                    0x01 => {
+                        assert_memory(self.mems)?;
+                        let (len2, memarg) = self.parse_atomic_memarg(2)?;
+                        instrs.push(Instr {
+                            op: vm::op_memory_atomic_wait32,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { memarg },
+                        });
+                        checker.op(&[ValType::I32, ValType::I32, ValType::I64], &[ValType::I32])?;
+                        (1 + len + len2, false)
+                    }
+                    0x02 => {
+                        assert_memory(self.mems)?;
+                        let (len2, memarg) = self.parse_atomic_memarg(3)?;
+                        instrs.push(Instr {
+                            op: vm::op_memory_atomic_wait64,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { memarg },
+                        });
+                        checker.op(&[ValType::I32, ValType::I64, ValType::I64], &[ValType::I32])?;
+                        (1 + len + len2, false)
+                    }
+                    0x03 => {
+                        let reserved = self.reader.read_exact_one()?;
+                        if reserved != 0 {
+                            Err(WasmParserError::InvalidInstruction([
+                                0xFE, 0x03, reserved, 0x00,
+                            ]))?;
+                        }
+                        instrs.push(Instr {
+                            op: vm::op_atomic_fence,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { u32: 0 },
+                        });
+                        checker.op(&[], &[])?;
+                        (2 + len, false)
+                    }
+                    0x10 => atomic_load!(2, vm::op_i32_atomic_load, ValType::I32),
+                    0x11 => atomic_load!(3, vm::op_i64_atomic_load, ValType::I64),
+                    0x12 => atomic_load!(0, vm::op_i32_atomic_load8_u, ValType::I32),
+                    0x13 => atomic_load!(1, vm::op_i32_atomic_load16_u, ValType::I32),
+                    0x14 => atomic_load!(0, vm::op_i64_atomic_load8_u, ValType::I64),
+                    0x15 => atomic_load!(1, vm::op_i64_atomic_load16_u, ValType::I64),
+                    0x16 => atomic_load!(2, vm::op_i64_atomic_load32_u, ValType::I64),
+                    0x17 => atomic_store!(2, vm::op_i32_atomic_store, ValType::I32),
+                    0x18 => atomic_store!(3, vm::op_i64_atomic_store, ValType::I64),
+                    0x19 => atomic_store!(0, vm::op_i32_atomic_store8, ValType::I32),
+                    0x1A => atomic_store!(1, vm::op_i32_atomic_store16, ValType::I32),
+                    0x1B => atomic_store!(0, vm::op_i64_atomic_store8, ValType::I64),
+                    0x1C => atomic_store!(1, vm::op_i64_atomic_store16, ValType::I64),
+                    0x1D => atomic_store!(2, vm::op_i64_atomic_store32, ValType::I64),
+                    0x1E => atomic_rmw!(2, vm::op_i32_atomic_rmw_add, ValType::I32, ValType::I32),
+                    0x1F => atomic_rmw!(3, vm::op_i64_atomic_rmw_add, ValType::I64, ValType::I64),
+                    0x20 => {
+                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_add_u, ValType::I32, ValType::I32)
+                    }
+                    0x21 => {
+                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_add_u, ValType::I32, ValType::I32)
+                    }
+                    0x22 => {
+                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_add_u, ValType::I64, ValType::I64)
+                    }
+                    0x23 => {
+                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_add_u, ValType::I64, ValType::I64)
+                    }
+                    0x24 => {
+                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_add_u, ValType::I64, ValType::I64)
+                    }
+                    0x25 => atomic_rmw!(2, vm::op_i32_atomic_rmw_sub, ValType::I32, ValType::I32),
+                    0x26 => atomic_rmw!(3, vm::op_i64_atomic_rmw_sub, ValType::I64, ValType::I64),
+                    0x27 => {
+                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_sub_u, ValType::I32, ValType::I32)
+                    }
+                    0x28 => {
+                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_sub_u, ValType::I32, ValType::I32)
+                    }
+                    0x29 => {
+                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_sub_u, ValType::I64, ValType::I64)
+                    }
+                    0x2A => {
+                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_sub_u, ValType::I64, ValType::I64)
+                    }
+                    0x2B => {
+                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_sub_u, ValType::I64, ValType::I64)
+                    }
+                    0x2C => atomic_rmw!(2, vm::op_i32_atomic_rmw_and, ValType::I32, ValType::I32),
+                    0x2D => atomic_rmw!(3, vm::op_i64_atomic_rmw_and, ValType::I64, ValType::I64),
+                    0x2E => {
+                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_and_u, ValType::I32, ValType::I32)
+                    }
+                    0x2F => {
+                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_and_u, ValType::I32, ValType::I32)
+                    }
+                    0x30 => {
+                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_and_u, ValType::I64, ValType::I64)
+                    }
+                    0x31 => {
+                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_and_u, ValType::I64, ValType::I64)
+                    }
+                    0x32 => {
+                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_and_u, ValType::I64, ValType::I64)
+                    }
+                    0x33 => atomic_rmw!(2, vm::op_i32_atomic_rmw_or, ValType::I32, ValType::I32),
+                    0x34 => atomic_rmw!(3, vm::op_i64_atomic_rmw_or, ValType::I64, ValType::I64),
+                    0x35 => atomic_rmw!(0, vm::op_i32_atomic_rmw8_or_u, ValType::I32, ValType::I32),
+                    0x36 => {
+                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_or_u, ValType::I32, ValType::I32)
+                    }
+                    0x37 => atomic_rmw!(0, vm::op_i64_atomic_rmw8_or_u, ValType::I64, ValType::I64),
+                    0x38 => {
+                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_or_u, ValType::I64, ValType::I64)
+                    }
+                    0x39 => {
+                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_or_u, ValType::I64, ValType::I64)
+                    }
+                    0x3A => atomic_rmw!(2, vm::op_i32_atomic_rmw_xor, ValType::I32, ValType::I32),
+                    0x3B => atomic_rmw!(3, vm::op_i64_atomic_rmw_xor, ValType::I64, ValType::I64),
+                    0x3C => {
+                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_xor_u, ValType::I32, ValType::I32)
+                    }
+                    0x3D => {
+                        atomic_rmw!(1, vm::op_i32_atomic_rmw16_xor_u, ValType::I32, ValType::I32)
+                    }
+                    0x3E => {
+                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_xor_u, ValType::I64, ValType::I64)
+                    }
+                    0x3F => {
+                        atomic_rmw!(1, vm::op_i64_atomic_rmw16_xor_u, ValType::I64, ValType::I64)
+                    }
+                    0x40 => {
+                        atomic_rmw!(2, vm::op_i64_atomic_rmw32_xor_u, ValType::I64, ValType::I64)
+                    }
+                    0x41 => atomic_rmw!(2, vm::op_i32_atomic_rmw_xchg, ValType::I32, ValType::I32),
+                    0x42 => atomic_rmw!(3, vm::op_i64_atomic_rmw_xchg, ValType::I64, ValType::I64),
+                    0x43 => {
+                        atomic_rmw!(0, vm::op_i32_atomic_rmw8_xchg_u, ValType::I32, ValType::I32)
+                    }
+                    0x44 => atomic_rmw!(
+                        1,
+                        vm::op_i32_atomic_rmw16_xchg_u,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x45 => {
+                        atomic_rmw!(0, vm::op_i64_atomic_rmw8_xchg_u, ValType::I64, ValType::I64)
+                    }
+                    0x46 => atomic_rmw!(
+                        1,
+                        vm::op_i64_atomic_rmw16_xchg_u,
+                        ValType::I64,
+                        ValType::I64
+                    ),
+                    0x47 => atomic_rmw!(
+                        2,
+                        vm::op_i64_atomic_rmw32_xchg_u,
+                        ValType::I64,
+                        ValType::I64
+                    ),
+                    0x48 => atomic_cmpxchg!(
+                        2,
+                        vm::op_i32_atomic_rmw_cmpxchg,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x49 => atomic_cmpxchg!(
+                        3,
+                        vm::op_i64_atomic_rmw_cmpxchg,
+                        ValType::I64,
+                        ValType::I64
+                    ),
+                    0x4A => atomic_cmpxchg!(
+                        0,
+                        vm::op_i32_atomic_rmw8_cmpxchg_u,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x4B => atomic_cmpxchg!(
+                        1,
+                        vm::op_i32_atomic_rmw16_cmpxchg_u,
+                        ValType::I32,
+                        ValType::I32
+                    ),
+                    0x4C => atomic_cmpxchg!(
+                        0,
+                        vm::op_i64_atomic_rmw8_cmpxchg_u,
+                        ValType::I64,
+                        ValType::I64
+                    ),
+                    0x4D => atomic_cmpxchg!(
+                        1,
+                        vm::op_i64_atomic_rmw16_cmpxchg_u,
+                        ValType::I64,
+                        ValType::I64
+                    ),
+                    0x4E => atomic_cmpxchg!(
+                        2,
+                        vm::op_i64_atomic_rmw32_cmpxchg_u,
+                        ValType::I64,
+                        ValType::I64
+                    ),
+                    _ => Err(WasmParserError::InvalidInstruction([
+                        0xFE, next as u8, 0x00, 0x00,
+                    ]))?,
                 }
             }
             unknown => Err(WasmParserError::invalid_instruction1(unknown))?,

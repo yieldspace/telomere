@@ -16,6 +16,10 @@ pub enum AsyncCompletion {
     Continue {
         fp: StablePc,
     },
+    ContinueWithI32 {
+        fp: StablePc,
+        value: i32,
+    },
     HostCall {
         result: VMResult<*const Instr>,
     },

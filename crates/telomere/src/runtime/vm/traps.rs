@@ -31,6 +31,11 @@ generate_trap_func!(
     VMResult::MemoryIndexOutOfRange
 );
 generate_trap_func!(
+    traps_unaligned_atomic,
+    TRAPS_UNALIGNED_ATOMIC,
+    VMResult::UnalignedAtomic
+);
+generate_trap_func!(
     traps_stack_overflow,
     TRAPS_STACK_OVERFLOW,
     VMResult::StackOverflow
@@ -54,6 +59,7 @@ pub(crate) unsafe fn trap_func<T>(res: VMResult<T>) -> *const Instr {
         VMResult::CallIndirectInvalidType => TRAPS_CALL_INDIRECT_INVALID_TYPE.as_ptr(),
         VMResult::InvalidOperand => TRAPS_INVALID_OPERAND.as_ptr(),
         VMResult::MemoryIndexOutOfRange => TRAPS_MEMORY_INDEX_OUT_OF_RANGE.as_ptr(),
+        VMResult::UnalignedAtomic => TRAPS_UNALIGNED_ATOMIC.as_ptr(),
         VMResult::StackOverflow => TRAPS_STACK_OVERFLOW.as_ptr(),
         VMResult::TableIndexOutOfRange => TRAPS_TABLE_INDEX_OUT_OF_RANGE.as_ptr(),
         VMResult::TableUninitialized => TRAPS_TABLE_UNINITIALIZED.as_ptr(),

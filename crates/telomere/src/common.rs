@@ -8,7 +8,9 @@ use custom_section::NameSubSection;
 
 pub use vm_result::VMResult;
 mod memory;
-pub use memory::{LocalMemoryObject, MemArg, Memory, SharedMemoryObject};
+pub use memory::{AtomicRmwOp, LocalMemoryObject, MemArg, Memory, SharedMemoryObject};
+#[cfg(feature = "async-runtime")]
+pub use memory::{AtomicWaitResult, SharedWaitRegistration};
 pub(crate) mod stack;
 pub(crate) use stack::CallFrameCache;
 pub use stack::{LocalReference, Stack};

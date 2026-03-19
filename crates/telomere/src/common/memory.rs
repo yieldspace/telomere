@@ -1,6 +1,18 @@
-use std::{fmt, ptr::NonNull, slice::SliceIndex, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt,
+    ptr::NonNull,
+    slice::SliceIndex,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use parking_lot::Mutex;
+#[cfg(feature = "async-runtime")]
+use tokio::sync::Notify;
 use vstd::prelude::*;
 
 use super::{Stack, VMResult, PAGE_SIZE};
@@ -101,6 +113,168 @@ pub struct MemArg {
     pub offset: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicRmwOp {
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Xchg,
+}
+
+impl AtomicRmwOp {
+    #[inline(always)]
+    fn apply_u8(self, old: u8, value: u8) -> u8 {
+        match self {
+            Self::Add => old.wrapping_add(value),
+            Self::Sub => old.wrapping_sub(value),
+            Self::And => old & value,
+            Self::Or => old | value,
+            Self::Xor => old ^ value,
+            Self::Xchg => value,
+        }
+    }
+
+    #[inline(always)]
+    fn apply_u16(self, old: u16, value: u16) -> u16 {
+        match self {
+            Self::Add => old.wrapping_add(value),
+            Self::Sub => old.wrapping_sub(value),
+            Self::And => old & value,
+            Self::Or => old | value,
+            Self::Xor => old ^ value,
+            Self::Xchg => value,
+        }
+    }
+
+    #[inline(always)]
+    fn apply_u32(self, old: u32, value: u32) -> u32 {
+        match self {
+            Self::Add => old.wrapping_add(value),
+            Self::Sub => old.wrapping_sub(value),
+            Self::And => old & value,
+            Self::Or => old | value,
+            Self::Xor => old ^ value,
+            Self::Xchg => value,
+        }
+    }
+
+    #[inline(always)]
+    fn apply_u64(self, old: u64, value: u64) -> u64 {
+        match self {
+            Self::Add => old.wrapping_add(value),
+            Self::Sub => old.wrapping_sub(value),
+            Self::And => old & value,
+            Self::Or => old | value,
+            Self::Xor => old ^ value,
+            Self::Xchg => value,
+        }
+    }
+}
+
+#[cfg(feature = "async-runtime")]
+#[derive(Debug)]
+pub struct SharedWaitRegistration {
+    address: usize,
+    waiter: Arc<SharedWaiter>,
+}
+
+#[cfg(feature = "async-runtime")]
+impl SharedWaitRegistration {
+    pub fn address(&self) -> usize {
+        self.address
+    }
+
+    pub async fn wait_result(self, shared: Arc<SharedMemoryObject>, timeout_ns: i64) -> i32 {
+        if timeout_ns < 0 {
+            self.waiter.wait().await;
+            return 0;
+        }
+
+        let sleep = tokio::time::sleep(Duration::from_nanos(timeout_ns as u64));
+        tokio::pin!(sleep);
+        tokio::select! {
+            _ = self.waiter.wait() => 0,
+            _ = &mut sleep => {
+                if self.waiter.try_mark_timed_out() {
+                    shared.remove_waiter(self.address, self.waiter.id());
+                    2
+                } else {
+                    0
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "async-runtime")]
+#[derive(Debug)]
+pub enum AtomicWaitResult {
+    NotEqual,
+    Pending(SharedWaitRegistration),
+}
+
+#[cfg(feature = "async-runtime")]
+#[derive(Debug)]
+struct SharedWaiter {
+    id: u64,
+    state: AtomicU8,
+    notify: Notify,
+}
+
+#[cfg(feature = "async-runtime")]
+impl SharedWaiter {
+    const WAITING: u8 = 0;
+    const NOTIFIED: u8 = 1;
+    const TIMED_OUT: u8 = 2;
+
+    fn new(id: u64) -> Self {
+        Self {
+            id,
+            state: AtomicU8::new(Self::WAITING),
+            notify: Notify::new(),
+        }
+    }
+
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    async fn wait(&self) {
+        if self.state.load(Ordering::Acquire) == Self::NOTIFIED {
+            return;
+        }
+        self.notify.notified().await;
+    }
+
+    fn try_mark_notified(&self) -> bool {
+        self.state
+            .compare_exchange(
+                Self::WAITING,
+                Self::NOTIFIED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn try_mark_timed_out(&self) -> bool {
+        self.state
+            .compare_exchange(
+                Self::WAITING,
+                Self::TIMED_OUT,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn is_waiting(&self) -> bool {
+        self.state.load(Ordering::Acquire) == Self::WAITING
+    }
+}
+
 #[derive(Debug)]
 struct MmapRegion {
     ptr: NonNull<u8>,
@@ -158,6 +332,15 @@ fn compute_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
         memarg.offset.checked_add(offset).map(|v| v as usize),
         || VMResult::MemoryIndexOutOfRange,
     )
+}
+
+#[inline(always)]
+fn ensure_atomic_alignment(offset: usize, alignment: usize) -> VMResult<()> {
+    if offset % alignment == 0 {
+        VMResult::Success(())
+    } else {
+        VMResult::UnalignedAtomic
+    }
 }
 
 pub struct Memory {
@@ -440,6 +623,136 @@ impl Memory {
         )))
     }
 
+    #[inline(always)]
+    pub fn atomic_load_u8(&self, offset: usize) -> VMResult<u8> {
+        vm_try!(ensure_atomic_alignment(offset, 1));
+        self.read_u8_at(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u16(&self, offset: usize) -> VMResult<u16> {
+        vm_try!(ensure_atomic_alignment(offset, 2));
+        self.read_u16_at(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u32(&self, offset: usize) -> VMResult<u32> {
+        vm_try!(ensure_atomic_alignment(offset, 4));
+        self.read_u32_at(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u64(&self, offset: usize) -> VMResult<u64> {
+        vm_try!(ensure_atomic_alignment(offset, 8));
+        self.read_u64_at(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u8(&mut self, offset: usize, value: u8) -> VMResult<()> {
+        vm_try!(ensure_atomic_alignment(offset, 1));
+        self.write_bytes(offset, &[value])
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u16(&mut self, offset: usize, value: u16) -> VMResult<()> {
+        vm_try!(ensure_atomic_alignment(offset, 2));
+        self.write_bytes(offset, &value.to_le_bytes())
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u32(&mut self, offset: usize, value: u32) -> VMResult<()> {
+        vm_try!(ensure_atomic_alignment(offset, 4));
+        self.write_bytes(offset, &value.to_le_bytes())
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u64(&mut self, offset: usize, value: u64) -> VMResult<()> {
+        vm_try!(ensure_atomic_alignment(offset, 8));
+        self.write_bytes(offset, &value.to_le_bytes())
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u8(&mut self, offset: usize, op: AtomicRmwOp, value: u8) -> VMResult<u8> {
+        let old = vm_try!(self.atomic_load_u8(offset));
+        vm_try!(self.atomic_store_u8(offset, op.apply_u8(old, value)));
+        VMResult::Success(old)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u16(&mut self, offset: usize, op: AtomicRmwOp, value: u16) -> VMResult<u16> {
+        let old = vm_try!(self.atomic_load_u16(offset));
+        vm_try!(self.atomic_store_u16(offset, op.apply_u16(old, value)));
+        VMResult::Success(old)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u32(&mut self, offset: usize, op: AtomicRmwOp, value: u32) -> VMResult<u32> {
+        let old = vm_try!(self.atomic_load_u32(offset));
+        vm_try!(self.atomic_store_u32(offset, op.apply_u32(old, value)));
+        VMResult::Success(old)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u64(&mut self, offset: usize, op: AtomicRmwOp, value: u64) -> VMResult<u64> {
+        let old = vm_try!(self.atomic_load_u64(offset));
+        vm_try!(self.atomic_store_u64(offset, op.apply_u64(old, value)));
+        VMResult::Success(old)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u8(&mut self, offset: usize, expected: u8, value: u8) -> VMResult<u8> {
+        let old = vm_try!(self.atomic_load_u8(offset));
+        if old == expected {
+            vm_try!(self.atomic_store_u8(offset, value));
+        }
+        VMResult::Success(old)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u16(
+        &mut self,
+        offset: usize,
+        expected: u16,
+        value: u16,
+    ) -> VMResult<u16> {
+        let old = vm_try!(self.atomic_load_u16(offset));
+        if old == expected {
+            vm_try!(self.atomic_store_u16(offset, value));
+        }
+        VMResult::Success(old)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u32(
+        &mut self,
+        offset: usize,
+        expected: u32,
+        value: u32,
+    ) -> VMResult<u32> {
+        let old = vm_try!(self.atomic_load_u32(offset));
+        if old == expected {
+            vm_try!(self.atomic_store_u32(offset, value));
+        }
+        VMResult::Success(old)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u64(
+        &mut self,
+        offset: usize,
+        expected: u64,
+        value: u64,
+    ) -> VMResult<u64> {
+        let old = vm_try!(self.atomic_load_u64(offset));
+        if old == expected {
+            vm_try!(self.atomic_store_u64(offset, value));
+        }
+        VMResult::Success(old)
+    }
+
+    #[inline(always)]
+    pub fn atomic_fence(&self) {}
+
     pub fn grow(&mut self, page_size_delta: u32) -> VMResult<i32> {
         let current_page_size = self.page_size();
         let new_page_size = current_page_size + page_size_delta;
@@ -571,6 +884,106 @@ impl LocalMemoryObject {
     }
 
     #[inline(always)]
+    pub fn atomic_load_u8(&self, offset: usize) -> VMResult<u8> {
+        self.memory.atomic_load_u8(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u16(&self, offset: usize) -> VMResult<u16> {
+        self.memory.atomic_load_u16(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u32(&self, offset: usize) -> VMResult<u32> {
+        self.memory.atomic_load_u32(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u64(&self, offset: usize) -> VMResult<u64> {
+        self.memory.atomic_load_u64(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u8(&mut self, offset: usize, value: u8) -> VMResult<()> {
+        self.memory.atomic_store_u8(offset, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u16(&mut self, offset: usize, value: u16) -> VMResult<()> {
+        self.memory.atomic_store_u16(offset, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u32(&mut self, offset: usize, value: u32) -> VMResult<()> {
+        self.memory.atomic_store_u32(offset, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u64(&mut self, offset: usize, value: u64) -> VMResult<()> {
+        self.memory.atomic_store_u64(offset, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u8(&mut self, offset: usize, op: AtomicRmwOp, value: u8) -> VMResult<u8> {
+        self.memory.atomic_rmw_u8(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u16(&mut self, offset: usize, op: AtomicRmwOp, value: u16) -> VMResult<u16> {
+        self.memory.atomic_rmw_u16(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u32(&mut self, offset: usize, op: AtomicRmwOp, value: u32) -> VMResult<u32> {
+        self.memory.atomic_rmw_u32(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u64(&mut self, offset: usize, op: AtomicRmwOp, value: u64) -> VMResult<u64> {
+        self.memory.atomic_rmw_u64(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u8(&mut self, offset: usize, expected: u8, value: u8) -> VMResult<u8> {
+        self.memory.atomic_cmpxchg_u8(offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u16(
+        &mut self,
+        offset: usize,
+        expected: u16,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.memory.atomic_cmpxchg_u16(offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u32(
+        &mut self,
+        offset: usize,
+        expected: u32,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.memory.atomic_cmpxchg_u32(offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u64(
+        &mut self,
+        offset: usize,
+        expected: u64,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.memory.atomic_cmpxchg_u64(offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_fence(&self) {
+        self.memory.atomic_fence();
+    }
+
+    #[inline(always)]
     pub fn grow(&mut self, page_size_delta: u32) -> VMResult<i32> {
         self.memory.grow(page_size_delta)
     }
@@ -587,103 +1000,306 @@ impl LocalMemoryObject {
 }
 
 #[derive(Debug)]
+struct SharedMemoryState {
+    memory: Memory,
+    #[cfg(feature = "async-runtime")]
+    wait_queues: HashMap<usize, VecDeque<Arc<SharedWaiter>>>,
+    #[cfg(feature = "async-runtime")]
+    next_waiter_id: u64,
+}
+
+#[derive(Debug)]
 pub struct SharedMemoryObject {
-    memory: Mutex<Memory>,
+    state: Mutex<SharedMemoryState>,
 }
 
 impl SharedMemoryObject {
     pub fn new(page_count: u32, max_page_size: u32) -> Arc<Self> {
         Arc::new(Self {
-            memory: Mutex::new(Memory::new_shared(page_count, max_page_size)),
+            state: Mutex::new(SharedMemoryState {
+                memory: Memory::new_shared(page_count, max_page_size),
+                #[cfg(feature = "async-runtime")]
+                wait_queues: HashMap::new(),
+                #[cfg(feature = "async-runtime")]
+                next_waiter_id: 1,
+            }),
         })
     }
 
     pub fn page_size(&self) -> u32 {
-        self.memory.lock().page_size()
+        self.state.lock().memory.page_size()
     }
 
     #[inline(always)]
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> VMResult<[u8; N]> {
-        self.memory.lock().read_u8_array::<N>(offset)
+        self.state.lock().memory.read_u8_array::<N>(offset)
     }
 
     #[inline(always)]
     pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
-        self.memory.lock().push_to_stack::<N>(stack, offset)
+        self.state.lock().memory.push_to_stack::<N>(stack, offset)
     }
 
     #[inline(always)]
     pub fn read_u8_at(&self, offset: usize) -> VMResult<u8> {
-        self.memory.lock().read_u8_at(offset)
+        self.state.lock().memory.read_u8_at(offset)
     }
 
     #[inline(always)]
     pub fn read_i8_at(&self, offset: usize) -> VMResult<i8> {
-        self.memory.lock().read_i8_at(offset)
+        self.state.lock().memory.read_i8_at(offset)
     }
 
     #[inline(always)]
     pub fn read_u16_at(&self, offset: usize) -> VMResult<u16> {
-        self.memory.lock().read_u16_at(offset)
+        self.state.lock().memory.read_u16_at(offset)
     }
 
     #[inline(always)]
     pub fn read_i16_at(&self, offset: usize) -> VMResult<i16> {
-        self.memory.lock().read_i16_at(offset)
+        self.state.lock().memory.read_i16_at(offset)
     }
 
     #[inline(always)]
     pub fn read_u32_at(&self, offset: usize) -> VMResult<u32> {
-        self.memory.lock().read_u32_at(offset)
+        self.state.lock().memory.read_u32_at(offset)
     }
 
     #[inline(always)]
     pub fn read_i32_at(&self, offset: usize) -> VMResult<i32> {
-        self.memory.lock().read_i32_at(offset)
+        self.state.lock().memory.read_i32_at(offset)
     }
 
     #[inline(always)]
     pub fn read_u64_at(&self, offset: usize) -> VMResult<u64> {
-        self.memory.lock().read_u64_at(offset)
+        self.state.lock().memory.read_u64_at(offset)
     }
 
     #[inline(always)]
     pub fn read_i64_at(&self, offset: usize) -> VMResult<i64> {
-        self.memory.lock().read_i64_at(offset)
+        self.state.lock().memory.read_i64_at(offset)
     }
 
     #[inline(always)]
     pub fn read_f32_at(&self, offset: usize) -> VMResult<f32> {
-        self.memory.lock().read_f32_at(offset)
+        self.state.lock().memory.read_f32_at(offset)
     }
 
     #[inline(always)]
     pub fn read_f64_at(&self, offset: usize) -> VMResult<f64> {
-        self.memory.lock().read_f64_at(offset)
+        self.state.lock().memory.read_f64_at(offset)
     }
 
     #[inline(always)]
     pub fn write_bytes(&self, offset: usize, bytes: &[u8]) -> VMResult<()> {
-        self.memory.lock().write_bytes(offset, bytes)
+        self.state.lock().memory.write_bytes(offset, bytes)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u8(&self, offset: usize) -> VMResult<u8> {
+        self.state.lock().memory.atomic_load_u8(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u16(&self, offset: usize) -> VMResult<u16> {
+        self.state.lock().memory.atomic_load_u16(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u32(&self, offset: usize) -> VMResult<u32> {
+        self.state.lock().memory.atomic_load_u32(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_load_u64(&self, offset: usize) -> VMResult<u64> {
+        self.state.lock().memory.atomic_load_u64(offset)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u8(&self, offset: usize, value: u8) -> VMResult<()> {
+        self.state.lock().memory.atomic_store_u8(offset, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u16(&self, offset: usize, value: u16) -> VMResult<()> {
+        self.state.lock().memory.atomic_store_u16(offset, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u32(&self, offset: usize, value: u32) -> VMResult<()> {
+        self.state.lock().memory.atomic_store_u32(offset, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_store_u64(&self, offset: usize, value: u64) -> VMResult<()> {
+        self.state.lock().memory.atomic_store_u64(offset, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u8(&self, offset: usize, op: AtomicRmwOp, value: u8) -> VMResult<u8> {
+        self.state.lock().memory.atomic_rmw_u8(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u16(&self, offset: usize, op: AtomicRmwOp, value: u16) -> VMResult<u16> {
+        self.state.lock().memory.atomic_rmw_u16(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u32(&self, offset: usize, op: AtomicRmwOp, value: u32) -> VMResult<u32> {
+        self.state.lock().memory.atomic_rmw_u32(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_rmw_u64(&self, offset: usize, op: AtomicRmwOp, value: u64) -> VMResult<u64> {
+        self.state.lock().memory.atomic_rmw_u64(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u8(&self, offset: usize, expected: u8, value: u8) -> VMResult<u8> {
+        self.state
+            .lock()
+            .memory
+            .atomic_cmpxchg_u8(offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u16(&self, offset: usize, expected: u16, value: u16) -> VMResult<u16> {
+        self.state
+            .lock()
+            .memory
+            .atomic_cmpxchg_u16(offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u32(&self, offset: usize, expected: u32, value: u32) -> VMResult<u32> {
+        self.state
+            .lock()
+            .memory
+            .atomic_cmpxchg_u32(offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_cmpxchg_u64(&self, offset: usize, expected: u64, value: u64) -> VMResult<u64> {
+        self.state
+            .lock()
+            .memory
+            .atomic_cmpxchg_u64(offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub fn atomic_fence(&self) {
+        let _state = self.state.lock();
+    }
+
+    #[cfg(feature = "async-runtime")]
+    pub fn register_wait32(&self, offset: usize, expected: u32) -> VMResult<AtomicWaitResult> {
+        let mut state = self.state.lock();
+        vm_try!(ensure_atomic_alignment(offset, 4));
+        let current = vm_try!(state.memory.atomic_load_u32(offset));
+        if current != expected {
+            return VMResult::Success(AtomicWaitResult::NotEqual);
+        }
+        let waiter = Arc::new(SharedWaiter::new(state.next_waiter_id));
+        state.next_waiter_id += 1;
+        state
+            .wait_queues
+            .entry(offset)
+            .or_default()
+            .push_back(waiter.clone());
+        VMResult::Success(AtomicWaitResult::Pending(SharedWaitRegistration {
+            address: offset,
+            waiter,
+        }))
+    }
+
+    #[cfg(feature = "async-runtime")]
+    pub fn register_wait64(&self, offset: usize, expected: u64) -> VMResult<AtomicWaitResult> {
+        let mut state = self.state.lock();
+        vm_try!(ensure_atomic_alignment(offset, 8));
+        let current = vm_try!(state.memory.atomic_load_u64(offset));
+        if current != expected {
+            return VMResult::Success(AtomicWaitResult::NotEqual);
+        }
+        let waiter = Arc::new(SharedWaiter::new(state.next_waiter_id));
+        state.next_waiter_id += 1;
+        state
+            .wait_queues
+            .entry(offset)
+            .or_default()
+            .push_back(waiter.clone());
+        VMResult::Success(AtomicWaitResult::Pending(SharedWaitRegistration {
+            address: offset,
+            waiter,
+        }))
+    }
+
+    pub fn notify_waiters(&self, offset: usize, count: u32) -> VMResult<u32> {
+        #[cfg(feature = "async-runtime")]
+        {
+            let mut state = self.state.lock();
+            vm_try!(state.memory.atomic_load_u32(offset));
+            let mut wake = Vec::new();
+            let mut remaining = count;
+            if let Some(queue) = state.wait_queues.get_mut(&offset) {
+                while remaining != 0 {
+                    let Some(waiter) = queue.pop_front() else {
+                        break;
+                    };
+                    if waiter.try_mark_notified() {
+                        wake.push(waiter);
+                        remaining -= 1;
+                    }
+                }
+                queue.retain(|waiter| waiter.is_waiting());
+                if queue.is_empty() {
+                    state.wait_queues.remove(&offset);
+                }
+            }
+            let woken = wake.len() as u32;
+            drop(state);
+            for waiter in wake {
+                waiter.notify.notify_one();
+            }
+            VMResult::Success(woken)
+        }
+        #[cfg(not(feature = "async-runtime"))]
+        {
+            let _ = count;
+            VMResult::Success(0)
+        }
+    }
+
+    #[cfg(feature = "async-runtime")]
+    fn remove_waiter(&self, offset: usize, waiter_id: u64) {
+        let mut state = self.state.lock();
+        if let Some(queue) = state.wait_queues.get_mut(&offset) {
+            if let Some(index) = queue.iter().position(|waiter| waiter.id() == waiter_id) {
+                queue.remove(index);
+            }
+            if queue.is_empty() {
+                state.wait_queues.remove(&offset);
+            }
+        }
     }
 
     #[inline(always)]
     pub fn grow(&self, page_size_delta: u32) -> VMResult<i32> {
-        self.memory.lock().grow(page_size_delta)
+        self.state.lock().memory.grow(page_size_delta)
     }
 
     #[inline(always)]
     pub fn copy(&self, dst: u32, src: u32, len: u32) -> VMResult<()> {
-        self.memory.lock().copy(dst, src, len)
+        self.state.lock().memory.copy(dst, src, len)
     }
 
     #[inline(always)]
     pub fn fill(&self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
-        self.memory.lock().fill(ptr, len, data)
+        self.state.lock().memory.fill(ptr, len, data)
     }
 
     pub fn with_memory<T>(&self, f: impl FnOnce(&mut Memory) -> T) -> T {
-        let mut memory = self.memory.lock();
-        f(&mut memory)
+        let mut state = self.state.lock();
+        f(&mut state.memory)
     }
 }
