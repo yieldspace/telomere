@@ -187,6 +187,20 @@ impl Stack {
     pub fn local_bytes(&self, reference: &LocalReference, local_addr: usize, size: usize) -> &[u8] {
         &self.memory[reference.local_top + local_addr..reference.local_top + local_addr + size]
     }
+    fn zero_new_locals(&mut self, start: usize, size: usize) -> VMResult<()> {
+        if size == 0 {
+            return VMResult::Success(());
+        }
+        let end = vm_try!(VMResult::from_option(start.checked_add(size), || {
+            VMResult::StackOverflow
+        }));
+        vm_try!(VMResult::from_option(
+            self.memory.get_mut(start..end),
+            || { VMResult::StackOverflow }
+        ))
+        .fill(0);
+        VMResult::Success(())
+    }
     /// # Safety
     /// Caller must ensure the returned pointer is not used after the stack is dropped or reallocated.
     pub unsafe fn local_area_mut_ptr(&mut self, reference: &LocalReference) -> *mut u8 {
@@ -206,6 +220,17 @@ impl Stack {
                 .cast::<CallStackInfo>()
         }) as _
     }
+    pub(crate) fn previous_local_reference(&self, reference: &LocalReference) -> LocalReference {
+        let CallStackInfo {
+            prev_local_reference_top,
+            prev_local_reference_size,
+            ..
+        } = *self.call_stack_info(reference);
+        LocalReference {
+            local_top: prev_local_reference_top,
+            local_size: prev_local_reference_size,
+        }
+    }
     pub fn code_addr(&self, reference: &LocalReference) -> GcRef {
         self.call_stack_info(reference).code_addr
     }
@@ -224,6 +249,7 @@ impl Stack {
         ));
 
         vm_try!(self.add_top(local_size));
+        vm_try!(self.zero_new_locals(local_top + param_size, local_size));
         let info = CallStackInfo {
             return_pc: StablePc::from_raw_in_frame(gc, self, prev_local_reference, return_addr),
             code_addr,
@@ -311,6 +337,7 @@ impl Stack {
         self.top = reference.local_top;
         vm_try!(self.add_top(param_size));
         vm_try!(self.add_top(local_size));
+        vm_try!(self.zero_new_locals(reference.local_top + param_size, local_size));
 
         let info = CallStackInfo {
             return_pc,

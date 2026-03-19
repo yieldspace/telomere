@@ -575,6 +575,22 @@ impl ExecuteContext<'_> {
     pub fn memory(&mut self) -> Option<&mut Memory> {
         self.memory_addr().map(|v| unsafe { self.gc.get_memory(v) })
     }
+    pub fn caller_local_reference(&self) -> Option<LocalReference> {
+        (self.local_reference.local_size != 0)
+            .then(|| self.stack.previous_local_reference(&self.local_reference))
+            .filter(|reference| reference.local_size != 0)
+    }
+    pub fn caller_memory_addr(&self) -> Option<GcRef> {
+        let caller = self.caller_local_reference()?;
+        let code_addr = self.stack.code_addr(&caller);
+        let func = self.func_by_addr(code_addr);
+        let instance = unsafe { &*self.gc.get_instance_unchecked(func.instance_addr) };
+        instance.mems.as_slice(self.gc).first().copied()
+    }
+    pub fn caller_memory(&mut self) -> Option<&mut Memory> {
+        self.caller_memory_addr()
+            .map(|addr| unsafe { self.gc.get_memory(addr) })
+    }
     pub fn return_slot(&mut self) -> ReturnSlot {
         let local_ref = self.local_reference();
         ReturnSlot(unsafe { self.stack.local_area_mut_ptr(&local_ref) })

@@ -1,6 +1,6 @@
 use crate::{
     common::stack::LaneType,
-    runtime::{memory_effect::WriteOperation, vm::load_internal},
+    runtime::vm::{compute_memory_offset, load_internal, store_internal, StoreBytes},
 };
 use telomere_macros::define_simd_operation;
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
@@ -10,8 +10,6 @@ use crate::{
     runtime::vm::call_next,
     Stack, VMResult,
 };
-
-use super::store_internal;
 
 pub unsafe fn op_v128_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     load_internal::<16>(tail_code, ctx, |stack, data, next| {
@@ -93,7 +91,7 @@ pub unsafe fn v128_load16x4_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 
 pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal(tail_code, ctx, |ctx| {
-        WriteOperation::Write16(ctx.stack.pop_u128().to_le_bytes())
+        StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
     })
 }
 
@@ -176,38 +174,25 @@ fn replace_lane_bytes<const N: usize>(bytes: &mut [u8; 16], lane: usize, value: 
     bytes[start..start + N].copy_from_slice(&value);
 }
 
-unsafe fn load_lane_read_handler<const N: usize>(
-    stack: &mut Stack,
-    data: &[u8],
-    next: *const Instr,
-) -> *const Instr {
-    let lane = (*next.sub(1)).operand.u32 as usize;
-    let mut bytes = stack.pop_u128().to_le_bytes();
-    replace_lane_bytes::<N>(&mut bytes, lane, data.try_into().unwrap());
-    trap_func!(stack.push_u128(u128::from_le_bytes(bytes)));
-    next
-}
-
 unsafe fn load_lane_internal<const N: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let vector = ctx.stack.pop_u128();
+    let lane = (*tail_code.add(1)).operand.u32 as usize;
+    let mut bytes = ctx.stack.pop_u128().to_le_bytes();
     let offset = ctx.stack.pop_u32();
-    let mem_addr = vm_try!(VMResult::from_option(ctx.memory_addr(), || {
-        VMResult::MemoryIndexOutOfRange
-    }));
-    vm_try!(ctx.stack.push_u128(vector));
-    vm_try!(ctx.effect.push_non_atomic_memory_read_effect(
-        ctx.task_id,
-        mem_addr,
-        (*tail_code).operand.memarg,
-        offset,
-        N as u32,
-        load_lane_read_handler::<N>,
-    ));
-    ctx.cont = tail_code.add(2);
-    VMResult::Success(())
+    let data = {
+        let memory = if let Some(memory) = ctx.memory() {
+            memory
+        } else {
+            return VMResult::MemoryIndexOutOfRange;
+        };
+        let start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
+        vm_try!(memory.read_u8_array::<N>(start))
+    };
+    replace_lane_bytes::<N>(&mut bytes, lane, data);
+    vm_try!(ctx.stack.push_u128(u128::from_le_bytes(bytes)));
+    call_next(tail_code, 2, ctx)
 }
 
 unsafe fn store_lane_internal<const N: usize>(
@@ -218,38 +203,20 @@ unsafe fn store_lane_internal<const N: usize>(
     let bytes = ctx.stack.pop_u128().to_le_bytes();
     let start = lane * N;
     let offset = ctx.stack.pop_u32();
-    let mem_addr = vm_try!(VMResult::from_option(ctx.memory_addr(), || {
+    let memory = if let Some(memory) = ctx.memory() {
+        memory
+    } else {
+        return VMResult::MemoryIndexOutOfRange;
+    };
+    let mem_start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
+    let mem_end = vm_try!(VMResult::from_option(mem_start.checked_add(N), || {
         VMResult::MemoryIndexOutOfRange
     }));
-    let operation = match N {
-        1 => WriteOperation::Write1([bytes[start]]),
-        2 => WriteOperation::Write2([bytes[start], bytes[start + 1]]),
-        4 => WriteOperation::Write4([
-            bytes[start],
-            bytes[start + 1],
-            bytes[start + 2],
-            bytes[start + 3],
-        ]),
-        8 => WriteOperation::Write8([
-            bytes[start],
-            bytes[start + 1],
-            bytes[start + 2],
-            bytes[start + 3],
-            bytes[start + 4],
-            bytes[start + 5],
-            bytes[start + 6],
-            bytes[start + 7],
-        ]),
-        _ => unreachable!(),
-    };
-    vm_try!(ctx.effect.push_non_atomic_memory_write_effect(
-        ctx.task_id,
-        mem_addr,
-        (*tail_code).operand.memarg,
-        offset,
-        ctx.gc,
-        operation,
+    let target = vm_try!(VMResult::from_option(
+        memory.get_mut(mem_start..mem_end),
+        || { VMResult::MemoryIndexOutOfRange }
     ));
+    target.copy_from_slice(&bytes[start..start + N]);
     call_next(tail_code, 2, ctx)
 }
 
