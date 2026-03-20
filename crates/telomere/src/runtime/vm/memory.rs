@@ -138,6 +138,18 @@ fn truncate_u64_to_u32_bytes(value: u64) -> (result: [u8; 4])
     ]
 }
 
+pub open spec fn spec_load_start_indexed_result(
+    default_memory_present: bool,
+    memarg_offset: u32,
+    offset: u32,
+    memidx: u32,
+) -> Option<(int, int)> {
+    match crate::runtime::vm::spec_load_start_result(default_memory_present, memarg_offset, offset) {
+        Some(start) => Some((start, memidx as int)),
+        None => None,
+    }
+}
+
 } // verus!
 
 #[inline(always)]
@@ -1443,3 +1455,120 @@ pub(crate) use op_i64_store32 as op_i64_store32_local;
 pub(crate) use op_i64_store8 as op_i64_store8_local;
 pub(crate) use op_mem_grow as op_mem_grow_local;
 pub(crate) use op_mem_size as op_mem_size_local;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        common::{
+            stack::{CachedMemoryKind, CallFrameCache},
+            store::InstanceId,
+            ExecuteContext, GcRef, LocalReference, Operand, Store, StoreInner,
+        },
+        runtime::{memory_effect::Effect, scheduler::EffectSupplier},
+    };
+    use std::collections::VecDeque;
+
+    fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
+        CallFrameCache {
+            code_addr: GcRef(0),
+            code_base: std::ptr::null(),
+            instance: InstanceId::from_index(0),
+            memory0_kind: kind,
+            memory0_raw: raw,
+        }
+    }
+
+    fn test_context<'a>(
+        stack: &'a mut Stack,
+        store: &'a Store,
+        gc: &'a mut StoreInner,
+        pending_effects: &'a mut u32,
+        effects: &'a mut VecDeque<Effect>,
+    ) -> ExecuteContext<'a> {
+        ExecuteContext {
+            stack,
+            local_reference: LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            current_frame: frame(CachedMemoryKind::Local, 1),
+            store,
+            gc,
+            effect: EffectSupplier::from_parts(pending_effects, effects),
+            cont: std::ptr::null(),
+            task_id: 1,
+        }
+    }
+
+    #[test]
+    fn load_start_helpers_match_offset_and_index_contracts() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut effects = VecDeque::new();
+        let mut stack = Stack::new(32);
+        stack.push_u32(5).unwrap();
+
+        let program = [
+            Instr {
+                operand: Operand {
+                    memarg: MemArg {
+                        align: 2,
+                        offset: 7,
+                    },
+                },
+            },
+            Instr {
+                operand: Operand { u32: 3 },
+            },
+        ];
+        let mut ctx = test_context(
+            &mut stack,
+            &store,
+            &mut gc,
+            &mut pending_effects,
+            &mut effects,
+        );
+
+        let start = unsafe { load_start(program.as_ptr(), &mut ctx) }.unwrap();
+        assert_eq!(start, 12);
+
+        ctx.stack.push_u32(11).unwrap();
+        let (indexed_start, memidx) =
+            unsafe { load_start_indexed(program.as_ptr(), &mut ctx) }.unwrap();
+        assert_eq!(indexed_start, 18);
+        assert_eq!(memidx, 3);
+    }
+
+    #[test]
+    fn load_start_fail_closes_memory_offset_overflow() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut effects = VecDeque::new();
+        let mut stack = Stack::new(16);
+        stack.push_u32(1).unwrap();
+
+        let program = [Instr {
+            operand: Operand {
+                memarg: MemArg {
+                    align: 0,
+                    offset: u32::MAX,
+                },
+            },
+        }];
+        let mut ctx = test_context(
+            &mut stack,
+            &store,
+            &mut gc,
+            &mut pending_effects,
+            &mut effects,
+        );
+
+        assert!(matches!(
+            unsafe { load_start(program.as_ptr(), &mut ctx) },
+            VMResult::MemoryIndexOutOfRange
+        ));
+    }
+}

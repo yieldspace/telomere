@@ -13,6 +13,36 @@ fn global_index(idx: usize) -> (result: usize)
 
 } // verus!
 
+#[inline(always)]
+unsafe fn global_addr(tail_code: *const Instr, ctx: &ExecuteContext) -> GcRef {
+    let idx = global_index((*tail_code).operand.u32 as usize);
+    ctx.instance().globals.as_slice()[idx]
+}
+
+#[inline(always)]
+unsafe fn global_get<const SIZE: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = global_addr(tail_code, ctx);
+    let bytes = ctx.gc.get_global(addr);
+    debug_assert_eq!(bytes.len(), SIZE);
+    vm_try!(ctx.stack.push_slice(bytes));
+    call_next(tail_code, 1, ctx)
+}
+
+#[inline(always)]
+unsafe fn global_set<const SIZE: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = global_addr(tail_code, ctx);
+    ctx.gc
+        .get_global_mut(addr)
+        .copy_from_slice(&ctx.stack.pop_u8_array::<SIZE>());
+    call_next(tail_code, 1, ctx)
+}
+
 /// WebAssembly `global.get`.
 ///
 /// Spec:
@@ -29,10 +59,7 @@ fn global_index(idx: usize) -> (result: usize)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let idx = global_index((*tail_code).operand.u32 as usize);
-    let addr = ctx.instance().globals.as_slice()[idx];
-    vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
-    call_next(tail_code, 1, ctx)
+    global_get::<4>(tail_code, ctx)
 }
 
 /// WebAssembly `global.get`.
@@ -51,10 +78,7 @@ pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_global_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let idx = global_index((*tail_code).operand.u32 as usize);
-    let addr = ctx.instance().globals.as_slice()[idx];
-    vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
-    call_next(tail_code, 1, ctx)
+    global_get::<8>(tail_code, ctx)
 }
 
 /// WebAssembly `global.get`.
@@ -73,10 +97,7 @@ pub unsafe fn op_global_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_global_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let idx = global_index((*tail_code).operand.u32 as usize);
-    let addr = ctx.instance().globals.as_slice()[idx];
-    vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
-    call_next(tail_code, 1, ctx)
+    global_get::<16>(tail_code, ctx)
 }
 
 /// WebAssembly `global.set`.
@@ -95,12 +116,7 @@ pub unsafe fn op_global_get16(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_global_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let idx = global_index((*tail_code).operand.u32 as usize);
-    let addr = ctx.instance().globals.as_slice()[idx];
-    ctx.gc
-        .get_global_mut(addr)
-        .copy_from_slice(&ctx.stack.pop_u8_array::<4>());
-    call_next(tail_code, 1, ctx)
+    global_set::<4>(tail_code, ctx)
 }
 
 /// WebAssembly `global.set`.
@@ -119,12 +135,7 @@ pub unsafe fn op_global_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let idx = global_index((*tail_code).operand.u32 as usize);
-    let addr = ctx.instance().globals.as_slice()[idx];
-    ctx.gc
-        .get_global_mut(addr)
-        .copy_from_slice(&ctx.stack.pop_u8_array::<8>());
-    call_next(tail_code, 1, ctx)
+    global_set::<8>(tail_code, ctx)
 }
 
 /// WebAssembly `global.set`.
@@ -143,10 +154,5 @@ pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_global_set16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let idx = global_index((*tail_code).operand.u32 as usize);
-    let addr = ctx.instance().globals.as_slice()[idx];
-    ctx.gc
-        .get_global_mut(addr)
-        .copy_from_slice(&ctx.stack.pop_u8_array::<16>());
-    call_next(tail_code, 1, ctx)
+    global_set::<16>(tail_code, ctx)
 }

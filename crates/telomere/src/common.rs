@@ -10,6 +10,7 @@ pub use vm_result::VMResult;
 mod memory;
 pub use memory::{AtomicRmwOp, LocalMemoryObject, MemArg, Memory, SharedMemoryObject};
 pub use memory::{AtomicWaitResult, SharedWaitRegistration};
+pub(crate) mod formal;
 pub(crate) mod stack;
 use stack::CachedMemoryKind;
 pub(crate) use stack::CallFrameCache;
@@ -547,47 +548,40 @@ pub struct ExecuteContext<'a> {
     pub task_id: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SnapshotMemoryKind {
-    None,
-    Local,
-    Shared,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct ExecuteContextSnapshot {
-    pub(crate) default_memory: SnapshotMemoryKind,
-    pub(crate) caller_memory: SnapshotMemoryKind,
+    pub(crate) default_memory: Option<MemoryHandle>,
+    pub(crate) caller_memory: Option<MemoryHandle>,
     pub(crate) cont_addr: usize,
     pub(crate) task_id: u32,
+    pub(crate) current_frame: CallFrameCache,
+    pub(crate) caller_frame: Option<CallFrameCache>,
+    pub(crate) active_local: LocalReference,
+    pub(crate) caller_local: Option<LocalReference>,
 }
 
 impl ExecuteContextSnapshot {
     pub(crate) fn has_default_memory(self) -> bool {
-        !matches!(self.default_memory, SnapshotMemoryKind::None)
-    }
-}
-
-fn snapshot_memory_kind(kind: CachedMemoryKind) -> SnapshotMemoryKind {
-    match kind {
-        CachedMemoryKind::None => SnapshotMemoryKind::None,
-        CachedMemoryKind::Local => SnapshotMemoryKind::Local,
-        CachedMemoryKind::Shared => SnapshotMemoryKind::Shared,
+        self.default_memory.is_some()
     }
 }
 
 impl ExecuteContext<'_> {
     pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
-        let default_memory = snapshot_memory_kind(self.current_frame.memory0_kind);
-        let caller_memory = self
-            .caller_frame_cache()
-            .map(|frame| snapshot_memory_kind(frame.memory0_kind))
-            .unwrap_or(SnapshotMemoryKind::None);
+        let default_memory = self.current_frame.memory0_handle();
+        let caller_local = self.caller_local_reference();
+        let caller_frame = caller_local.map(|reference| self.stack.frame_cache(&reference));
+        let caller_memory = caller_frame.and_then(|frame| frame.memory0_handle());
         ExecuteContextSnapshot {
             default_memory,
             caller_memory,
             cont_addr: self.cont as usize,
             task_id: self.task_id,
+            current_frame: self.current_frame,
+            caller_frame,
+            active_local: self.local_reference,
+            caller_local,
         }
     }
 
@@ -1119,6 +1113,18 @@ impl From<&[Locals]> for LocalsData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::{memory_effect::Effect, scheduler::EffectSupplier};
+    use std::collections::VecDeque;
+
+    fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
+        CallFrameCache {
+            code_addr: GcRef(0),
+            code_base: std::ptr::null(),
+            instance: store::InstanceId::from_index(0),
+            memory0_kind: kind,
+            memory0_raw: raw,
+        }
+    }
 
     #[test]
     fn execute_elem_init_const_expr_fail_closes_numeric_const() {
@@ -1142,5 +1148,121 @@ mod tests {
             RefType::ExternRef,
         );
         assert!(matches!(result, VMResult::Unlinkable));
+    }
+
+    #[test]
+    fn execute_context_snapshot_tracks_tail_call_memory_cache() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+
+        let root = stack
+            .function_call(
+                0,
+                0,
+                frame(CachedMemoryKind::Local, 1),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let callee = stack
+            .function_call(
+                0,
+                0,
+                frame(CachedMemoryKind::Shared, 2),
+                root,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let tail = stack
+            .function_return_call(&callee, 0, 0, frame(CachedMemoryKind::Local, 3))
+            .unwrap();
+
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut effects: VecDeque<Effect> = VecDeque::new();
+        let program = [crate::runtime::vm::VM_END, crate::runtime::vm::VM_END];
+        let mut ctx = ExecuteContext {
+            stack: &mut stack,
+            local_reference: callee,
+            current_frame: frame(CachedMemoryKind::Shared, 2),
+            store: &store,
+            gc: &mut gc,
+            effect: EffectSupplier::from_parts(&mut pending_effects, &mut effects),
+            cont: program.as_ptr(),
+            task_id: 77,
+        };
+
+        let before = ctx.snapshot();
+        let callee_local_top = callee.local_top;
+        let callee_local_size = callee.local_size;
+        let root_local_top = root.local_top;
+        let root_local_size = root.local_size;
+        assert_eq!(
+            before.default_memory,
+            Some(MemoryHandle::Shared(store::SharedMemoryId::from_raw(2)))
+        );
+        assert_eq!(
+            before.caller_memory,
+            Some(MemoryHandle::Local(store::LocalMemoryId::from_raw(1)))
+        );
+        assert_eq!(before.current_frame.memory0_handle(), before.default_memory);
+        assert_eq!(
+            before.caller_frame.unwrap().memory0_handle(),
+            before.caller_memory
+        );
+        let before_active_local = before.active_local;
+        let before_caller_local = before.caller_local.unwrap();
+        let before_active_local_top = before_active_local.local_top;
+        let before_active_local_size = before_active_local.local_size;
+        let before_caller_local_top = before_caller_local.local_top;
+        let before_caller_local_size = before_caller_local.local_size;
+        assert_eq!(before_active_local_top, callee_local_top);
+        assert_eq!(before_active_local_size, callee_local_size);
+        assert_eq!(before_caller_local_top, root_local_top);
+        assert_eq!(before_caller_local_size, root_local_size);
+        assert!(before.has_default_memory());
+        assert_eq!(before.cont_addr, program.as_ptr() as usize);
+        assert_eq!(before.task_id, 77);
+
+        ctx.set_local_reference(tail);
+        ctx.cont = unsafe { program.as_ptr().add(1) };
+
+        let after = ctx.snapshot();
+        let tail_local_top = tail.local_top;
+        let tail_local_size = tail.local_size;
+        assert_eq!(
+            after.default_memory,
+            Some(MemoryHandle::Local(store::LocalMemoryId::from_raw(3)))
+        );
+        assert_eq!(
+            after.caller_memory,
+            Some(MemoryHandle::Local(store::LocalMemoryId::from_raw(1)))
+        );
+        assert_eq!(after.current_frame.memory0_handle(), after.default_memory);
+        assert_eq!(
+            after.caller_frame.unwrap().memory0_handle(),
+            after.caller_memory
+        );
+        let after_active_local = after.active_local;
+        let after_caller_local = after.caller_local.unwrap();
+        let after_active_local_top = after_active_local.local_top;
+        let after_active_local_size = after_active_local.local_size;
+        let after_caller_local_top = after_caller_local.local_top;
+        let after_caller_local_size = after_caller_local.local_size;
+        assert_eq!(after_active_local_top, tail_local_top);
+        assert_eq!(after_active_local_size, tail_local_size);
+        assert_eq!(after_caller_local_top, root_local_top);
+        assert_eq!(after_caller_local_size, root_local_size);
+        assert_eq!(ctx.memory_addr(), after.default_memory);
+        assert!(after.has_default_memory());
+        assert_eq!(after.cont_addr, unsafe { program.as_ptr().add(1) } as usize);
+        assert_eq!(after.task_id, 77);
     }
 }

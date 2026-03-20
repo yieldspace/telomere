@@ -1002,6 +1002,7 @@ dependencies = [
  "tokio",
  "tracing",
  "union-find",
+ "verus_state_machines_macros",
  "vstd",
  "wast",
  "wat",

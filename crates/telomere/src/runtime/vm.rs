@@ -53,6 +53,39 @@ fn checked_compute_memory_offset(memarg_offset: u32, offset: u32) -> (result: Op
     }
 }
 
+pub open spec fn spec_load_start_result(
+    default_memory_present: bool,
+    memarg_offset: u32,
+    offset: u32,
+) -> Option<int> {
+    if default_memory_present {
+        spec_compute_memory_offset_result(memarg_offset, offset)
+    } else {
+        None
+    }
+}
+
+pub open spec fn spec_store_result(
+    view: crate::common::formal::LinearMemoryView,
+    start: int,
+    payload: Seq<u8>,
+) -> crate::common::formal::LinearMemoryView {
+    crate::common::formal::linear_write_bytes(view, start, payload)
+}
+
+pub proof fn lemma_store_result_preserves_page_metadata(
+    view: crate::common::formal::LinearMemoryView,
+    start: int,
+    payload: Seq<u8>,
+)
+    ensures
+        spec_store_result(view, start, payload).current_pages == view.current_pages,
+        spec_store_result(view, start, payload).max_pages == view.max_pages,
+        spec_store_result(view, start, payload).shared == view.shared,
+{
+    crate::common::formal::lemma_linear_write_preserves_page_metadata(view, start, payload);
+}
+
 } // verus!
 
 #[inline(always)]

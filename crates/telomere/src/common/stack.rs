@@ -722,6 +722,7 @@ impl Stack {
         self.top = reference.local_top + reference.local_size as usize + stack_top + return_size;
     }
 }
+
 pub(crate) trait StackOperation<T> {
     fn push(&mut self, v: T) -> VMResult<()>;
     fn pop(&mut self) -> T;
@@ -795,3 +796,249 @@ stack_operation_wide!(u16x8);
 stack_operation_wide!(u32x4);
 #[cfg(feature = "simd")]
 stack_operation_wide!(u64x2);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
+        CallFrameCache {
+            code_addr: GcRef(0),
+            code_base: std::ptr::null(),
+            instance: InstanceId::from_index(0),
+            memory0_kind: kind,
+            memory0_raw: raw,
+        }
+    }
+
+    #[test]
+    fn function_call_and_return_roundtrip_result_bytes() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let prev = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+
+        stack.push_u32(0x1122_3344).unwrap();
+        let reference = stack
+            .function_call(
+                4,
+                8,
+                frame(CachedMemoryKind::Local, 9),
+                prev,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let reference_local_top = reference.local_top;
+        let reference_local_size = reference.local_size;
+
+        assert_eq!(reference_local_top, 0);
+        assert_eq!(
+            reference_local_size as usize,
+            4 + 8 + std::mem::size_of::<CallStackInfo>()
+        );
+        assert_eq!(trusted_read_u32(&stack.memory[0..4]), 0x1122_3344);
+        assert!(stack.memory[4..12].iter().all(|byte| *byte == 0));
+        assert_eq!(
+            stack.frame_cache(&reference).memory0_handle(),
+            Some(MemoryHandle::Local(LocalMemoryId::from_raw(9)))
+        );
+
+        stack.push_u32(0xaabb_ccdd).unwrap();
+        let (restored, return_pc) = stack.function_return(&reference, 4, &runtime);
+        let restored_local_top = restored.local_top;
+        let restored_local_size = restored.local_size;
+        assert_eq!(restored_local_top, 0);
+        assert_eq!(restored_local_size, 0);
+        assert!(return_pc.is_null());
+        assert_eq!(stack.top, 4);
+        assert_eq!(stack.pop_u32(), 0xaabb_ccdd);
+    }
+
+    #[test]
+    fn function_return_in_place_uses_local_area_as_result_slot() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let prev = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+
+        let reference = stack
+            .function_call(
+                0,
+                8,
+                frame(CachedMemoryKind::Shared, 5),
+                prev,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let reference_local_top = reference.local_top;
+
+        trusted_write_u32(
+            &mut stack.memory[reference_local_top..reference_local_top + 4],
+            0x5566_7788,
+        );
+        let (restored, return_pc) = stack.function_return_in_place(&reference, 4, &runtime);
+        let restored_local_top = restored.local_top;
+        let restored_local_size = restored.local_size;
+        assert_eq!(restored_local_top, 0);
+        assert_eq!(restored_local_size, 0);
+        assert!(return_pc.is_null());
+        assert_eq!(stack.top, 4);
+        assert_eq!(stack.pop_u32(), 0x5566_7788);
+    }
+
+    #[test]
+    fn function_return_call_reuses_frame_slot_and_zeroes_new_locals() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let caller = stack
+            .function_call(
+                0,
+                4,
+                frame(CachedMemoryKind::Local, 1),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        stack.push_u32(0x0102_0304).unwrap();
+        let callee = stack
+            .function_call(
+                4,
+                4,
+                frame(CachedMemoryKind::Shared, 2),
+                caller,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        stack.push_u32(0xa1a2_a3a4).unwrap();
+        stack.push_u32(0xb1b2_b3b4).unwrap();
+        let tail = stack
+            .function_return_call(&callee, 8, 8, frame(CachedMemoryKind::Local, 3))
+            .unwrap();
+        let tail_local_top = tail.local_top;
+        let tail_local_size = tail.local_size;
+        let callee_local_top = callee.local_top;
+
+        assert_eq!(tail_local_top, callee_local_top);
+        assert_eq!(
+            tail_local_size as usize,
+            8 + 8 + std::mem::size_of::<CallStackInfo>()
+        );
+        assert_eq!(
+            trusted_read_u32(&stack.memory[tail_local_top..tail_local_top + 4]),
+            0xa1a2_a3a4
+        );
+        assert_eq!(
+            trusted_read_u32(&stack.memory[tail_local_top + 4..tail_local_top + 8]),
+            0xb1b2_b3b4
+        );
+        assert!(stack.memory[tail_local_top + 8..tail_local_top + 16]
+            .iter()
+            .all(|byte| *byte == 0));
+        assert_eq!(
+            stack.frame_cache(&tail).memory0_handle(),
+            Some(MemoryHandle::Local(LocalMemoryId::from_raw(3)))
+        );
+    }
+
+    #[test]
+    fn block_return_moves_result_to_block_stack_top() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let reference = stack
+            .function_call(
+                0,
+                4,
+                frame(CachedMemoryKind::Local, 1),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let reference_local_top = reference.local_top;
+        let reference_local_size = reference.local_size;
+        let frame_top = reference_local_top + reference_local_size as usize;
+        stack.push_u32(0x1111_2222).unwrap();
+        stack.push_u32(0x3333_4444).unwrap();
+        assert_eq!(frame_top + 8, stack.top);
+
+        stack.block_return(&reference, 4, 4);
+
+        assert_eq!(stack.top, frame_top + 8);
+        assert_eq!(
+            trusted_read_u32(&stack.memory[frame_top..frame_top + 4]),
+            0x1111_2222
+        );
+        assert_eq!(
+            trusted_read_u32(&stack.memory[frame_top + 4..frame_top + 8]),
+            0x3333_4444
+        );
+    }
+
+    #[test]
+    fn generic_local_get_copies_bytes_to_operand_stack() {
+        let mut stack = Stack::new(64);
+        let reference = LocalReference {
+            local_top: 0,
+            local_size: 8,
+        };
+
+        stack
+            .push_slice(&[0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80])
+            .unwrap();
+        stack.local_get(&reference, 2, 4).unwrap();
+
+        assert_eq!(stack.top, 12);
+        assert_eq!(&stack.memory[8..12], &[0x30, 0x40, 0x50, 0x60]);
+    }
+
+    #[test]
+    fn generic_local_set_moves_top_bytes_into_local_slot() {
+        let mut stack = Stack::new(64);
+        let reference = LocalReference {
+            local_top: 0,
+            local_size: 8,
+        };
+
+        stack.push_slice(&[0; 8]).unwrap();
+        stack.push_slice(&[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+        stack.local_set(&reference, 2, 4);
+
+        assert_eq!(stack.top, 8);
+        assert_eq!(&stack.memory[2..6], &[0xaa, 0xbb, 0xcc, 0xdd]);
+    }
+
+    #[test]
+    fn generic_local_tee_keeps_operand_stack_and_updates_local_slot() {
+        let mut stack = Stack::new(64);
+        let reference = LocalReference {
+            local_top: 0,
+            local_size: 8,
+        };
+
+        stack.push_slice(&[0; 8]).unwrap();
+        stack.push_slice(&[1, 2, 3, 4]).unwrap();
+        stack.local_tee(&reference, 1, 4);
+
+        assert_eq!(stack.top, 12);
+        assert_eq!(&stack.memory[1..5], &[1, 2, 3, 4]);
+        assert_eq!(&stack.memory[8..12], &[1, 2, 3, 4]);
+    }
+}

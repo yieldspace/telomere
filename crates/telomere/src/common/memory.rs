@@ -1527,3 +1527,128 @@ impl SharedMemoryObject {
         f(&mut state.memory)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_write_copy_fill_and_grow_match_linear_model_bytes() {
+        let mut memory = Memory::new(1, 3);
+
+        assert!(matches!(
+            memory.write_bytes(0, &[0x10, 0x20, 0x30, 0x40]),
+            VMResult::Success(())
+        ));
+        assert!(matches!(memory.copy(8, 0, 4), VMResult::Success(())));
+        assert!(matches!(memory.fill(12, 4, 0xaa), VMResult::Success(())));
+
+        assert_eq!(
+            &memory.slice()[0..16],
+            &[
+                0x10, 0x20, 0x30, 0x40, 0x00, 0x00, 0x00, 0x00, 0x10, 0x20, 0x30, 0x40, 0xaa, 0xaa,
+                0xaa, 0xaa,
+            ]
+        );
+
+        assert_eq!(memory.grow(1).unwrap(), 1);
+        assert_eq!(memory.page_size(), 2);
+        assert_eq!(
+            &memory.slice()[0..16],
+            &[
+                0x10, 0x20, 0x30, 0x40, 0x00, 0x00, 0x00, 0x00, 0x10, 0x20, 0x30, 0x40, 0xaa, 0xaa,
+                0xaa, 0xaa,
+            ]
+        );
+        assert!(memory.slice()[PAGE_SIZE..PAGE_SIZE + 16]
+            .iter()
+            .all(|byte| *byte == 0));
+    }
+
+    #[tokio::test]
+    async fn shared_wait_queue_internal_state_tracks_notify_and_timeout_cleanup() {
+        let shared = SharedMemoryObject::new(1, 1);
+        assert!(matches!(
+            shared.atomic_store_u32(0, 7),
+            VMResult::Success(())
+        ));
+
+        let first = match shared.register_wait32(0, 7).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+        let second = match shared.register_wait32(0, 7).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+
+        {
+            let state = shared.state.lock();
+            let queue = state.wait_queues.get(&0).expect("queue must exist");
+            assert_eq!(queue.len(), 2);
+            assert!(queue.iter().all(|waiter| waiter.is_waiting()));
+            assert_eq!(state.next_waiter_id, 3);
+        }
+
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
+        assert_eq!(first.wait_result(shared.clone(), -1).await, 0);
+
+        {
+            let state = shared.state.lock();
+            let queue = state.wait_queues.get(&0).expect("one waiter should remain");
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue.front().unwrap().id(), second.waiter.id());
+            assert!(queue.front().unwrap().is_waiting());
+        }
+
+        assert_eq!(second.wait_result(shared.clone(), 0).await, 2);
+
+        {
+            let state = shared.state.lock();
+            assert!(!state.wait_queues.contains_key(&0));
+        }
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn shared_wait_queue_rejects_mismatch_and_notifies_fifo_up_to_count() {
+        let shared = SharedMemoryObject::new(1, 1);
+        assert!(matches!(
+            shared.atomic_store_u32(0, 11),
+            VMResult::Success(())
+        ));
+
+        assert!(matches!(
+            shared.register_wait32(0, 12).unwrap(),
+            AtomicWaitResult::NotEqual
+        ));
+
+        let first = match shared.register_wait32(0, 11).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+        let second = match shared.register_wait32(0, 11).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+        let third = match shared.register_wait32(0, 11).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+
+        assert_eq!(shared.notify_waiters(0, 2).unwrap(), 2);
+        assert_eq!(first.wait_result(shared.clone(), 0).await, 0);
+        assert_eq!(second.wait_result(shared.clone(), 0).await, 0);
+
+        {
+            let state = shared.state.lock();
+            let queue = state.wait_queues.get(&0).expect("one waiter should remain");
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue.front().unwrap().id(), third.waiter.id());
+        }
+
+        assert_eq!(shared.notify_waiters(0, 10).unwrap(), 1);
+        assert_eq!(third.wait_result(shared.clone(), 0).await, 0);
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 0);
+    }
+}

@@ -1,5 +1,36 @@
 use super::*;
 
+#[inline(always)]
+unsafe fn local_get<const SIZE: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    vm_try!(ctx.stack.local_get(&ctx.local_reference(), addr, SIZE));
+    trace!("op_local_get{SIZE}: {addr}");
+    call_next(tail_code, 1, ctx)
+}
+
+#[inline(always)]
+unsafe fn local_set<const SIZE: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    ctx.stack.local_set(&ctx.local_reference(), addr, SIZE);
+    call_next(tail_code, 1, ctx)
+}
+
+#[inline(always)]
+unsafe fn local_tee<const SIZE: usize>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    ctx.stack.local_tee(&ctx.local_reference(), addr, SIZE);
+    call_next(tail_code, 1, ctx)
+}
+
 /// WebAssembly `drop`.
 ///
 /// Spec:
@@ -85,11 +116,7 @@ pub unsafe fn op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx.stack.local_get4(&ctx.local_reference(), addr));
-    trace!("op_local_get4: {addr}");
-
-    call_next(tail_code, 1, ctx)
+    local_get::<4>(tail_code, ctx)
 }
 
 /// WebAssembly `local.get`.
@@ -108,11 +135,7 @@ pub unsafe fn op_local_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx.stack.local_get8(&ctx.local_reference(), addr));
-    trace!("op_local_get8: {addr}");
-
-    call_next(tail_code, 1, ctx)
+    local_get::<8>(tail_code, ctx)
 }
 
 /// WebAssembly `local.get`.
@@ -131,11 +154,7 @@ pub unsafe fn op_local_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx.stack.local_get16(&ctx.local_reference(), addr));
-    trace!("op_local_get16: {addr}");
-
-    call_next(tail_code, 1, ctx)
+    local_get::<16>(tail_code, ctx)
 }
 
 /// WebAssembly `local.set`.
@@ -154,9 +173,7 @@ pub unsafe fn op_local_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    ctx.stack.local_set4(&ctx.local_reference(), addr);
-    call_next(tail_code, 1, ctx)
+    local_set::<4>(tail_code, ctx)
 }
 
 /// WebAssembly `local.set`.
@@ -175,10 +192,7 @@ pub unsafe fn op_local_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    ctx.stack.local_set8(&ctx.local_reference(), addr);
-
-    call_next(tail_code, 1, ctx)
+    local_set::<8>(tail_code, ctx)
 }
 
 /// WebAssembly `local.set`.
@@ -197,10 +211,7 @@ pub unsafe fn op_local_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_set16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    ctx.stack.local_set16(&ctx.local_reference(), addr);
-
-    call_next(tail_code, 1, ctx)
+    local_set::<16>(tail_code, ctx)
 }
 
 /// WebAssembly `local.tee`.
@@ -219,9 +230,7 @@ pub unsafe fn op_local_set16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_tee4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    ctx.stack.local_tee4(&ctx.local_reference(), addr);
-    call_next(tail_code, 1, ctx)
+    local_tee::<4>(tail_code, ctx)
 }
 
 /// WebAssembly `local.tee`.
@@ -240,10 +249,7 @@ pub unsafe fn op_local_tee4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    ctx.stack.local_tee8(&ctx.local_reference(), addr);
-
-    call_next(tail_code, 1, ctx)
+    local_tee::<8>(tail_code, ctx)
 }
 
 /// WebAssembly `local.tee`.
@@ -262,8 +268,5 @@ pub unsafe fn op_local_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_tee16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    ctx.stack.local_tee16(&ctx.local_reference(), addr);
-
-    call_next(tail_code, 1, ctx)
+    local_tee::<16>(tail_code, ctx)
 }

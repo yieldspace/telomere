@@ -29,6 +29,18 @@ fn wait_result_timed_out() -> (result: i32)
     2
 }
 
+pub open spec fn spec_atomic_start_indexed_result(
+    default_memory_present: bool,
+    memarg_offset: u32,
+    offset: u32,
+    memidx: u32,
+) -> Option<(int, int)> {
+    match crate::runtime::vm::spec_load_start_result(default_memory_present, memarg_offset, offset) {
+        Some(start) => Some((start, memidx as int)),
+        None => None,
+    }
+}
+
 } // verus!
 
 #[inline(always)]
@@ -2575,3 +2587,201 @@ pub(crate) use op_i64_atomic_store8 as op_i64_atomic_store8_local;
 pub(crate) use op_memory_atomic_notify as op_memory_atomic_notify_unshared;
 pub(crate) use op_memory_atomic_wait32 as op_memory_atomic_wait32_unshared;
 pub(crate) use op_memory_atomic_wait64 as op_memory_atomic_wait64_unshared;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        common::{
+            stack::{CachedMemoryKind, CallFrameCache},
+            store::InstanceId,
+            ExecuteContext, GcRef, LocalReference, Operand, SharedMemoryObject, Store, StoreInner,
+        },
+        runtime::{
+            memory_effect::{AsyncCompletion, Effect},
+            scheduler::EffectSupplier,
+        },
+    };
+    use std::collections::VecDeque;
+
+    fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
+        CallFrameCache {
+            code_addr: GcRef(0),
+            code_base: std::ptr::null(),
+            instance: InstanceId::from_index(0),
+            memory0_kind: kind,
+            memory0_raw: raw,
+        }
+    }
+
+    fn test_context<'a>(
+        stack: &'a mut Stack,
+        store: &'a Store,
+        gc: &'a mut StoreInner,
+        pending_effects: &'a mut u32,
+        effects: &'a mut VecDeque<Effect>,
+    ) -> ExecuteContext<'a> {
+        ExecuteContext {
+            stack,
+            local_reference: LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            current_frame: frame(CachedMemoryKind::Local, 1),
+            store,
+            gc,
+            effect: EffectSupplier::from_parts(pending_effects, effects),
+            cont: std::ptr::null(),
+            task_id: 9,
+        }
+    }
+
+    unsafe fn stop_op(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
+        VMResult::Success(())
+    }
+
+    #[test]
+    fn atomic_start_helpers_match_offset_index_and_wait_codes() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut effects = VecDeque::new();
+        let mut stack = Stack::new(32);
+        stack.push_u32(4).unwrap();
+
+        let program = [
+            Instr {
+                operand: Operand {
+                    memarg: MemArg {
+                        align: 2,
+                        offset: 6,
+                    },
+                },
+            },
+            Instr {
+                operand: Operand { u32: 8 },
+            },
+        ];
+        let mut ctx = test_context(
+            &mut stack,
+            &store,
+            &mut gc,
+            &mut pending_effects,
+            &mut effects,
+        );
+
+        let start = unsafe { atomic_start(program.as_ptr(), &mut ctx) }.unwrap();
+        assert_eq!(start, 10);
+
+        ctx.stack.push_u32(1).unwrap();
+        let (indexed_start, memidx) =
+            unsafe { atomic_start_indexed(program.as_ptr(), &mut ctx) }.unwrap();
+        assert_eq!(indexed_start, 7);
+        assert_eq!(memidx, 8);
+        assert_eq!(wait_result_not_equal(), 1);
+        assert_eq!(wait_result_ok(), 0);
+        assert_eq!(wait_result_timed_out(), 2);
+    }
+
+    #[tokio::test]
+    async fn push_wait_effect_preserves_resume_pc_and_task_id() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut effects = VecDeque::new();
+        let mut stack = Stack::new(32);
+        let shared = SharedMemoryObject::new(1, 1);
+        shared.atomic_store_u32(0, 7).unwrap();
+        let wait = match shared.register_wait32(0, 7).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+        let program = [
+            Instr {
+                operand: Operand { u32: 0 },
+            },
+            Instr { op: stop_op },
+        ];
+        let resume_pc = unsafe { program.as_ptr().add(1) };
+        let local_reference = {
+            let mut ctx = test_context(
+                &mut stack,
+                &store,
+                &mut gc,
+                &mut pending_effects,
+                &mut effects,
+            );
+            let local_reference = ctx.local_reference;
+            unsafe {
+                push_wait_effect(&mut ctx, shared.clone(), wait, -1, resume_pc);
+            }
+            local_reference
+        };
+
+        assert_eq!(pending_effects, 1);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
+
+        let effect = effects.pop_front().expect("async effect must be queued");
+        let result = match effect {
+            Effect::AsyncEffect(effect) => effect.future.await,
+        };
+
+        assert_eq!(result.task_id, 9);
+        match result.completion {
+            AsyncCompletion::ContinueWithI32 { fp, value } => {
+                assert_eq!(value, wait_result_ok());
+                assert_eq!(fp.resolve(&gc, &stack, local_reference), resume_pc);
+            }
+            other => panic!("unexpected completion: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unshared_wait_and_notify_helpers_fail_close() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut effects = VecDeque::new();
+        let mut stack = Stack::new(64);
+        let mut ctx = test_context(
+            &mut stack,
+            &store,
+            &mut gc,
+            &mut pending_effects,
+            &mut effects,
+        );
+
+        ctx.stack.push_u32(5).unwrap();
+        ctx.stack.push_u32(2).unwrap();
+        let notify_program = [
+            Instr {
+                operand: Operand {
+                    memarg: MemArg {
+                        align: 2,
+                        offset: 3,
+                    },
+                },
+            },
+            Instr { op: stop_op },
+        ];
+        unsafe {
+            op_memory_atomic_notify(notify_program.as_ptr(), &mut ctx).unwrap();
+        }
+        assert_eq!(ctx.stack.pop_u32(), 0);
+
+        ctx.stack.push_u32(4).unwrap();
+        ctx.stack.push_u32(7).unwrap();
+        ctx.stack.push_i64(-1).unwrap();
+        let wait_program = [Instr {
+            operand: Operand {
+                memarg: MemArg {
+                    align: 2,
+                    offset: 1,
+                },
+            },
+        }];
+        let result = unsafe { op_memory_atomic_wait32(wait_program.as_ptr(), &mut ctx) };
+        assert!(matches!(result, VMResult::InvalidOperand));
+    }
+}

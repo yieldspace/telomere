@@ -130,6 +130,17 @@ impl EffectSupplier<'_> {
         *self.pending_effects
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_parts<'a>(
+        pending_effects: &'a mut u32,
+        effects: &'a mut VecDeque<Effect>,
+    ) -> EffectSupplier<'a> {
+        EffectSupplier {
+            pending_effects,
+            effects,
+        }
+    }
+
     pub(crate) fn push_async_effect(&mut self, future: AsyncEffectFuture) {
         self.effects
             .push_back(Effect::AsyncEffect(AsyncEffect { future }));

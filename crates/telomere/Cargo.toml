@@ -24,6 +24,7 @@ tokio.workspace = true
 parking_lot = "0.12.5"
 libc.workspace = true
 vstd = "0.0.0-2026-03-17-2326"
+verus_state_machines_macros = "0.0.0-2026-03-15-0111"
 
 [dev-dependencies]
 futures = "0.3.31"

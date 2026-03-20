@@ -1688,7 +1688,25 @@ impl StoreState {
 
 #[cfg(test)]
 mod tests {
-    use super::{Store, StoreState};
+    use super::{
+        LocalMemoryObject, MemoryHandle, SharedMemoryId, SharedMemoryObject, Stack, Store,
+        StoreInner, StoreState, VMResult,
+    };
+    use crate::common::PAGE_SIZE;
+
+    fn local_id(handle: MemoryHandle) -> super::LocalMemoryId {
+        match handle {
+            MemoryHandle::Local(id) => id,
+            MemoryHandle::Shared(_) => panic!("expected local memory handle"),
+        }
+    }
+
+    fn shared_id(handle: MemoryHandle) -> SharedMemoryId {
+        match handle {
+            MemoryHandle::Shared(id) => id,
+            MemoryHandle::Local(_) => panic!("expected shared memory handle"),
+        }
+    }
 
     #[test]
     fn test_state() {
@@ -1710,5 +1728,148 @@ mod tests {
             err.to_string(),
             "lock_runtime is unsupported while the same store execution is already active on this thread"
         );
+    }
+
+    #[test]
+    fn store_memory_dispatch_matches_handle_kind_and_cross_copy_paths() {
+        let mut store = StoreInner::new();
+        let local = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 3)));
+        let shared = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 3)));
+        let local_dst = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 3)));
+        let shared_dst = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 3)));
+
+        store
+            .write_bytes(MemoryHandle::Local(local), 0, &[1, 2, 3, 4])
+            .unwrap();
+        store
+            .copy_memory(MemoryHandle::Local(local), 8, 0, 4)
+            .unwrap();
+        store
+            .fill_memory(MemoryHandle::Local(local), 12, 4, 0xaa)
+            .unwrap();
+
+        store
+            .write_bytes(MemoryHandle::Shared(shared), 0, &[9, 8, 7, 6])
+            .unwrap();
+        store
+            .copy_memory(MemoryHandle::Shared(shared), 8, 0, 4)
+            .unwrap();
+        store
+            .fill_memory(MemoryHandle::Shared(shared), 12, 4, 0xbb)
+            .unwrap();
+
+        store
+            .copy_memory_local_to_shared(shared, local, 16, 8, 4)
+            .unwrap();
+        store
+            .copy_memory_shared_to_local(local_dst, shared, 4, 16, 4)
+            .unwrap();
+        store
+            .copy_memory_shared_to_shared(shared_dst, shared, 0, 12, 4)
+            .unwrap();
+
+        let mut stack = Stack::new(32);
+        store
+            .push_memory_to_stack::<4>(MemoryHandle::Local(local), &mut stack, 0)
+            .unwrap();
+        assert_eq!(stack.pop_u8_array::<4>(), [1, 2, 3, 4]);
+        store
+            .push_memory_to_stack::<4>(MemoryHandle::Shared(shared), &mut stack, 0)
+            .unwrap();
+        assert_eq!(stack.pop_u8_array::<4>(), [9, 8, 7, 6]);
+
+        assert_eq!(store.grow_memory(MemoryHandle::Local(local), 1).unwrap(), 1);
+        assert_eq!(
+            store.grow_memory(MemoryHandle::Shared(shared), 1).unwrap(),
+            1
+        );
+
+        assert_eq!(
+            store
+                .local_memory(local)
+                .memory()
+                .read_u8_array::<16>(0)
+                .unwrap(),
+            [1, 2, 3, 4, 0, 0, 0, 0, 1, 2, 3, 4, 0xaa, 0xaa, 0xaa, 0xaa]
+        );
+        assert_eq!(
+            store
+                .shared_memory(shared)
+                .with_memory(|memory| memory.read_u8_array::<20>(0).unwrap()),
+            [9, 8, 7, 6, 0, 0, 0, 0, 9, 8, 7, 6, 0xbb, 0xbb, 0xbb, 0xbb, 1, 2, 3, 4,]
+        );
+        assert_eq!(
+            store
+                .local_memory(local_dst)
+                .memory()
+                .read_u8_array::<8>(0)
+                .unwrap(),
+            [0, 0, 0, 0, 1, 2, 3, 4]
+        );
+        assert_eq!(
+            store
+                .shared_memory(shared_dst)
+                .with_memory(|memory| memory.read_u8_array::<4>(0).unwrap()),
+            [0xbb, 0xbb, 0xbb, 0xbb]
+        );
+        assert_eq!(
+            store
+                .local_memory(local)
+                .memory()
+                .read_u8_array::<8>(PAGE_SIZE)
+                .unwrap(),
+            [0; 8]
+        );
+        assert_eq!(
+            store
+                .shared_memory(shared)
+                .with_memory(|memory| memory.read_u8_array::<8>(PAGE_SIZE).unwrap()),
+            [0; 8]
+        );
+    }
+
+    #[test]
+    fn store_atomic_cmpxchg_dispatch_preserves_old_value_and_alignment_errors() {
+        let mut store = StoreInner::new();
+        let local = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 1)));
+        let shared = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 1)));
+
+        store
+            .atomic_store_u32(MemoryHandle::Local(local), 4, 0x1122_3344)
+            .unwrap();
+        store
+            .atomic_store_u32(MemoryHandle::Shared(shared), 8, 0x5566_7788)
+            .unwrap();
+
+        let local_old = store
+            .atomic_cmpxchg_u32(MemoryHandle::Local(local), 4, 0x1122_3344, 0xaabb_ccdd)
+            .unwrap();
+        assert_eq!(local_old, 0x1122_3344);
+        assert_eq!(
+            store
+                .atomic_load_u32(MemoryHandle::Local(local), 4)
+                .unwrap(),
+            0xaabb_ccdd
+        );
+
+        let shared_old = store
+            .atomic_cmpxchg_u32(MemoryHandle::Shared(shared), 8, 0xdead_beef, 0xfeed_face)
+            .unwrap();
+        assert_eq!(shared_old, 0x5566_7788);
+        assert_eq!(
+            store
+                .atomic_load_u32(MemoryHandle::Shared(shared), 8)
+                .unwrap(),
+            0x5566_7788
+        );
+
+        assert!(matches!(
+            store.atomic_cmpxchg_u32(MemoryHandle::Local(local), 2, 0, 1),
+            VMResult::UnalignedAtomic
+        ));
+        assert!(matches!(
+            store.atomic_cmpxchg_u32(MemoryHandle::Shared(shared), 2, 0, 1),
+            VMResult::UnalignedAtomic
+        ));
     }
 }

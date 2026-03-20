@@ -13,6 +13,42 @@ fn branch_taken(cond: u32) -> (taken: bool)
 
 } // verus!
 
+#[inline(always)]
+unsafe fn jump_target(ctx: &ExecuteContext, addr: u32) -> *const Instr {
+    ctx.code().offset(addr as isize)
+}
+
+#[inline(always)]
+unsafe fn tail_jump(ptr: *const Instr, skip: isize, ctx: &mut ExecuteContext) -> VMResult<()> {
+    call_next(ptr, skip, ctx)
+}
+
+#[inline(always)]
+unsafe fn conditional_jump_target(
+    tail_code: *const Instr,
+    ctx: &ExecuteContext,
+    taken: bool,
+    addr: u32,
+) -> *const Instr {
+    if taken {
+        jump_target(ctx, addr)
+    } else {
+        tail_code.offset(1)
+    }
+}
+
+#[inline(always)]
+unsafe fn block_return_continue(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    stack_top: usize,
+    return_size: usize,
+) -> VMResult<()> {
+    ctx.stack
+        .block_return(&ctx.local_reference(), stack_top, return_size);
+    tail_jump(tail_code, 1, ctx)
+}
+
 /// WebAssembly `return`.
 ///
 /// Spec:
@@ -31,9 +67,7 @@ fn branch_taken(cond: u32) -> (taken: bool)
 pub unsafe fn op_return(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.jump_addr;
     trace!("op_return: {addr}");
-    let code = ctx.code();
-    let tail_code = code.offset(addr as isize);
-    call_next(tail_code, 0, ctx)
+    tail_jump(jump_target(ctx, addr), 0, ctx)
 }
 
 /// WebAssembly `end`.
@@ -74,9 +108,7 @@ pub unsafe fn op_end(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRes
 pub unsafe fn op_br(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.jump_addr;
     trace!("op_br: {addr}");
-
-    let tail_code = ctx.code().offset(addr as isize);
-    call_next(tail_code, 0, ctx)
+    tail_jump(jump_target(ctx, addr), 0, ctx)
 }
 
 /// WebAssembly `else`.
@@ -98,8 +130,7 @@ pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     trace!("op_else");
 
     let addr = (*tail_code).operand.jump_addr;
-    let tail_code = ctx.code().offset(addr as isize);
-    call_next(tail_code, 1, ctx)
+    tail_jump(jump_target(ctx, addr), 1, ctx)
 }
 
 /// WebAssembly `br_if`.
@@ -120,14 +151,13 @@ pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let cond = ctx.stack.pop_u32();
     trace!("op_br_if: {cond}");
-
-    let ptr = if branch_taken(cond) {
-        let addr = (*tail_code).operand.jump_addr;
-        ctx.code().offset(addr as isize)
-    } else {
-        tail_code.offset(1)
-    };
-    call_next(ptr, 0, ctx)
+    let ptr = conditional_jump_target(
+        tail_code,
+        ctx,
+        branch_taken(cond),
+        (*tail_code).operand.jump_addr,
+    );
+    tail_jump(ptr, 0, ctx)
 }
 
 /// WebAssembly `br_table`.
@@ -162,8 +192,7 @@ pub unsafe fn op_br_table(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
         table_size,
         addr
     );
-    let tail_code = ctx.code().offset(addr as isize);
-    call_next(tail_code, 0, ctx)
+    tail_jump(jump_target(ctx, addr), 0, ctx)
 }
 
 /// WebAssembly `loop`.
@@ -185,13 +214,12 @@ pub unsafe fn op_loop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     trace!("op_loop: {}", (*tail_code).operand.jump_addr);
 
     let loop_param = (*tail_code).operand.loop_param;
-    ctx.stack.block_return(
-        &ctx.local_reference(),
+    block_return_continue(
+        tail_code,
+        ctx,
         loop_param.stack_top as usize,
         loop_param.param_size as usize,
-    );
-
-    call_next(tail_code, 1, ctx)
+    )
 }
 
 /// WebAssembly `if`.
@@ -214,12 +242,8 @@ pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
     let value = ctx.stack.pop_u32();
     trace!("op_if: {else_addr} {value}");
 
-    let ptr = if branch_taken(value) {
-        tail_code.offset(1)
-    } else {
-        ctx.code().offset(else_addr as isize)
-    };
-    call_next(ptr, 0, ctx)
+    let ptr = conditional_jump_target(tail_code, ctx, !branch_taken(value), else_addr);
+    tail_jump(ptr, 0, ctx)
 }
 
 /// Telomere internal `special_function_return` trampoline.
@@ -283,8 +307,7 @@ pub unsafe fn special_block_return(
         block_return.return_size as usize,
     );
     trace!("stack: {:?}", ctx.stack);
-
-    call_next(tail_code, 1, ctx)
+    tail_jump(tail_code, 1, ctx)
 }
 
 /// Telomere internal `special_function_vm_end` trampoline.
