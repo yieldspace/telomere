@@ -481,6 +481,41 @@ async fn memory_grow_returns_previous_page_count_and_minus_one_on_limit() {
     );
 }
 
+async fn assert_memory_grow_overflow_returns_minus_one(memory_decl: &str) {
+    let store = Store::new();
+    let registry = Registry::new();
+    let module = format!(
+        r#"
+        (module
+          (memory {memory_decl})
+          (func (export "grow") (param i32) (result i32)
+            local.get 0
+            memory.grow)
+          (func (export "size") (result i32)
+            memory.size))
+        "#
+    );
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    assert_success_i32(call_i32(&instance, &store, "size", vec![]).await, 1);
+    assert_success_i32(
+        call_i32(&instance, &store, "grow", vec![WasmValue::I32(-1)]).await,
+        -1,
+    );
+    assert_success_i32(call_i32(&instance, &store, "size", vec![]).await, 1);
+}
+
+#[tokio::test]
+async fn memory_grow_overflow_keeps_local_memory_size_unchanged() {
+    assert_memory_grow_overflow_returns_minus_one("1 10").await;
+}
+
+#[cfg(feature = "threads")]
+#[tokio::test]
+async fn memory_grow_overflow_keeps_shared_memory_size_unchanged() {
+    assert_memory_grow_overflow_returns_minus_one("1 10 shared").await;
+}
+
 #[tokio::test]
 async fn indexed_local_memory_ops_support_nonzero_memidx() {
     let store = Store::new();

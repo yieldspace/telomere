@@ -993,13 +993,14 @@ impl Memory {
 
     pub fn grow(&mut self, page_size_delta: u32) -> VMResult<i32> {
         let current_page_size = self.page_size();
-        let new_page_size = current_page_size + page_size_delta;
-        if self.max_pages >= new_page_size {
-            self.current_pages = new_page_size;
-            VMResult::Success(current_page_size as i32)
-        } else {
-            VMResult::Success(-1)
+        let Some(new_page_size) = current_page_size.checked_add(page_size_delta) else {
+            return VMResult::Success(-1);
+        };
+        if new_page_size > self.max_pages {
+            return VMResult::Success(-1);
         }
+        self.current_pages = new_page_size;
+        VMResult::Success(current_page_size as i32)
     }
 
     pub fn fill(&mut self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
