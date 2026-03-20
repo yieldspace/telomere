@@ -24,11 +24,9 @@ pub enum AsyncCompletion {
         result: VMResult<*const Instr>,
     },
 }
-#[cfg(feature = "async-runtime")]
 pub struct AsyncEffect {
     pub future: AsyncEffectFuture,
 }
-#[cfg(feature = "async-runtime")]
 impl fmt::Debug for AsyncEffect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("AsyncEffect(..)")
@@ -37,6 +35,5 @@ impl fmt::Debug for AsyncEffect {
 
 #[derive(Debug)]
 pub enum Effect {
-    #[cfg(feature = "async-runtime")]
     AsyncEffect(AsyncEffect),
 }

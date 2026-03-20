@@ -21,9 +21,7 @@ fn proposal_allowlist() -> Vec<&'static str> {
     let mut families = Vec::new();
     #[cfg(feature = "threads")]
     families.push("threads");
-    #[cfg(feature = "tail-call")]
     families.push("tail-call");
-    #[cfg(feature = "multi-memory")]
     families.push("wasm-3.0");
     families
 }
@@ -33,30 +31,24 @@ fn proposal_only() -> Vec<&'static str> {
     let mut fixtures = Vec::new();
     #[cfg(feature = "threads")]
     fixtures.push("proposals/threads/atomic");
-    #[cfg(feature = "tail-call")]
-    {
-        fixtures.push("proposals/tail-call/return_call");
-        fixtures.push("proposals/tail-call/return_call_indirect");
-    }
-    #[cfg(feature = "multi-memory")]
-    {
-        fixtures.extend([
-            "proposals/wasm-3.0/memory-multi",
-            "proposals/wasm-3.0/load2",
-            "proposals/wasm-3.0/memory_copy0",
-            "proposals/wasm-3.0/memory_copy1",
-            "proposals/wasm-3.0/memory_fill0",
-            "proposals/wasm-3.0/memory_init0",
-            "proposals/wasm-3.0/memory_size0",
-            "proposals/wasm-3.0/memory_size1",
-            "proposals/wasm-3.0/memory_size2",
-            "proposals/wasm-3.0/memory_size3",
-            "proposals/wasm-3.0/memory_trap0",
-            "proposals/wasm-3.0/memory_trap1",
-        ]);
-        #[cfg(feature = "simd")]
-        fixtures.push("proposals/wasm-3.0/simd_memory-multi");
-    }
+    fixtures.push("proposals/tail-call/return_call");
+    fixtures.push("proposals/tail-call/return_call_indirect");
+    fixtures.extend([
+        "proposals/wasm-3.0/memory-multi",
+        "proposals/wasm-3.0/load2",
+        "proposals/wasm-3.0/memory_copy0",
+        "proposals/wasm-3.0/memory_copy1",
+        "proposals/wasm-3.0/memory_fill0",
+        "proposals/wasm-3.0/memory_init0",
+        "proposals/wasm-3.0/memory_size0",
+        "proposals/wasm-3.0/memory_size1",
+        "proposals/wasm-3.0/memory_size2",
+        "proposals/wasm-3.0/memory_size3",
+        "proposals/wasm-3.0/memory_trap0",
+        "proposals/wasm-3.0/memory_trap1",
+    ]);
+    #[cfg(feature = "simd")]
+    fixtures.push("proposals/wasm-3.0/simd_memory-multi");
     fixtures
 }
 #[derive(Clone)]
@@ -138,7 +130,6 @@ fn collect_root_cases(suite_dir: &Path) -> (Vec<Case>, HashSet<String>) {
         if stem.starts_with("simd") {
             continue;
         }
-        #[cfg(feature = "multi-memory")]
         if matches!(stem.as_str(), "memory" | "binary" | "binary-leb128") {
             continue;
         }

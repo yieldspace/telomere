@@ -14,6 +14,7 @@ pub use common::Stack;
 pub use common::VMResult;
 pub use common::WasmValue;
 pub use common::{Store, StoreState};
+pub use parser::core::ProposalFeature;
 pub use parser::core::WasmParser;
 pub use parser::core::WasmParserError;
 pub use runtime::aliasing;

@@ -1,6 +1,5 @@
 use super::*;
 use crate::common::AtomicRmwOp;
-#[cfg(feature = "async-runtime")]
 use crate::common::AtomicWaitResult;
 use vstd::prelude::*;
 
@@ -2226,7 +2225,6 @@ pub unsafe fn op_memory_atomic_notify_indexed_shared(
     call_next(tail_code, 2, ctx)
 }
 
-#[cfg(feature = "async-runtime")]
 /// WebAssembly threads `memory.atomic.wait` completion helper.
 ///
 /// Spec:
@@ -2307,31 +2305,23 @@ pub unsafe fn op_memory_atomic_wait32_shared(
     let timeout_ns = ctx.stack.pop_i64();
     let expected = ctx.stack.pop_u32();
     let start = vm_try!(atomic_start(tail_code, ctx));
-    #[cfg(feature = "async-runtime")]
-    {
-        let shared = ctx
-            .gc
-            .shared_memory(ctx.default_shared_memory_id_unchecked());
-        match vm_try!(shared.register_wait32(start, expected)) {
-            AtomicWaitResult::NotEqual => {
-                vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-                call_next(tail_code, 1, ctx)
-            }
-            AtomicWaitResult::Pending(wait) => {
-                let resume_pc = tail_code.offset(1);
-                let shared = ctx
-                    .gc
-                    .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
-                push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-                let _ = wait_effect(ctx, resume_pc);
-                VMResult::Success(())
-            }
+    let shared = ctx
+        .gc
+        .shared_memory(ctx.default_shared_memory_id_unchecked());
+    match vm_try!(shared.register_wait32(start, expected)) {
+        AtomicWaitResult::NotEqual => {
+            vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
+            call_next(tail_code, 1, ctx)
         }
-    }
-    #[cfg(not(feature = "async-runtime"))]
-    {
-        let _ = (timeout_ns, expected, start);
-        VMResult::InvalidOperand
+        AtomicWaitResult::Pending(wait) => {
+            let resume_pc = tail_code.offset(1);
+            let shared = ctx
+                .gc
+                .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+            push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
+            let _ = wait_effect(ctx, resume_pc);
+            VMResult::Success(())
+        }
     }
 }
 
@@ -2378,31 +2368,23 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared(
     let timeout_ns = ctx.stack.pop_i64();
     let expected = ctx.stack.pop_u32();
     let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-    #[cfg(feature = "async-runtime")]
-    {
-        let shared = ctx
-            .gc
-            .shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
-        match vm_try!(shared.register_wait32(start, expected)) {
-            AtomicWaitResult::NotEqual => {
-                vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-                call_next(tail_code, 2, ctx)
-            }
-            AtomicWaitResult::Pending(wait) => {
-                let resume_pc = tail_code.offset(2);
-                let shared = ctx
-                    .gc
-                    .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
-                push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-                let _ = wait_effect(ctx, resume_pc);
-                VMResult::Success(())
-            }
+    let shared = ctx
+        .gc
+        .shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+    match vm_try!(shared.register_wait32(start, expected)) {
+        AtomicWaitResult::NotEqual => {
+            vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
+            call_next(tail_code, 2, ctx)
         }
-    }
-    #[cfg(not(feature = "async-runtime"))]
-    {
-        let _ = (timeout_ns, expected, start, memidx);
-        VMResult::InvalidOperand
+        AtomicWaitResult::Pending(wait) => {
+            let resume_pc = tail_code.offset(2);
+            let shared = ctx
+                .gc
+                .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+            push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
+            let _ = wait_effect(ctx, resume_pc);
+            VMResult::Success(())
+        }
     }
 }
 
@@ -2450,31 +2432,23 @@ pub unsafe fn op_memory_atomic_wait64_shared(
     let timeout_ns = ctx.stack.pop_i64();
     let expected = ctx.stack.pop_u64();
     let start = vm_try!(atomic_start(tail_code, ctx));
-    #[cfg(feature = "async-runtime")]
-    {
-        let shared = ctx
-            .gc
-            .shared_memory(ctx.default_shared_memory_id_unchecked());
-        match vm_try!(shared.register_wait64(start, expected)) {
-            AtomicWaitResult::NotEqual => {
-                vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-                call_next(tail_code, 1, ctx)
-            }
-            AtomicWaitResult::Pending(wait) => {
-                let resume_pc = tail_code.offset(1);
-                let shared = ctx
-                    .gc
-                    .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
-                push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-                let _ = wait_effect(ctx, resume_pc);
-                VMResult::Success(())
-            }
+    let shared = ctx
+        .gc
+        .shared_memory(ctx.default_shared_memory_id_unchecked());
+    match vm_try!(shared.register_wait64(start, expected)) {
+        AtomicWaitResult::NotEqual => {
+            vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
+            call_next(tail_code, 1, ctx)
         }
-    }
-    #[cfg(not(feature = "async-runtime"))]
-    {
-        let _ = (timeout_ns, expected, start);
-        VMResult::InvalidOperand
+        AtomicWaitResult::Pending(wait) => {
+            let resume_pc = tail_code.offset(1);
+            let shared = ctx
+                .gc
+                .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+            push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
+            let _ = wait_effect(ctx, resume_pc);
+            VMResult::Success(())
+        }
     }
 }
 
@@ -2521,31 +2495,23 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
     let timeout_ns = ctx.stack.pop_i64();
     let expected = ctx.stack.pop_u64();
     let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-    #[cfg(feature = "async-runtime")]
-    {
-        let shared = ctx
-            .gc
-            .shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
-        match vm_try!(shared.register_wait64(start, expected)) {
-            AtomicWaitResult::NotEqual => {
-                vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-                call_next(tail_code, 2, ctx)
-            }
-            AtomicWaitResult::Pending(wait) => {
-                let resume_pc = tail_code.offset(2);
-                let shared = ctx
-                    .gc
-                    .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
-                push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-                let _ = wait_effect(ctx, resume_pc);
-                VMResult::Success(())
-            }
+    let shared = ctx
+        .gc
+        .shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+    match vm_try!(shared.register_wait64(start, expected)) {
+        AtomicWaitResult::NotEqual => {
+            vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
+            call_next(tail_code, 2, ctx)
         }
-    }
-    #[cfg(not(feature = "async-runtime"))]
-    {
-        let _ = (timeout_ns, expected, start, memidx);
-        VMResult::InvalidOperand
+        AtomicWaitResult::Pending(wait) => {
+            let resume_pc = tail_code.offset(2);
+            let shared = ctx
+                .gc
+                .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+            push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
+            let _ = wait_effect(ctx, resume_pc);
+            VMResult::Success(())
+        }
     }
 }
 

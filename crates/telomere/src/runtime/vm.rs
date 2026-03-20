@@ -1,5 +1,6 @@
 #[macro_use]
 pub(crate) mod traps;
+#[cfg(feature = "threads")]
 mod atomics;
 mod bulk_memory;
 mod call;
@@ -227,27 +228,19 @@ fn start_async_host_call(
     return_addr: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<CallOutcome> {
-    #[cfg(feature = "async-runtime")]
-    {
-        let async_host = ctx.func().async_host_code_pointer();
-        let task_id = ctx.task_id;
-        let future = async_host(ctx);
-        ctx.effect.push_async_effect(Box::pin(async move {
-            AsyncResult {
-                task_id,
-                completion: AsyncCompletion::HostCall {
-                    result: future.await,
-                },
-            }
-        }));
-        ctx.cont = return_addr;
-        VMResult::Success(CallOutcome::Pending)
-    }
-    #[cfg(not(feature = "async-runtime"))]
-    {
-        let _ = (return_addr, ctx);
-        VMResult::InvalidOperand
-    }
+    let async_host = ctx.func().async_host_code_pointer();
+    let task_id = ctx.task_id;
+    let future = async_host(ctx);
+    ctx.effect.push_async_effect(Box::pin(async move {
+        AsyncResult {
+            task_id,
+            completion: AsyncCompletion::HostCall {
+                result: future.await,
+            },
+        }
+    }));
+    ctx.cont = return_addr;
+    VMResult::Success(CallOutcome::Pending)
 }
 
 fn invoke_host_function(
@@ -263,6 +256,7 @@ fn invoke_host_function(
     }
 }
 
+#[cfg(feature = "threads")]
 pub(crate) use atomics::*;
 pub(crate) use bulk_memory::{
     op_data_drop, op_mem_copy_indexed_local_local, op_mem_copy_indexed_local_shared,

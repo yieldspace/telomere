@@ -18,6 +18,7 @@ async fn call_i32(
     }
 }
 
+#[cfg(feature = "simd")]
 async fn call_v128(
     instance: &telomere::common::InstanceHandle,
     store: &Store,
@@ -480,7 +481,6 @@ async fn memory_grow_returns_previous_page_count_and_minus_one_on_limit() {
     );
 }
 
-#[cfg(feature = "multi-memory")]
 #[tokio::test]
 async fn indexed_local_memory_ops_support_nonzero_memidx() {
     let store = Store::new();
@@ -535,7 +535,7 @@ async fn indexed_local_memory_ops_support_nonzero_memidx() {
     );
 }
 
-#[cfg(all(feature = "multi-memory", feature = "threads"))]
+#[cfg(feature = "threads")]
 #[tokio::test]
 async fn indexed_cross_memory_copy_supports_local_to_shared() {
     let store = Store::new();
@@ -572,7 +572,7 @@ async fn indexed_cross_memory_copy_supports_local_to_shared() {
     );
 }
 
-#[cfg(all(feature = "multi-memory", feature = "simd"))]
+#[cfg(feature = "simd")]
 async fn assert_indexed_simd_memory_roundtrip(memory_decl: &str) {
     let store = Store::new();
     let registry = Registry::new();
@@ -614,13 +614,13 @@ async fn assert_indexed_simd_memory_roundtrip(memory_decl: &str) {
     );
 }
 
-#[cfg(all(feature = "multi-memory", feature = "simd"))]
+#[cfg(feature = "simd")]
 #[tokio::test]
 async fn indexed_simd_memory_access_roundtrips_for_local_nonzero_memidx() {
     assert_indexed_simd_memory_roundtrip("1").await;
 }
 
-#[cfg(all(feature = "multi-memory", feature = "threads", feature = "simd"))]
+#[cfg(all(feature = "threads", feature = "simd"))]
 #[tokio::test]
 async fn indexed_simd_memory_access_roundtrips_for_shared_nonzero_memidx() {
     assert_indexed_simd_memory_roundtrip("1 2 shared").await;

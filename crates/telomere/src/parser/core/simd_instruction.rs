@@ -35,10 +35,6 @@ fn memory_shared<R: BinaryReader>(
     ctx: &SimdParserContext<R>,
     memidx: u32,
 ) -> Result<bool, WasmParserError> {
-    #[cfg(not(feature = "multi-memory"))]
-    if memidx != 0 {
-        Err(WasmParserError::InvalidMemIdx(memidx))?;
-    }
     Ok(ctx
         .mems
         .get(memidx as usize)

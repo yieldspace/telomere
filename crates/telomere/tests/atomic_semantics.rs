@@ -3,7 +3,6 @@
 mod common;
 
 use common::instantiate_wat;
-#[cfg(feature = "async-runtime")]
 use telomere::common::AtomicWaitResult;
 use telomere::{
     common::{AtomicRmwOp, SharedMemoryObject},
@@ -87,7 +86,6 @@ async fn unshared_wait_traps_and_notify_returns_zero() {
     ));
 }
 
-#[cfg(feature = "async-runtime")]
 #[tokio::test]
 async fn shared_wait_notify_is_fifo_and_timeout_removes_waiter() {
     let shared = SharedMemoryObject::new(1, 1);
@@ -186,7 +184,6 @@ async fn misaligned_atomic_store_traps_without_partial_write() {
     );
 }
 
-#[cfg(feature = "multi-memory")]
 #[tokio::test]
 async fn indexed_shared_atomic_ops_use_nonzero_memidx() {
     let store = Store::new();
@@ -228,14 +225,8 @@ async fn indexed_shared_atomic_ops_use_nonzero_memidx() {
         unwrap_success(call_i32(&instance, &store, "notify0", vec![]).await),
         0
     );
-    #[cfg(feature = "async-runtime")]
     assert_eq!(
         unwrap_success(call_i32(&instance, &store, "wait_not_equal", vec![]).await),
         1
     );
-    #[cfg(not(feature = "async-runtime"))]
-    assert!(matches!(
-        call_i32(&instance, &store, "wait_not_equal", vec![]).await,
-        VMResult::InvalidOperand
-    ));
 }

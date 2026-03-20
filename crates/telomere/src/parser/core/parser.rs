@@ -241,7 +241,10 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 0xFD => {
                     #[cfg(not(feature = "simd"))]
                     {
-                        Err(WasmParserError::InvalidConstInstruction(0xFD))?
+                        Err(WasmParserError::unsupported_feature(
+                            super::ProposalFeature::Simd,
+                            [0xFD, 0, 0, 0],
+                        ))?
                     }
                     #[cfg(feature = "simd")]
                     {
@@ -937,10 +940,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             }
                         }
                     }
-                    #[cfg(not(feature = "multi-memory"))]
-                    if mems.len() > 1 {
-                        Err(WasmParserError::MultipleMemory)?
-                    }
                     imported_global_len = globals.len();
                     imported_function_len = functions.len();
                     import_section = Some(section);
@@ -960,10 +959,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     let section = self.parse_section_body(Self::parse_memory_section)?;
                     for mt in section {
                         mems.push(mt);
-                    }
-                    #[cfg(not(feature = "multi-memory"))]
-                    if mems.len() > 1 {
-                        Err(WasmParserError::MultipleMemory)?
                     }
                 }
                 WasmSectionType::Global => {

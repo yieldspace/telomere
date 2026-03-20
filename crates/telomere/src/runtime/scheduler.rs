@@ -1,11 +1,9 @@
 use super::memory_effect::{AsyncCompletion, AsyncResult, Effect};
-#[cfg(feature = "async-runtime")]
 use super::memory_effect::{AsyncEffect, AsyncEffectFuture};
 use crate::{
     common::{CallFrameCache, ExecuteContext, LocalReference, StablePc, StoreInner},
     Stack, Store, VMResult,
 };
-#[cfg(feature = "async-runtime")]
 use futures::{future::FusedFuture, stream::FuturesUnordered};
 use std::{
     collections::VecDeque,
@@ -108,7 +106,6 @@ impl Future for NotificationReceiver<'_> {
         }
     }
 }
-#[cfg(feature = "async-runtime")]
 impl FusedFuture for NotificationReceiver<'_> {
     fn is_terminated(&self) -> bool {
         false
@@ -117,7 +114,6 @@ impl FusedFuture for NotificationReceiver<'_> {
 pub(crate) struct Scheduler<'a> {
     tasks: VecDeque<Task>,
     notify: Notify,
-    #[cfg(feature = "async-runtime")]
     async_tasks: FuturesUnordered<AsyncEffectFuture>,
     pub(crate) completed_tasks: Vec<CompletedTask>,
     pub(crate) store: &'a Store,
@@ -134,7 +130,6 @@ impl EffectSupplier<'_> {
         *self.pending_effects
     }
 
-    #[cfg(feature = "async-runtime")]
     pub(crate) fn push_async_effect(&mut self, future: AsyncEffectFuture) {
         self.effects
             .push_back(Effect::AsyncEffect(AsyncEffect { future }));
@@ -151,7 +146,6 @@ impl<'a> Scheduler<'a> {
             effects: VecDeque::new(),
             ready_count: 0,
             notify: Notify::new(),
-            #[cfg(feature = "async-runtime")]
             async_tasks: FuturesUnordered::new(),
         }
     }
@@ -163,7 +157,6 @@ impl<'a> Scheduler<'a> {
             self.notify.wake();
         }
     }
-    #[cfg(feature = "async-runtime")]
     unsafe fn handle_async_effect_call(&mut self, effect: AsyncEffect) {
         self.async_tasks.push(effect.future);
     }
@@ -275,7 +268,6 @@ impl<'a> Scheduler<'a> {
             },
         }
     }
-    #[cfg(feature = "async-runtime")]
     async fn await_executation(&mut self) {
         use futures::{select_biased, StreamExt};
         trace!("await_executation");
@@ -291,13 +283,6 @@ impl<'a> Scheduler<'a> {
                     break;
                 }
             }
-        }
-    }
-
-    #[cfg(not(feature = "async-runtime"))]
-    async fn await_executation(&mut self) {
-        if self.ready_count == 0 && !self.tasks.is_empty() {
-            self.notify.receiver().await;
         }
     }
 
@@ -514,7 +499,6 @@ impl<'a> Scheduler<'a> {
             if self.ready_count != 0 {
                 continue;
             }
-            #[cfg(feature = "async-runtime")]
             if !self.async_tasks.is_empty() {
                 return Err(SyncRunError::AsyncPending);
             }
@@ -528,7 +512,6 @@ impl<'a> Scheduler<'a> {
     fn processing_effect(&mut self) {
         while let Some(effect) = self.effects.pop_front() {
             match effect {
-                #[cfg(feature = "async-runtime")]
                 Effect::AsyncEffect(effect) => {
                     unsafe { self.handle_async_effect_call(effect) };
                 }
@@ -536,7 +519,7 @@ impl<'a> Scheduler<'a> {
         }
     }
 }
-#[cfg(all(test, feature = "async-runtime"))]
+#[cfg(test)]
 mod tests {
     use crate::{
         common::{ExecuteContext, Instr, LocalReference, StablePc},
@@ -557,7 +540,6 @@ mod tests {
             completion: AsyncCompletion::Continue { fp },
         }
     }
-    #[cfg(feature = "async-runtime")]
     #[tokio::test]
     async fn test_async() {
         let store = Store::new();

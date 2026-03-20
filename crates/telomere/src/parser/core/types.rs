@@ -154,7 +154,10 @@ pub fn parse_memtype<R: BinaryReader>(reader: &mut R) -> Result<(usize, MemType)
     }
     #[cfg(not(feature = "threads"))]
     if shared {
-        Err(WasmParserError::InvalidLimit)?
+        Err(WasmParserError::unsupported_feature(
+            crate::parser::core::ProposalFeature::Threads,
+            [0, 0, 0, 0],
+        ))?
     }
     if shared && limits.max.is_none() {
         Err(WasmParserError::InvalidLimit)?

@@ -11,7 +11,6 @@ use std::{
 };
 
 use parking_lot::Mutex;
-#[cfg(feature = "async-runtime")]
 use tokio::sync::Notify;
 use vstd::prelude::*;
 
@@ -407,14 +406,12 @@ pub proof fn lemma_wait_queue_notify_count_bounded(queue_len: nat, count: u32)
 
 } // verus!
 
-#[cfg(feature = "async-runtime")]
 #[derive(Debug)]
 pub struct SharedWaitRegistration {
     address: usize,
     waiter: Arc<SharedWaiter>,
 }
 
-#[cfg(feature = "async-runtime")]
 impl SharedWaitRegistration {
     pub fn address(&self) -> usize {
         self.address
@@ -442,14 +439,12 @@ impl SharedWaitRegistration {
     }
 }
 
-#[cfg(feature = "async-runtime")]
 #[derive(Debug)]
 pub enum AtomicWaitResult {
     NotEqual,
     Pending(SharedWaitRegistration),
 }
 
-#[cfg(feature = "async-runtime")]
 #[derive(Debug)]
 struct SharedWaiter {
     id: u64,
@@ -457,7 +452,6 @@ struct SharedWaiter {
     notify: Notify,
 }
 
-#[cfg(feature = "async-runtime")]
 impl SharedWaiter {
     const WAITING: u8 = 0;
     const NOTIFIED: u8 = 1;
@@ -1246,9 +1240,7 @@ impl LocalMemoryObject {
 #[derive(Debug)]
 struct SharedMemoryState {
     memory: Memory,
-    #[cfg(feature = "async-runtime")]
     wait_queues: HashMap<usize, VecDeque<Arc<SharedWaiter>>>,
-    #[cfg(feature = "async-runtime")]
     next_waiter_id: u64,
 }
 
@@ -1262,9 +1254,7 @@ impl SharedMemoryObject {
         Arc::new(Self {
             state: Mutex::new(SharedMemoryState {
                 memory: Memory::new_shared(page_count, max_page_size),
-                #[cfg(feature = "async-runtime")]
                 wait_queues: HashMap::new(),
-                #[cfg(feature = "async-runtime")]
                 next_waiter_id: 1,
             }),
         })
@@ -1436,7 +1426,6 @@ impl SharedMemoryObject {
         let _state = self.state.lock();
     }
 
-    #[cfg(feature = "async-runtime")]
     pub fn register_wait32(&self, offset: usize, expected: u32) -> VMResult<AtomicWaitResult> {
         let mut state = self.state.lock();
         vm_try!(ensure_atomic_alignment(offset, 4));
@@ -1457,7 +1446,6 @@ impl SharedMemoryObject {
         }))
     }
 
-    #[cfg(feature = "async-runtime")]
     pub fn register_wait64(&self, offset: usize, expected: u64) -> VMResult<AtomicWaitResult> {
         let mut state = self.state.lock();
         vm_try!(ensure_atomic_alignment(offset, 8));
@@ -1479,42 +1467,33 @@ impl SharedMemoryObject {
     }
 
     pub fn notify_waiters(&self, offset: usize, count: u32) -> VMResult<u32> {
-        #[cfg(feature = "async-runtime")]
-        {
-            let mut state = self.state.lock();
-            vm_try!(state.memory.atomic_load_u32(offset));
-            let mut wake = Vec::new();
-            let mut remaining = count;
-            if let Some(queue) = state.wait_queues.get_mut(&offset) {
-                while remaining != 0 {
-                    let Some(waiter) = queue.pop_front() else {
-                        break;
-                    };
-                    if waiter.try_mark_notified() {
-                        wake.push(waiter);
-                        remaining -= 1;
-                    }
-                }
-                queue.retain(|waiter| waiter.is_waiting());
-                if queue.is_empty() {
-                    state.wait_queues.remove(&offset);
+        let mut state = self.state.lock();
+        vm_try!(state.memory.atomic_load_u32(offset));
+        let mut wake = Vec::new();
+        let mut remaining = count;
+        if let Some(queue) = state.wait_queues.get_mut(&offset) {
+            while remaining != 0 {
+                let Some(waiter) = queue.pop_front() else {
+                    break;
+                };
+                if waiter.try_mark_notified() {
+                    wake.push(waiter);
+                    remaining -= 1;
                 }
             }
-            let woken = wake.len() as u32;
-            drop(state);
-            for waiter in wake {
-                waiter.notify.notify_one();
+            queue.retain(|waiter| waiter.is_waiting());
+            if queue.is_empty() {
+                state.wait_queues.remove(&offset);
             }
-            VMResult::Success(woken)
         }
-        #[cfg(not(feature = "async-runtime"))]
-        {
-            let _ = count;
-            VMResult::Success(0)
+        let woken = wake.len() as u32;
+        drop(state);
+        for waiter in wake {
+            waiter.notify.notify_one();
         }
+        VMResult::Success(woken)
     }
 
-    #[cfg(feature = "async-runtime")]
     fn remove_waiter(&self, offset: usize, waiter_id: u64) {
         let mut state = self.state.lock();
         if let Some(queue) = state.wait_queues.get_mut(&offset) {
