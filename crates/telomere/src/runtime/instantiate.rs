@@ -79,23 +79,22 @@ fn execute_offset_const_expr(
     globals: &[GcRef],
     exprs: &[ConstExpr],
 ) -> VMResult<u32> {
-    for expr in exprs {
-        return VMResult::Success(match expr {
-            ConstExpr::I32(v) => *v as u32,
-            ConstExpr::GlobalGet(idx) => {
-                let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
-                    VMResult::Unlinkable
-                }));
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(gc.get_global(addr));
-                u32::from_le_bytes(buf)
-            }
-            _ => {
-                todo!()
-            }
-        });
+    if exprs.len() != 1 {
+        return VMResult::Unlinkable;
     }
-    VMResult::Unlinkable
+    match &exprs[0] {
+        ConstExpr::I32(v) => VMResult::Success(*v as u32),
+        ConstExpr::GlobalGet(idx) => {
+            let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
+                VMResult::Unlinkable
+            }));
+            let Ok(buf): Result<[u8; 4], _> = gc.get_global(addr).try_into() else {
+                return VMResult::Unlinkable;
+            };
+            VMResult::Success(u32::from_le_bytes(buf))
+        }
+        _ => VMResult::Unlinkable,
+    }
 }
 
 fn convert_native_module_to_module(m: NativeModule) -> Module {
@@ -557,7 +556,6 @@ pub async fn instantiate(
 
     VMResult::Success(addr)
 }
-// TODO:
 #[allow(dead_code)]
 pub fn aliasing(
     registry: &Registry,
@@ -764,4 +762,26 @@ pub fn link_async_host_function_with_export_name(
     };
     drop(gc);
     link_async_host_function_with_function_idx(addr, func_idx, f, store);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execute_offset_const_expr_fail_closes_non_i32_const() {
+        let store = Store::new();
+        let mut gc = store.lock_gc();
+        let result = execute_offset_const_expr(&mut gc, &[], &[ConstExpr::F64(1.0)]);
+        assert!(matches!(result, VMResult::Unlinkable));
+    }
+
+    #[test]
+    fn execute_offset_const_expr_fail_closes_non_i32_global_get() {
+        let store = Store::new();
+        let mut gc = store.lock_gc();
+        let global = gc.new_global_data8(42);
+        let result = execute_offset_const_expr(&mut gc, &[global], &[ConstExpr::GlobalGet(0)]);
+        assert!(matches!(result, VMResult::Unlinkable));
+    }
 }

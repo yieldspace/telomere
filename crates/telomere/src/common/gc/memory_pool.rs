@@ -55,8 +55,13 @@ impl MemoryPool {
         let expected_len = HEADER_LEN + offset + header.word_size() as usize;
         if expected_len > self.memory.capacity() {
             let additional = expected_len - self.memory.len();
-            // FIXME: handle memory allocation fail
-            self.memory.try_reserve_exact(additional).unwrap();
+            self.memory
+                .try_reserve_exact(additional)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "memory pool allocation failed while reserving {additional} bytes: {err}"
+                    )
+                });
             self.memory.resize(self.memory.capacity(), 0);
         }
         self.memory[padding_offset..offset].fill(PADDING_MASK);

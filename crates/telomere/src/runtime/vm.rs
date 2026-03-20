@@ -432,7 +432,10 @@ pub async fn run_module_function(
         let module_inst = gc.get_module(instance.module_addr);
         trace!("{:?}", module_inst.exports);
         let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
-            let code_addr = instance.funcs[idx.0 as usize];
+            let code_addr = *vm_try!(VMResult::from_option(
+                instance.funcs.as_slice().get(idx.0 as usize),
+                || { VMResult::Unlinkable }
+            ));
             let funcinst = gc.get_func(code_addr);
             let func_instance = gc.instance(funcinst.instance);
             let frame = CallFrameCache::from_parts(
@@ -445,12 +448,15 @@ pub async fn run_module_function(
                     .and_then(|slot| slot.handle()),
             );
             let mut stack = Stack::new(128 * 1024);
-            let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
-            let ft = module_inst
-                .function_types
-                .get(tidx.0 as usize)
-                .unwrap()
-                .clone();
+            let tidx = *vm_try!(VMResult::from_option(
+                module_inst.functions.get(idx.0 as usize),
+                || { VMResult::Unlinkable }
+            ));
+            let ft = vm_try!(VMResult::from_option(
+                module_inst.function_types.get(tidx.0 as usize),
+                || { VMResult::Unlinkable }
+            ))
+            .clone();
             let param_size = result_type_size(&ft.0);
 
             let locals_data = funcinst.locals();
@@ -481,7 +487,7 @@ pub async fn run_module_function(
             });
             ft
         } else {
-            unimplemented!()
+            return VMResult::Unlinkable;
         };
         ft
     };
@@ -509,7 +515,10 @@ pub(crate) fn run_module_function_sync_with_gc(
         let module_inst = gc.get_module(instance.module_addr);
         trace!("{:?}", module_inst.exports);
         let ft = if let Some(ExportDesc::Func(idx)) = module_inst.exports.find(name) {
-            let code_addr = instance.funcs[idx.0 as usize];
+            let code_addr = match instance.funcs.as_slice().get(idx.0 as usize) {
+                Some(code_addr) => *code_addr,
+                None => return Ok(VMResult::Unlinkable),
+            };
             let funcinst = gc.get_func(code_addr);
             let func_instance = gc.instance(funcinst.instance);
             let frame = CallFrameCache::from_parts(
@@ -522,12 +531,14 @@ pub(crate) fn run_module_function_sync_with_gc(
                     .and_then(|slot| slot.handle()),
             );
             let mut stack = Stack::new(128 * 1024);
-            let tidx = module_inst.functions.get(idx.0 as usize).unwrap();
-            let ft = module_inst
-                .function_types
-                .get(tidx.0 as usize)
-                .unwrap()
-                .clone();
+            let tidx = match module_inst.functions.get(idx.0 as usize) {
+                Some(tidx) => *tidx,
+                None => return Ok(VMResult::Unlinkable),
+            };
+            let ft = match module_inst.function_types.get(tidx.0 as usize) {
+                Some(ft) => ft.clone(),
+                None => return Ok(VMResult::Unlinkable),
+            };
             let param_size = result_type_size(&ft.0);
 
             let locals_data = funcinst.locals();
@@ -564,7 +575,7 @@ pub(crate) fn run_module_function_sync_with_gc(
             });
             ft
         } else {
-            unimplemented!()
+            return Ok(VMResult::Unlinkable);
         };
         ft
     };
@@ -603,6 +614,26 @@ fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultVal
     }
 }
 
+fn read_global_value(bytes: &[u8], ty: ValType) -> Option<WasmValue> {
+    match ty {
+        ValType::I32 => Some(WasmValue::I32(i32::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::I64 => Some(WasmValue::I64(i64::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::F32 => Some(WasmValue::F32(f32::from_bits(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        )))),
+        ValType::F64 => Some(WasmValue::F64(f64::from_bits(u64::from_le_bytes(
+            bytes.try_into().ok()?,
+        )))),
+        ValType::V128 => Some(WasmValue::V128(u128::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::FuncRef => Some(WasmValue::FuncRef(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        ))),
+        ValType::ExternRef => Some(WasmValue::ExternRef(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        ))),
+    }
+}
+
 pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMResult<WasmValue> {
     if store.has_active_gc_on_current_thread() {
         tracing::error!("get_global is unsupported while the same store GC is already active");
@@ -617,23 +648,19 @@ pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMRes
         )))
     };
     let module_inst = gc.get_module(instance.module_addr);
-    if let Some(ExportDesc::Global(idx)) = module_inst.exports.find(name) {
-        let addr = instance.globals.as_slice()[idx.0 as usize];
-        let gt = module_inst.globals[idx.0 as usize];
-        VMResult::Success(match gt.0 {
-            ValType::I32 => {
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(gc.get_global(addr));
-                WasmValue::I32(i32::from_le_bytes(buf))
-            }
-            ValType::I64 => {
-                let mut buf = [0u8; 8];
-                buf.copy_from_slice(gc.get_global(addr));
-                WasmValue::I64(i64::from_le_bytes(buf))
-            }
-            _ => todo!(),
-        })
-    } else {
-        unimplemented!()
-    }
+    let Some(ExportDesc::Global(idx)) = module_inst.exports.find(name) else {
+        return VMResult::Unlinkable;
+    };
+    let addr = *vm_try!(VMResult::from_option(
+        instance.globals.as_slice().get(idx.0 as usize),
+        || { VMResult::Unlinkable }
+    ));
+    let gt = *vm_try!(VMResult::from_option(
+        module_inst.globals.get(idx.0 as usize),
+        || { VMResult::Unlinkable }
+    ));
+    let Some(value) = read_global_value(gc.get_global(addr), gt.0) else {
+        return VMResult::Unlinkable;
+    };
+    VMResult::Success(value)
 }

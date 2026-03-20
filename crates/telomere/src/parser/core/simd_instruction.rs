@@ -309,7 +309,7 @@ pub(crate) mod v128_load {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 4)?; // TODO:
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 4)?;
         ctx.checker.load_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,
@@ -539,7 +539,7 @@ pub(crate) mod v128_store {
     pub(crate) fn parse<R: BinaryReader>(
         ctx: &mut SimdParserContext<R>,
     ) -> Result<usize, WasmParserError> {
-        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 4)?; // TODO:
+        let (len, memidx, memarg) = values::parse_memarg(ctx.reader, 4)?;
         ctx.checker.store_op(ValType::V128)?;
         super::push_memarg_instruction(
             ctx,

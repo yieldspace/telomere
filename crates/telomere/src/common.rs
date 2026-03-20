@@ -924,11 +924,12 @@ pub fn execute_elem_init_const_expr(
             let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
                 VMResult::Unlinkable
             }));
-            let mut buf = [0u8; 4];
-            buf.copy_from_slice(runtime.get_global(addr));
+            let Ok(buf): Result<[u8; 4], _> = runtime.get_global(addr).try_into() else {
+                return VMResult::Unlinkable;
+            };
             VMResult::Success(GcRef(u32::from_le_bytes(buf)))
         }
-        unknown => todo!("{unknown:?}"),
+        _ => VMResult::Unlinkable,
     }
 }
 pub const fn word_size<T>() -> usize {
@@ -1112,5 +1113,34 @@ impl From<&[Locals]> for LocalsData {
             }
         }
         me
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execute_elem_init_const_expr_fail_closes_numeric_const() {
+        let store = Store::new();
+        let mut gc = store.lock_gc();
+        let result =
+            execute_elem_init_const_expr(&mut gc, &[], &[], &[ConstExpr::I32(7)], RefType::FuncRef);
+        assert!(matches!(result, VMResult::Unlinkable));
+    }
+
+    #[test]
+    fn execute_elem_init_const_expr_fail_closes_non_ref_global_get() {
+        let store = Store::new();
+        let mut gc = store.lock_gc();
+        let global = gc.new_global_data8(42);
+        let result = execute_elem_init_const_expr(
+            &mut gc,
+            &[global],
+            &[],
+            &[ConstExpr::GlobalGet(0)],
+            RefType::ExternRef,
+        );
+        assert!(matches!(result, VMResult::Unlinkable));
     }
 }

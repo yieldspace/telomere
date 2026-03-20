@@ -18,7 +18,7 @@ const LOCALS_ENCODED_V128: u32 = 0x1 << 6;
 pub struct FunctionInstanceData {
     pub instance_addr: GcRef,
     pub funcidx: u32,
-    pub function_flags: u32, //TODO: more efficient encoding
+    pub function_flags: u32,
     pub body: GcRef, // raw, reference to wasm locals/code, or sync/async host function pointer
 }
 

@@ -20,8 +20,9 @@ use crate::parser::core::type_checker::MaybeUnreachable;
 use crate::runtime::vm;
 use crate::{
     common::{
-        BlockType, DataCountVerifier, Elem, FuncIdx, FuncType, Instr, LocalReassignTable, MemType,
-        Op, Operand, TableType, TypeIdx, TypeSection, ValType, ValueSize,
+        BlockType, ConstExpr, DataCountVerifier, Elem, FuncIdx, FuncType, Instr,
+        LocalReassignTable, MemType, Op, Operand, TableType, TypeIdx, TypeSection, ValType,
+        ValueSize,
     },
     WasmParserError,
 };
@@ -2967,9 +2968,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                                     break;
                                 }
                             }
-                            ElemInit::ConstExpr(_exprs) => {
-                                // FIXME: handle declarative const exprs
-                                todo!();
+                            ElemInit::ConstExpr(exprs) => {
+                                if exprs.iter().flatten().any(
+                                    |expr| matches!(expr, ConstExpr::FuncRef(funcidx) if *funcidx == idx),
+                                ) {
+                                    found = true;
+                                    break;
+                                }
                             }
                         }
                     }

@@ -254,7 +254,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                             (1 + len + 16, ConstExpr::V128(u128::from_le_bytes(v)))
                         } else {
                             Err(WasmParserError::InvalidConstInstruction(0xFD))?
-                            //FIXME:
                         }
                     }
                 }
@@ -904,17 +903,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
 
             match st {
                 WasmSectionType::Unknown(id) => Err(WasmParserError::InvalidSectionType(id))?,
-                WasmSectionType::Custom => {
-                    match self.parse_section_body(Self::parse_namedata)? {
-                        NameData::NameSection(subsec) => {
-                            // TODO: we should validate position
-                            name_section = Some(subsec)
-                        }
-                        NameData::Unknown(name) => {
-                            tracing::warn!("encounted unknown custom section: {name}")
-                        }
+                WasmSectionType::Custom => match self.parse_section_body(Self::parse_namedata)? {
+                    NameData::NameSection(subsec) => name_section = Some(subsec),
+                    NameData::Unknown(name) => {
+                        tracing::warn!("encounted unknown custom section: {name}")
                     }
-                }
+                },
                 WasmSectionType::Type => {
                     trace!("type section");
                     type_section = Some(self.parse_section_body(Self::parse_type_section)?);
