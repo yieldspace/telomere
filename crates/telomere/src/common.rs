@@ -15,6 +15,7 @@ pub(crate) mod stack;
 use stack::local_reference_has_call_stack_info;
 use stack::CachedMemoryKind;
 use stack::IntoCallFrameCache;
+use stack::StackOperation;
 pub(crate) use stack::{CallFrameCache, FrameProjection, MemoryHandleProjection};
 pub use stack::{LocalReference, Stack};
 mod registry;
@@ -792,31 +793,19 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         self.as_ctx().instance_id()
     }
 
-    #[inline(always)]
-    pub(crate) fn func_idx(&self) -> u32 {
-        self.as_ctx().func().funcidx
-    }
-
-    #[inline(always)]
-    pub(crate) fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
-        self.as_ctx_mut().with_memory(f)
-    }
-
-    #[inline(always)]
-    pub(crate) fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
-        self.as_ctx_mut().with_caller_memory(f)
-    }
-
+    #[allow(dead_code)]
     #[inline(always)]
     pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
         self.as_ctx().snapshot()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     #[inline(always)]
     pub(crate) fn projection(&self) -> ExecuteContextProjection {
         self.as_ctx().projection()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     #[inline(always)]
     pub(crate) fn token_projection(&self) -> Option<ExecContextTokenProjection> {
         self.projection().token_projection()
@@ -840,11 +829,6 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
     #[inline(always)]
     pub(crate) fn instance(&self) -> &InstanceData {
         self.as_ctx().instance()
-    }
-
-    #[inline(always)]
-    pub(crate) fn instance_addr(&self) -> GcRef {
-        self.as_ctx().instance_addr()
     }
 
     #[inline(always)]
@@ -873,8 +857,232 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
     }
 
     #[inline(always)]
+    pub(crate) fn pop<T>(&mut self) -> T
+    where
+        Stack: StackOperation<T>,
+    {
+        self.stack_mut().pop()
+    }
+
+    #[inline(always)]
+    pub(crate) fn push<T>(&mut self, value: T) -> VMResult<()>
+    where
+        Stack: StackOperation<T>,
+    {
+        self.stack_mut().push(value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_u8_array<const N: usize>(&mut self) -> [u8; N] {
+        self.as_ctx_mut().pop_u8_array::<N>()
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_u32(&mut self) -> u32 {
+        self.stack_mut().pop_u32()
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_i32(&mut self) -> i32 {
+        self.stack_mut().pop_i32()
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_u64(&mut self) -> u64 {
+        self.stack_mut().pop_u64()
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_i64(&mut self) -> i64 {
+        self.stack_mut().pop_i64()
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_u128(&mut self) -> u128 {
+        self.stack_mut().pop_u128()
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_u8_array_generic<const N: usize>(&mut self, size: usize) -> [u8; N] {
+        self.stack_mut().pop_u8_array_generic::<N>(size)
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_slice(&mut self, value: &[u8]) -> VMResult<()> {
+        self.as_ctx_mut().push_slice(value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn drop_values(&mut self, size: usize) {
+        self.stack_mut().drop(size);
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_u32(&mut self, value: u32) -> VMResult<()> {
+        self.stack_mut().push_u32(value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_i32(&mut self, value: i32) -> VMResult<()> {
+        self.stack_mut().push_i32(value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_u64(&mut self, value: u64) -> VMResult<()> {
+        self.stack_mut().push_u64(value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_i64(&mut self, value: i64) -> VMResult<()> {
+        self.stack_mut().push_i64(value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_u128(&mut self, value: u128) -> VMResult<()> {
+        self.stack_mut().push_u128(value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_typed_value(&mut self, ty: ValType, value: &WasmValue) -> VMResult<()> {
+        match (ty, value) {
+            (ValType::I32, WasmValue::I32(value)) => self.push_i32(*value),
+            (ValType::I64, WasmValue::I64(value)) => self.push_i64(*value),
+            (ValType::F32, WasmValue::F32(value)) => self.push(*value),
+            (ValType::F64, WasmValue::F64(value)) => self.push(*value),
+            (ValType::V128, WasmValue::V128(value)) => self.push_u128(*value),
+            (ValType::FuncRef, WasmValue::FuncRef(value)) => self.push_u32(*value),
+            (ValType::ExternRef, WasmValue::ExternRef(value)) => self.push_u32(*value),
+            _ => VMResult::InvalidOperand,
+        }
+    }
+
+    #[inline(never)]
+    pub(crate) fn push_result_values(
+        &mut self,
+        types: &ResultType,
+        values: &ResultValue,
+    ) -> VMResult<()> {
+        if types.0.len() != values.len() {
+            return VMResult::InvalidOperand;
+        }
+        for (ty, value) in types.iter().zip(values.iter()) {
+            vm_try!(self.push_typed_value(*ty, value));
+        }
+        VMResult::Success(())
+    }
+
+    #[inline(never)]
+    pub(crate) fn write_marshaled_results(
+        &mut self,
+        slot_offset: usize,
+        types: &ResultType,
+        values: &ResultValue,
+    ) -> VMResult<()> {
+        let local_size = types
+            .iter()
+            .map(|ty| ty.stack_size().usize())
+            .sum::<usize>();
+        let slot = LocalReference {
+            local_top: slot_offset,
+            local_size: local_size as u32,
+        };
+        if types.0.len() != values.len() {
+            return VMResult::InvalidOperand;
+        }
+        let mut offset = 0usize;
+        let dst = unsafe { self.stack_mut().local_area_mut_ptr(&slot) };
+        for (ty, value) in types.iter().zip(values.iter()) {
+            let size = ty.stack_size().usize();
+            unsafe {
+                match (ty, value) {
+                    (ValType::I32, WasmValue::I32(value)) => {
+                        std::ptr::copy_nonoverlapping(
+                            value.to_le_bytes().as_ptr(),
+                            dst.add(offset),
+                            size,
+                        );
+                    }
+                    (ValType::I64, WasmValue::I64(value)) => {
+                        std::ptr::copy_nonoverlapping(
+                            value.to_le_bytes().as_ptr(),
+                            dst.add(offset),
+                            size,
+                        );
+                    }
+                    (ValType::F32, WasmValue::F32(value)) => {
+                        std::ptr::copy_nonoverlapping(
+                            value.to_bits().to_le_bytes().as_ptr(),
+                            dst.add(offset),
+                            size,
+                        );
+                    }
+                    (ValType::F64, WasmValue::F64(value)) => {
+                        std::ptr::copy_nonoverlapping(
+                            value.to_bits().to_le_bytes().as_ptr(),
+                            dst.add(offset),
+                            size,
+                        );
+                    }
+                    (ValType::V128, WasmValue::V128(value)) => {
+                        std::ptr::copy_nonoverlapping(
+                            value.to_le_bytes().as_ptr(),
+                            dst.add(offset),
+                            size,
+                        );
+                    }
+                    (ValType::FuncRef, WasmValue::FuncRef(value)) => {
+                        std::ptr::copy_nonoverlapping(
+                            value.to_le_bytes().as_ptr(),
+                            dst.add(offset),
+                            size,
+                        );
+                    }
+                    (ValType::ExternRef, WasmValue::ExternRef(value)) => {
+                        std::ptr::copy_nonoverlapping(
+                            value.to_le_bytes().as_ptr(),
+                            dst.add(offset),
+                            size,
+                        );
+                    }
+                    _ => return VMResult::InvalidOperand,
+                }
+            }
+            offset += size;
+        }
+        VMResult::Success(())
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_get(&mut self, local_addr: usize, size: usize) -> VMResult<()> {
+        self.as_ctx_mut().local_get(local_addr, size)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_set(&mut self, local_addr: usize, size: usize) {
+        self.as_ctx_mut().local_set(local_addr, size);
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_tee(&mut self, local_addr: usize, size: usize) {
+        self.as_ctx_mut().local_tee(local_addr, size);
+    }
+
+    #[inline(always)]
+    pub(crate) fn select(&mut self, size: usize, cond: u32) -> VMResult<()> {
+        let a = self.pop_u8_array_generic::<8>(size);
+        let b = self.pop_u8_array_generic::<8>(size);
+        let value = if cond == 0 { a } else { b };
+        self.push_slice(&value[0..size])
+    }
+
+    #[inline(always)]
     pub(crate) fn local_reference(&self) -> LocalReference {
         self.as_ctx().local_reference()
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_branch_cond(&mut self) -> bool {
+        self.pop::<u32>() != 0
     }
 
     #[inline(always)]
@@ -888,8 +1096,23 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
     }
 
     #[inline(always)]
+    pub(crate) fn code(&self) -> *const Instr {
+        self.as_ctx().code()
+    }
+
+    #[inline(always)]
     pub(crate) fn set_cont(&mut self, cont: *const Instr) {
         self.as_ctx_mut().set_cont(cont)
+    }
+
+    #[inline(always)]
+    pub(crate) fn clear_cont(&mut self) {
+        self.as_ctx_mut().clear_cont();
+    }
+
+    #[inline(always)]
+    pub(crate) fn clear_continuation(&mut self) {
+        self.clear_cont();
     }
 
     #[inline(always)]
@@ -898,6 +1121,25 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         id: store::SharedMemoryId,
     ) -> std::sync::Arc<SharedMemoryObject> {
         self.as_ctx().clone_shared_memory(id)
+    }
+
+    #[inline(always)]
+    pub(crate) fn with_shared_memory_ref<T>(
+        &self,
+        id: store::SharedMemoryId,
+        f: impl FnOnce(&SharedMemoryObject) -> T,
+    ) -> T {
+        f(self.gc_ref().shared_memory(id))
+    }
+
+    #[inline(always)]
+    pub(crate) fn stable_pc_from_raw_in_frame(&self, pc: *const Instr) -> StablePc {
+        StablePc::from_raw_in_frame(self.gc_ref(), self.stack_ref(), self.local_reference(), pc)
+    }
+
+    #[inline(always)]
+    pub(crate) fn resolve_branch_target(&self, addr: u32) -> *const Instr {
+        self.jump_target(addr)
     }
 
     #[inline(always)]
@@ -1218,16 +1460,6 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
     #[inline(always)]
     pub(crate) unsafe fn memory_page_size_shared_indexed(&self, memidx: u32) -> u32 {
         unsafe { self.as_ctx().memory_page_size_shared_indexed(memidx) }
-    }
-
-    #[inline(always)]
-    pub(crate) fn copy_memory(&mut self, dst: u32, src: u32, len: u32) -> VMResult<()> {
-        self.as_ctx_mut().copy_memory(dst, src, len)
-    }
-
-    #[inline(always)]
-    pub(crate) fn fill_memory(&mut self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
-        self.as_ctx_mut().fill_memory(ptr, len, data)
     }
 
     #[inline(always)]
@@ -1911,9 +2143,483 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
                 .indexed_shared_atomic_cmpxchg_u64(memidx, offset, current, new)
         }
     }
+
+    #[inline(always)]
+    pub(crate) fn function_return_in_place(&mut self, return_size: usize) -> (*const Instr, usize) {
+        self.as_ctx_mut().function_return_in_place(return_size)
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub(crate) fn function_return(&mut self, return_size: usize) -> *const Instr {
+        self.as_ctx_mut().function_return(return_size)
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub(crate) fn finish_function_return(&mut self, return_size: usize) -> *const Instr {
+        self.function_return(return_size)
+    }
+
+    #[inline(always)]
+    pub(crate) fn block_return(&mut self, stack_top: usize, return_size: usize) {
+        self.as_ctx_mut().block_return(stack_top, return_size);
+    }
+
+    #[inline(always)]
+    pub(crate) fn apply_block_return(&mut self, stack_top: usize, return_size: usize) {
+        self.block_return(stack_top, return_size);
+    }
+
+    #[inline(always)]
+    pub(crate) fn end_program(&mut self) {
+        self.as_ctx_mut().end_program();
+    }
+
+    #[inline(always)]
+    pub(crate) fn global_addr(&self, global_idx: usize) -> GcRef {
+        self.instance().globals.as_slice()[global_idx]
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_global_bytes<const SIZE: usize>(
+        &mut self,
+        global_idx: usize,
+    ) -> VMResult<()> {
+        let addr = self.global_addr(global_idx);
+        let bytes = self.gc_ref().get_global(addr).to_vec();
+        debug_assert_eq!(bytes.len(), SIZE);
+        self.push_slice(&bytes)
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_global_bytes<const SIZE: usize>(
+        &mut self,
+        global_idx: usize,
+        value: [u8; SIZE],
+    ) {
+        let addr = self.global_addr(global_idx);
+        self.gc_mut().get_global_mut(addr).copy_from_slice(&value);
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_ref(&mut self, value: u32) -> VMResult<()> {
+        self.push(value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn pop_ref(&mut self) -> u32 {
+        self.pop::<u32>()
+    }
+
+    #[inline(always)]
+    pub(crate) fn ref_func_value(&self, funcidx: u32) -> u32 {
+        self.instance().funcs.as_slice()[funcidx as usize].get()
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub(crate) fn instance_func_addr(&self, funcidx: u32) -> Option<GcRef> {
+        self.instance()
+            .funcs
+            .as_slice()
+            .get(funcidx as usize)
+            .copied()
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub(crate) fn gc_ref_for_instance(&self, instance: store::InstanceId) -> GcRef {
+        self.gc_ref().gc_ref_for_instance(instance)
+    }
+
+    #[inline(always)]
+    pub(crate) fn function_type(&self, func: &FunctionInstanceData) -> &FuncType {
+        let gc = self.gc_ref();
+        let instance = gc.instance(func.instance);
+        let module = gc.get_module(instance.module_addr);
+        &module.function_types[func.typeidx.0 as usize]
+    }
+
+    #[inline(always)]
+    pub(crate) fn function_type_by_addr(&self, funcaddr: GcRef) -> &FuncType {
+        self.function_type(self.func_by_addr(funcaddr))
+    }
+
+    #[inline(always)]
+    pub(crate) fn current_function_type(&self) -> &FuncType {
+        self.function_type(self.func())
+    }
+
+    #[inline(always)]
+    pub(crate) fn module_function_type(&self, typeidx: u32) -> Option<&FuncType> {
+        self.module().function_types.get(typeidx as usize)
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub(crate) fn call_frame_for_funcaddr(&self, funcaddr: GcRef) -> CallFrameCache {
+        let funcinst = self.func_by_addr(funcaddr);
+        let instance = self.gc_ref().instance(funcinst.instance);
+        let memory0 = instance
+            .memory_slots
+            .first()
+            .copied()
+            .and_then(|slot| slot.handle());
+        CallFrameCache::from_parts(funcaddr, funcinst, memory0)
+    }
+
+    #[inline(always)]
+    pub(crate) fn run_sync_host_function(
+        &mut self,
+        fp: HostFunction,
+        param_types: &ResultType,
+        result_types: &ResultType,
+    ) -> VMResult<HostCallControl> {
+        fp(HostCallContext::new(
+            self.as_ctx_mut(),
+            param_types,
+            result_types,
+        ))
+    }
+
+    #[inline(always)]
+    pub(crate) fn table_addr(&self, table_idx: usize) -> GcRef {
+        self.instance().tables.as_slice()[table_idx]
+    }
+
+    #[inline(always)]
+    pub(crate) fn table_reftype(&mut self, table_addr: GcRef) -> RefType {
+        self.gc_mut().get_table(table_addr).0.reftype
+    }
+
+    #[inline(always)]
+    pub(crate) fn table_len(&mut self, table_addr: GcRef) -> usize {
+        self.gc_mut().get_table(table_addr).1.len()
+    }
+
+    #[inline(always)]
+    pub(crate) fn table_get_value(&mut self, table_addr: GcRef, index: usize) -> Option<u32> {
+        self.gc_mut().get_table(table_addr).1.get(index).copied()
+    }
+
+    #[inline(always)]
+    pub(crate) fn table_set_value(
+        &mut self,
+        table_addr: GcRef,
+        index: usize,
+        value: u32,
+    ) -> VMResult<()> {
+        let table = &mut self.gc_mut().get_table(table_addr).1;
+        let slot = vm_try!(VMResult::from_option(table.get_mut(index), || {
+            VMResult::TableIndexOutOfRange
+        }));
+        *slot = value;
+        VMResult::Success(())
+    }
+
+    #[inline(never)]
+    pub(crate) fn table_copy(
+        &mut self,
+        dst_table_addr: GcRef,
+        src_table_addr: GcRef,
+        dst: usize,
+        src: usize,
+        len: usize,
+    ) -> VMResult<()> {
+        let src_values = {
+            let src_table = &self.gc_mut().get_table(src_table_addr).1;
+            vm_try!(VMResult::from_option(src_table.get(src..src + len), || {
+                VMResult::TableIndexOutOfRange
+            }))
+            .to_vec()
+        };
+        let dst_table = &mut self.gc_mut().get_table(dst_table_addr).1;
+        let dst_slice = vm_try!(VMResult::from_option(
+            dst_table.get_mut(dst..dst + len),
+            || { VMResult::TableIndexOutOfRange }
+        ));
+        dst_slice.copy_from_slice(&src_values);
+        VMResult::Success(())
+    }
+
+    #[inline(always)]
+    pub(crate) fn table_grow(&mut self, table_addr: GcRef, n: i32, value: u32) -> u32 {
+        let table_inst = &mut self.gc_mut().get_table(table_addr);
+        let sz = table_inst.1.len();
+        if n < 0 {
+            return (-1i32) as u32;
+        }
+        let new_len = sz + n as usize;
+        match table_inst.0.limits.max {
+            Some(max) if max as usize >= new_len => {
+                table_inst.1.resize(new_len, value);
+                sz as u32
+            }
+            None => {
+                table_inst.1.resize(new_len, value);
+                sz as u32
+            }
+            Some(_) => (-1i32) as u32,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn table_fill(
+        &mut self,
+        table_addr: GcRef,
+        start: usize,
+        len: usize,
+        value: u32,
+    ) -> VMResult<()> {
+        let table = &mut self.gc_mut().get_table(table_addr).1;
+        let slice = vm_try!(VMResult::from_option(
+            table.get_mut(start..start + len),
+            || { VMResult::TableIndexOutOfRange }
+        ));
+        slice.fill(value);
+        VMResult::Success(())
+    }
+
+    #[inline(always)]
+    pub(crate) fn table_write_slice(
+        &mut self,
+        table_addr: GcRef,
+        start: usize,
+        values: &[u32],
+    ) -> VMResult<()> {
+        let table = &mut self.gc_mut().get_table(table_addr).1;
+        let slice = vm_try!(VMResult::from_option(
+            table.get_mut(start..start + values.len()),
+            || { VMResult::TableIndexOutOfRange }
+        ));
+        slice.copy_from_slice(values);
+        VMResult::Success(())
+    }
+
+    #[inline(never)]
+    pub(crate) fn eval_elem_init_exprs(
+        &mut self,
+        exprs: &[Vec<ConstExpr>],
+        globals: &[GcRef],
+        funcs: &[GcRef],
+        reftype: RefType,
+    ) -> VMResult<Vec<u32>> {
+        let mut values = Vec::with_capacity(exprs.len());
+        for expr in exprs {
+            let res = vm_try!(execute_elem_init_const_expr(
+                self.gc_mut(),
+                globals,
+                funcs,
+                expr,
+                reftype,
+            ));
+            values.push(res.get());
+        }
+        VMResult::Success(values)
+    }
+
+    #[inline(always)]
+    pub(crate) fn instance_globals_snapshot(&self) -> Vec<GcRef> {
+        self.instance().globals.as_slice().to_vec()
+    }
+
+    #[inline(always)]
+    pub(crate) fn instance_funcs_snapshot(&self) -> Vec<GcRef> {
+        self.instance().funcs.as_slice().to_vec()
+    }
+
+    #[inline(always)]
+    pub(crate) fn instance_func_addrs_snapshot(&self) -> Vec<u32> {
+        self.instance()
+            .funcs
+            .as_slice()
+            .iter()
+            .map(|func| func.get())
+            .collect()
+    }
+
+    #[inline(always)]
+    pub(crate) fn elem_init(&self, elem_idx: u32) -> Option<ElemInit> {
+        self.store_ref()
+            .lock_segments()
+            .elems
+            .get(&(self.instance_id(), elem_idx))
+            .map(|elem| elem.init.clone())
+    }
+
+    #[inline(always)]
+    pub(crate) fn drop_elem_segment(&self, elem_idx: u32) {
+        let _ = self
+            .store_ref()
+            .lock_segments()
+            .elems
+            .remove(&(self.instance_id(), elem_idx));
+    }
+
+    #[inline(always)]
+    pub(crate) fn data_segment_bytes(
+        &self,
+        idx: u32,
+        src: u32,
+        len: u32,
+    ) -> VMResult<Option<Vec<u8>>> {
+        let copied = {
+            let segments = self.store_ref().lock_segments();
+            let data = segments.data.get(&(self.instance_id(), idx));
+            if data.is_none() && len == 0 && src == 0 {
+                None
+            } else {
+                let data = vm_try!(VMResult::from_option(data, || {
+                    VMResult::MemoryIndexOutOfRange
+                }));
+                let src_last = vm_try!(VMResult::from_option(src.checked_add(len), || {
+                    VMResult::MemoryIndexOutOfRange
+                })) as usize;
+                let data = vm_try!(VMResult::from_option(
+                    data.init.get(src as usize..src_last),
+                    || { VMResult::MemoryIndexOutOfRange }
+                ));
+                Some(data.to_vec())
+            }
+        };
+        VMResult::Success(copied)
+    }
+
+    #[inline(always)]
+    pub(crate) fn drop_data_segment(&self, idx: u32) {
+        let _ = self
+            .store_ref()
+            .lock_segments()
+            .data
+            .remove(&(self.instance_id(), idx));
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_local_memory_bytes_by_id(
+        &mut self,
+        memory: store::LocalMemoryId,
+        dst: u32,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        self.gc_mut().local_write_bytes(memory, dst as usize, bytes)
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_shared_memory_bytes_by_id(
+        &mut self,
+        memory: store::SharedMemoryId,
+        dst: u32,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        self.gc_mut()
+            .shared_write_bytes(memory, dst as usize, bytes)
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_local_memory_by_id(
+        &mut self,
+        memory: store::LocalMemoryId,
+        dst: u32,
+        src: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.gc_mut().local_copy_memory(memory, dst, src, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_shared_memory_by_id(
+        &mut self,
+        memory: store::SharedMemoryId,
+        dst: u32,
+        src: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.gc_mut().shared_copy_memory(memory, dst, src, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn fill_local_memory_by_id(
+        &mut self,
+        memory: store::LocalMemoryId,
+        ptr: u32,
+        len: u32,
+        data: u32,
+    ) -> VMResult<()> {
+        self.gc_mut().local_fill_memory(memory, ptr, len, data)
+    }
+
+    #[inline(always)]
+    pub(crate) fn fill_shared_memory_by_id(
+        &mut self,
+        memory: store::SharedMemoryId,
+        ptr: u32,
+        len: u32,
+        data: u32,
+    ) -> VMResult<()> {
+        self.gc_mut().shared_fill_memory(memory, ptr, len, data)
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_memory_local_to_local_by_id(
+        &mut self,
+        dst: store::LocalMemoryId,
+        src: store::LocalMemoryId,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.gc_mut()
+            .copy_memory_local_to_local(dst, src, dst_offset, src_offset, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_memory_shared_to_local_by_id(
+        &mut self,
+        dst: store::LocalMemoryId,
+        src: store::SharedMemoryId,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.gc_mut()
+            .copy_memory_shared_to_local(dst, src, dst_offset, src_offset, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_memory_local_to_shared_by_id(
+        &mut self,
+        dst: store::SharedMemoryId,
+        src: store::LocalMemoryId,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.gc_mut()
+            .copy_memory_local_to_shared(dst, src, dst_offset, src_offset, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_memory_shared_to_shared_by_id(
+        &mut self,
+        dst: store::SharedMemoryId,
+        src: store::SharedMemoryId,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.gc_mut()
+            .copy_memory_shared_to_shared(dst, src, dst_offset, src_offset, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn jump_target(&self, addr: u32) -> *const Instr {
+        unsafe { self.code().offset(addr as isize) }
+    }
 }
 
 impl ExecuteContextSnapshot {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn has_default_memory(self) -> bool {
         self.default_memory.is_some()
     }
@@ -3847,5 +4553,121 @@ mod tests {
         assert_eq!(projection.caller_frame, None);
         assert!(projection.proof_ready().is_none());
         assert!(projection.token_projection().is_none());
+    }
+
+    #[test]
+    fn facade_local_helpers_round_trip_locals_and_select() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops: VecDeque<PendingOp> = VecDeque::new();
+        let mut stack = Stack::new(128);
+        stack.push_u32(10).unwrap();
+        stack.push_u32(20).unwrap();
+
+        let locals = stack
+            .function_call(
+                8,
+                0,
+                frame(CachedMemoryKind::Local, 1),
+                LocalReference {
+                    local_top: 0,
+                    local_size: 0,
+                },
+                std::ptr::null(),
+                &gc,
+            )
+            .unwrap();
+
+        let mut ctx = ExecuteContext::new(
+            &mut stack,
+            locals,
+            frame(CachedMemoryKind::Local, 1),
+            &store,
+            &mut gc,
+            PendingOpEmitter::from_parts(19, &mut pending_effects, &mut pending_ops),
+            std::ptr::null(),
+            19,
+        );
+
+        let mut facade = ExecuteContextFacade::new(&mut ctx);
+        facade.local_get(0, 4).unwrap();
+        assert_eq!(facade.pop_u32(), 10);
+
+        facade.push_u32(33).unwrap();
+        facade.local_set(0, 4);
+        facade.local_get(0, 4).unwrap();
+        assert_eq!(facade.pop_u32(), 33);
+
+        facade.push_u32(44).unwrap();
+        facade.local_tee(4, 4);
+        assert_eq!(facade.pop_u32(), 44);
+        facade.local_get(4, 4).unwrap();
+        assert_eq!(facade.pop_u32(), 44);
+
+        facade.push_u32(111).unwrap();
+        facade.push_u32(222).unwrap();
+        facade.select(4, 0).unwrap();
+        assert_eq!(facade.pop_u32(), 222);
+
+        assert!(facade.projection().token_projection().is_some());
+        assert!(facade.token_projection().is_some());
+    }
+
+    #[test]
+    fn facade_global_and_ref_helpers_match_instance_storage() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops: VecDeque<PendingOp> = VecDeque::new();
+        let mut stack = Stack::new(64);
+
+        let global = gc.new_global_data4(0x1122_3344);
+        let instance = gc.alloc_instance(InstanceData {
+            instance_id: 7,
+            module_addr: GcRef(0),
+            globals: vec![global],
+            funcs: vec![GcRef(0x1234_5678)],
+            tables: Vec::new(),
+            mems: Vec::new(),
+            memory_slots: Vec::new(),
+        });
+
+        let mut ctx = ExecuteContext::new(
+            &mut stack,
+            LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            CallFrameCache {
+                code_addr: GcRef(0),
+                code_base: std::ptr::null(),
+                instance,
+                memory0_kind: CachedMemoryKind::None,
+                memory0_raw: 0,
+            },
+            &store,
+            &mut gc,
+            PendingOpEmitter::from_parts(23, &mut pending_effects, &mut pending_ops),
+            std::ptr::null(),
+            23,
+        );
+
+        let mut facade = ExecuteContextFacade::new(&mut ctx);
+        facade.push_global_bytes::<4>(0).unwrap();
+        assert_eq!(facade.pop_u32(), 0x1122_3344);
+
+        facade.write_global_bytes(0, 0xaabb_ccdd_u32.to_le_bytes());
+        facade.push_global_bytes::<4>(0).unwrap();
+        assert_eq!(facade.pop_u32(), 0xaabb_ccdd);
+
+        facade.push_ref(0x0102_0304).unwrap();
+        assert_eq!(facade.pop_ref(), 0x0102_0304);
+        assert_eq!(facade.ref_func_value(0), 0x1234_5678);
+
+        assert_eq!(
+            gc.global_projection(global).bytes,
+            0xaabb_ccdd_u32.to_le_bytes().to_vec()
+        );
     }
 }

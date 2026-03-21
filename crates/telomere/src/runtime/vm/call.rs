@@ -19,9 +19,10 @@ use super::*;
 pub(crate) unsafe fn internal_op_call(
     return_addr: *const Instr,
     funcaddr: GcRef,
-    facade: &mut ExecuteContextFacade<'_, '_>,
+    ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<*const Instr> {
+    let mut facade = ExecuteContextFacade::new(ctx);
     let funcinst = facade.func_by_addr(funcaddr);
     let (frame, param_types, result_types) = {
         let gc = facade.gc_ref();
@@ -46,7 +47,7 @@ pub(crate) unsafe fn internal_op_call(
     trace!(
         "op_call_internal: {:?}({:?}) {funcaddr:?}",
         funcinst.funcidx,
-        facade.gc_ref().gc_ref_for_instance(funcinst.instance)
+        facade.gc_ref_for_instance(funcinst.instance)
     );
     let param_size = funcinst.param_size();
     if funcinst.is_host_func() {
@@ -56,7 +57,7 @@ pub(crate) unsafe fn internal_op_call(
             vm_try!(facade.enter_function_call(param_size, 0, frame, return_addr));
         }
         vm_try!(unsafe {
-            invoke_host_function(return_addr, facade.as_ctx_mut(), param_types, result_types)
+            invoke_host_function(return_addr, &mut facade, param_types, result_types)
         });
         VMResult::Success(std::ptr::null())
     } else {
@@ -90,14 +91,13 @@ pub(crate) unsafe fn internal_op_call(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
     let funcidx = (*tail_code).operand.u32;
-    let funcaddr = facade.instance().funcs.as_slice()[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, &mut facade, false));
+    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
+    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
-        call_next(ptr, 0, facade.as_ctx_mut())
+        call_next(ptr, 0, ctx)
     }
 }
 
@@ -134,14 +134,13 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
     let funcidx = (*tail_code).operand.u32;
-    let funcaddr = facade.instance().funcs.as_slice()[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, &mut facade, true));
+    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
+    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
-        call_next(ptr, 0, facade.as_ctx_mut())
+        call_next(ptr, 0, ctx)
     }
 }
 
@@ -181,42 +180,30 @@ pub unsafe fn op_return_call_import(
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
 unsafe fn resolve_indirect_call_target(
     tail_code: *const Instr,
-    facade: &mut ExecuteContextFacade<'_, '_>,
+    ctx: &mut ExecuteContext,
 ) -> VMResult<GcRef> {
-    let i = facade.stack_mut().pop_u32();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let i = facade.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
     let table_addr = *vm_try!(VMResult::from_option(
         facade.instance().tables.as_slice().get(tableidx),
         || { VMResult::TableIndexOutOfRange }
     ));
-    let func_addr = {
-        let table = facade.gc_mut().get_table(table_addr);
-        let func_addr = *vm_try!(VMResult::from_option(table.1.get(i as usize), || {
-            VMResult::TableIndexOutOfRange
-        }));
-        trace!("internal_op_call_indirect: {tableidx} {table_addr:?} {func_addr} {table:?}");
-        func_addr
-    };
+    let func_addr = vm_try!(VMResult::from_option(
+        facade.table_get_value(table_addr, i as usize),
+        || { VMResult::TableIndexOutOfRange }
+    ));
+    trace!("internal_op_call_indirect: {tableidx} {table_addr:?} {func_addr}");
     if func_addr == TABLE_UNINITIALIZED {
         return VMResult::TableUninitialized;
     }
     let func_addr = GcRef(func_addr);
-    let (actual_ft, expected_ft) = {
-        let gc = facade.gc_ref();
-        let funcinst = gc.get_func(func_addr);
-        let instance = gc.instance(funcinst.instance);
-        let module = gc.get_module(instance.module_addr);
-        let actual_ft = module
-            .function_types
-            .get_unchecked(funcinst.typeidx.0 as usize) as *const FuncType;
-        let expected_typeidx = (*tail_code.offset(1)).operand.u32;
-        let expected_ft = facade
-            .module()
-            .function_types
-            .get(expected_typeidx as usize)
-            .unwrap() as *const FuncType;
-        (actual_ft, expected_ft)
-    };
+    let actual_ft = facade.function_type_by_addr(func_addr) as *const FuncType;
+    let expected_typeidx = (*tail_code.offset(1)).operand.u32;
+    let expected_ft = facade
+        .module_function_type(expected_typeidx)
+        .expect("validated call_indirect type index must exist")
+        as *const FuncType;
     trace!("{:?} {:?}", unsafe { &*actual_ft }, unsafe {
         &*expected_ft
     });
@@ -242,13 +229,12 @@ unsafe fn resolve_indirect_call_target(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, &mut facade));
-    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, &mut facade, false));
+    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, ctx));
+    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, ctx, false));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
-        call_next(ptr, 0, facade.as_ctx_mut())
+        call_next(ptr, 0, ctx)
     }
 }
 
@@ -269,13 +255,12 @@ pub unsafe fn op_return_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, &mut facade));
-    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, &mut facade, true));
+    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, ctx));
+    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, ctx, true));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
-        call_next(ptr, 0, facade.as_ctx_mut())
+        call_next(ptr, 0, ctx)
     }
 }
 
@@ -299,11 +284,11 @@ pub unsafe fn special_start_function_call(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let function_type = unsafe { &*current_function_type_ptr(&mut facade) };
+    let function_type = unsafe { &*current_function_type_ptr(&facade) };
     unsafe {
         invoke_host_function(
             &VM_END as *const Instr,
-            facade.as_ctx_mut(),
+            &mut facade,
             &function_type.0,
             &function_type.1,
         )

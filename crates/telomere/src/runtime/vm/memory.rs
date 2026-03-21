@@ -172,7 +172,7 @@ unsafe fn load_start(
 ) -> VMResult<usize> {
     debug_assert!(facade.has_default_memory());
     let memarg = (*tail_code).operand.memarg;
-    let offset = facade.stack_mut().pop_u32();
+    let offset = facade.pop_u32();
     trace!("memory access: {:?} {}", memarg, offset);
     compute_memory_offset(memarg, offset)
 }
@@ -184,7 +184,7 @@ unsafe fn load_start_indexed(
 ) -> VMResult<(usize, u32)> {
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
-    let offset = facade.stack_mut().pop_u32();
+    let offset = facade.pop_u32();
     trace!(
         "indexed memory access: {:?} {} memidx={}",
         memarg,
@@ -216,7 +216,7 @@ macro_rules! define_indexed_push_load {
             let mut facade = ExecuteContextFacade::new(ctx);
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, &mut facade));
             vm_try!(facade.push_memory_to_stack_local_indexed::<$bytes>(memidx, start));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            facade_call_next(tail_code, 2, &mut facade)
         }
 
         #[doc = concat!("WebAssembly `", $mnemonic, "` on indexed shared memory.")]
@@ -238,7 +238,7 @@ macro_rules! define_indexed_push_load {
             let mut facade = ExecuteContextFacade::new(ctx);
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, &mut facade));
             vm_try!(facade.push_memory_to_stack_shared_indexed::<$bytes>(memidx, start));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            facade_call_next(tail_code, 2, &mut facade)
         }
     };
 }
@@ -264,8 +264,8 @@ macro_rules! define_indexed_scalar_load {
             let mut facade = ExecuteContextFacade::new(ctx);
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, &mut facade));
             let value = vm_try!(facade.$local_reader(memidx, start));
-            vm_try!(facade.stack_mut().$push($convert(value)));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            vm_try!(facade.$push($convert(value)));
+            facade_call_next(tail_code, 2, &mut facade)
         }
 
         #[doc = concat!("WebAssembly `", $mnemonic, "` on indexed shared memory.")]
@@ -287,8 +287,8 @@ macro_rules! define_indexed_scalar_load {
             let mut facade = ExecuteContextFacade::new(ctx);
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, &mut facade));
             let value = vm_try!(facade.$shared_reader(memidx, start));
-            vm_try!(facade.stack_mut().$push($convert(value)));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            vm_try!(facade.$push($convert(value)));
+            facade_call_next(tail_code, 2, &mut facade)
         }
     };
 }
@@ -354,7 +354,7 @@ pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     vm_try!(facade.push_memory_to_stack::<4>(start));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i64.load`.
@@ -376,7 +376,7 @@ pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     vm_try!(facade.push_memory_to_stack::<8>(start));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `f32.load`.
@@ -398,7 +398,7 @@ pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     vm_try!(facade.push_memory_to_stack::<4>(start));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `f64.load`.
@@ -420,7 +420,7 @@ pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     vm_try!(facade.push_memory_to_stack::<8>(start));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i32.load8_u`.
@@ -442,8 +442,8 @@ pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_u8(start));
-    vm_try!(facade.stack_mut().push_u32(widen_u8_to_u32(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_u32(widen_u8_to_u32(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i32.load8_s`.
@@ -465,8 +465,8 @@ pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_i8(start));
-    vm_try!(facade.stack_mut().push_i32(widen_i8_to_i32(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_i32(widen_i8_to_i32(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i32.load16_s`.
@@ -488,8 +488,8 @@ pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_i16(start));
-    vm_try!(facade.stack_mut().push_i32(widen_i16_to_i32(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_i32(widen_i16_to_i32(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i32.load16_u`.
@@ -511,8 +511,8 @@ pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_u16(start));
-    vm_try!(facade.stack_mut().push_u32(widen_u16_to_u32(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_u32(widen_u16_to_u32(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i64.load8_s`.
@@ -534,8 +534,8 @@ pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_i8(start));
-    vm_try!(facade.stack_mut().push_i64(widen_i8_to_i64(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_i64(widen_i8_to_i64(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i64.load8_u`.
@@ -557,8 +557,8 @@ pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_u8(start));
-    vm_try!(facade.stack_mut().push_u64(widen_u8_to_u64(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_u64(widen_u8_to_u64(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i64.load16_s`.
@@ -580,8 +580,8 @@ pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_i16(start));
-    vm_try!(facade.stack_mut().push_i64(widen_i16_to_i64(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_i64(widen_i16_to_i64(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i64.load16_u`.
@@ -603,8 +603,8 @@ pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_u16(start));
-    vm_try!(facade.stack_mut().push_u64(widen_u16_to_u64(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_u64(widen_u16_to_u64(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i64.load32_s`.
@@ -626,8 +626,8 @@ pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_i32(start));
-    vm_try!(facade.stack_mut().push_i64(widen_i32_to_i64(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_i64(widen_i32_to_i64(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i64.load32_u`.
@@ -649,8 +649,8 @@ pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
     let mut facade = ExecuteContextFacade::new(ctx);
     let start = vm_try!(load_start(tail_code, &mut facade));
     let value = vm_try!(facade.read_memory_u32(start));
-    vm_try!(facade.stack_mut().push_u64(widen_u32_to_u64(value)));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_u64(widen_u32_to_u64(value)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `i32.store`.
@@ -669,9 +669,11 @@ pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write4(facade.stack_mut().pop_u8_array::<4>())
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| StoreBytes::Write4(facade.pop_u8_array::<4>()),
+    )
 }
 
 /// WebAssembly `i64.store`.
@@ -690,9 +692,11 @@ pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write8(facade.stack_mut().pop_u8_array::<8>())
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| StoreBytes::Write8(facade.pop_u8_array::<8>()),
+    )
 }
 
 /// WebAssembly `f32.store`.
@@ -711,9 +715,11 @@ pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write4(facade.stack_mut().pop_u8_array::<4>())
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| StoreBytes::Write4(facade.pop_u8_array::<4>()),
+    )
 }
 
 /// WebAssembly `f64.store`.
@@ -732,9 +738,11 @@ pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write8(facade.stack_mut().pop_u8_array::<8>())
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| StoreBytes::Write8(facade.pop_u8_array::<8>()),
+    )
 }
 
 /// WebAssembly `i32.store8`.
@@ -753,9 +761,13 @@ pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write1(truncate_u32_to_u8_bytes(facade.stack_mut().pop_u32()))
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| {
+            StoreBytes::Write1(truncate_u32_to_u8_bytes(facade.pop_u32()))
+        },
+    )
 }
 
 /// WebAssembly `i32.store16`.
@@ -774,9 +786,13 @@ pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write2(truncate_u32_to_u16_bytes(facade.stack_mut().pop_u32()))
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| {
+            StoreBytes::Write2(truncate_u32_to_u16_bytes(facade.pop_u32()))
+        },
+    )
 }
 
 /// WebAssembly `i64.store8`.
@@ -795,9 +811,13 @@ pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write1(truncate_u64_to_u8_bytes(facade.stack_mut().pop_u64()))
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| {
+            StoreBytes::Write1(truncate_u64_to_u8_bytes(facade.pop_u64()))
+        },
+    )
 }
 
 /// WebAssembly `i64.store16`.
@@ -816,9 +836,13 @@ pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write2(truncate_u64_to_u16_bytes(facade.stack_mut().pop_u64()))
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| {
+            StoreBytes::Write2(truncate_u64_to_u16_bytes(facade.pop_u64()))
+        },
+    )
 }
 
 /// WebAssembly `i64.store32`.
@@ -837,9 +861,13 @@ pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |facade: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write4(truncate_u64_to_u32_bytes(facade.stack_mut().pop_u64()))
-    })
+    store_internal_local(
+        tail_code,
+        ctx,
+        |facade: &mut ExecuteContextFacade<'_, '_>| {
+            StoreBytes::Write4(truncate_u64_to_u32_bytes(facade.pop_u64()))
+        },
+    )
 }
 
 /// WebAssembly `memory.size`.
@@ -860,8 +888,8 @@ pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
     let page_size = facade.memory_page_size().unwrap_or_default();
-    vm_try!(facade.stack_mut().push_u32(page_size));
-    call_next(tail_code, 0, facade.as_ctx_mut())
+    vm_try!(facade.push_u32(page_size));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `memory.grow`.
@@ -881,10 +909,10 @@ pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let page_size_delta = facade.stack_mut().pop_u32();
+    let page_size_delta = facade.pop_u32();
     let result = vm_try!(facade.grow_memory(page_size_delta));
-    vm_try!(facade.stack_mut().push_i32(result));
-    call_next(tail_code, 0, facade.as_ctx_mut())
+    vm_try!(facade.push_i32(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 macro_rules! define_shared_push_load {
@@ -908,7 +936,7 @@ macro_rules! define_shared_push_load {
             let mut facade = ExecuteContextFacade::new(ctx);
             let start = vm_try!(load_start(tail_code, &mut facade));
             vm_try!(facade.push_memory_to_stack::<$bytes>(start));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -934,8 +962,8 @@ macro_rules! define_shared_scalar_load {
             let mut facade = ExecuteContextFacade::new(ctx);
             let start = vm_try!(load_start(tail_code, &mut facade));
             let value = vm_try!(facade.$reader(start));
-            vm_try!(facade.stack_mut().$push($convert(value)));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            vm_try!(facade.$push($convert(value)));
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -1037,33 +1065,61 @@ define_shared_scalar_load!(
     push_u64,
     widen_u32_to_u64
 );
-define_shared_store_alias!(op_i32_store_shared, "i32.store", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write4(facade.stack_mut().pop_u8_array::<4>())
-});
-define_shared_store_alias!(op_i64_store_shared, "i64.store", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write8(facade.stack_mut().pop_u8_array::<8>())
-});
-define_shared_store_alias!(op_f32_store_shared, "f32.store", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write4(facade.stack_mut().pop_u8_array::<4>())
-});
-define_shared_store_alias!(op_f64_store_shared, "f64.store", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write8(facade.stack_mut().pop_u8_array::<8>())
-});
-define_shared_store_alias!(op_i32_store8_shared, "i32.store8", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write1(truncate_u32_to_u8_bytes(facade.stack_mut().pop_u32()))
-});
-define_shared_store_alias!(op_i32_store16_shared, "i32.store16", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write2(truncate_u32_to_u16_bytes(facade.stack_mut().pop_u32()))
-});
-define_shared_store_alias!(op_i64_store8_shared, "i64.store8", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write1(truncate_u64_to_u8_bytes(facade.stack_mut().pop_u64()))
-});
-define_shared_store_alias!(op_i64_store16_shared, "i64.store16", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write2(truncate_u64_to_u16_bytes(facade.stack_mut().pop_u64()))
-});
-define_shared_store_alias!(op_i64_store32_shared, "i64.store32", |facade: &mut ExecuteContextFacade<'_, '_>| {
-    StoreBytes::Write4(truncate_u64_to_u32_bytes(facade.stack_mut().pop_u64()))
-});
+define_shared_store_alias!(
+    op_i32_store_shared,
+    "i32.store",
+    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write4(facade.pop_u8_array::<4>()) }
+);
+define_shared_store_alias!(
+    op_i64_store_shared,
+    "i64.store",
+    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write8(facade.pop_u8_array::<8>()) }
+);
+define_shared_store_alias!(
+    op_f32_store_shared,
+    "f32.store",
+    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write4(facade.pop_u8_array::<4>()) }
+);
+define_shared_store_alias!(
+    op_f64_store_shared,
+    "f64.store",
+    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write8(facade.pop_u8_array::<8>()) }
+);
+define_shared_store_alias!(
+    op_i32_store8_shared,
+    "i32.store8",
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write1(truncate_u32_to_u8_bytes(facade.pop_u32()))
+    }
+);
+define_shared_store_alias!(
+    op_i32_store16_shared,
+    "i32.store16",
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write2(truncate_u32_to_u16_bytes(facade.pop_u32()))
+    }
+);
+define_shared_store_alias!(
+    op_i64_store8_shared,
+    "i64.store8",
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write1(truncate_u64_to_u8_bytes(facade.pop_u64()))
+    }
+);
+define_shared_store_alias!(
+    op_i64_store16_shared,
+    "i64.store16",
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write2(truncate_u64_to_u16_bytes(facade.pop_u64()))
+    }
+);
+define_shared_store_alias!(
+    op_i64_store32_shared,
+    "i64.store32",
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write4(truncate_u64_to_u32_bytes(facade.pop_u64()))
+    }
+);
 
 define_indexed_push_load!(
     op_i32_load_indexed_local,
@@ -1183,55 +1239,65 @@ define_indexed_store_alias!(
     op_i32_store_indexed_local,
     op_i32_store_indexed_shared,
     "i32.store",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write4(facade.stack_mut().pop_u8_array::<4>()) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write4(facade.pop_u8_array::<4>()) }
 );
 define_indexed_store_alias!(
     op_i64_store_indexed_local,
     op_i64_store_indexed_shared,
     "i64.store",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write8(facade.stack_mut().pop_u8_array::<8>()) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write8(facade.pop_u8_array::<8>()) }
 );
 define_indexed_store_alias!(
     op_f32_store_indexed_local,
     op_f32_store_indexed_shared,
     "f32.store",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write4(facade.stack_mut().pop_u8_array::<4>()) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write4(facade.pop_u8_array::<4>()) }
 );
 define_indexed_store_alias!(
     op_f64_store_indexed_local,
     op_f64_store_indexed_shared,
     "f64.store",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write8(facade.stack_mut().pop_u8_array::<8>()) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write8(facade.pop_u8_array::<8>()) }
 );
 define_indexed_store_alias!(
     op_i32_store8_indexed_local,
     op_i32_store8_indexed_shared,
     "i32.store8",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write1(truncate_u32_to_u8_bytes(facade.stack_mut().pop_u32())) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write1(truncate_u32_to_u8_bytes(facade.pop_u32()))
+    }
 );
 define_indexed_store_alias!(
     op_i32_store16_indexed_local,
     op_i32_store16_indexed_shared,
     "i32.store16",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write2(truncate_u32_to_u16_bytes(facade.stack_mut().pop_u32())) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write2(truncate_u32_to_u16_bytes(facade.pop_u32()))
+    }
 );
 define_indexed_store_alias!(
     op_i64_store8_indexed_local,
     op_i64_store8_indexed_shared,
     "i64.store8",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write1(truncate_u64_to_u8_bytes(facade.stack_mut().pop_u64())) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write1(truncate_u64_to_u8_bytes(facade.pop_u64()))
+    }
 );
 define_indexed_store_alias!(
     op_i64_store16_indexed_local,
     op_i64_store16_indexed_shared,
     "i64.store16",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write2(truncate_u64_to_u16_bytes(facade.stack_mut().pop_u64())) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write2(truncate_u64_to_u16_bytes(facade.pop_u64()))
+    }
 );
 define_indexed_store_alias!(
     op_i64_store32_indexed_local,
     op_i64_store32_indexed_shared,
     "i64.store32",
-    |facade: &mut ExecuteContextFacade<'_, '_>| { StoreBytes::Write4(truncate_u64_to_u32_bytes(facade.stack_mut().pop_u64())) }
+    |facade: &mut ExecuteContextFacade<'_, '_>| {
+        StoreBytes::Write4(truncate_u64_to_u32_bytes(facade.pop_u64()))
+    }
 );
 
 /// WebAssembly `memory.size` on shared default memory.
@@ -1255,8 +1321,8 @@ pub unsafe fn op_mem_size_shared(
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
     let page_size = facade.memory_page_size().unwrap_or_default();
-    vm_try!(facade.stack_mut().push_u32(page_size));
-    call_next(tail_code, 0, facade.as_ctx_mut())
+    vm_try!(facade.push_u32(page_size));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `memory.grow` on shared default memory.
@@ -1279,10 +1345,10 @@ pub unsafe fn op_mem_grow_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let page_size_delta = facade.stack_mut().pop_u32();
+    let page_size_delta = facade.pop_u32();
     let result = vm_try!(facade.grow_memory(page_size_delta));
-    vm_try!(facade.stack_mut().push_i32(result));
-    call_next(tail_code, 0, facade.as_ctx_mut())
+    vm_try!(facade.push_i32(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `memory.size` on indexed local memory.
@@ -1306,8 +1372,8 @@ pub unsafe fn op_mem_size_indexed_local(
     let mut facade = ExecuteContextFacade::new(ctx);
     let memidx = (*tail_code).operand.u32;
     let page_size = facade.memory_page_size_local_indexed(memidx);
-    vm_try!(facade.stack_mut().push_u32(page_size));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_u32(page_size));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `memory.size` on indexed shared memory.
@@ -1331,8 +1397,8 @@ pub unsafe fn op_mem_size_indexed_shared(
     let mut facade = ExecuteContextFacade::new(ctx);
     let memidx = (*tail_code).operand.u32;
     let page_size = facade.memory_page_size_shared_indexed(memidx);
-    vm_try!(facade.stack_mut().push_u32(page_size));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_u32(page_size));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `memory.grow` on indexed local memory.
@@ -1355,10 +1421,10 @@ pub unsafe fn op_mem_grow_indexed_local(
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
     let memidx = (*tail_code).operand.u32;
-    let page_size_delta = facade.stack_mut().pop_u32();
+    let page_size_delta = facade.pop_u32();
     let result = vm_try!(facade.grow_memory_local_indexed(memidx, page_size_delta));
-    vm_try!(facade.stack_mut().push_i32(result));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_i32(result));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `memory.grow` on indexed shared memory.
@@ -1381,10 +1447,10 @@ pub unsafe fn op_mem_grow_indexed_shared(
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
     let memidx = (*tail_code).operand.u32;
-    let page_size_delta = facade.stack_mut().pop_u32();
+    let page_size_delta = facade.pop_u32();
     let result = vm_try!(facade.grow_memory_shared_indexed(memidx, page_size_delta));
-    vm_try!(facade.stack_mut().push_i32(result));
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    vm_try!(facade.push_i32(result));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 pub(crate) use op_f32_load as op_f32_load_local;
@@ -1492,7 +1558,7 @@ mod tests {
         let start = unsafe { load_start(program.as_ptr(), &mut facade) }.unwrap();
         assert_eq!(start, 12);
 
-        facade.stack_mut().push_u32(11).unwrap();
+        facade.push_u32(11).unwrap();
         let (indexed_start, memidx) =
             unsafe { load_start_indexed(program.as_ptr(), &mut facade) }.unwrap();
         assert_eq!(indexed_start, 18);

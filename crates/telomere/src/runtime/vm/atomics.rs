@@ -60,10 +60,10 @@ pub open spec fn spec_atomic_start_indexed_result(
 /// - This helper must not retain borrows across the call boundary into memory access helpers.
 unsafe fn atomic_start(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<usize> {
     let memarg = (*tail_code).operand.memarg;
-    let offset = facade.stack_mut().pop_u32();
+    let offset = facade.pop_u32();
     compute_memory_offset(memarg, offset)
 }
 
@@ -83,11 +83,11 @@ unsafe fn atomic_start(
 /// - This helper must not retain borrows across the call boundary into memory access helpers.
 unsafe fn atomic_start_indexed(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u32)> {
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
-    let offset = facade.stack_mut().pop_u32();
+    let offset = facade.pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     VMResult::Success((start, memidx))
 }
@@ -95,96 +95,96 @@ unsafe fn atomic_start_indexed(
 #[inline(always)]
 unsafe fn push_u32_and_continue(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
     skip: isize,
     value: u32,
 ) -> VMResult<()> {
-    vm_try!(facade.stack_mut().push_u32(value));
-    call_next(tail_code, skip, facade.as_ctx_mut())
+    vm_try!(facade.push_u32(value));
+    facade_call_next(tail_code, skip, facade)
 }
 
 #[inline(always)]
 unsafe fn push_i32_and_continue(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
     skip: isize,
     value: i32,
 ) -> VMResult<()> {
-    vm_try!(facade.stack_mut().push_i32(value));
-    call_next(tail_code, skip, facade.as_ctx_mut())
+    vm_try!(facade.push_i32(value));
+    facade_call_next(tail_code, skip, facade)
 }
 
 #[inline(always)]
 unsafe fn pop_notify_operands(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u32)> {
-    let count = facade.stack_mut().pop_u32();
-    let start = vm_try!(atomic_start(tail_code, &mut facade));
+    let count = facade.pop_u32();
+    let start = vm_try!(atomic_start(tail_code, facade));
     VMResult::Success((start, count))
 }
 
 #[inline(always)]
 unsafe fn pop_notify_operands_indexed(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u32, u32)> {
-    let count = facade.stack_mut().pop_u32();
-    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
+    let count = facade.pop_u32();
+    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, facade));
     VMResult::Success((start, memidx, count))
 }
 
 #[inline(always)]
 unsafe fn pop_wait32_operands(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u32, i64)> {
-    let timeout_ns = facade.stack_mut().pop_i64();
-    let expected = facade.stack_mut().pop_u32();
-    let start = vm_try!(atomic_start(tail_code, &mut facade));
+    let timeout_ns = facade.pop_i64();
+    let expected = facade.pop_u32();
+    let start = vm_try!(atomic_start(tail_code, facade));
     VMResult::Success((start, expected, timeout_ns))
 }
 
 #[inline(always)]
 unsafe fn pop_wait32_operands_indexed(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u32, u32, i64)> {
-    let timeout_ns = facade.stack_mut().pop_i64();
-    let expected = facade.stack_mut().pop_u32();
-    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
+    let timeout_ns = facade.pop_i64();
+    let expected = facade.pop_u32();
+    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, facade));
     VMResult::Success((start, memidx, expected, timeout_ns))
 }
 
 #[inline(always)]
 unsafe fn pop_wait64_operands(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u64, i64)> {
-    let timeout_ns = facade.stack_mut().pop_i64();
-    let expected = facade.stack_mut().pop_u64();
-    let start = vm_try!(atomic_start(tail_code, &mut facade));
+    let timeout_ns = facade.pop_i64();
+    let expected = facade.pop_u64();
+    let start = vm_try!(atomic_start(tail_code, facade));
     VMResult::Success((start, expected, timeout_ns))
 }
 
 #[inline(always)]
 unsafe fn pop_wait64_operands_indexed(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u32, u64, i64)> {
-    let timeout_ns = facade.stack_mut().pop_i64();
-    let expected = facade.stack_mut().pop_u64();
-    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
+    let timeout_ns = facade.pop_i64();
+    let expected = facade.pop_u64();
+    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, facade));
     VMResult::Success((start, memidx, expected, timeout_ns))
 }
 
 #[inline(always)]
 unsafe fn finish_wait_not_equal(
     tail_code: *const Instr,
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
     skip: isize,
 ) -> VMResult<()> {
-    push_i32_and_continue(tail_code, &mut facade, skip, wait_result_not_equal())
+    push_i32_and_continue(tail_code, facade, skip, wait_result_not_equal())
 }
 
 macro_rules! atomic_load_op {
@@ -203,11 +203,11 @@ macro_rules! atomic_load_op {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
+            let mut facade = ExecuteContextFacade::new(ctx);
             let start = vm_try!(atomic_start(tail_code, &mut facade));
             let value = vm_try!(facade.$reader(start));
-            vm_try!(facade.stack_mut().$push(value as $cast));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            vm_try!(facade.$push(value as $cast));
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -228,11 +228,11 @@ macro_rules! atomic_load_op_shared {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
+            let mut facade = ExecuteContextFacade::new(ctx);
             let start = vm_try!(atomic_start(tail_code, &mut facade));
             let value = vm_try!(facade.$reader(start));
-            vm_try!(facade.stack_mut().$push(value as $cast));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            vm_try!(facade.$push(value as $cast));
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -253,11 +253,11 @@ macro_rules! atomic_store_op {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, &mut facade));
             vm_try!(facade.$writer(start, value));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -278,11 +278,11 @@ macro_rules! atomic_store_op_shared {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, &mut facade));
             vm_try!(facade.$writer(start, value));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -303,12 +303,12 @@ macro_rules! atomic_rmw_op {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $pop_ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, &mut facade));
             let old = vm_try!(facade.$rmw(start, $op, value));
-            vm_try!(facade.stack_mut().$push(old as $push_ty));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            vm_try!(facade.$push(old as $push_ty));
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -329,12 +329,12 @@ macro_rules! atomic_rmw_op_shared {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $pop_ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, &mut facade));
             let old = vm_try!(facade.$rmw(start, $op, value));
-            vm_try!(facade.stack_mut().$push(old as $push_ty));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            vm_try!(facade.$push(old as $push_ty));
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -355,13 +355,13 @@ macro_rules! atomic_cmpxchg_op {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $ty;
-            let expected = facade.stack_mut().$pop() as $ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $ty;
+            let expected = facade.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, &mut facade));
             let old = vm_try!(facade.$cmpxchg(start, expected, value));
-            vm_try!(facade.stack_mut().$push(old as $push_ty));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            vm_try!(facade.$push(old as $push_ty));
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -382,13 +382,13 @@ macro_rules! atomic_cmpxchg_op_shared {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $ty;
-            let expected = facade.stack_mut().$pop() as $ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $ty;
+            let expected = facade.$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, &mut facade));
             let old = vm_try!(facade.$cmpxchg(start, expected, value));
-            vm_try!(facade.stack_mut().$push(old as $push_ty));
-            call_next(tail_code, 1, facade.as_ctx_mut())
+            vm_try!(facade.$push(old as $push_ty));
+            facade_call_next(tail_code, 1, &mut facade)
         }
     };
 }
@@ -408,11 +408,11 @@ macro_rules! atomic_load_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
+            let mut facade = ExecuteContextFacade::new(ctx);
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
             let value = vm_try!(unsafe { facade.$reader_local(memidx, start) });
-            vm_try!(facade.stack_mut().$push(value as $cast));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            vm_try!(facade.$push(value as $cast));
+            facade_call_next(tail_code, 2, &mut facade)
         }
 
         #[doc = concat!("WebAssembly threads atomic load `", stringify!($shared), "` on indexed shared memory.")]
@@ -428,11 +428,11 @@ macro_rules! atomic_load_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
+            let mut facade = ExecuteContextFacade::new(ctx);
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
             let value = vm_try!(unsafe { facade.$reader_shared(memidx, start) });
-            vm_try!(facade.stack_mut().$push(value as $cast));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            vm_try!(facade.$push(value as $cast));
+            facade_call_next(tail_code, 2, &mut facade)
         }
     };
 }
@@ -452,11 +452,11 @@ macro_rules! atomic_store_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
             vm_try!(unsafe { facade.$writer_local(memidx, start, value) });
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            facade_call_next(tail_code, 2, &mut facade)
         }
 
         #[doc = concat!("WebAssembly threads atomic store `", stringify!($shared), "` on indexed shared memory.")]
@@ -472,11 +472,11 @@ macro_rules! atomic_store_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
             vm_try!(unsafe { facade.$writer_shared(memidx, start, value) });
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            facade_call_next(tail_code, 2, &mut facade)
         }
     };
 }
@@ -496,12 +496,12 @@ macro_rules! atomic_rmw_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $pop_ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $pop_ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
             let old = vm_try!(unsafe { facade.$rmw_local(memidx, start, $op, value) });
-            vm_try!(facade.stack_mut().$push(old as $push_ty));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            vm_try!(facade.$push(old as $push_ty));
+            facade_call_next(tail_code, 2, &mut facade)
         }
 
         #[doc = concat!("WebAssembly threads atomic read-modify-write `", stringify!($shared), "` on indexed shared memory.")]
@@ -517,12 +517,12 @@ macro_rules! atomic_rmw_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $pop_ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $pop_ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
             let old = vm_try!(unsafe { facade.$rmw_shared(memidx, start, $op, value) });
-            vm_try!(facade.stack_mut().$push(old as $push_ty));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            vm_try!(facade.$push(old as $push_ty));
+            facade_call_next(tail_code, 2, &mut facade)
         }
     };
 }
@@ -542,13 +542,13 @@ macro_rules! atomic_cmpxchg_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $ty;
-            let expected = facade.stack_mut().$pop() as $ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $ty;
+            let expected = facade.$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
             let old = vm_try!(unsafe { facade.$cmpxchg_local(memidx, start, expected, value) });
-            vm_try!(facade.stack_mut().$push(old as $push_ty));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            vm_try!(facade.$push(old as $push_ty));
+            facade_call_next(tail_code, 2, &mut facade)
         }
 
         #[doc = concat!("WebAssembly threads atomic compare-exchange `", stringify!($shared), "` on indexed shared memory.")]
@@ -564,13 +564,13 @@ macro_rules! atomic_cmpxchg_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-            let value = facade.stack_mut().$pop() as $ty;
-            let expected = facade.stack_mut().$pop() as $ty;
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let value = facade.$pop() as $ty;
+            let expected = facade.$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, &mut facade));
             let old = vm_try!(unsafe { facade.$cmpxchg_shared(memidx, start, expected, value) });
-            vm_try!(facade.stack_mut().$push(old as $push_ty));
-            call_next(tail_code, 2, facade.as_ctx_mut())
+            vm_try!(facade.$push(old as $push_ty));
+            facade_call_next(tail_code, 2, &mut facade)
         }
     };
 }
@@ -2243,10 +2243,10 @@ pub unsafe fn op_memory_atomic_notify_shared(
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
     let (start, count) = vm_try!(pop_notify_operands(tail_code, &mut facade));
-    let notify = vm_try!(facade
-        .gc_ref()
-        .shared_memory(facade.default_shared_memory_id_unchecked())
-        .notify_waiters_protocol(start, count));
+    let shared_id = unsafe { facade.default_shared_memory_id_unchecked() };
+    let notify = vm_try!(facade.with_shared_memory_ref(shared_id, |shared| {
+        shared.notify_waiters_protocol(start, count)
+    }));
     push_u32_and_continue(tail_code, &mut facade, 1, notify.woken)
 }
 
@@ -2292,10 +2292,9 @@ pub unsafe fn op_memory_atomic_notify_indexed_shared(
     let mut facade = ExecuteContextFacade::new(ctx);
     let (start, memidx, count) = vm_try!(pop_notify_operands_indexed(tail_code, &mut facade));
     let shared_id = unsafe { facade.shared_memory_id_at_unchecked(memidx) };
-    let notify = vm_try!(facade
-        .gc_ref()
-        .shared_memory(shared_id)
-        .notify_waiters_protocol(start, count));
+    let notify = vm_try!(facade.with_shared_memory_ref(shared_id, |shared| {
+        shared.notify_waiters_protocol(start, count)
+    }));
     push_u32_and_continue(tail_code, &mut facade, 2, notify.woken)
 }
 
@@ -2313,19 +2312,14 @@ pub unsafe fn op_memory_atomic_notify_indexed_shared(
 /// - `shared` and `wait` must refer to a wait registration belonging to the active store and memory instance.
 /// - This helper must not keep locks or borrows alive while constructing the async completion.
 unsafe fn enqueue_wait_pending(
-    mut facade: &mut ExecuteContextFacade<'_, '_>,
+    facade: &mut ExecuteContextFacade<'_, '_>,
     shared: std::sync::Arc<crate::common::SharedMemoryObject>,
     wait: crate::common::SharedWaitRegistration,
     timeout_ns: i64,
     resume_pc: *const Instr,
 ) {
     let task_id = facade.task_id();
-    let fp = StablePc::from_raw_in_frame(
-        facade.gc_ref(),
-        facade.stack_ref(),
-        facade.local_reference(),
-        resume_pc,
-    );
+    let fp = facade.stable_pc_from_raw_in_frame(resume_pc);
     facade
         .pending_mut()
         .push_pending(crate::runtime::memory_effect::PendingOp::MemoryWait(
@@ -2382,8 +2376,10 @@ pub unsafe fn op_memory_atomic_wait32_shared(
     let mut facade = ExecuteContextFacade::new(ctx);
     let (start, expected, timeout_ns) = vm_try!(pop_wait32_operands(tail_code, &mut facade));
     let shared_id = unsafe { facade.default_shared_memory_id_unchecked() };
-    let shared = facade.gc_ref().shared_memory(shared_id);
-    match vm_try!(shared.register_wait32_protocol(start, expected)) {
+    let registration = vm_try!(facade.with_shared_memory_ref(shared_id, |shared| {
+        shared.register_wait32_protocol(start, expected)
+    }));
+    match registration {
         None => finish_wait_not_equal(tail_code, &mut facade, 1),
         Some(protocol) => {
             let resume_pc = tail_code.offset(1);
@@ -2439,8 +2435,10 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared(
     let (start, memidx, expected, timeout_ns) =
         vm_try!(pop_wait32_operands_indexed(tail_code, &mut facade));
     let shared_id = unsafe { facade.shared_memory_id_at_unchecked(memidx) };
-    let shared = facade.gc_ref().shared_memory(shared_id);
-    match vm_try!(shared.register_wait32_protocol(start, expected)) {
+    let registration = vm_try!(facade.with_shared_memory_ref(shared_id, |shared| {
+        shared.register_wait32_protocol(start, expected)
+    }));
+    match registration {
         None => finish_wait_not_equal(tail_code, &mut facade, 2),
         Some(protocol) => {
             let resume_pc = tail_code.offset(2);
@@ -2495,8 +2493,10 @@ pub unsafe fn op_memory_atomic_wait64_shared(
     let mut facade = ExecuteContextFacade::new(ctx);
     let (start, expected, timeout_ns) = vm_try!(pop_wait64_operands(tail_code, &mut facade));
     let shared_id = unsafe { facade.default_shared_memory_id_unchecked() };
-    let shared = facade.gc_ref().shared_memory(shared_id);
-    match vm_try!(shared.register_wait64_protocol(start, expected)) {
+    let registration = vm_try!(facade.with_shared_memory_ref(shared_id, |shared| {
+        shared.register_wait64_protocol(start, expected)
+    }));
+    match registration {
         None => finish_wait_not_equal(tail_code, &mut facade, 1),
         Some(protocol) => {
             let resume_pc = tail_code.offset(1);
@@ -2552,8 +2552,10 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
     let (start, memidx, expected, timeout_ns) =
         vm_try!(pop_wait64_operands_indexed(tail_code, &mut facade));
     let shared_id = unsafe { facade.shared_memory_id_at_unchecked(memidx) };
-    let shared = facade.gc_ref().shared_memory(shared_id);
-    match vm_try!(shared.register_wait64_protocol(start, expected)) {
+    let registration = vm_try!(facade.with_shared_memory_ref(shared_id, |shared| {
+        shared.register_wait64_protocol(start, expected)
+    }));
+    match registration {
         None => finish_wait_not_equal(tail_code, &mut facade, 2),
         Some(protocol) => {
             let resume_pc = tail_code.offset(2);
@@ -2582,7 +2584,7 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
 pub unsafe fn op_atomic_fence(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
     facade.local_atomic_fence();
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `atomic.fence` on shared default memory.
@@ -2604,7 +2606,7 @@ pub unsafe fn op_atomic_fence_shared(
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
     facade.shared_atomic_fence();
-    call_next(tail_code, 1, facade.as_ctx_mut())
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 pub(crate) use op_atomic_fence as op_atomic_fence_local;
@@ -2729,7 +2731,7 @@ mod tests {
         let start = unsafe { atomic_start(program.as_ptr(), &mut facade) }.unwrap();
         assert_eq!(start, 10);
 
-        facade.stack_mut().push_u32(1).unwrap();
+        facade.push_u32(1).unwrap();
         let (indexed_start, memidx) =
             unsafe { atomic_start_indexed(program.as_ptr(), &mut facade) }.unwrap();
         assert_eq!(indexed_start, 7);
@@ -2807,8 +2809,8 @@ mod tests {
 
         {
             let mut facade = ExecuteContextFacade::new(&mut ctx);
-            facade.stack_mut().push_u32(5).unwrap();
-            facade.stack_mut().push_u32(2).unwrap();
+            facade.push_u32(5).unwrap();
+            facade.push_u32(2).unwrap();
         }
         let notify_program = [
             Instr {
@@ -2826,14 +2828,14 @@ mod tests {
         }
         {
             let mut facade = ExecuteContextFacade::new(&mut ctx);
-            assert_eq!(facade.stack_mut().pop_u32(), 0);
+            assert_eq!(facade.pop_u32(), 0);
         }
 
         {
             let mut facade = ExecuteContextFacade::new(&mut ctx);
-            facade.stack_mut().push_u32(4).unwrap();
-            facade.stack_mut().push_u32(7).unwrap();
-            facade.stack_mut().push_i64(-1).unwrap();
+            facade.push_u32(4).unwrap();
+            facade.push_u32(7).unwrap();
+            facade.push_i64(-1).unwrap();
         }
         let wait_program = [Instr {
             operand: Operand {
@@ -2871,9 +2873,9 @@ mod tests {
                 frame(CachedMemoryKind::Shared, shared_id.raw()),
             );
             let mut facade = ExecuteContextFacade::new(&mut ctx);
-            facade.stack_mut().push_u32(0).unwrap();
-            facade.stack_mut().push_u32(7).unwrap();
-            facade.stack_mut().push_i64(-1).unwrap();
+            facade.push_u32(0).unwrap();
+            facade.push_u32(7).unwrap();
+            facade.push_i64(-1).unwrap();
             let wait_program = [
                 Instr {
                     operand: Operand {
@@ -2906,8 +2908,8 @@ mod tests {
                 frame(CachedMemoryKind::Shared, shared_id.raw()),
             );
             let mut facade = ExecuteContextFacade::new(&mut ctx);
-            facade.stack_mut().push_u32(0).unwrap();
-            facade.stack_mut().push_u32(1).unwrap();
+            facade.push_u32(0).unwrap();
+            facade.push_u32(1).unwrap();
             let notify_program = [
                 Instr {
                     operand: Operand {
@@ -2923,7 +2925,7 @@ mod tests {
                 op_memory_atomic_notify_shared(notify_program.as_ptr(), &mut ctx).unwrap();
             }
             let mut facade = ExecuteContextFacade::new(&mut ctx);
-            assert_eq!(facade.stack_mut().pop_u32(), 1);
+            assert_eq!(facade.pop_u32(), 1);
         }
 
         let after_notify = shared.projection();
@@ -2955,9 +2957,9 @@ mod tests {
         );
         {
             let mut facade = ExecuteContextFacade::new(&mut ctx);
-            facade.stack_mut().push_u32(8).unwrap();
-            facade.stack_mut().push_u64(0xffff_ffff_ffff_ffff).unwrap();
-            facade.stack_mut().push_i64(0).unwrap();
+            facade.push_u32(8).unwrap();
+            facade.push_u64(0xffff_ffff_ffff_ffff).unwrap();
+            facade.push_i64(0).unwrap();
         }
         let wait_program = [
             Instr {
@@ -2974,7 +2976,7 @@ mod tests {
             op_memory_atomic_wait64_shared(wait_program.as_ptr(), &mut ctx).unwrap();
         }
         let mut facade = ExecuteContextFacade::new(&mut ctx);
-        assert_eq!(facade.stack_mut().pop_i32(), wait_result_not_equal());
+        assert_eq!(facade.pop_i32(), wait_result_not_equal());
         assert_eq!(pending_effects, 0);
         assert!(pending_ops.is_empty());
     }

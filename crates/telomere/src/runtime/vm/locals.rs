@@ -18,14 +18,6 @@ pub open spec fn spec_select_result(
     crate::common::formal::stack_select_bytes(view, size, cond)
 }
 
-#[inline(always)]
-fn select_uses_top_value(cond: u32) -> (result: bool)
-    ensures
-        result == (cond == 0),
-{
-    cond == 0
-}
-
 } // verus!
 
 #[inline(always)]
@@ -34,14 +26,10 @@ unsafe fn local_get<const SIZE: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx.local_get(addr, SIZE));
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.local_get(addr, SIZE));
     trace!("op_local_get{SIZE}: {addr}");
-    call_next(tail_code, 1, ctx)
-}
-
-#[inline(always)]
-unsafe fn internal_op_drop(size: usize, ctx: &mut ExecuteContext) {
-    ctx.stack_mut().drop(size);
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 #[inline(always)]
@@ -50,8 +38,9 @@ unsafe fn local_set<const SIZE: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
-    ctx.local_set(addr, SIZE);
-    call_next(tail_code, 1, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    facade.local_set(addr, SIZE);
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 #[inline(always)]
@@ -60,8 +49,9 @@ unsafe fn local_tee<const SIZE: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
-    ctx.local_tee(addr, SIZE);
-    call_next(tail_code, 1, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    facade.local_tee(addr, SIZE);
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `drop`.
@@ -82,34 +72,9 @@ unsafe fn local_tee<const SIZE: usize>(
 pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let size = (*tail_code).operand.drop_size as usize;
     trace!("op_drop: {size}");
-    internal_op_drop(size, ctx);
-    call_next(tail_code, 1, ctx)
-}
-
-#[inline(never)]
-/// WebAssembly `select` helper for validated stack values.
-///
-/// Spec:
-/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
-///
-/// Stack effect: internal `select` operand handling.
-/// Traps: none.
-/// Notes: Reads the validated operands and materializes the selected value before the tail-dispatch wrapper continues.
-///
-/// # Safety
-/// - `tail_code` must point to the decoded instruction stream for the current active frame.
-/// - `ctx` must reference a live execution context whose validated operand stack matches this `select` instruction.
-/// - This helper must not keep borrows or guards alive across the follow-up stack push.
-unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let x = (*tail_code).operand.select as usize;
-    let cond = ctx.stack_mut().pop_u32();
-
-    let a = ctx.stack_mut().pop_u8_array_generic::<8>(x);
-    let b = ctx.stack_mut().pop_u8_array_generic::<8>(x);
-    let value = if select_uses_top_value(cond) { a } else { b };
-    trace!("op_select: {x} {cond} {a:?} {b:?} => {value:?}");
-    vm_try!(ctx.stack_mut().push_slice(&value[0..x]));
-    VMResult::Success(())
+    let mut facade = ExecuteContextFacade::new(ctx);
+    facade.drop_values(size);
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `select`.
@@ -128,8 +93,12 @@ unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    vm_try!(internal_op_select(tail_code, ctx));
-    call_next(tail_code, 1, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let x = (*tail_code).operand.select as usize;
+    let cond = facade.pop::<u32>();
+    trace!("op_select: {x} {cond}");
+    vm_try!(facade.select(x, cond));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `local.get`.

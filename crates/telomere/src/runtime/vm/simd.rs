@@ -2,8 +2,7 @@ use crate::{
     common::stack::{LaneType, StackOperation},
     runtime::vm::{
         compute_memory_offset, store_internal_local, store_internal_local_indexed,
-        store_internal_shared, store_internal_shared_indexed, StoreBytes,
-        ExecuteContextFacade,
+        store_internal_shared, store_internal_shared_indexed, ExecuteContextFacade, StoreBytes,
     },
 };
 use telomere_macros::define_simd_operation;
@@ -11,7 +10,7 @@ use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16}
 
 use crate::{
     common::{ExecuteContext, Instr},
-    runtime::vm::call_next,
+    runtime::vm::facade_call_next,
     Stack, VMResult,
 };
 
@@ -33,7 +32,7 @@ unsafe fn push_memory_to_stack_local<const N: usize>(
     ctx: &mut ExecuteContext,
     start: usize,
 ) -> VMResult<()> {
-    ctx.push_memory_to_stack::<N>(start)
+    ExecuteContextFacade::new(ctx).push_memory_to_stack::<N>(start)
 }
 
 /// Telomere internal SIMD shared-memory push helper.
@@ -54,7 +53,7 @@ unsafe fn push_memory_to_stack_shared<const N: usize>(
     ctx: &mut ExecuteContext,
     start: usize,
 ) -> VMResult<()> {
-    ctx.push_memory_to_stack::<N>(start)
+    ExecuteContextFacade::new(ctx).push_memory_to_stack::<N>(start)
 }
 
 #[inline(always)]
@@ -64,7 +63,7 @@ unsafe fn push_memory_to_stack_local_indexed<const N: usize>(
     start: usize,
 ) -> VMResult<()> {
     let memidx = (*tail_code.add(1)).operand.u32;
-    ctx.push_memory_to_stack_local_indexed::<N>(memidx, start)
+    ExecuteContextFacade::new(ctx).push_memory_to_stack_local_indexed::<N>(memidx, start)
 }
 
 #[inline(always)]
@@ -74,7 +73,7 @@ unsafe fn push_memory_to_stack_shared_indexed<const N: usize>(
     start: usize,
 ) -> VMResult<()> {
     let memidx = (*tail_code.add(1)).operand.u32;
-    ctx.push_memory_to_stack_shared_indexed::<N>(memidx, start)
+    ExecuteContextFacade::new(ctx).push_memory_to_stack_shared_indexed::<N>(memidx, start)
 }
 
 /// Telomere internal SIMD local-memory read helper.
@@ -96,9 +95,10 @@ unsafe fn read_memory_bytes_local<const N: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
     let memarg = (*tail_code).operand.memarg;
-    let offset = ctx.stack_mut().pop_u32();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let offset = facade.pop::<u32>();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    ctx.read_memory_u8_array::<N>(start)
+    facade.read_memory_u8_array::<N>(start)
 }
 
 /// Telomere internal SIMD shared-memory read helper.
@@ -120,9 +120,10 @@ unsafe fn read_memory_bytes_shared<const N: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
     let memarg = (*tail_code).operand.memarg;
-    let offset = ctx.stack_mut().pop_u32();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let offset = facade.pop::<u32>();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    ctx.read_memory_u8_array::<N>(start)
+    facade.read_memory_u8_array::<N>(start)
 }
 
 #[inline(always)]
@@ -131,10 +132,11 @@ unsafe fn read_memory_bytes_local_indexed<const N: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
     let memarg = (*tail_code).operand.memarg;
-    let offset = ctx.stack_mut().pop_u32();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let offset = facade.pop::<u32>();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     let memidx = (*tail_code.add(1)).operand.u32;
-    ctx.read_u8_array_local_indexed::<N>(memidx, start)
+    facade.read_u8_array_local_indexed::<N>(memidx, start)
 }
 
 #[inline(always)]
@@ -143,10 +145,11 @@ unsafe fn read_memory_bytes_shared_indexed<const N: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
     let memarg = (*tail_code).operand.memarg;
-    let offset = ctx.stack_mut().pop_u32();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let offset = facade.pop::<u32>();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     let memidx = (*tail_code.add(1)).operand.u32;
-    ctx.read_u8_array_shared_indexed::<N>(memidx, start)
+    facade.read_u8_array_shared_indexed::<N>(memidx, start)
 }
 
 #[inline(always)]
@@ -159,9 +162,10 @@ unsafe fn unary_v128_to_v128_op<F>(
 where
     F: FnOnce(u128) -> u128,
 {
-    let value = ctx.stack_mut().pop_u128();
-    vm_try!(ctx.stack_mut().push_u128(f(value)));
-    call_next(tail_code, skip, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value = facade.pop_u128();
+    vm_try!(facade.push_u128(f(value)));
+    facade_call_next(tail_code, skip, &mut facade)
 }
 
 #[inline(always)]
@@ -174,9 +178,10 @@ unsafe fn unary_v128_to_i32_op<F>(
 where
     F: FnOnce(u128) -> i32,
 {
-    let value = ctx.stack_mut().pop_u128();
-    vm_try!(ctx.stack_mut().push_i32(f(value)));
-    call_next(tail_code, skip, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value = facade.pop_u128();
+    vm_try!(facade.push(f(value)));
+    facade_call_next(tail_code, skip, &mut facade)
 }
 
 #[inline(always)]
@@ -189,10 +194,11 @@ unsafe fn binary_v128_to_v128_op<F>(
 where
     F: FnOnce(u128, u128) -> u128,
 {
-    let rhs = ctx.stack_mut().pop_u128();
-    let lhs = ctx.stack_mut().pop_u128();
-    vm_try!(ctx.stack_mut().push_u128(f(lhs, rhs)));
-    call_next(tail_code, skip, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let rhs = facade.pop_u128();
+    let lhs = facade.pop_u128();
+    vm_try!(facade.push_u128(f(lhs, rhs)));
+    facade_call_next(tail_code, skip, &mut facade)
 }
 
 #[inline(always)]
@@ -205,11 +211,12 @@ unsafe fn ternary_v128_to_v128_op<F>(
 where
     F: FnOnce(u128, u128, u128) -> u128,
 {
-    let third = ctx.stack_mut().pop_u128();
-    let second = ctx.stack_mut().pop_u128();
-    let first = ctx.stack_mut().pop_u128();
-    vm_try!(ctx.stack_mut().push_u128(f(first, second, third)));
-    call_next(tail_code, skip, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let third = facade.pop_u128();
+    let second = facade.pop_u128();
+    let first = facade.pop_u128();
+    vm_try!(facade.push_u128(f(first, second, third)));
+    facade_call_next(tail_code, skip, &mut facade)
 }
 
 #[inline(always)]
@@ -223,9 +230,10 @@ where
     Stack: StackOperation<T> + StackOperation<U>,
     F: FnOnce(T) -> U,
 {
-    let value: T = ctx.stack_mut().pop();
-    vm_try!(ctx.stack_mut().push(f(value)));
-    call_next(tail_code, skip, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value: T = facade.pop();
+    vm_try!(facade.push(f(value)));
+    facade_call_next(tail_code, skip, &mut facade)
 }
 
 #[inline(always)]
@@ -239,10 +247,11 @@ where
     Stack: StackOperation<T> + StackOperation<U> + StackOperation<V>,
     F: FnOnce(T, U) -> V,
 {
-    let rhs: U = ctx.stack_mut().pop();
-    let lhs: T = ctx.stack_mut().pop();
-    vm_try!(ctx.stack_mut().push(f(lhs, rhs)));
-    call_next(tail_code, skip, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let rhs: U = facade.pop();
+    let lhs: T = facade.pop();
+    vm_try!(facade.push(f(lhs, rhs)));
+    facade_call_next(tail_code, skip, &mut facade)
 }
 
 unsafe fn extract_lane_op<T, F>(
@@ -256,9 +265,10 @@ where
     F: FnOnce(&[u8]) -> T,
 {
     let lane = (*tail_code).operand.u32 as usize * lane_width;
-    let bytes = ctx.stack_mut().pop_u128().to_le_bytes();
-    vm_try!(ctx.stack_mut().push(f(&bytes[lane..lane + lane_width])));
-    call_next(tail_code, 1, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let bytes = facade.pop_u128().to_le_bytes();
+    vm_try!(facade.push(f(&bytes[lane..lane + lane_width])));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 #[inline(always)]
@@ -272,11 +282,12 @@ where
     F: FnOnce(T) -> [u8; N],
 {
     let lane = (*tail_code).operand.u32 as usize;
-    let value = f(ctx.stack_mut().pop());
-    let mut bytes = ctx.stack_mut().pop_u128().to_le_bytes();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value = f(facade.pop());
+    let mut bytes = facade.pop_u128().to_le_bytes();
     replace_lane_bytes(&mut bytes, lane, value);
-    vm_try!(ctx.stack_mut().push_u128(u128::from_le_bytes(bytes)));
-    call_next(tail_code, 1, ctx)
+    vm_try!(facade.push_u128(u128::from_le_bytes(bytes)));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 macro_rules! define_shared_simd_memory_handler {
@@ -396,7 +407,7 @@ unsafe fn op_v128_load_impl<const SHARED: bool, const INDEXED: bool>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
-    let offset = ctx.stack_mut().pop_u32();
+    let offset = ExecuteContextFacade::new(ctx).pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     if SHARED && INDEXED {
         vm_try!(push_memory_to_stack_shared_indexed::<16>(
@@ -411,7 +422,8 @@ unsafe fn op_v128_load_impl<const SHARED: bool, const INDEXED: bool>(
     } else {
         vm_try!(push_memory_to_stack_local::<16>(ctx, start));
     }
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 
 define_local_simd_memory_handler!(op_v128_load, "v128.load", op_v128_load_impl);
@@ -486,8 +498,9 @@ unsafe fn v128_load8x8_s_impl<const SHARED: bool, const INDEXED: bool>(
         data[6] as i8 as i16,
         data[7] as i8 as i16,
     ];
-    vm_try!(ctx.stack_mut().push(i16x8::from(extended)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(i16x8::from(extended)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load8x8_s, "v128.load8x8_s", v128_load8x8_s_impl);
 define_shared_simd_memory_handler!(v128_load8x8_s_shared, "v128.load8x8_s", v128_load8x8_s_impl);
@@ -532,8 +545,9 @@ unsafe fn v128_load8x8_u_impl<const SHARED: bool, const INDEXED: bool>(
         data[6] as u16,
         data[7] as u16,
     ];
-    vm_try!(ctx.stack_mut().push(u16x8::from(extended)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(u16x8::from(extended)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load8x8_u, "v128.load8x8_u", v128_load8x8_u_impl);
 define_shared_simd_memory_handler!(v128_load8x8_u_shared, "v128.load8x8_u", v128_load8x8_u_impl);
@@ -581,8 +595,9 @@ unsafe fn v128_load16x4_s_impl<const SHARED: bool, const INDEXED: bool>(
         i16s[2] as i32,
         i16s[3] as i32,
     ];
-    vm_try!(ctx.stack_mut().push(i32x4::from(extended)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(i32x4::from(extended)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load16x4_s, "v128.load16x4_s", v128_load16x4_s_impl);
 define_shared_simd_memory_handler!(
@@ -633,8 +648,9 @@ unsafe fn v128_load16x4_u_impl<const SHARED: bool, const INDEXED: bool>(
         u16s[2] as u32,
         u16s[3] as u32,
     ];
-    vm_try!(ctx.stack_mut().push(u32x4::from(extended)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(u32x4::from(extended)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load16x4_u, "v128.load16x4_u", v128_load16x4_u_impl);
 define_shared_simd_memory_handler!(
@@ -670,7 +686,7 @@ define_indexed_shared_simd_memory_handler!(
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     store_internal_local(tail_code, ctx, |ctx: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write16(ctx.stack_mut().pop_u128().to_le_bytes())
+        StoreBytes::Write16(ctx.pop_u128().to_le_bytes())
     })
 }
 
@@ -694,7 +710,7 @@ pub unsafe fn v128_store_indexed_local(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     store_internal_local_indexed(tail_code, ctx, |ctx: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write16(ctx.stack_mut().pop_u128().to_le_bytes())
+        StoreBytes::Write16(ctx.pop_u128().to_le_bytes())
     })
 }
 
@@ -721,7 +737,7 @@ unsafe fn v128_store_shared_impl<const SHARED: bool, const INDEXED: bool>(
     debug_assert!(SHARED);
     debug_assert!(!INDEXED);
     store_internal_shared(tail_code, ctx, |ctx: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write16(ctx.stack_mut().pop_u128().to_le_bytes())
+        StoreBytes::Write16(ctx.pop_u128().to_le_bytes())
     })
 }
 
@@ -745,7 +761,7 @@ pub unsafe fn v128_store_indexed_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     store_internal_shared_indexed(tail_code, ctx, |ctx: &mut ExecuteContextFacade<'_, '_>| {
-        StoreBytes::Write16(ctx.stack_mut().pop_u128().to_le_bytes())
+        StoreBytes::Write16(ctx.pop_u128().to_le_bytes())
     })
 }
 
@@ -774,8 +790,9 @@ unsafe fn v128_load32x2_s_impl<const SHARED: bool, const INDEXED: bool>(
         i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
     ];
     let extended = [i32s[0] as i64, i32s[1] as i64];
-    vm_try!(ctx.stack_mut().push(i64x2::from(extended)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(i64x2::from(extended)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load32x2_s, "v128.load32x2_s", v128_load32x2_s_impl);
 define_shared_simd_memory_handler!(
@@ -818,8 +835,9 @@ unsafe fn v128_load32x2_u_impl<const SHARED: bool, const INDEXED: bool>(
         u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
     ];
     let extended = [u32s[0] as u64, u32s[1] as u64];
-    vm_try!(ctx.stack_mut().push(u64x2::from(extended)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(u64x2::from(extended)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load32x2_u, "v128.load32x2_u", v128_load32x2_u_impl);
 define_shared_simd_memory_handler!(
@@ -858,8 +876,9 @@ unsafe fn v128_load8_splat_impl<const SHARED: bool, const INDEXED: bool>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<1, SHARED, INDEXED>(tail_code, ctx));
-    vm_try!(ctx.stack_mut().push(i8x16::from(bytes[0] as i8)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(i8x16::from(bytes[0] as i8)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load8_splat, "v128.load8_splat", v128_load8_splat_impl);
 define_shared_simd_memory_handler!(
@@ -898,10 +917,9 @@ unsafe fn v128_load16_splat_impl<const SHARED: bool, const INDEXED: bool>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<2, SHARED, INDEXED>(tail_code, ctx));
-    vm_try!(ctx
-        .stack_mut()
-        .push(i16x8::from(i16::from_le_bytes([bytes[0], bytes[1]]))));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(i16x8::from(i16::from_le_bytes([bytes[0], bytes[1]]))));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(
     v128_load16_splat,
@@ -944,10 +962,11 @@ unsafe fn v128_load32_splat_impl<const SHARED: bool, const INDEXED: bool>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<4, SHARED, INDEXED>(tail_code, ctx));
-    vm_try!(ctx.stack_mut().push(i32x4::from(i32::from_le_bytes([
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(i32x4::from(i32::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3],
     ]))));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(
     v128_load32_splat,
@@ -990,10 +1009,11 @@ unsafe fn v128_load64_splat_impl<const SHARED: bool, const INDEXED: bool>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let bytes = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
-    vm_try!(ctx.stack_mut().push(i64x2::from(i64::from_le_bytes([
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(i64x2::from(i64::from_le_bytes([
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
     ]))));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(
     v128_load64_splat,
@@ -1037,8 +1057,9 @@ pub unsafe fn v128_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
     let mut buf = [0u8; 16];
     buf[0..8].copy_from_slice(left_buf);
     buf[8..16].copy_from_slice(right_buf);
-    vm_try!(ctx.stack_mut().push_u128(u128::from_le_bytes(buf)));
-    call_next(tail_code, 2, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push_u128(u128::from_le_bytes(buf)));
+    facade_call_next(tail_code, 2, &mut facade)
 }
 
 fn replace_lane_bytes<const N: usize>(bytes: &mut [u8; 16], lane: usize, value: [u8; N]) {
@@ -1064,11 +1085,12 @@ unsafe fn load_lane_internal<const N: usize, const SHARED: bool, const INDEXED: 
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let lane = (*tail_code.add(1)).operand.u32 as usize;
-    let mut bytes = ctx.stack_mut().pop_u128().to_le_bytes();
+    let mut bytes = ExecuteContextFacade::new(ctx).pop_u128().to_le_bytes();
     let data = vm_try!(read_memory_bytes::<N, SHARED, INDEXED>(tail_code, ctx));
     replace_lane_bytes::<N>(&mut bytes, lane, data);
-    vm_try!(ctx.stack_mut().push_u128(u128::from_le_bytes(bytes)));
-    call_next(tail_code, if INDEXED { 3 } else { 2 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push_u128(u128::from_le_bytes(bytes)));
+    facade_call_next(tail_code, if INDEXED { 3 } else { 2 }, &mut facade)
 }
 
 /// WebAssembly SIMD lane-store helper.
@@ -1089,29 +1111,30 @@ unsafe fn store_lane_internal<const N: usize, const SHARED: bool, const INDEXED:
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let lane = (*tail_code.add(1)).operand.u32 as usize;
-    let bytes = ctx.stack_mut().pop_u128().to_le_bytes();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let bytes = facade.pop_u128().to_le_bytes();
     let start = lane * N;
-    let offset = ctx.stack_mut().pop_u32();
+    let offset = facade.pop::<u32>();
     let mem_start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
     if INDEXED {
         let memidx = (*tail_code.add(2)).operand.u32;
         if SHARED {
-            vm_try!(ctx.write_memory_bytes_shared_indexed(
+            vm_try!(facade.write_memory_bytes_shared_indexed(
                 memidx,
                 mem_start,
                 &bytes[start..start + N]
             ));
         } else {
-            vm_try!(ctx.write_memory_bytes_local_indexed(
+            vm_try!(facade.write_memory_bytes_local_indexed(
                 memidx,
                 mem_start,
                 &bytes[start..start + N]
             ));
         }
-        call_next(tail_code, 3, ctx)
+        facade_call_next(tail_code, 3, &mut facade)
     } else {
-        vm_try!(ctx.write_memory_bytes(mem_start, &bytes[start..start + N]));
-        call_next(tail_code, 2, ctx)
+        vm_try!(facade.write_memory_bytes(mem_start, &bytes[start..start + N]));
+        facade_call_next(tail_code, 2, &mut facade)
     }
 }
 
@@ -1922,8 +1945,9 @@ unsafe fn v128_load32_zero_impl<const SHARED: bool, const INDEXED: bool>(
     let bytes = vm_try!(read_memory_bytes::<4, SHARED, INDEXED>(tail_code, ctx));
     let mut result = [0u8; 16];
     result[0..4].copy_from_slice(&bytes);
-    vm_try!(ctx.stack_mut().push_u128(u128::from_le_bytes(result)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push_u128(u128::from_le_bytes(result)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load32_zero, "v128.load32_zero", v128_load32_zero_impl);
 define_shared_simd_memory_handler!(
@@ -1964,8 +1988,9 @@ unsafe fn v128_load64_zero_impl<const SHARED: bool, const INDEXED: bool>(
     let bytes = vm_try!(read_memory_bytes::<8, SHARED, INDEXED>(tail_code, ctx));
     let mut result = [0u8; 16];
     result[0..8].copy_from_slice(&bytes);
-    vm_try!(ctx.stack_mut().push_u128(u128::from_le_bytes(result)));
-    call_next(tail_code, if INDEXED { 2 } else { 1 }, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push_u128(u128::from_le_bytes(result)));
+    facade_call_next(tail_code, if INDEXED { 2 } else { 1 }, &mut facade)
 }
 define_local_simd_memory_handler!(v128_load64_zero, "v128.load64_zero", v128_load64_zero_impl);
 define_shared_simd_memory_handler!(
@@ -2376,12 +2401,12 @@ pub unsafe fn f32x4_convert_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    use crate::common::stack::StackOperation;
-    let a: u32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u32x4 = facade.pop();
     let [a, b, c, d] = a.to_array();
     let result = f32x4::from([a as f32, b as f32, c as f32, d as f32]);
-    vm_try!(ctx.stack_mut().push(result));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `f64x2.convert_low_i32x4_s`.
@@ -2403,11 +2428,11 @@ pub unsafe fn f64x2_convert_low_i32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    use crate::common::stack::StackOperation;
-    let v: i32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let v: i32x4 = facade.pop();
     let result = f64x2::from_i32x4_lower2(v);
-    vm_try!(ctx.stack_mut().push(result));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `f64x2.convert_low_i32x4_u`.
 ///
@@ -2428,12 +2453,12 @@ pub unsafe fn f64x2_convert_low_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    use crate::common::stack::StackOperation;
-    let a: u32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u32x4 = facade.pop();
     let [a, b, _c, _d] = a.to_array();
     let result = f64x2::from([a as f64, b as f64]);
-    vm_try!(ctx.stack_mut().push(result));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 macro_rules! narrow_instruction {
     ($name: ident,$from: ident,$to: ident) => {
@@ -2451,10 +2476,9 @@ macro_rules! narrow_instruction {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            use crate::common::stack::StackOperation;
-
-            let b: $from = ctx.stack_mut().pop();
-            let a: $from = ctx.stack_mut().pop();
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let b: $from = facade.pop();
+            let a: $from = facade.pop();
             let mut result: [<$to as LaneType>::BaseType; <$to as LaneType>::LANE_SIZE] =
                 [0; <$to as LaneType>::LANE_SIZE];
             let a_arr = a.to_array();
@@ -2472,8 +2496,8 @@ macro_rules! narrow_instruction {
                     as <$to as LaneType>::BaseType;
             }
 
-            vm_try!(ctx.stack_mut().push($to::from(result)));
-            call_next(tail_code, 0, ctx)
+            vm_try!(facade.push($to::from(result)));
+            facade_call_next(tail_code, 0, &mut facade)
         }
     };
 }
@@ -2502,12 +2526,11 @@ pub unsafe fn f32x4_demote_f64x2_zero(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let v: f64x2 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let v: f64x2 = facade.pop();
     let [a, b] = v.to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(f32x4::from([a as f32, b as f32, 0.0f32, 0.0f32])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(f32x4::from([a as f32, b as f32, 0.0f32, 0.0f32])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `f64x2.promote_low_f32x4`.
 ///
@@ -2528,10 +2551,11 @@ pub unsafe fn f64x2_promote_low_f32x4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let v: f32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let v: f32x4 = facade.pop();
     let [a, b, _c, _d] = v.to_array();
-    vm_try!(ctx.stack_mut().push(f64x2::from([a as f64, b as f64])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(f64x2::from([a as f64, b as f64])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 macro_rules! extend_instruction {
     ($name: ident,$from: ident,$to: ident,$($index: expr),*)=> {
@@ -2549,11 +2573,12 @@ macro_rules! extend_instruction {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let v: $from = ctx.stack_mut().pop();
+            let mut facade = ExecuteContextFacade::new(ctx);
+            let v: $from = facade.pop();
             let v = v.to_array();
-            vm_try!(ctx.stack_mut().push($to::from([$(v[$index] as <$to as LaneType>::BaseType),*])));
+            vm_try!(facade.push($to::from([$(v[$index] as <$to as LaneType>::BaseType),*])));
 
-            call_next(tail_code, 0, ctx)
+            facade_call_next(tail_code, 0, &mut facade)
         }
     }
 }
@@ -2642,12 +2667,12 @@ unsafe fn handle_unary_op<T>(
 where
     Stack: StackOperation<T>,
 {
-    use crate::common::stack::StackOperation;
-    let v2: T = ctx.stack_mut().pop();
-    let v1: T = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let v2: T = facade.pop();
+    let v1: T = facade.pop();
     let result = op(v1, v2);
-    vm_try!(ctx.stack_mut().push(result));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 #[inline]
@@ -2672,11 +2697,11 @@ unsafe fn handle_binary_op<T>(
 where
     Stack: StackOperation<T>,
 {
-    use crate::common::stack::StackOperation;
-    let a: T = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: T = facade.pop();
     let result = op(a);
-    vm_try!(ctx.stack_mut().push(result));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 macro_rules! define_unary_simd_operation {
@@ -2972,12 +2997,11 @@ define_binary_simd_operation!(nearest, [f64x2], |a| {
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v: i64x2 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let v: i64x2 = facade.pop();
     let [a, b] = v.to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(i64x2::from([a.wrapping_abs(), b.wrapping_abs()])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(i64x2::from([a.wrapping_abs(), b.wrapping_abs()])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i64x2.neg`.
@@ -2996,12 +3020,11 @@ pub unsafe fn i64x2_abs(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v: i64x2 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let v: i64x2 = facade.pop();
     let [a, b] = v.to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(i64x2::from([a.wrapping_neg(), b.wrapping_neg()])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(i64x2::from([a.wrapping_neg(), b.wrapping_neg()])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `f32x4.neg`.
@@ -3020,10 +3043,11 @@ pub unsafe fn i64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v: f32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let v: f32x4 = facade.pop();
     let [a, b, c, d] = v.to_array();
-    vm_try!(ctx.stack_mut().push(f32x4::from([-a, -b, -c, -d])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(f32x4::from([-a, -b, -c, -d])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `f64x2.neg`.
 ///
@@ -3041,10 +3065,11 @@ pub unsafe fn f32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn f64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v: f64x2 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let v: f64x2 = facade.pop();
     let [a, b] = v.to_array();
-    vm_try!(ctx.stack_mut().push(f64x2::from([-a, -b])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(f64x2::from([-a, -b])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `i8x16.neg`.
 ///
@@ -3063,10 +3088,10 @@ pub unsafe fn f64x2_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i8x16_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     use std::ops::BitXor;
-    let a: i8x16 = ctx.stack_mut().pop();
-
-    vm_try!(ctx.stack_mut().push(a.bitxor(-i8x16::ONE) + i8x16::ONE));
-    call_next(tail_code, 0, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i8x16 = facade.pop();
+    vm_try!(facade.push(a.bitxor(-i8x16::ONE) + i8x16::ONE));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `i16x8.neg`.
 ///
@@ -3085,10 +3110,10 @@ pub unsafe fn i8x16_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     use std::ops::BitXor;
-    let a: i16x8 = ctx.stack_mut().pop();
-
-    vm_try!(ctx.stack_mut().push(a.bitxor(-i16x8::ONE) + i16x8::ONE));
-    call_next(tail_code, 0, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i16x8 = facade.pop();
+    vm_try!(facade.push(a.bitxor(-i16x8::ONE) + i16x8::ONE));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `i32x4.neg`.
 ///
@@ -3107,10 +3132,10 @@ pub unsafe fn i16x8_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_neg(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     use std::ops::BitXor;
-    let a: i32x4 = ctx.stack_mut().pop();
-
-    vm_try!(ctx.stack_mut().push(a.bitxor(-i32x4::ONE) + i32x4::ONE));
-    call_next(tail_code, 0, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i32x4 = facade.pop();
+    vm_try!(facade.push(a.bitxor(-i32x4::ONE) + i32x4::ONE));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 define_binary_simd_operation!(sqrt, [f64x2, f32x4], |a| a.sqrt());
 use std::ops::Not;
@@ -3182,13 +3207,14 @@ pub unsafe fn i16x8_extadd_pairwise_i8x16(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut res = [0i16; 8];
-    let a: i8x16 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i8x16 = facade.pop();
     let a = a.to_array();
     for i in 0..8 {
         res[i] = a[i * 2] as i16 + a[i * 2 + 1] as i16;
     }
-    vm_try!(ctx.stack_mut().push(i16x8::from(res)));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(i16x8::from(res)));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `u16x8.extadd_pairwise_i8x16`.
 ///
@@ -3210,13 +3236,14 @@ pub unsafe fn u16x8_extadd_pairwise_i8x16(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut res = [0u16; 8];
-    let a: u8x16 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u8x16 = facade.pop();
     let a = a.to_array();
     for i in 0..8 {
         res[i] = a[i * 2] as u16 + a[i * 2 + 1] as u16;
     }
-    vm_try!(ctx.stack_mut().push(u16x8::from(res)));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(u16x8::from(res)));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `i32x4.extadd_pairwise_i16x8`.
 ///
@@ -3238,13 +3265,14 @@ pub unsafe fn i32x4_extadd_pairwise_i16x8(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut res = [0i32; 4];
-    let a: i16x8 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i16x8 = facade.pop();
     let a = a.to_array();
     for i in 0..4 {
         res[i] = a[i * 2] as i32 + a[i * 2 + 1] as i32;
     }
-    vm_try!(ctx.stack_mut().push(i32x4::from(res)));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(i32x4::from(res)));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `u32x4.extadd_pairwise_i16x8`.
 ///
@@ -3266,13 +3294,14 @@ pub unsafe fn u32x4_extadd_pairwise_i16x8(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut res = [0u32; 4];
-    let a: u16x8 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u16x8 = facade.pop();
     let a = a.to_array();
     for i in 0..4 {
         res[i] = a[i * 2] as u32 + a[i * 2 + 1] as u32;
     }
-    vm_try!(ctx.stack_mut().push(u32x4::from(res)));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(u32x4::from(res)));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 define_unary_simd_operation!(q15mulr_sat_s, [i16x8], |a, b| a.mul_scale_round(b));
@@ -3361,13 +3390,14 @@ fn extend_high_u32x4_to_u64x2(input: u32x4) -> u64x2 {
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: i8x16 = ctx.stack_mut().pop();
-    let b: i8x16 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i8x16 = facade.pop();
+    let b: i8x16 = facade.pop();
 
     let a = extend_low_i8x16_to_i16x8(a);
     let b = extend_low_i8x16_to_i16x8(b);
-    vm_try!(ctx.stack_mut().push(a * b));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(a * b));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `i16x8.extmul_high`.
 ///
@@ -3385,13 +3415,14 @@ pub unsafe fn i16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: i8x16 = ctx.stack_mut().pop();
-    let b: i8x16 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i8x16 = facade.pop();
+    let b: i8x16 = facade.pop();
 
     let a = extend_high_i8x16_to_i16x8(a);
     let b = extend_high_i8x16_to_i16x8(b);
-    vm_try!(ctx.stack_mut().push(a * b));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(a * b));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `u16x8.extmul_low`.
 ///
@@ -3409,13 +3440,14 @@ pub unsafe fn i16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: u8x16 = ctx.stack_mut().pop();
-    let b: u8x16 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u8x16 = facade.pop();
+    let b: u8x16 = facade.pop();
 
     let a = u16x8::from_u8x16_low(a);
     let b = u16x8::from_u8x16_low(b);
-    vm_try!(ctx.stack_mut().push(a * b));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(a * b));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `u16x8.extmul_high`.
 ///
@@ -3433,13 +3465,14 @@ pub unsafe fn u16x8_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: u8x16 = ctx.stack_mut().pop();
-    let b: u8x16 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u8x16 = facade.pop();
+    let b: u8x16 = facade.pop();
 
     let a = u16x8::from_u8x16_high(a);
     let b = u16x8::from_u8x16_high(b);
-    vm_try!(ctx.stack_mut().push(a * b));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(a * b));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i32x4.extmul_low`.
@@ -3458,13 +3491,14 @@ pub unsafe fn u16x8_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: i16x8 = ctx.stack_mut().pop();
-    let b: i16x8 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i16x8 = facade.pop();
+    let b: i16x8 = facade.pop();
 
     let a = extend_low_i16x8_to_i32x4(a);
     let b = extend_low_i16x8_to_i32x4(b);
-    vm_try!(ctx.stack_mut().push(a * b));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(a * b));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `i32x4.extmul_high`.
 ///
@@ -3482,13 +3516,14 @@ pub unsafe fn i32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: i16x8 = ctx.stack_mut().pop();
-    let b: i16x8 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i16x8 = facade.pop();
+    let b: i16x8 = facade.pop();
 
     let a = extend_high_i16x8_to_i32x4(a);
     let b = extend_high_i16x8_to_i32x4(b);
-    vm_try!(ctx.stack_mut().push(a * b));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(a * b));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i64x2.sub`.
@@ -3507,14 +3542,13 @@ pub unsafe fn i32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContex
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let b: i64x2 = ctx.stack_mut().pop();
-    let a: i64x2 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let b: i64x2 = facade.pop();
+    let a: i64x2 = facade.pop();
     let [b0, b1] = b.to_array();
     let [a0, a1] = a.to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(i64x2::from([a0.wrapping_sub(b0), a1.wrapping_sub(b1),])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(i64x2::from([a0.wrapping_sub(b0), a1.wrapping_sub(b1),])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i64x2.mul`.
@@ -3533,14 +3567,13 @@ pub unsafe fn i64x2_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i64x2_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let b: i64x2 = ctx.stack_mut().pop();
-    let a: i64x2 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let b: i64x2 = facade.pop();
+    let a: i64x2 = facade.pop();
     let [b0, b1] = b.to_array();
     let [a0, a1] = a.to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `u32x4.extmul_low`.
 ///
@@ -3558,13 +3591,14 @@ pub unsafe fn i64x2_mul(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: u16x8 = ctx.stack_mut().pop();
-    let b: u16x8 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u16x8 = facade.pop();
+    let b: u16x8 = facade.pop();
 
     let a = extend_low_u16x8_to_u32x4(a);
     let b = extend_low_u16x8_to_u32x4(b);
-    vm_try!(ctx.stack_mut().push(a * b));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(a * b));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 /// WebAssembly `u32x4.extmul_high`.
 ///
@@ -3582,13 +3616,14 @@ pub unsafe fn u32x4_extmul_low(tail_code: *const Instr, ctx: &mut ExecuteContext
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn u32x4_extmul_high(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: u16x8 = ctx.stack_mut().pop();
-    let b: u16x8 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u16x8 = facade.pop();
+    let b: u16x8 = facade.pop();
 
     let a = extend_high_u16x8_to_u32x4(a);
     let b = extend_high_u16x8_to_u32x4(b);
-    vm_try!(ctx.stack_mut().push(a * b));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(a * b));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i64x2.extmul_low_i32x4_s`.
@@ -3610,14 +3645,13 @@ pub unsafe fn i64x2_extmul_low_i32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a: i32x4 = ctx.stack_mut().pop();
-    let b: i32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i32x4 = facade.pop();
+    let b: i32x4 = facade.pop();
     let [a0, a1] = extend_low_i32x4_to_i64x2(a).to_array();
     let [b0, b1] = extend_low_i32x4_to_i64x2(b).to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i64x2.extmul_high_i32x4_s`.
@@ -3639,14 +3673,13 @@ pub unsafe fn i64x2_extmul_high_i32x4_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a: i32x4 = ctx.stack_mut().pop();
-    let b: i32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i32x4 = facade.pop();
+    let b: i32x4 = facade.pop();
     let [a0, a1] = extend_high_i32x4_to_i64x2(a).to_array();
     let [b0, b1] = extend_high_i32x4_to_i64x2(b).to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(i64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i64x2.extmul_low_i32x4_u`.
@@ -3668,14 +3701,13 @@ pub unsafe fn i64x2_extmul_low_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a: u32x4 = ctx.stack_mut().pop();
-    let b: u32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u32x4 = facade.pop();
+    let b: u32x4 = facade.pop();
     let [a0, a1] = extend_low_u32x4_to_u64x2(a).to_array();
     let [b0, b1] = extend_low_u32x4_to_u64x2(b).to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(u64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(u64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i64x2.extmul_high_i32x4_u`.
@@ -3697,14 +3729,13 @@ pub unsafe fn i64x2_extmul_high_i32x4_u(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let a: u32x4 = ctx.stack_mut().pop();
-    let b: u32x4 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: u32x4 = facade.pop();
+    let b: u32x4 = facade.pop();
     let [a0, a1] = extend_high_u32x4_to_u64x2(a).to_array();
     let [b0, b1] = extend_high_u32x4_to_u64x2(b).to_array();
-    vm_try!(ctx
-        .stack_mut()
-        .push(u64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(u64x2::from([a0.wrapping_mul(b0), a1.wrapping_mul(b1),])));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i32x4.dot_i16x8`.
@@ -3723,16 +3754,17 @@ pub unsafe fn i64x2_extmul_high_i32x4_u(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn i32x4_dot_i16x8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a: i16x8 = ctx.stack_mut().pop();
-    let b: i16x8 = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let a: i16x8 = facade.pop();
+    let b: i16x8 = facade.pop();
 
     let a = a.to_array();
     let b = b.to_array();
-    vm_try!(ctx.stack_mut().push(i32x4::from([
+    vm_try!(facade.push(i32x4::from([
         i32::wrapping_add(a[0] as i32 * b[0] as i32, a[1] as i32 * b[1] as i32),
         i32::wrapping_add(a[2] as i32 * b[2] as i32, a[3] as i32 * b[3] as i32),
         i32::wrapping_add(a[4] as i32 * b[4] as i32, a[5] as i32 * b[5] as i32),
         i32::wrapping_add(a[6] as i32 * b[6] as i32, a[7] as i32 * b[7] as i32)
     ])));
-    call_next(tail_code, 0, ctx)
+    facade_call_next(tail_code, 0, &mut facade)
 }

@@ -36,18 +36,19 @@ unsafe fn push_ref_value(
     skip: isize,
     value: u32,
 ) -> VMResult<()> {
-    vm_try!(ctx.stack_mut().push_u32(value));
-    call_next(tail_code, skip, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push_ref(value));
+    facade_call_next(tail_code, skip, &mut facade)
 }
 
 #[inline(always)]
-unsafe fn ref_func_value(ctx: &ExecuteContext, funcidx: u32) -> u32 {
-    ctx.instance().funcs.as_slice()[funcidx as usize].get()
+unsafe fn ref_func_value(facade: &ExecuteContextFacade<'_, '_>, funcidx: u32) -> u32 {
+    facade.ref_func_value(funcidx)
 }
 
 #[inline(always)]
 unsafe fn pop_ref_value(ctx: &mut ExecuteContext) -> u32 {
-    ctx.stack_mut().pop_u32()
+    ExecuteContextFacade::new(ctx).pop_ref()
 }
 
 /// WebAssembly `ref.null`.
@@ -106,6 +107,7 @@ pub unsafe fn op_ref_is_null(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_ref_func(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let funcidx = (*tail_code).operand.u32;
-    let value = ref_func_value(ctx, funcidx);
+    let facade = ExecuteContextFacade::new(ctx);
+    let value = ref_func_value(&facade, funcidx);
     push_ref_value(tail_code, ctx, 1, value)
 }

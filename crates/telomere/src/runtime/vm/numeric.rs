@@ -56,9 +56,10 @@ where
     Stack: StackOperation<T>,
     F: FnOnce(T) -> T,
 {
-    let value = ctx.stack_mut().pop();
-    vm_try!(ctx.stack_mut().push(f(value)));
-    call_next(tail_code, 0, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value: T = facade.pop();
+    vm_try!(facade.push(f(value)));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 #[inline(always)]
@@ -71,9 +72,10 @@ where
     Stack: StackOperation<T> + StackOperation<U>,
     F: FnOnce(T) -> U,
 {
-    let value = ctx.stack_mut().pop();
-    vm_try!(ctx.stack_mut().push(f(value)));
-    call_next(tail_code, 0, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value: T = facade.pop();
+    vm_try!(facade.push(f(value)));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 #[inline(always)]
@@ -86,10 +88,11 @@ where
     Stack: StackOperation<T> + StackOperation<U>,
     F: FnOnce(T) -> VMResult<U>,
 {
-    let value = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value: T = facade.pop();
     let result = vm_try!(f(value));
-    vm_try!(ctx.stack_mut().push(result));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 #[inline(always)]
@@ -102,8 +105,9 @@ unsafe fn const_stack_op<T>(
 where
     Stack: StackOperation<T>,
 {
-    vm_try!(ctx.stack_mut().push(value));
-    call_next(tail_code, skip, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    vm_try!(facade.push(value));
+    facade_call_next(tail_code, skip, &mut facade)
 }
 
 #[inline(always)]
@@ -116,10 +120,11 @@ where
     Stack: StackOperation<T>,
     F: FnOnce(T, T) -> T,
 {
-    let rhs = ctx.stack_mut().pop();
-    let lhs = ctx.stack_mut().pop();
-    vm_try!(ctx.stack_mut().push(f(lhs, rhs)));
-    call_next(tail_code, 0, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let rhs: T = facade.pop();
+    let lhs: T = facade.pop();
+    vm_try!(facade.push(f(lhs, rhs)));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 #[inline(always)]
@@ -132,11 +137,12 @@ where
     Stack: StackOperation<T>,
     F: FnOnce(T, T) -> VMResult<T>,
 {
-    let rhs = ctx.stack_mut().pop();
-    let lhs = ctx.stack_mut().pop();
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let rhs: T = facade.pop();
+    let lhs: T = facade.pop();
     let result = vm_try!(f(lhs, rhs));
-    vm_try!(ctx.stack_mut().push(result));
-    call_next(tail_code, 0, ctx)
+    vm_try!(facade.push(result));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 #[inline(always)]
@@ -149,10 +155,11 @@ where
     Stack: StackOperation<T>,
     F: FnOnce(T, T) -> bool,
 {
-    let rhs = ctx.stack_mut().pop();
-    let lhs = ctx.stack_mut().pop();
-    vm_try!(ctx.stack_mut().push_u32(bool_to_u32(f(lhs, rhs))));
-    call_next(tail_code, 0, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let rhs: T = facade.pop();
+    let lhs: T = facade.pop();
+    vm_try!(facade.push_u32(bool_to_u32(f(lhs, rhs))));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 #[inline(always)]
@@ -165,9 +172,10 @@ where
     Stack: StackOperation<T>,
     F: FnOnce(T) -> bool,
 {
-    let value = ctx.stack_mut().pop();
-    vm_try!(ctx.stack_mut().push_u32(bool_to_u32(f(value))));
-    call_next(tail_code, 0, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value: T = facade.pop();
+    vm_try!(facade.push_u32(bool_to_u32(f(value))));
+    facade_call_next(tail_code, 0, &mut facade)
 }
 
 /// WebAssembly `i32.const`.

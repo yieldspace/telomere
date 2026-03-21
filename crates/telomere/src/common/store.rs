@@ -288,7 +288,7 @@ impl TableProjection {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn proof_ready(&self) -> bool {
         self.max_len
-            .map_or(true, |max_len| self.elements.len() <= max_len as usize)
+            .is_none_or(|max_len| self.elements.len() <= max_len as usize)
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

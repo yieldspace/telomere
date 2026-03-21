@@ -14,6 +14,7 @@ pub open spec fn spec_global_set_result(
     crate::common::formal::global_set_bytes(global, bytes)
 }
 
+#[allow(dead_code)]
 #[inline(always)]
 fn global_index(idx: usize) -> (result: usize)
     ensures
@@ -24,10 +25,11 @@ fn global_index(idx: usize) -> (result: usize)
 
 } // verus!
 
+#[allow(dead_code)]
 #[inline(always)]
-unsafe fn global_addr(tail_code: *const Instr, ctx: &ExecuteContext) -> GcRef {
+unsafe fn global_addr(tail_code: *const Instr, facade: &ExecuteContextFacade<'_, '_>) -> GcRef {
     let idx = global_index((*tail_code).operand.u32 as usize);
-    ctx.instance().globals.as_slice()[idx]
+    facade.global_addr(idx)
 }
 
 #[inline(always)]
@@ -35,11 +37,10 @@ unsafe fn global_get<const SIZE: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let addr = global_addr(tail_code, ctx);
-    let bytes = ctx.gc_ref().get_global(addr).to_vec();
-    debug_assert_eq!(bytes.len(), SIZE);
-    vm_try!(ctx.push_slice(&bytes));
-    call_next(tail_code, 1, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    trace!("op_global_get{SIZE}: {:?}", global_addr(tail_code, &facade));
+    vm_try!(facade.push_global_bytes::<SIZE>((*tail_code).operand.u32 as usize));
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 #[inline(always)]
@@ -47,10 +48,11 @@ unsafe fn global_set<const SIZE: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let addr = global_addr(tail_code, ctx);
-    let value = ctx.pop_u8_array::<SIZE>();
-    ctx.gc_mut().get_global_mut(addr).copy_from_slice(&value);
-    call_next(tail_code, 1, ctx)
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let value = facade.pop_u8_array::<SIZE>();
+    trace!("op_global_set{SIZE}: {:?}", global_addr(tail_code, &facade));
+    facade.write_global_bytes((*tail_code).operand.u32 as usize, value);
+    facade_call_next(tail_code, 1, &mut facade)
 }
 
 /// WebAssembly `global.get`.
