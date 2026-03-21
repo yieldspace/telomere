@@ -3,6 +3,8 @@
 mod common;
 
 use common::instantiate_wat;
+use futures::future::poll_fn;
+use std::{sync::Arc, time::Duration};
 use telomere::common::AtomicWaitResult;
 use telomere::{
     common::{AtomicRmwOp, SharedMemoryObject},
@@ -13,6 +15,24 @@ fn unwrap_success<T: std::fmt::Debug>(result: VMResult<T>) -> T {
     match result {
         VMResult::Success(value) => value,
         other => panic!("expected success, got {other:?}"),
+    }
+}
+
+async fn wait_result(
+    shared: Arc<SharedMemoryObject>,
+    wait: telomere::common::SharedWaitRegistration,
+    timeout_ns: i64,
+) -> i32 {
+    if timeout_ns < 0 {
+        poll_fn(|cx| wait.poll_wait(cx)).await;
+        wait.finish_notified(&shared)
+    } else {
+        let sleep = tokio::time::sleep(Duration::from_nanos(timeout_ns as u64));
+        tokio::pin!(sleep);
+        tokio::select! {
+            _ = poll_fn(|cx| wait.poll_wait(cx)) => wait.finish_notified(&shared),
+            _ = &mut sleep => wait.finish_timeout(&shared),
+        }
     }
 }
 
@@ -106,8 +126,8 @@ async fn shared_wait_notify_is_fifo_and_timeout_removes_waiter() {
     };
 
     assert_eq!(unwrap_success(shared.notify_waiters(0, 1)), 1);
-    assert_eq!(first.wait_result(shared.clone(), -1).await, 0);
-    assert_eq!(second.wait_result(shared.clone(), 0).await, 2);
+    assert_eq!(wait_result(shared.clone(), first, -1).await, 0);
+    assert_eq!(wait_result(shared.clone(), second, 0).await, 2);
     assert_eq!(unwrap_success(shared.notify_waiters(0, 1)), 0);
 }
 

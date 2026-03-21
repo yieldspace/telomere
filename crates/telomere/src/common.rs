@@ -2,7 +2,7 @@
 
 #[macro_use]
 mod vm_result;
-use std::{fmt::Display, future::Future, pin::Pin};
+use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
 
@@ -13,7 +13,8 @@ pub use memory::{AtomicWaitResult, SharedWaitRegistration};
 pub(crate) mod formal;
 pub(crate) mod stack;
 use stack::CachedMemoryKind;
-pub(crate) use stack::CallFrameCache;
+use stack::IntoCallFrameCache;
+pub(crate) use stack::{CallFrameCache, FrameProjection, MemoryHandleProjection};
 pub use stack::{LocalReference, Stack};
 mod registry;
 pub use registry::Registry;
@@ -24,13 +25,13 @@ use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};
 pub(crate) mod gc;
 pub use gc::GcRef;
 
-use crate::runtime::scheduler::EffectSupplier;
+use crate::runtime::scheduler::PendingOpEmitter;
 use crate::WasmParserError;
 pub mod custom_section;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeIdx(pub u32);
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FuncIdx(pub u32);
 impl Display for FuncIdx {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -171,20 +172,91 @@ impl ExportSection {
         self.0.iter().find(|it| it.0 == name).map(|it| it.1)
     }
 }
-pub type HostFunction = fn(ctx: &mut ExecuteContext) -> VMResult<*const Instr>;
-pub type AsyncHostFuture = Pin<Box<dyn Future<Output = VMResult<*const Instr>> + 'static>>;
-pub type AsyncHostFunction = fn(&mut ExecuteContext<'_>) -> AsyncHostFuture;
+pub type AsyncHostFuture = Pin<Box<dyn Future<Output = VMResult<ResultValue>> + 'static>>;
 
-pub struct ReturnSlot(*mut u8);
-unsafe impl Send for ReturnSlot {}
-impl ReturnSlot {
-    pub fn write(&self, data: &[u8]) {
-        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.0, data.len()) };
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostTailCallTarget {
+    FuncIdx(FuncIdx),
+    FuncRef(GcRef),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HostCallControl {
+    Return(ResultValue),
+    TailCall {
+        target: HostTailCallTarget,
+        params: ResultValue,
+    },
+    EndProgram,
+}
+
+pub struct HostCallContext<'ctx, 'store> {
+    facade: ExecuteContextFacade<'ctx, 'store>,
+    params: ResultValue,
+    result_types: ResultType,
+}
+
+impl<'ctx, 'store> HostCallContext<'ctx, 'store> {
+    pub(crate) fn new(
+        ctx: &'ctx mut ExecuteContext<'store>,
+        params: ResultValue,
+        result_types: ResultType,
+    ) -> Self {
+        Self {
+            facade: ExecuteContextFacade { ctx },
+            params,
+            result_types,
+        }
     }
-    pub fn as_mut_ptr(&self) -> *mut u8 {
-        self.0
+
+    pub fn params(&self) -> &ResultValue {
+        &self.params
+    }
+
+    pub fn param(&self, index: usize) -> Option<&WasmValue> {
+        self.params.0.get(index)
+    }
+
+    pub fn result_types(&self) -> &ResultType {
+        &self.result_types
+    }
+
+    pub fn store(&self) -> &Store {
+        self.facade.store_ref()
+    }
+
+    pub fn store_state(&self) -> StoreState {
+        self.store().state
+    }
+
+    pub fn instance_id(&self) -> u32 {
+        self.facade.instance_id()
+    }
+
+    pub fn func_idx(&self) -> u32 {
+        self.facade.func_idx()
+    }
+
+    pub fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
+        self.facade.with_memory(f)
+    }
+
+    pub fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
+        self.facade.with_caller_memory(f)
     }
 }
+
+pub type HostFunction =
+    for<'ctx, 'store> fn(ctx: HostCallContext<'ctx, 'store>) -> VMResult<HostCallControl>;
+
+#[derive(Debug, Clone)]
+pub struct AsyncHostCallContext {
+    pub params: ResultValue,
+    pub result_types: ResultType,
+    pub store_state: StoreState,
+}
+
+pub type AsyncHostFunction = fn(AsyncHostCallContext) -> AsyncHostFuture;
 #[derive(Clone)]
 pub enum FunctionBody {
     Wasm(Func),
@@ -417,7 +489,7 @@ unsafe impl Sync for Instr {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
-pub(crate) struct StablePc(usize);
+pub struct StablePc(usize);
 impl StablePc {
     const RELATIVE_TAG: usize = 1;
 
@@ -538,14 +610,14 @@ pub const PAGE_SIZE: usize = 64 * 1024;
 pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 
 pub struct ExecuteContext<'a> {
-    pub stack: &'a mut Stack,
-    pub local_reference: LocalReference,
+    stack: &'a mut Stack,
+    local_reference: LocalReference,
     pub(crate) current_frame: CallFrameCache,
-    pub store: &'a Store,
-    pub gc: &'a mut StoreInner,
-    pub effect: EffectSupplier<'a>,
-    pub cont: *const Instr,
-    pub task_id: u32,
+    store: &'a Store,
+    gc: &'a mut StoreInner,
+    pending: PendingOpEmitter<'a>,
+    cont: *const Instr,
+    task_id: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -561,13 +633,141 @@ pub(crate) struct ExecuteContextSnapshot {
     pub(crate) caller_local: Option<LocalReference>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct FrameCacheProjection {
+    pub(crate) instance_raw: u32,
+    pub(crate) default_memory: MemoryHandleProjection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct ExecuteContextProjection {
+    pub(crate) default_memory: MemoryHandleProjection,
+    pub(crate) caller_memory: MemoryHandleProjection,
+    pub(crate) cont_addr: usize,
+    pub(crate) task_id: u32,
+    pub(crate) current_frame: FrameCacheProjection,
+    pub(crate) caller_frame: Option<FrameCacheProjection>,
+    pub(crate) active_frame_slot: Option<FrameProjection>,
+    pub(crate) caller_frame_slot: Option<FrameProjection>,
+    pub(crate) active_local: LocalReference,
+    pub(crate) caller_local: Option<LocalReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct ExecContextTokenProjection {
+    pub(crate) current_frame: FrameProjection,
+    pub(crate) caller_frame: Option<FrameProjection>,
+    pub(crate) cont_addr: usize,
+    pub(crate) task_id: u32,
+}
+
+pub(crate) struct ExecuteContextFacade<'ctx, 'store> {
+    ctx: &'ctx mut ExecuteContext<'store>,
+}
+
+impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
+    pub(crate) fn store_ref(&self) -> &Store {
+        self.ctx.store_ref()
+    }
+
+    pub(crate) fn instance_id(&self) -> u32 {
+        self.ctx.instance_id()
+    }
+
+    pub(crate) fn func_idx(&self) -> u32 {
+        self.ctx.func().funcidx
+    }
+
+    pub(crate) fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
+        self.ctx.with_memory(f)
+    }
+
+    pub(crate) fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
+        self.ctx.with_caller_memory(f)
+    }
+}
+
 impl ExecuteContextSnapshot {
     pub(crate) fn has_default_memory(self) -> bool {
         self.default_memory.is_some()
     }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn projection(
+        self,
+        stack: &Stack,
+        runtime: &StoreInner,
+    ) -> ExecuteContextProjection {
+        let current_frame = FrameCacheProjection {
+            instance_raw: self.current_frame.instance.raw(),
+            default_memory: self.current_frame.projection_memory(),
+        };
+        let caller_frame = self.caller_frame.map(|frame| FrameCacheProjection {
+            instance_raw: frame.instance.raw(),
+            default_memory: frame.projection_memory(),
+        });
+        let active_frame_slot = (self.active_local.local_size as usize
+            >= std::mem::size_of::<crate::common::stack::CallStackInfo>())
+        .then(|| stack.frame_projection(&self.active_local, runtime));
+        let caller_frame_slot = self.caller_local.and_then(|reference| {
+            (reference.local_size as usize
+                >= std::mem::size_of::<crate::common::stack::CallStackInfo>())
+            .then(|| stack.frame_projection(&reference, runtime))
+        });
+        ExecuteContextProjection {
+            default_memory: MemoryHandleProjection::from_handle(self.default_memory),
+            caller_memory: MemoryHandleProjection::from_handle(self.caller_memory),
+            cont_addr: self.cont_addr,
+            task_id: self.task_id,
+            current_frame,
+            caller_frame,
+            active_frame_slot,
+            caller_frame_slot,
+            active_local: self.active_local,
+            caller_local: self.caller_local,
+        }
+    }
 }
 
-impl ExecuteContext<'_> {
+impl ExecuteContextProjection {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn token_projection(&self) -> Option<ExecContextTokenProjection> {
+        Some(ExecContextTokenProjection {
+            current_frame: self.active_frame_slot.clone()?,
+            caller_frame: self.caller_frame_slot.clone(),
+            cont_addr: self.cont_addr,
+            task_id: self.task_id,
+        })
+    }
+}
+
+impl<'a> ExecuteContext<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        stack: &'a mut Stack,
+        local_reference: LocalReference,
+        current_frame: CallFrameCache,
+        store: &'a Store,
+        gc: &'a mut StoreInner,
+        pending: PendingOpEmitter<'a>,
+        cont: *const Instr,
+        task_id: u32,
+    ) -> ExecuteContext<'a> {
+        ExecuteContext {
+            stack,
+            local_reference,
+            current_frame,
+            store,
+            gc,
+            pending,
+            cont,
+            task_id,
+        }
+    }
+
     pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
         let default_memory = self.current_frame.memory0_handle();
         let caller_local = self.caller_local_reference();
@@ -583,6 +783,51 @@ impl ExecuteContext<'_> {
             active_local: self.local_reference,
             caller_local,
         }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn projection(&self) -> ExecuteContextProjection {
+        self.snapshot().projection(self.stack, self.gc)
+    }
+
+    pub(crate) fn stack_ref(&self) -> &Stack {
+        self.stack
+    }
+
+    pub(crate) fn stack_mut(&mut self) -> &mut Stack {
+        self.stack
+    }
+
+    pub(crate) fn store_ref(&self) -> &Store {
+        self.store
+    }
+
+    pub(crate) fn gc_ref(&self) -> &StoreInner {
+        self.gc
+    }
+
+    pub(crate) fn gc_mut(&mut self) -> &mut StoreInner {
+        self.gc
+    }
+
+    pub(crate) fn pending_mut(&mut self) -> &mut PendingOpEmitter<'a> {
+        &mut self.pending
+    }
+
+    pub(crate) fn cont(&self) -> *const Instr {
+        self.cont
+    }
+
+    pub(crate) fn set_cont(&mut self, cont: *const Instr) {
+        self.cont = cont;
+    }
+
+    pub(crate) fn clear_cont(&mut self) {
+        self.cont = std::ptr::null();
+    }
+
+    pub(crate) fn task_id(&self) -> u32 {
+        self.task_id
     }
 
     pub fn set_local_reference(&mut self, local_reference: LocalReference) {
@@ -625,6 +870,99 @@ impl ExecuteContext<'_> {
     }
     pub fn local_reference(&self) -> LocalReference {
         self.local_reference
+    }
+
+    pub(crate) fn pop_u8_array<const N: usize>(&mut self) -> [u8; N] {
+        self.stack.pop_u8_array::<N>()
+    }
+
+    pub(crate) fn push_slice(&mut self, value: &[u8]) -> VMResult<()> {
+        self.stack.push_slice(value)
+    }
+
+    pub(crate) fn local_get(&mut self, local_addr: usize, size: usize) -> VMResult<()> {
+        self.stack
+            .local_get(&self.local_reference(), local_addr, size)
+    }
+
+    pub(crate) fn local_set(&mut self, local_addr: usize, size: usize) {
+        self.stack
+            .local_set(&self.local_reference(), local_addr, size);
+    }
+
+    pub(crate) fn local_tee(&mut self, local_addr: usize, size: usize) {
+        self.stack
+            .local_tee(&self.local_reference(), local_addr, size);
+    }
+
+    pub(crate) fn enter_function_call<F: IntoCallFrameCache>(
+        &mut self,
+        param_size: usize,
+        local_size: usize,
+        frame: F,
+        return_addr: *const Instr,
+    ) -> VMResult<()> {
+        let local_reference = vm_try!(self.stack.function_call(
+            param_size,
+            local_size,
+            frame,
+            self.local_reference,
+            return_addr,
+            self.gc,
+        ));
+        self.set_local_reference(local_reference);
+        VMResult::Success(())
+    }
+
+    pub(crate) fn enter_function_return_call<F: IntoCallFrameCache>(
+        &mut self,
+        param_size: usize,
+        local_size: usize,
+        frame: F,
+    ) -> VMResult<()> {
+        let frame = frame.into_call_frame_cache(self.gc);
+        let local_reference = vm_try!(self.stack.function_return_call(
+            &self.local_reference,
+            param_size,
+            local_size,
+            frame,
+        ));
+        self.set_local_reference(local_reference);
+        VMResult::Success(())
+    }
+
+    pub(crate) fn function_return_in_place(&mut self, return_size: usize) -> (*const Instr, usize) {
+        let result_slot = self.local_reference.local_top;
+        let (prev_local_reference, return_addr) =
+            self.stack
+                .function_return_in_place(&self.local_reference, return_size, self.gc);
+        self.set_local_reference(prev_local_reference);
+        (return_addr, result_slot)
+    }
+
+    pub(crate) fn function_return(&mut self, return_size: usize) -> *const Instr {
+        let (prev_local_reference, return_addr) =
+            self.stack
+                .function_return(&self.local_reference, return_size, self.gc);
+        self.set_local_reference(prev_local_reference);
+        return_addr
+    }
+
+    pub(crate) fn block_return(&mut self, stack_top: usize, return_size: usize) {
+        self.stack
+            .block_return(&self.local_reference(), stack_top, return_size);
+    }
+
+    pub(crate) fn end_program(&mut self) {
+        let mut local_reference = self.local_reference;
+        while local_reference.local_size != 0 {
+            let (prev_local_ref, _return_addr) =
+                self.stack
+                    .function_return_in_place(&local_reference, 0, self.gc);
+            local_reference = prev_local_ref;
+        }
+        self.set_local_reference(local_reference);
+        self.clear_cont();
     }
     pub fn memory_addr(&self) -> Option<MemoryHandle> {
         self.current_frame.memory0_handle()
@@ -807,6 +1145,639 @@ impl ExecuteContext<'_> {
     }
 
     #[inline(always)]
+    pub(crate) fn memory_handle_at_result(&self, memidx: u32) -> VMResult<MemoryHandle> {
+        VMResult::from_option(
+            self.memory_slot_at(memidx).and_then(|slot| slot.handle()),
+            || VMResult::MemoryIndexOutOfRange,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_memory_to_stack_handle<const N: usize>(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<()> {
+        self.gc
+            .push_memory_to_stack::<N>(handle, self.stack, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u8_array_handle<const N: usize>(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<[u8; N]> {
+        self.gc.read_u8_array::<N>(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u8_at_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u8> {
+        self.gc.read_u8_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i8_at_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<i8> {
+        self.gc.read_i8_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u16_at_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u16> {
+        self.gc.read_u16_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i16_at_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<i16> {
+        self.gc.read_i16_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_u32_at_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u32> {
+        self.gc.read_u32_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_i32_at_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<i32> {
+        self.gc.read_i32_at(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_memory_bytes_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        self.gc.write_bytes(handle, offset, bytes)
+    }
+
+    #[inline(always)]
+    pub(crate) fn grow_memory_handle(
+        &mut self,
+        handle: MemoryHandle,
+        page_size_delta: u32,
+    ) -> VMResult<i32> {
+        self.gc.grow_memory(handle, page_size_delta)
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_memory_handle(
+        &mut self,
+        handle: MemoryHandle,
+        dst: u32,
+        src: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        self.gc.copy_memory(handle, dst, src, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_memory_between_handles(
+        &mut self,
+        dst: MemoryHandle,
+        src: MemoryHandle,
+        dst_offset: u32,
+        src_offset: u32,
+        len: u32,
+    ) -> VMResult<()> {
+        match (dst, src) {
+            (MemoryHandle::Local(dst), MemoryHandle::Local(src)) => self
+                .gc
+                .copy_memory_local_to_local(dst, src, dst_offset, src_offset, len),
+            (MemoryHandle::Local(dst), MemoryHandle::Shared(src)) => self
+                .gc
+                .copy_memory_shared_to_local(dst, src, dst_offset, src_offset, len),
+            (MemoryHandle::Shared(dst), MemoryHandle::Local(src)) => self
+                .gc
+                .copy_memory_local_to_shared(dst, src, dst_offset, src_offset, len),
+            (MemoryHandle::Shared(dst), MemoryHandle::Shared(src)) => self
+                .gc
+                .copy_memory_shared_to_shared(dst, src, dst_offset, src_offset, len),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn fill_memory_handle(
+        &mut self,
+        handle: MemoryHandle,
+        ptr: u32,
+        len: u32,
+        data: u32,
+    ) -> VMResult<()> {
+        self.gc.fill_memory(handle, ptr, len, data)
+    }
+
+    #[inline(always)]
+    pub(crate) fn memory_page_size_handle(&self, handle: MemoryHandle) -> u32 {
+        match handle {
+            MemoryHandle::Local(id) => self.gc.local_memory(id).page_size(),
+            MemoryHandle::Shared(id) => self.gc.shared_memory(id).page_size(),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_load_u8_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u8> {
+        self.gc.atomic_load_u8(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_load_u16_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u16> {
+        self.gc.atomic_load_u16(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_load_u32_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u32> {
+        self.gc.atomic_load_u32(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_load_u64_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u64> {
+        self.gc.atomic_load_u64(handle, offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_store_u8_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u8,
+    ) -> VMResult<()> {
+        self.gc.atomic_store_u8(handle, offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_store_u16_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u16,
+    ) -> VMResult<()> {
+        self.gc.atomic_store_u16(handle, offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_store_u32_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u32,
+    ) -> VMResult<()> {
+        self.gc.atomic_store_u32(handle, offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_store_u64_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u64,
+    ) -> VMResult<()> {
+        self.gc.atomic_store_u64(handle, offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_rmw_u8_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
+        self.gc.atomic_rmw_u8(handle, offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_rmw_u16_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.gc.atomic_rmw_u16(handle, offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_rmw_u32_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.gc.atomic_rmw_u32(handle, offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_rmw_u64_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.gc.atomic_rmw_u64(handle, offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_cmpxchg_u8_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u8,
+        value: u8,
+    ) -> VMResult<u8> {
+        self.gc.atomic_cmpxchg_u8(handle, offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_cmpxchg_u16_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u16,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.gc.atomic_cmpxchg_u16(handle, offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_cmpxchg_u32_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u32,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.gc.atomic_cmpxchg_u32(handle, offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_cmpxchg_u64_handle(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u64,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.gc.atomic_cmpxchg_u64(handle, offset, expected, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn atomic_fence_handle(&mut self, handle: MemoryHandle) {
+        self.gc.atomic_fence(handle);
+    }
+
+    pub(crate) fn local_atomic_load_u8(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u8> {
+        self.atomic_load_u8_handle(handle, offset)
+    }
+
+    pub(crate) fn local_atomic_load_u16(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u16> {
+        self.atomic_load_u16_handle(handle, offset)
+    }
+
+    pub(crate) fn local_atomic_load_u32(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u32> {
+        self.atomic_load_u32_handle(handle, offset)
+    }
+
+    pub(crate) fn local_atomic_load_u64(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u64> {
+        self.atomic_load_u64_handle(handle, offset)
+    }
+
+    pub(crate) fn shared_atomic_load_u8(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u8> {
+        self.atomic_load_u8_handle(handle, offset)
+    }
+
+    pub(crate) fn shared_atomic_load_u16(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u16> {
+        self.atomic_load_u16_handle(handle, offset)
+    }
+
+    pub(crate) fn shared_atomic_load_u32(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u32> {
+        self.atomic_load_u32_handle(handle, offset)
+    }
+
+    pub(crate) fn shared_atomic_load_u64(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+    ) -> VMResult<u64> {
+        self.atomic_load_u64_handle(handle, offset)
+    }
+
+    pub(crate) fn local_atomic_store_u8(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u8,
+    ) -> VMResult<()> {
+        self.atomic_store_u8_handle(handle, offset, value)
+    }
+
+    pub(crate) fn local_atomic_store_u16(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u16,
+    ) -> VMResult<()> {
+        self.atomic_store_u16_handle(handle, offset, value)
+    }
+
+    pub(crate) fn local_atomic_store_u32(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u32,
+    ) -> VMResult<()> {
+        self.atomic_store_u32_handle(handle, offset, value)
+    }
+
+    pub(crate) fn local_atomic_store_u64(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u64,
+    ) -> VMResult<()> {
+        self.atomic_store_u64_handle(handle, offset, value)
+    }
+
+    pub(crate) fn shared_atomic_store_u8(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u8,
+    ) -> VMResult<()> {
+        self.atomic_store_u8_handle(handle, offset, value)
+    }
+
+    pub(crate) fn shared_atomic_store_u16(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u16,
+    ) -> VMResult<()> {
+        self.atomic_store_u16_handle(handle, offset, value)
+    }
+
+    pub(crate) fn shared_atomic_store_u32(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u32,
+    ) -> VMResult<()> {
+        self.atomic_store_u32_handle(handle, offset, value)
+    }
+
+    pub(crate) fn shared_atomic_store_u64(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        value: u64,
+    ) -> VMResult<()> {
+        self.atomic_store_u64_handle(handle, offset, value)
+    }
+
+    pub(crate) fn local_atomic_rmw_u8(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
+        self.atomic_rmw_u8_handle(handle, offset, op, value)
+    }
+
+    pub(crate) fn local_atomic_rmw_u16(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.atomic_rmw_u16_handle(handle, offset, op, value)
+    }
+
+    pub(crate) fn local_atomic_rmw_u32(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.atomic_rmw_u32_handle(handle, offset, op, value)
+    }
+
+    pub(crate) fn local_atomic_rmw_u64(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.atomic_rmw_u64_handle(handle, offset, op, value)
+    }
+
+    pub(crate) fn shared_atomic_rmw_u8(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
+        self.atomic_rmw_u8_handle(handle, offset, op, value)
+    }
+
+    pub(crate) fn shared_atomic_rmw_u16(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.atomic_rmw_u16_handle(handle, offset, op, value)
+    }
+
+    pub(crate) fn shared_atomic_rmw_u32(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.atomic_rmw_u32_handle(handle, offset, op, value)
+    }
+
+    pub(crate) fn shared_atomic_rmw_u64(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.atomic_rmw_u64_handle(handle, offset, op, value)
+    }
+
+    pub(crate) fn local_atomic_cmpxchg_u8(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u8,
+        value: u8,
+    ) -> VMResult<u8> {
+        self.atomic_cmpxchg_u8_handle(handle, offset, expected, value)
+    }
+
+    pub(crate) fn local_atomic_cmpxchg_u16(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u16,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.atomic_cmpxchg_u16_handle(handle, offset, expected, value)
+    }
+
+    pub(crate) fn local_atomic_cmpxchg_u32(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u32,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.atomic_cmpxchg_u32_handle(handle, offset, expected, value)
+    }
+
+    pub(crate) fn local_atomic_cmpxchg_u64(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u64,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.atomic_cmpxchg_u64_handle(handle, offset, expected, value)
+    }
+
+    pub(crate) fn shared_atomic_cmpxchg_u8(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u8,
+        value: u8,
+    ) -> VMResult<u8> {
+        self.atomic_cmpxchg_u8_handle(handle, offset, expected, value)
+    }
+
+    pub(crate) fn shared_atomic_cmpxchg_u16(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u16,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.atomic_cmpxchg_u16_handle(handle, offset, expected, value)
+    }
+
+    pub(crate) fn shared_atomic_cmpxchg_u32(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u32,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.atomic_cmpxchg_u32_handle(handle, offset, expected, value)
+    }
+
+    pub(crate) fn shared_atomic_cmpxchg_u64(
+        &mut self,
+        handle: MemoryHandle,
+        offset: usize,
+        expected: u64,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.atomic_cmpxchg_u64_handle(handle, offset, expected, value)
+    }
+
+    pub(crate) fn local_atomic_fence(&mut self, handle: MemoryHandle) {
+        self.atomic_fence_handle(handle);
+    }
+
+    pub(crate) fn shared_atomic_fence(&mut self, handle: MemoryHandle) {
+        self.atomic_fence_handle(handle);
+    }
+
+    #[inline(always)]
+    pub(crate) fn clone_shared_memory(&self, id: store::SharedMemoryId) -> Arc<SharedMemoryObject> {
+        self.gc.clone_shared_memory(id)
+    }
+
+    #[inline(always)]
     pub fn grow_memory(&mut self, page_size_delta: u32) -> VMResult<i32> {
         let handle = vm_try!(self.memory_handle_result());
         self.gc.grow_memory(handle, page_size_delta)
@@ -870,10 +1841,6 @@ impl ExecuteContext<'_> {
         let handle = self.caller_memory_addr()?;
         let addr = self.gc.gc_ref_for_memory_handle(handle);
         Some(self.gc.with_memory_by_addr(addr, f))
-    }
-    pub fn return_slot(&mut self) -> ReturnSlot {
-        let local_ref = self.local_reference();
-        ReturnSlot(unsafe { self.stack.local_area_mut_ptr(&local_ref) })
     }
 }
 
@@ -1113,7 +2080,7 @@ impl From<&[Locals]> for LocalsData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{memory_effect::Effect, scheduler::EffectSupplier};
+    use crate::runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter};
     use std::collections::VecDeque;
 
     fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
@@ -1186,20 +2153,21 @@ mod tests {
         let store = Store::new();
         let mut gc = StoreInner::new();
         let mut pending_effects = 0;
-        let mut effects: VecDeque<Effect> = VecDeque::new();
+        let mut pending_ops: VecDeque<PendingOp> = VecDeque::new();
         let program = [crate::runtime::vm::VM_END, crate::runtime::vm::VM_END];
-        let mut ctx = ExecuteContext {
-            stack: &mut stack,
-            local_reference: callee,
-            current_frame: frame(CachedMemoryKind::Shared, 2),
-            store: &store,
-            gc: &mut gc,
-            effect: EffectSupplier::from_parts(&mut pending_effects, &mut effects),
-            cont: program.as_ptr(),
-            task_id: 77,
-        };
+        let mut ctx = ExecuteContext::new(
+            &mut stack,
+            callee,
+            frame(CachedMemoryKind::Shared, 2),
+            &store,
+            &mut gc,
+            PendingOpEmitter::from_parts(77, &mut pending_effects, &mut pending_ops),
+            program.as_ptr(),
+            77,
+        );
 
         let before = ctx.snapshot();
+        let before_projection = ctx.projection();
         let callee_local_top = callee.local_top;
         let callee_local_size = callee.local_size;
         let root_local_top = root.local_top;
@@ -1230,11 +2198,69 @@ mod tests {
         assert!(before.has_default_memory());
         assert_eq!(before.cont_addr, program.as_ptr() as usize);
         assert_eq!(before.task_id, 77);
+        assert_eq!(
+            before_projection.default_memory,
+            MemoryHandleProjection::from_handle(before.default_memory)
+        );
+        assert_eq!(
+            before_projection.caller_memory,
+            MemoryHandleProjection::from_handle(before.caller_memory)
+        );
+        assert_eq!(before_projection.cont_addr, before.cont_addr);
+        assert_eq!(before_projection.task_id, before.task_id);
+        assert_eq!(
+            before_projection.current_frame.default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Shared(
+                store::SharedMemoryId::from_raw(2),
+            )))
+        );
+        assert_eq!(
+            before_projection.caller_frame.unwrap().default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(1),
+            )))
+        );
+        assert_eq!(
+            before_projection
+                .active_frame_slot
+                .as_ref()
+                .unwrap()
+                .default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(3),
+            )))
+        );
+        assert_eq!(
+            before_projection
+                .caller_frame_slot
+                .as_ref()
+                .unwrap()
+                .default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(1),
+            )))
+        );
+        let before_token = before_projection.token_projection().unwrap();
+        assert_eq!(
+            before_token.current_frame.default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(3),
+            )))
+        );
+        assert_eq!(
+            before_token.caller_frame.unwrap().default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(1),
+            )))
+        );
+        assert_eq!(before_token.cont_addr, before.cont_addr);
+        assert_eq!(before_token.task_id, before.task_id);
 
         ctx.set_local_reference(tail);
-        ctx.cont = unsafe { program.as_ptr().add(1) };
+        ctx.set_cont(unsafe { program.as_ptr().add(1) });
 
         let after = ctx.snapshot();
+        let after_projection = ctx.projection();
         let tail_local_top = tail.local_top;
         let tail_local_size = tail.local_size;
         assert_eq!(
@@ -1264,5 +2290,62 @@ mod tests {
         assert!(after.has_default_memory());
         assert_eq!(after.cont_addr, unsafe { program.as_ptr().add(1) } as usize);
         assert_eq!(after.task_id, 77);
+        assert_eq!(
+            after_projection.default_memory,
+            MemoryHandleProjection::from_handle(after.default_memory)
+        );
+        assert_eq!(
+            after_projection.caller_memory,
+            MemoryHandleProjection::from_handle(after.caller_memory)
+        );
+        assert_eq!(after_projection.cont_addr, after.cont_addr);
+        assert_eq!(after_projection.task_id, after.task_id);
+        assert_eq!(
+            after_projection.current_frame.default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(3),
+            )))
+        );
+        assert_eq!(
+            after_projection.caller_frame.unwrap().default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(1),
+            )))
+        );
+        assert_eq!(
+            after_projection
+                .active_frame_slot
+                .as_ref()
+                .unwrap()
+                .default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(3),
+            )))
+        );
+        assert_eq!(
+            after_projection
+                .caller_frame_slot
+                .as_ref()
+                .unwrap()
+                .default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(1),
+            )))
+        );
+        let after_token = after_projection.token_projection().unwrap();
+        assert_eq!(
+            after_token.current_frame.default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(3),
+            )))
+        );
+        assert_eq!(
+            after_token.caller_frame.unwrap().default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(1),
+            )))
+        );
+        assert_eq!(after_token.cont_addr, after.cont_addr);
+        assert_eq!(after_token.task_id, after.task_id);
     }
 }

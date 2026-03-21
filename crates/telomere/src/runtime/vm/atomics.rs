@@ -14,6 +14,7 @@ fn wait_result_not_equal() -> (result: i32)
 }
 
 #[inline(always)]
+#[cfg(test)]
 fn wait_result_ok() -> (result: i32)
     ensures
         result == 0,
@@ -22,6 +23,7 @@ fn wait_result_ok() -> (result: i32)
 }
 
 #[inline(always)]
+#[cfg(test)]
 fn wait_result_timed_out() -> (result: i32)
     ensures
         result == 2,
@@ -59,7 +61,7 @@ pub open spec fn spec_atomic_start_indexed_result(
 /// - This helper must not retain borrows across the call boundary into memory access helpers.
 unsafe fn atomic_start(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<usize> {
     let memarg = (*tail_code).operand.memarg;
-    let offset = ctx.stack.pop_u32();
+    let offset = ctx.stack_mut().pop_u32();
     compute_memory_offset(memarg, offset)
 }
 
@@ -83,9 +85,104 @@ unsafe fn atomic_start_indexed(
 ) -> VMResult<(usize, u32)> {
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
-    let offset = ctx.stack.pop_u32();
+    let offset = ctx.stack_mut().pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     VMResult::Success((start, memidx))
+}
+
+#[inline(always)]
+unsafe fn push_u32_and_continue(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    skip: isize,
+    value: u32,
+) -> VMResult<()> {
+    vm_try!(ctx.stack_mut().push_u32(value));
+    call_next(tail_code, skip, ctx)
+}
+
+#[inline(always)]
+unsafe fn push_i32_and_continue(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    skip: isize,
+    value: i32,
+) -> VMResult<()> {
+    vm_try!(ctx.stack_mut().push_i32(value));
+    call_next(tail_code, skip, ctx)
+}
+
+#[inline(always)]
+unsafe fn pop_notify_operands(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32)> {
+    let count = ctx.stack_mut().pop_u32();
+    let start = vm_try!(atomic_start(tail_code, ctx));
+    VMResult::Success((start, count))
+}
+
+#[inline(always)]
+unsafe fn pop_notify_operands_indexed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32, u32)> {
+    let count = ctx.stack_mut().pop_u32();
+    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
+    VMResult::Success((start, memidx, count))
+}
+
+#[inline(always)]
+unsafe fn pop_wait32_operands(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32, i64)> {
+    let timeout_ns = ctx.stack_mut().pop_i64();
+    let expected = ctx.stack_mut().pop_u32();
+    let start = vm_try!(atomic_start(tail_code, ctx));
+    VMResult::Success((start, expected, timeout_ns))
+}
+
+#[inline(always)]
+unsafe fn pop_wait32_operands_indexed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32, u32, i64)> {
+    let timeout_ns = ctx.stack_mut().pop_i64();
+    let expected = ctx.stack_mut().pop_u32();
+    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
+    VMResult::Success((start, memidx, expected, timeout_ns))
+}
+
+#[inline(always)]
+unsafe fn pop_wait64_operands(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u64, i64)> {
+    let timeout_ns = ctx.stack_mut().pop_i64();
+    let expected = ctx.stack_mut().pop_u64();
+    let start = vm_try!(atomic_start(tail_code, ctx));
+    VMResult::Success((start, expected, timeout_ns))
+}
+
+#[inline(always)]
+unsafe fn pop_wait64_operands_indexed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32, u64, i64)> {
+    let timeout_ns = ctx.stack_mut().pop_i64();
+    let expected = ctx.stack_mut().pop_u64();
+    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
+    VMResult::Success((start, memidx, expected, timeout_ns))
+}
+
+#[inline(always)]
+unsafe fn finish_wait_not_equal(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    skip: isize,
+) -> VMResult<()> {
+    push_i32_and_continue(tail_code, ctx, skip, wait_result_not_equal())
 }
 
 macro_rules! atomic_load_op {
@@ -105,8 +202,9 @@ macro_rules! atomic_load_op {
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let value = vm_try!(ctx.gc.$reader(ctx.default_local_memory_id_unchecked(), start));
-            vm_try!(ctx.stack.$push(value as $cast));
+            let handle = vm_try!(ctx.memory_handle_result());
+            let value = vm_try!(ctx.$reader(handle, start));
+            vm_try!(ctx.stack_mut().$push(value as $cast));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -129,8 +227,9 @@ macro_rules! atomic_load_op_shared {
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let value = vm_try!(ctx.gc.$reader(ctx.default_shared_memory_id_unchecked(), start));
-            vm_try!(ctx.stack.$push(value as $cast));
+            let handle = vm_try!(ctx.memory_handle_result());
+            let value = vm_try!(ctx.$reader(handle, start));
+            vm_try!(ctx.stack_mut().$push(value as $cast));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -152,13 +251,10 @@ macro_rules! atomic_store_op {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $ty;
+            let value = ctx.stack_mut().$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            vm_try!(ctx.gc.$writer(
-                ctx.default_local_memory_id_unchecked(),
-                start,
-                value,
-            ));
+            let handle = vm_try!(ctx.memory_handle_result());
+            vm_try!(ctx.$writer(handle, start, value));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -180,13 +276,10 @@ macro_rules! atomic_store_op_shared {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $ty;
+            let value = ctx.stack_mut().$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            vm_try!(ctx.gc.$writer(
-                ctx.default_shared_memory_id_unchecked(),
-                start,
-                value,
-            ));
+            let handle = vm_try!(ctx.memory_handle_result());
+            vm_try!(ctx.$writer(handle, start, value));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -208,15 +301,11 @@ macro_rules! atomic_rmw_op {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $pop_ty;
+            let value = ctx.stack_mut().$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let old = vm_try!(ctx.gc.$rmw(
-                ctx.default_local_memory_id_unchecked(),
-                start,
-                $op,
-                value,
-            ));
-            vm_try!(ctx.stack.$push(old as $push_ty));
+            let handle = vm_try!(ctx.memory_handle_result());
+            let old = vm_try!(ctx.$rmw(handle, start, $op, value));
+            vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -238,15 +327,11 @@ macro_rules! atomic_rmw_op_shared {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $pop_ty;
+            let value = ctx.stack_mut().$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let old = vm_try!(ctx.gc.$rmw(
-                ctx.default_shared_memory_id_unchecked(),
-                start,
-                $op,
-                value,
-            ));
-            vm_try!(ctx.stack.$push(old as $push_ty));
+            let handle = vm_try!(ctx.memory_handle_result());
+            let old = vm_try!(ctx.$rmw(handle, start, $op, value));
+            vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -268,16 +353,12 @@ macro_rules! atomic_cmpxchg_op {
         #[doc = "- `ctx` must reference a live execution context whose validated operand stack and default memory satisfy this instruction."]
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $ty;
-            let expected = ctx.stack.$pop() as $ty;
+            let value = ctx.stack_mut().$pop() as $ty;
+            let expected = ctx.stack_mut().$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let old = vm_try!(ctx.gc.$cmpxchg(
-                ctx.default_local_memory_id_unchecked(),
-                start,
-                expected,
-                value,
-            ));
-            vm_try!(ctx.stack.$push(old as $push_ty));
+            let handle = vm_try!(ctx.memory_handle_result());
+            let old = vm_try!(ctx.$cmpxchg(handle, start, expected, value));
+            vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -299,16 +380,12 @@ macro_rules! atomic_cmpxchg_op_shared {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $ty;
-            let expected = ctx.stack.$pop() as $ty;
+            let value = ctx.stack_mut().$pop() as $ty;
+            let expected = ctx.stack_mut().$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let old = vm_try!(ctx.gc.$cmpxchg(
-                ctx.default_shared_memory_id_unchecked(),
-                start,
-                expected,
-                value,
-            ));
-            vm_try!(ctx.stack.$push(old as $push_ty));
+            let handle = vm_try!(ctx.memory_handle_result());
+            let old = vm_try!(ctx.$cmpxchg(handle, start, expected, value));
+            vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -330,8 +407,9 @@ macro_rules! atomic_load_op_indexed {
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let value = vm_try!(ctx.gc.$reader_local(ctx.local_memory_id_at_unchecked(memidx), start));
-            vm_try!(ctx.stack.$push(value as $cast));
+            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+            let value = vm_try!(ctx.$reader_local(handle, start));
+            vm_try!(ctx.stack_mut().$push(value as $cast));
             call_next(tail_code, 2, ctx)
         }
 
@@ -349,8 +427,9 @@ macro_rules! atomic_load_op_indexed {
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let value = vm_try!(ctx.gc.$reader_shared(ctx.shared_memory_id_at_unchecked(memidx), start));
-            vm_try!(ctx.stack.$push(value as $cast));
+            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+            let value = vm_try!(ctx.$reader_shared(handle, start));
+            vm_try!(ctx.stack_mut().$push(value as $cast));
             call_next(tail_code, 2, ctx)
         }
     };
@@ -371,9 +450,10 @@ macro_rules! atomic_store_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $ty;
+            let value = ctx.stack_mut().$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            vm_try!(ctx.gc.$writer_local(ctx.local_memory_id_at_unchecked(memidx), start, value));
+            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+            vm_try!(ctx.$writer_local(handle, start, value));
             call_next(tail_code, 2, ctx)
         }
 
@@ -390,9 +470,10 @@ macro_rules! atomic_store_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $ty;
+            let value = ctx.stack_mut().$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            vm_try!(ctx.gc.$writer_shared(ctx.shared_memory_id_at_unchecked(memidx), start, value));
+            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+            vm_try!(ctx.$writer_shared(handle, start, value));
             call_next(tail_code, 2, ctx)
         }
     };
@@ -413,15 +494,11 @@ macro_rules! atomic_rmw_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $pop_ty;
+            let value = ctx.stack_mut().$pop() as $pop_ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let old = vm_try!(ctx.gc.$rmw_local(
-                ctx.local_memory_id_at_unchecked(memidx),
-                start,
-                $op,
-                value,
-            ));
-            vm_try!(ctx.stack.$push(old as $push_ty));
+            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+            let old = vm_try!(ctx.$rmw_local(handle, start, $op, value));
+            vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 2, ctx)
         }
 
@@ -438,15 +515,11 @@ macro_rules! atomic_rmw_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $pop_ty;
+            let value = ctx.stack_mut().$pop() as $pop_ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let old = vm_try!(ctx.gc.$rmw_shared(
-                ctx.shared_memory_id_at_unchecked(memidx),
-                start,
-                $op,
-                value,
-            ));
-            vm_try!(ctx.stack.$push(old as $push_ty));
+            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+            let old = vm_try!(ctx.$rmw_shared(handle, start, $op, value));
+            vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 2, ctx)
         }
     };
@@ -467,16 +540,12 @@ macro_rules! atomic_cmpxchg_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $ty;
-            let expected = ctx.stack.$pop() as $ty;
+            let value = ctx.stack_mut().$pop() as $ty;
+            let expected = ctx.stack_mut().$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let old = vm_try!(ctx.gc.$cmpxchg_local(
-                ctx.local_memory_id_at_unchecked(memidx),
-                start,
-                expected,
-                value,
-            ));
-            vm_try!(ctx.stack.$push(old as $push_ty));
+            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+            let old = vm_try!(ctx.$cmpxchg_local(handle, start, expected, value));
+            vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 2, ctx)
         }
 
@@ -493,16 +562,12 @@ macro_rules! atomic_cmpxchg_op_indexed {
         /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let value = ctx.stack.$pop() as $ty;
-            let expected = ctx.stack.$pop() as $ty;
+            let value = ctx.stack_mut().$pop() as $ty;
+            let expected = ctx.stack_mut().$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let old = vm_try!(ctx.gc.$cmpxchg_shared(
-                ctx.shared_memory_id_at_unchecked(memidx),
-                start,
-                expected,
-                value,
-            ));
-            vm_try!(ctx.stack.$push(old as $push_ty));
+            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+            let old = vm_try!(ctx.$cmpxchg_shared(handle, start, expected, value));
+            vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 2, ctx)
         }
     };
@@ -2152,11 +2217,8 @@ pub unsafe fn op_memory_atomic_notify(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let _count = ctx.stack.pop_u32();
-    let _start = vm_try!(atomic_start(tail_code, ctx));
-    let woken = 0;
-    vm_try!(ctx.stack.push_u32(woken));
-    call_next(tail_code, 1, ctx)
+    let (_start, _count) = vm_try!(pop_notify_operands(tail_code, ctx));
+    push_u32_and_continue(tail_code, ctx, 1, 0)
 }
 
 /// WebAssembly `memory.atomic.notify` on shared default memory.
@@ -2176,14 +2238,12 @@ pub unsafe fn op_memory_atomic_notify_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let count = ctx.stack.pop_u32();
-    let start = vm_try!(atomic_start(tail_code, ctx));
+    let (start, count) = vm_try!(pop_notify_operands(tail_code, ctx));
     let woken = vm_try!(ctx
-        .gc
+        .gc_ref()
         .shared_memory(ctx.default_shared_memory_id_unchecked())
         .notify_waiters(start, count));
-    vm_try!(ctx.stack.push_u32(woken));
-    call_next(tail_code, 1, ctx)
+    push_u32_and_continue(tail_code, ctx, 1, woken)
 }
 
 /// WebAssembly `memory.atomic.notify` on unshared indexed memory.
@@ -2203,11 +2263,8 @@ pub unsafe fn op_memory_atomic_notify_indexed_unshared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let count = ctx.stack.pop_u32();
-    let (start, _memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-    let _ = (count, start);
-    vm_try!(ctx.stack.push_u32(0));
-    call_next(tail_code, 2, ctx)
+    let (_start, _memidx, _count) = vm_try!(pop_notify_operands_indexed(tail_code, ctx));
+    push_u32_and_continue(tail_code, ctx, 2, 0)
 }
 
 /// WebAssembly `memory.atomic.notify` on shared indexed memory.
@@ -2227,14 +2284,16 @@ pub unsafe fn op_memory_atomic_notify_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let count = ctx.stack.pop_u32();
-    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
+    let (start, memidx, count) = vm_try!(pop_notify_operands_indexed(tail_code, ctx));
+    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+    let crate::common::MemoryHandle::Shared(shared_id) = handle else {
+        return VMResult::InvalidOperand;
+    };
     let woken = vm_try!(ctx
-        .gc
-        .shared_memory(ctx.shared_memory_id_at_unchecked(memidx))
+        .gc_ref()
+        .shared_memory(shared_id)
         .notify_waiters(start, count));
-    vm_try!(ctx.stack.push_u32(woken));
-    call_next(tail_code, 2, ctx)
+    push_u32_and_continue(tail_code, ctx, 2, woken)
 }
 
 /// WebAssembly threads `memory.atomic.wait` completion helper.
@@ -2242,35 +2301,38 @@ pub unsafe fn op_memory_atomic_notify_indexed_shared(
 /// Spec:
 /// - Threads: https://webassembly.github.io/threads/core/
 ///
-/// Stack effect: internal async completion for wait operations.
+/// Stack effect: internal suspend point for wait operations.
 /// Traps: propagates the trap behavior of the underlying wait operation.
-/// Notes: Packages the wake result into the async runtime effect queue.
+/// Notes: Registers a `MemoryWait` pending op so the execution driver can resume the task later.
 ///
 /// # Safety
-/// - `ctx` must reference a live execution context whose wait effect queue is available.
+/// - `ctx` must reference a live execution context whose pending-op emitter is available.
 /// - `shared` and `wait` must refer to a wait registration belonging to the active store and memory instance.
 /// - This helper must not keep locks or borrows alive while constructing the async completion.
-unsafe fn push_wait_effect(
+unsafe fn enqueue_wait_pending(
     ctx: &mut ExecuteContext,
     shared: std::sync::Arc<crate::common::SharedMemoryObject>,
     wait: crate::common::SharedWaitRegistration,
     timeout_ns: i64,
     resume_pc: *const Instr,
 ) {
-    let task_id = ctx.task_id;
-    let fp = StablePc::from_raw_in_frame(ctx.gc, ctx.stack, ctx.local_reference, resume_pc);
-    ctx.effect.push_async_effect(Box::pin(async move {
-        let value = wait.wait_result(shared, timeout_ns).await;
-        let value = match value {
-            0 => wait_result_ok(),
-            2 => wait_result_timed_out(),
-            other => other,
-        };
-        AsyncResult {
-            task_id,
-            completion: AsyncCompletion::ContinueWithI32 { fp, value },
-        }
-    }));
+    let task_id = ctx.task_id();
+    let fp = StablePc::from_raw_in_frame(
+        ctx.gc_ref(),
+        ctx.stack_ref(),
+        ctx.local_reference(),
+        resume_pc,
+    );
+    ctx.pending_mut()
+        .push_pending(crate::runtime::memory_effect::PendingOp::MemoryWait(
+            crate::runtime::memory_effect::MemoryWaitPending {
+                task_id,
+                shared,
+                wait,
+                timeout_ns,
+                fp,
+            },
+        ));
 }
 
 /// WebAssembly `memory.atomic.wait32`.
@@ -2291,9 +2353,7 @@ pub unsafe fn op_memory_atomic_wait32(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let _timeout_ns = ctx.stack.pop_i64();
-    let _expected = ctx.stack.pop_u32();
-    let _start = vm_try!(atomic_start(tail_code, ctx));
+    let (_start, _expected, _timeout_ns) = vm_try!(pop_wait32_operands(tail_code, ctx));
     VMResult::InvalidOperand
 }
 
@@ -2314,24 +2374,16 @@ pub unsafe fn op_memory_atomic_wait32_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let timeout_ns = ctx.stack.pop_i64();
-    let expected = ctx.stack.pop_u32();
-    let start = vm_try!(atomic_start(tail_code, ctx));
-    let shared = ctx
-        .gc
-        .shared_memory(ctx.default_shared_memory_id_unchecked());
+    let (start, expected, timeout_ns) = vm_try!(pop_wait32_operands(tail_code, ctx));
+    let shared_id = unsafe { ctx.default_shared_memory_id_unchecked() };
+    let shared = ctx.gc_ref().shared_memory(shared_id);
     match vm_try!(shared.register_wait32(start, expected)) {
-        AtomicWaitResult::NotEqual => {
-            vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-            call_next(tail_code, 1, ctx)
-        }
+        AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, ctx, 1),
         AtomicWaitResult::Pending(wait) => {
             let resume_pc = tail_code.offset(1);
-            let shared = ctx
-                .gc
-                .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
-            push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-            let _ = wait_effect(ctx, resume_pc);
+            let shared = ctx.clone_shared_memory(shared_id);
+            enqueue_wait_pending(ctx, shared, wait, timeout_ns, resume_pc);
+            ctx.set_cont(resume_pc);
             VMResult::Success(())
         }
     }
@@ -2354,9 +2406,8 @@ pub unsafe fn op_memory_atomic_wait32_indexed_unshared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let _timeout_ns = ctx.stack.pop_i64();
-    let _expected = ctx.stack.pop_u32();
-    let _start = vm_try!(atomic_start_indexed(tail_code, ctx));
+    let (_start, _memidx, _expected, _timeout_ns) =
+        vm_try!(pop_wait32_operands_indexed(tail_code, ctx));
     VMResult::InvalidOperand
 }
 
@@ -2377,24 +2428,20 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let timeout_ns = ctx.stack.pop_i64();
-    let expected = ctx.stack.pop_u32();
-    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-    let shared = ctx
-        .gc
-        .shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+    let (start, memidx, expected, timeout_ns) =
+        vm_try!(pop_wait32_operands_indexed(tail_code, ctx));
+    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+    let crate::common::MemoryHandle::Shared(shared_id) = handle else {
+        return VMResult::InvalidOperand;
+    };
+    let shared = ctx.gc_ref().shared_memory(shared_id);
     match vm_try!(shared.register_wait32(start, expected)) {
-        AtomicWaitResult::NotEqual => {
-            vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-            call_next(tail_code, 2, ctx)
-        }
+        AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, ctx, 2),
         AtomicWaitResult::Pending(wait) => {
             let resume_pc = tail_code.offset(2);
-            let shared = ctx
-                .gc
-                .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
-            push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-            let _ = wait_effect(ctx, resume_pc);
+            let shared = ctx.clone_shared_memory(shared_id);
+            enqueue_wait_pending(ctx, shared, wait, timeout_ns, resume_pc);
+            ctx.set_cont(resume_pc);
             VMResult::Success(())
         }
     }
@@ -2418,9 +2465,7 @@ pub unsafe fn op_memory_atomic_wait64(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let _timeout_ns = ctx.stack.pop_i64();
-    let _expected = ctx.stack.pop_u64();
-    let _start = vm_try!(atomic_start(tail_code, ctx));
+    let (_start, _expected, _timeout_ns) = vm_try!(pop_wait64_operands(tail_code, ctx));
     VMResult::InvalidOperand
 }
 
@@ -2441,24 +2486,16 @@ pub unsafe fn op_memory_atomic_wait64_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let timeout_ns = ctx.stack.pop_i64();
-    let expected = ctx.stack.pop_u64();
-    let start = vm_try!(atomic_start(tail_code, ctx));
-    let shared = ctx
-        .gc
-        .shared_memory(ctx.default_shared_memory_id_unchecked());
+    let (start, expected, timeout_ns) = vm_try!(pop_wait64_operands(tail_code, ctx));
+    let shared_id = unsafe { ctx.default_shared_memory_id_unchecked() };
+    let shared = ctx.gc_ref().shared_memory(shared_id);
     match vm_try!(shared.register_wait64(start, expected)) {
-        AtomicWaitResult::NotEqual => {
-            vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-            call_next(tail_code, 1, ctx)
-        }
+        AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, ctx, 1),
         AtomicWaitResult::Pending(wait) => {
             let resume_pc = tail_code.offset(1);
-            let shared = ctx
-                .gc
-                .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
-            push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-            let _ = wait_effect(ctx, resume_pc);
+            let shared = ctx.clone_shared_memory(shared_id);
+            enqueue_wait_pending(ctx, shared, wait, timeout_ns, resume_pc);
+            ctx.set_cont(resume_pc);
             VMResult::Success(())
         }
     }
@@ -2481,9 +2518,8 @@ pub unsafe fn op_memory_atomic_wait64_indexed_unshared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let _timeout_ns = ctx.stack.pop_i64();
-    let _expected = ctx.stack.pop_u64();
-    let _start = vm_try!(atomic_start_indexed(tail_code, ctx));
+    let (_start, _memidx, _expected, _timeout_ns) =
+        vm_try!(pop_wait64_operands_indexed(tail_code, ctx));
     VMResult::InvalidOperand
 }
 
@@ -2504,24 +2540,20 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let timeout_ns = ctx.stack.pop_i64();
-    let expected = ctx.stack.pop_u64();
-    let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-    let shared = ctx
-        .gc
-        .shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+    let (start, memidx, expected, timeout_ns) =
+        vm_try!(pop_wait64_operands_indexed(tail_code, ctx));
+    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
+    let crate::common::MemoryHandle::Shared(shared_id) = handle else {
+        return VMResult::InvalidOperand;
+    };
+    let shared = ctx.gc_ref().shared_memory(shared_id);
     match vm_try!(shared.register_wait64(start, expected)) {
-        AtomicWaitResult::NotEqual => {
-            vm_try!(ctx.stack.push_i32(wait_result_not_equal()));
-            call_next(tail_code, 2, ctx)
-        }
+        AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, ctx, 2),
         AtomicWaitResult::Pending(wait) => {
             let resume_pc = tail_code.offset(2);
-            let shared = ctx
-                .gc
-                .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
-            push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
-            let _ = wait_effect(ctx, resume_pc);
+            let shared = ctx.clone_shared_memory(shared_id);
+            enqueue_wait_pending(ctx, shared, wait, timeout_ns, resume_pc);
+            ctx.set_cont(resume_pc);
             VMResult::Success(())
         }
     }
@@ -2542,8 +2574,8 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
 pub unsafe fn op_atomic_fence(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    ctx.gc
-        .local_atomic_fence(ctx.default_local_memory_id_unchecked());
+    let handle = vm_try!(ctx.memory_handle_result());
+    ctx.local_atomic_fence(handle);
     call_next(tail_code, 1, ctx)
 }
 
@@ -2564,8 +2596,8 @@ pub unsafe fn op_atomic_fence_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    ctx.gc
-        .shared_atomic_fence(ctx.default_shared_memory_id_unchecked());
+    let handle = vm_try!(ctx.memory_handle_result());
+    ctx.shared_atomic_fence(handle);
     call_next(tail_code, 1, ctx)
 }
 
@@ -2597,11 +2629,9 @@ mod tests {
             store::InstanceId,
             ExecuteContext, GcRef, LocalReference, Operand, SharedMemoryObject, Store, StoreInner,
         },
-        runtime::{
-            memory_effect::{AsyncCompletion, Effect},
-            scheduler::EffectSupplier,
-        },
+        runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter},
     };
+    use futures::future::poll_fn;
     use std::collections::VecDeque;
 
     fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
@@ -2619,21 +2649,21 @@ mod tests {
         store: &'a Store,
         gc: &'a mut StoreInner,
         pending_effects: &'a mut u32,
-        effects: &'a mut VecDeque<Effect>,
+        pending_ops: &'a mut VecDeque<PendingOp>,
     ) -> ExecuteContext<'a> {
-        ExecuteContext {
+        ExecuteContext::new(
             stack,
-            local_reference: LocalReference {
+            LocalReference {
                 local_top: 0,
                 local_size: 0,
             },
-            current_frame: frame(CachedMemoryKind::Local, 1),
+            frame(CachedMemoryKind::Local, 1),
             store,
             gc,
-            effect: EffectSupplier::from_parts(pending_effects, effects),
-            cont: std::ptr::null(),
-            task_id: 9,
-        }
+            PendingOpEmitter::from_parts(9, pending_effects, pending_ops),
+            std::ptr::null(),
+            9,
+        )
     }
 
     unsafe fn stop_op(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -2645,7 +2675,7 @@ mod tests {
         let store = Store::new();
         let mut gc = StoreInner::new();
         let mut pending_effects = 0;
-        let mut effects = VecDeque::new();
+        let mut pending_ops = VecDeque::new();
         let mut stack = Stack::new(32);
         stack.push_u32(4).unwrap();
 
@@ -2667,13 +2697,13 @@ mod tests {
             &store,
             &mut gc,
             &mut pending_effects,
-            &mut effects,
+            &mut pending_ops,
         );
 
         let start = unsafe { atomic_start(program.as_ptr(), &mut ctx) }.unwrap();
         assert_eq!(start, 10);
 
-        ctx.stack.push_u32(1).unwrap();
+        ctx.stack_mut().push_u32(1).unwrap();
         let (indexed_start, memidx) =
             unsafe { atomic_start_indexed(program.as_ptr(), &mut ctx) }.unwrap();
         assert_eq!(indexed_start, 7);
@@ -2684,11 +2714,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn push_wait_effect_preserves_resume_pc_and_task_id() {
+    async fn enqueue_wait_pending_preserves_resume_pc_and_task_id() {
         let store = Store::new();
         let mut gc = StoreInner::new();
         let mut pending_effects = 0;
-        let mut effects = VecDeque::new();
+        let mut pending_ops = VecDeque::new();
         let mut stack = Stack::new(32);
         let shared = SharedMemoryObject::new(1, 1);
         shared.atomic_store_u32(0, 7).unwrap();
@@ -2709,32 +2739,28 @@ mod tests {
                 &store,
                 &mut gc,
                 &mut pending_effects,
-                &mut effects,
+                &mut pending_ops,
             );
-            let local_reference = ctx.local_reference;
+            let local_reference = ctx.local_reference();
             unsafe {
-                push_wait_effect(&mut ctx, shared.clone(), wait, -1, resume_pc);
+                enqueue_wait_pending(&mut ctx, shared.clone(), wait, -1, resume_pc);
             }
             local_reference
         };
 
         assert_eq!(pending_effects, 1);
-        assert_eq!(effects.len(), 1);
+        assert_eq!(pending_ops.len(), 1);
         assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
 
-        let effect = effects.pop_front().expect("async effect must be queued");
-        let result = match effect {
-            Effect::AsyncEffect(effect) => effect.future.await,
+        let pending = pending_ops.pop_front().expect("memory wait must be queued");
+        let PendingOp::MemoryWait(pending) = pending else {
+            panic!("unexpected pending op");
         };
-
-        assert_eq!(result.task_id, 9);
-        match result.completion {
-            AsyncCompletion::ContinueWithI32 { fp, value } => {
-                assert_eq!(value, wait_result_ok());
-                assert_eq!(fp.resolve(&gc, &stack, local_reference), resume_pc);
-            }
-            other => panic!("unexpected completion: {other:?}"),
-        }
+        assert_eq!(pending.task_id, 9);
+        poll_fn(|cx| pending.wait.poll_wait(cx)).await;
+        let value = pending.wait.finish_notified(&shared);
+        assert_eq!(value, wait_result_ok());
+        assert_eq!(pending.fp.resolve(&gc, &stack, local_reference), resume_pc);
     }
 
     #[test]
@@ -2742,18 +2768,18 @@ mod tests {
         let store = Store::new();
         let mut gc = StoreInner::new();
         let mut pending_effects = 0;
-        let mut effects = VecDeque::new();
+        let mut pending_ops = VecDeque::new();
         let mut stack = Stack::new(64);
         let mut ctx = test_context(
             &mut stack,
             &store,
             &mut gc,
             &mut pending_effects,
-            &mut effects,
+            &mut pending_ops,
         );
 
-        ctx.stack.push_u32(5).unwrap();
-        ctx.stack.push_u32(2).unwrap();
+        ctx.stack_mut().push_u32(5).unwrap();
+        ctx.stack_mut().push_u32(2).unwrap();
         let notify_program = [
             Instr {
                 operand: Operand {
@@ -2768,11 +2794,11 @@ mod tests {
         unsafe {
             op_memory_atomic_notify(notify_program.as_ptr(), &mut ctx).unwrap();
         }
-        assert_eq!(ctx.stack.pop_u32(), 0);
+        assert_eq!(ctx.stack_mut().pop_u32(), 0);
 
-        ctx.stack.push_u32(4).unwrap();
-        ctx.stack.push_u32(7).unwrap();
-        ctx.stack.push_i64(-1).unwrap();
+        ctx.stack_mut().push_u32(4).unwrap();
+        ctx.stack_mut().push_u32(7).unwrap();
+        ctx.stack_mut().push_i64(-1).unwrap();
         let wait_program = [Instr {
             operand: Operand {
                 memarg: MemArg {

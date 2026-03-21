@@ -4,8 +4,8 @@ use common::instantiate_wat;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
     common::{
-        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, FuncType,
-        ValType,
+        AsyncHostCallContext, AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule,
+        FuncType, ValType,
     },
     instantiate_native_async_module, run_module_function, Registry, ResultValue, Store, StoreState,
     VMResult, WasmValue,
@@ -138,27 +138,19 @@ struct AsyncTailState {
     calls: AtomicUsize,
 }
 
-fn async_add_one(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    let slot = ctx.return_slot();
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_add_one(ctx: AsyncHostCallContext) -> AsyncHostFuture {
+    let state = ctx.store_state;
+    let value = match ctx.params.iter().next() {
+        Some(WasmValue::I32(value)) => *value,
+        other => panic!("expected i32 param, got {other:?}"),
+    };
     Box::pin(async move {
         tokio::task::yield_now().await;
         unsafe { state.get::<AsyncTailState>() }
             .unwrap()
             .calls
             .fetch_add(1, Ordering::SeqCst);
-        slot.write(&(value + 1).to_le_bytes());
-        VMResult::Success(return_addr)
+        VMResult::Success(ResultValue::new(vec![WasmValue::I32(value + 1)]))
     })
 }
 

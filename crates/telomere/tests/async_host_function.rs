@@ -7,8 +7,8 @@ use std::sync::{
 };
 use telomere::{
     common::{
-        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, FuncType,
-        ValType,
+        AsyncHostCallContext, AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule,
+        FuncType, HostCallContext, HostCallControl, ValType,
     },
     get_global, instantiate_native_async_module, link_async_host_function_with_export_name,
     link_async_host_function_with_function_idx, link_host_function_with_function_idx, Registry,
@@ -19,25 +19,17 @@ struct ScalarState {
     calls: AtomicUsize,
 }
 
-fn async_add_one(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    let slot = ctx.return_slot();
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_add_one(ctx: AsyncHostCallContext) -> AsyncHostFuture {
+    let state = ctx.store_state;
+    let value = match ctx.params.iter().next() {
+        Some(WasmValue::I32(value)) => *value,
+        other => panic!("expected i32 param, got {other:?}"),
+    };
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<ScalarState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
-        slot.write(&(value + 1).to_le_bytes());
-        VMResult::Success(return_addr)
+        VMResult::Success(ResultValue::new(vec![WasmValue::I32(value + 1)]))
     })
 }
 
@@ -46,26 +38,25 @@ struct RoundTripState {
     seen: Mutex<Vec<(i32, i64)>>,
 }
 
-fn async_swap_results(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let local_ref = ctx.local_reference();
-    let lhs = i32::from_le_bytes(ctx.stack.local_bytes(&local_ref, 0, 4).try_into().unwrap());
-    let rhs = i64::from_le_bytes(ctx.stack.local_bytes(&local_ref, 4, 8).try_into().unwrap());
-    let slot = ctx.return_slot();
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 12, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_swap_results(ctx: AsyncHostCallContext) -> AsyncHostFuture {
+    let state = ctx.store_state;
+    let lhs = match ctx.params.iter().next() {
+        Some(WasmValue::I32(value)) => *value,
+        other => panic!("expected i32 lhs, got {other:?}"),
+    };
+    let rhs = match ctx.params.iter().nth(1) {
+        Some(WasmValue::I64(value)) => *value,
+        other => panic!("expected i64 rhs, got {other:?}"),
+    };
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<RoundTripState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
         state.seen.lock().unwrap().push((lhs, rhs));
-        let mut result = [0u8; 12];
-        result[0..8].copy_from_slice(&rhs.to_le_bytes());
-        result[8..12].copy_from_slice(&lhs.to_le_bytes());
-        slot.write(&result);
-        VMResult::Success(return_addr)
+        VMResult::Success(ResultValue::new(vec![
+            WasmValue::I64(rhs),
+            WasmValue::I32(lhs),
+        ]))
     })
 }
 
@@ -73,19 +64,15 @@ struct StartState {
     calls: AtomicUsize,
 }
 
-fn async_init(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_init(ctx: AsyncHostCallContext) -> AsyncHostFuture {
+    let state = ctx.store_state;
     Box::pin(async move {
         tokio::task::yield_now().await;
         unsafe { state.get::<StartState>() }
             .unwrap()
             .calls
             .fetch_add(1, Ordering::SeqCst);
-        VMResult::Success(return_addr)
+        VMResult::Success(ResultValue::new(vec![]))
     })
 }
 
@@ -93,53 +80,35 @@ struct CallIndirectState {
     calls: AtomicUsize,
 }
 
-fn async_double(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let state = ctx.store.state;
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    let slot = ctx.return_slot();
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
+fn async_double(ctx: AsyncHostCallContext) -> AsyncHostFuture {
+    let state = ctx.store_state;
+    let value = match ctx.params.iter().next() {
+        Some(WasmValue::I32(value)) => *value,
+        other => panic!("expected i32 param, got {other:?}"),
+    };
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<CallIndirectState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
-        slot.write(&(value * 2).to_le_bytes());
-        VMResult::Success(return_addr)
+        VMResult::Success(ResultValue::new(vec![WasmValue::I32(value * 2)]))
     })
 }
 
-fn async_fail(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
-    let (_prev_local_ref, _return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
-    ctx.set_local_reference(_prev_local_ref);
+fn async_fail(_ctx: AsyncHostCallContext) -> AsyncHostFuture {
     Box::pin(async move {
         tokio::task::yield_now().await;
         VMResult::InvalidOperand
     })
 }
 
-fn sync_add_two(ctx: &mut ExecuteContext) -> VMResult<*const telomere::common::Instr> {
-    let value = i32::from_le_bytes(
-        ctx.stack
-            .local_bytes(&ctx.local_reference(), 0, 4)
-            .try_into()
-            .unwrap(),
-    );
-    let slot = ctx.return_slot();
-    slot.write(&(value + 2).to_le_bytes());
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
+fn sync_add_two(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
+    let value = match ctx.param(0) {
+        Some(WasmValue::I32(value)) => *value,
+        other => panic!("expected i32 param, got {other:?}"),
+    };
+    VMResult::Success(HostCallControl::Return(ResultValue::new(vec![
+        WasmValue::I32(value + 2),
+    ])))
 }
 
 #[tokio::test]

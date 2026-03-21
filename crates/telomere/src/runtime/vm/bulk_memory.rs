@@ -1,5 +1,29 @@
 use super::*;
 
+#[inline(always)]
+unsafe fn pop_copy_operands(ctx: &mut ExecuteContext) -> (u32, u32, u32) {
+    let len = ctx.stack_mut().pop_u32();
+    let src = ctx.stack_mut().pop_u32();
+    let dst = ctx.stack_mut().pop_u32();
+    (dst, src, len)
+}
+
+#[inline(always)]
+unsafe fn pop_fill_operands(ctx: &mut ExecuteContext) -> (u32, u32, u32) {
+    let len = ctx.stack_mut().pop_u32();
+    let data = ctx.stack_mut().pop_u32();
+    let ptr = ctx.stack_mut().pop_u32();
+    (ptr, data, len)
+}
+
+#[inline(always)]
+unsafe fn pop_init_operands(ctx: &mut ExecuteContext) -> (u32, u32, u32) {
+    let len = ctx.stack_mut().pop_u32();
+    let src = ctx.stack_mut().pop_u32();
+    let dst = ctx.stack_mut().pop_u32();
+    (dst, src, len)
+}
+
 #[inline(never)]
 fn mem_init_bytes(
     ctx: &mut ExecuteContext,
@@ -9,7 +33,7 @@ fn mem_init_bytes(
 ) -> VMResult<Option<Vec<u8>>> {
     let instance_id = ctx.instance_id();
     let copied = {
-        let segments = ctx.store.lock_segments();
+        let segments = ctx.store_ref().lock_segments();
         let data = segments.data.get(&(instance_id, idx));
         if data.is_none() && len == 0 && src == 0 {
             None
@@ -58,8 +82,11 @@ fn mem_init_impl_local_with_id(
     len: u32,
 ) -> VMResult<()> {
     let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
-    ctx.gc
-        .local_write_bytes(memory, dst as usize, copied.as_deref().unwrap_or(&[]))
+    ctx.write_memory_bytes_handle(
+        crate::common::MemoryHandle::Local(memory),
+        dst as usize,
+        copied.as_deref().unwrap_or(&[]),
+    )
 }
 
 #[inline(never)]
@@ -90,13 +117,136 @@ fn mem_init_impl_shared_with_id(
     len: u32,
 ) -> VMResult<()> {
     let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
-    ctx.gc
-        .shared_write_bytes(memory, dst as usize, copied.as_deref().unwrap_or(&[]))
+    ctx.write_memory_bytes_handle(
+        crate::common::MemoryHandle::Shared(memory),
+        dst as usize,
+        copied.as_deref().unwrap_or(&[]),
+    )
 }
 
 #[inline(never)]
 fn data_drop_impl(ctx: &mut ExecuteContext, instance_id: u32, idx: u32) {
-    let _ = ctx.store.lock_segments().data.remove(&(instance_id, idx));
+    let _ = ctx
+        .store_ref()
+        .lock_segments()
+        .data
+        .remove(&(instance_id, idx));
+}
+
+#[inline(never)]
+fn mem_copy_impl_local_with_id(
+    ctx: &mut ExecuteContext,
+    memory: crate::common::store::LocalMemoryId,
+    dst: u32,
+    src: u32,
+    len: u32,
+) -> VMResult<()> {
+    ctx.copy_memory_handle(crate::common::MemoryHandle::Local(memory), dst, src, len)
+}
+
+#[inline(never)]
+fn mem_copy_impl_shared_with_id(
+    ctx: &mut ExecuteContext,
+    memory: crate::common::store::SharedMemoryId,
+    dst: u32,
+    src: u32,
+    len: u32,
+) -> VMResult<()> {
+    ctx.copy_memory_handle(crate::common::MemoryHandle::Shared(memory), dst, src, len)
+}
+
+#[inline(never)]
+fn mem_fill_impl_local_with_id(
+    ctx: &mut ExecuteContext,
+    memory: crate::common::store::LocalMemoryId,
+    ptr: u32,
+    len: u32,
+    data: u32,
+) -> VMResult<()> {
+    ctx.fill_memory_handle(crate::common::MemoryHandle::Local(memory), ptr, len, data)
+}
+
+#[inline(never)]
+fn mem_fill_impl_shared_with_id(
+    ctx: &mut ExecuteContext,
+    memory: crate::common::store::SharedMemoryId,
+    ptr: u32,
+    len: u32,
+    data: u32,
+) -> VMResult<()> {
+    ctx.fill_memory_handle(crate::common::MemoryHandle::Shared(memory), ptr, len, data)
+}
+
+#[inline(never)]
+fn mem_copy_impl_local_to_local(
+    ctx: &mut ExecuteContext,
+    dst: crate::common::store::LocalMemoryId,
+    src: crate::common::store::LocalMemoryId,
+    dst_offset: u32,
+    src_offset: u32,
+    len: u32,
+) -> VMResult<()> {
+    ctx.copy_memory_between_handles(
+        crate::common::MemoryHandle::Local(dst),
+        crate::common::MemoryHandle::Local(src),
+        dst_offset,
+        src_offset,
+        len,
+    )
+}
+
+#[inline(never)]
+fn mem_copy_impl_shared_to_local(
+    ctx: &mut ExecuteContext,
+    dst: crate::common::store::LocalMemoryId,
+    src: crate::common::store::SharedMemoryId,
+    dst_offset: u32,
+    src_offset: u32,
+    len: u32,
+) -> VMResult<()> {
+    ctx.copy_memory_between_handles(
+        crate::common::MemoryHandle::Local(dst),
+        crate::common::MemoryHandle::Shared(src),
+        dst_offset,
+        src_offset,
+        len,
+    )
+}
+
+#[inline(never)]
+fn mem_copy_impl_local_to_shared(
+    ctx: &mut ExecuteContext,
+    dst: crate::common::store::SharedMemoryId,
+    src: crate::common::store::LocalMemoryId,
+    dst_offset: u32,
+    src_offset: u32,
+    len: u32,
+) -> VMResult<()> {
+    ctx.copy_memory_between_handles(
+        crate::common::MemoryHandle::Shared(dst),
+        crate::common::MemoryHandle::Local(src),
+        dst_offset,
+        src_offset,
+        len,
+    )
+}
+
+#[inline(never)]
+fn mem_copy_impl_shared_to_shared(
+    ctx: &mut ExecuteContext,
+    dst: crate::common::store::SharedMemoryId,
+    src: crate::common::store::SharedMemoryId,
+    dst_offset: u32,
+    src_offset: u32,
+    len: u32,
+) -> VMResult<()> {
+    ctx.copy_memory_between_handles(
+        crate::common::MemoryHandle::Shared(dst),
+        crate::common::MemoryHandle::Shared(src),
+        dst_offset,
+        src_offset,
+        len,
+    )
 }
 
 /// WebAssembly `memory.init`.
@@ -116,9 +266,7 @@ fn data_drop_impl(ctx: &mut ExecuteContext, instance_id: u32, idx: u32) {
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
+    let (dst, src, len) = pop_init_operands(ctx);
     vm_try!(mem_init_impl_local(ctx, idx, dst, src, len));
     call_next(tail_code, 1, ctx)
 }
@@ -139,9 +287,6 @@ pub unsafe fn op_mem_init(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_data_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    if wait_effect(ctx, ctx.cont) {
-        return VMResult::Success(());
-    }
     let idx = (*tail_code).operand.u32;
     let instance_id = ctx.instance_id();
     data_drop_impl(ctx, instance_id, idx);
@@ -164,16 +309,15 @@ pub unsafe fn op_data_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    if wait_effect(ctx, ctx.cont) {
-        return VMResult::Success(());
-    }
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
+    let (dst, src, len) = pop_copy_operands(ctx);
     trace!("op_mem_copy src: {src},dst: {dst},len: {len}");
-    vm_try!(ctx
-        .gc
-        .local_copy_memory(ctx.default_local_memory_id_unchecked(), dst, src, len,));
+    vm_try!(mem_copy_impl_local_with_id(
+        ctx,
+        ctx.default_local_memory_id_unchecked(),
+        dst,
+        src,
+        len,
+    ));
     call_next(tail_code, 0, ctx)
 }
 
@@ -193,12 +337,14 @@ pub unsafe fn op_mem_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_fill(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let len = ctx.stack.pop_u32();
-    let data = ctx.stack.pop_u32();
-    let ptr = ctx.stack.pop_u32();
-    vm_try!(ctx
-        .gc
-        .local_fill_memory(ctx.default_local_memory_id_unchecked(), ptr, len, data,));
+    let (ptr, data, len) = pop_fill_operands(ctx);
+    vm_try!(mem_fill_impl_local_with_id(
+        ctx,
+        ctx.default_local_memory_id_unchecked(),
+        ptr,
+        len,
+        data,
+    ));
     call_next(tail_code, 0, ctx)
 }
 
@@ -222,9 +368,7 @@ pub unsafe fn op_mem_init_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let idx = (*tail_code).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
+    let (dst, src, len) = pop_init_operands(ctx);
     vm_try!(mem_init_impl_shared(ctx, idx, dst, src, len));
     call_next(tail_code, 1, ctx)
 }
@@ -248,16 +392,15 @@ pub unsafe fn op_mem_copy_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    if wait_effect(ctx, ctx.cont) {
-        return VMResult::Success(());
-    }
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
+    let (dst, src, len) = pop_copy_operands(ctx);
     trace!("op_mem_copy_shared src: {src},dst: {dst},len: {len}");
-    vm_try!(ctx
-        .gc
-        .shared_copy_memory(ctx.default_shared_memory_id_unchecked(), dst, src, len,));
+    vm_try!(mem_copy_impl_shared_with_id(
+        ctx,
+        ctx.default_shared_memory_id_unchecked(),
+        dst,
+        src,
+        len,
+    ));
     call_next(tail_code, 0, ctx)
 }
 
@@ -280,12 +423,14 @@ pub unsafe fn op_mem_fill_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let len = ctx.stack.pop_u32();
-    let data = ctx.stack.pop_u32();
-    let ptr = ctx.stack.pop_u32();
-    vm_try!(ctx
-        .gc
-        .shared_fill_memory(ctx.default_shared_memory_id_unchecked(), ptr, len, data,));
+    let (ptr, data, len) = pop_fill_operands(ctx);
+    vm_try!(mem_fill_impl_shared_with_id(
+        ctx,
+        ctx.default_shared_memory_id_unchecked(),
+        ptr,
+        len,
+        data,
+    ));
     call_next(tail_code, 0, ctx)
 }
 
@@ -309,9 +454,7 @@ pub unsafe fn op_mem_init_indexed_local(
 ) -> VMResult<()> {
     let idx = (*tail_code).operand.u32;
     let memidx = (*tail_code.add(1)).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
+    let (dst, src, len) = pop_init_operands(ctx);
     vm_try!(mem_init_impl_local_with_id(
         ctx,
         ctx.local_memory_id_at_unchecked(memidx),
@@ -343,9 +486,7 @@ pub unsafe fn op_mem_init_indexed_shared(
 ) -> VMResult<()> {
     let idx = (*tail_code).operand.u32;
     let memidx = (*tail_code.add(1)).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
+    let (dst, src, len) = pop_init_operands(ctx);
     vm_try!(mem_init_impl_shared_with_id(
         ctx,
         ctx.shared_memory_id_at_unchecked(memidx),
@@ -375,15 +516,11 @@ pub unsafe fn op_mem_copy_indexed_local_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    if wait_effect(ctx, ctx.cont) {
-        return VMResult::Success(());
-    }
     let dst_memidx = (*tail_code).operand.u32;
     let src_memidx = (*tail_code.add(1)).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.gc.copy_memory_local_to_local(
+    let (dst, src, len) = pop_copy_operands(ctx);
+    vm_try!(mem_copy_impl_local_to_local(
+        ctx,
         ctx.local_memory_id_at_unchecked(dst_memidx),
         ctx.local_memory_id_at_unchecked(src_memidx),
         dst,
@@ -411,15 +548,11 @@ pub unsafe fn op_mem_copy_indexed_local_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    if wait_effect(ctx, ctx.cont) {
-        return VMResult::Success(());
-    }
     let dst_memidx = (*tail_code).operand.u32;
     let src_memidx = (*tail_code.add(1)).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.gc.copy_memory_shared_to_local(
+    let (dst, src, len) = pop_copy_operands(ctx);
+    vm_try!(mem_copy_impl_shared_to_local(
+        ctx,
         ctx.local_memory_id_at_unchecked(dst_memidx),
         ctx.shared_memory_id_at_unchecked(src_memidx),
         dst,
@@ -447,15 +580,11 @@ pub unsafe fn op_mem_copy_indexed_shared_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    if wait_effect(ctx, ctx.cont) {
-        return VMResult::Success(());
-    }
     let dst_memidx = (*tail_code).operand.u32;
     let src_memidx = (*tail_code.add(1)).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.gc.copy_memory_local_to_shared(
+    let (dst, src, len) = pop_copy_operands(ctx);
+    vm_try!(mem_copy_impl_local_to_shared(
+        ctx,
         ctx.shared_memory_id_at_unchecked(dst_memidx),
         ctx.local_memory_id_at_unchecked(src_memidx),
         dst,
@@ -483,15 +612,11 @@ pub unsafe fn op_mem_copy_indexed_shared_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    if wait_effect(ctx, ctx.cont) {
-        return VMResult::Success(());
-    }
     let dst_memidx = (*tail_code).operand.u32;
     let src_memidx = (*tail_code.add(1)).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let src = ctx.stack.pop_u32();
-    let dst = ctx.stack.pop_u32();
-    vm_try!(ctx.gc.copy_memory_shared_to_shared(
+    let (dst, src, len) = pop_copy_operands(ctx);
+    vm_try!(mem_copy_impl_shared_to_shared(
+        ctx,
         ctx.shared_memory_id_at_unchecked(dst_memidx),
         ctx.shared_memory_id_at_unchecked(src_memidx),
         dst,
@@ -520,12 +645,14 @@ pub unsafe fn op_mem_fill_indexed_local(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let memidx = (*tail_code).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let data = ctx.stack.pop_u32();
-    let ptr = ctx.stack.pop_u32();
-    vm_try!(ctx
-        .gc
-        .local_fill_memory(ctx.local_memory_id_at_unchecked(memidx), ptr, len, data,));
+    let (ptr, data, len) = pop_fill_operands(ctx);
+    vm_try!(mem_fill_impl_local_with_id(
+        ctx,
+        ctx.local_memory_id_at_unchecked(memidx),
+        ptr,
+        len,
+        data,
+    ));
     call_next(tail_code, 1, ctx)
 }
 
@@ -548,12 +675,14 @@ pub unsafe fn op_mem_fill_indexed_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let memidx = (*tail_code).operand.u32;
-    let len = ctx.stack.pop_u32();
-    let data = ctx.stack.pop_u32();
-    let ptr = ctx.stack.pop_u32();
-    vm_try!(ctx
-        .gc
-        .shared_fill_memory(ctx.shared_memory_id_at_unchecked(memidx), ptr, len, data,));
+    let (ptr, data, len) = pop_fill_operands(ctx);
+    vm_try!(mem_fill_impl_shared_with_id(
+        ctx,
+        ctx.shared_memory_id_at_unchecked(memidx),
+        ptr,
+        len,
+        data,
+    ));
     call_next(tail_code, 1, ctx)
 }
 

@@ -2,9 +2,9 @@
 
 use super::{
     gc::GcRef,
-    memory::{AtomicRmwOp, LocalMemoryObject, SharedMemoryObject},
+    memory::{AtomicRmwOp, LinearMemoryProjection, LocalMemoryObject, SharedMemoryObject},
     AsyncHostFunction, Data, Elem, ExportSection, FuncType, GlobalType, HostFunction, Instr,
-    LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
+    LocalsData, MemType, RefType, Stack, TableType, TypeIdx, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -250,6 +250,17 @@ impl GlobalValue {
             },
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GlobalProjection {
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TableProjection {
+    pub(crate) reftype: RefType,
+    pub(crate) elements: Vec<u32>,
 }
 
 pub(crate) fn func_ref_raw(func: FuncId) -> u32 {
@@ -646,6 +657,20 @@ impl StoreInner {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Global);
         self.globals[index].as_bytes_mut()
+    }
+
+    pub(crate) fn global_projection(&self, addr: GcRef) -> GlobalProjection {
+        GlobalProjection {
+            bytes: self.get_global(addr).to_vec(),
+        }
+    }
+
+    pub(crate) fn table_projection(&mut self, addr: GcRef) -> TableProjection {
+        let table = self.get_table(addr);
+        TableProjection {
+            reftype: table.0.reftype,
+            elements: table.1.clone(),
+        }
     }
 
     pub(crate) fn copy_object(&mut self, item: GcRef) -> GcRef {
@@ -1320,6 +1345,14 @@ impl StoreInner {
     }
 
     #[inline(always)]
+    pub(crate) fn memory_projection(&self, handle: MemoryHandle) -> LinearMemoryProjection {
+        match handle {
+            MemoryHandle::Local(id) => self.local_memory(id).projection(),
+            MemoryHandle::Shared(id) => self.shared_memory(id).projection().memory,
+        }
+    }
+
+    #[inline(always)]
     pub(crate) fn grow_memory(
         &mut self,
         handle: MemoryHandle,
@@ -1649,7 +1682,7 @@ pub(crate) fn clear_active_root_slot_for_identity(_identity: &Weak<()>, _slot: u
     false
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct StoreState(usize);
 
 impl StoreState {
@@ -1782,6 +1815,23 @@ mod tests {
         assert_eq!(
             store.grow_memory(MemoryHandle::Shared(shared), 1).unwrap(),
             1
+        );
+
+        let local_projection = store.memory_projection(MemoryHandle::Local(local));
+        let shared_projection = store.memory_projection(MemoryHandle::Shared(shared));
+        assert_eq!(local_projection.current_pages, 2);
+        assert_eq!(local_projection.max_pages, 3);
+        assert!(!local_projection.shared);
+        assert_eq!(shared_projection.current_pages, 2);
+        assert_eq!(shared_projection.max_pages, 3);
+        assert!(shared_projection.shared);
+        assert_eq!(
+            &local_projection.bytes[0..16],
+            &[1, 2, 3, 4, 0, 0, 0, 0, 1, 2, 3, 4, 0xaa, 0xaa, 0xaa, 0xaa]
+        );
+        assert_eq!(
+            &shared_projection.bytes[0..20],
+            &[9, 8, 7, 6, 0, 0, 0, 0, 9, 8, 7, 6, 0xbb, 0xbb, 0xbb, 0xbb, 1, 2, 3, 4]
         );
 
         assert_eq!(

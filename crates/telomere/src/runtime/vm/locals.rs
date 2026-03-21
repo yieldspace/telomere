@@ -1,4 +1,32 @@
 use super::*;
+use vstd::prelude::*;
+
+verus! {
+
+pub open spec fn spec_drop_result(
+    view: crate::common::formal::StackView,
+    size: nat,
+) -> crate::common::formal::StackView {
+    crate::common::formal::stack_drop_values(view, size)
+}
+
+pub open spec fn spec_select_result(
+    view: crate::common::formal::StackView,
+    size: nat,
+    cond: u32,
+) -> crate::common::formal::StackView {
+    crate::common::formal::stack_select_bytes(view, size, cond)
+}
+
+#[inline(always)]
+fn select_uses_top_value(cond: u32) -> (result: bool)
+    ensures
+        result == (cond == 0),
+{
+    cond == 0
+}
+
+} // verus!
 
 #[inline(always)]
 unsafe fn local_get<const SIZE: usize>(
@@ -6,9 +34,14 @@ unsafe fn local_get<const SIZE: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx.stack.local_get(&ctx.local_reference(), addr, SIZE));
+    vm_try!(ctx.local_get(addr, SIZE));
     trace!("op_local_get{SIZE}: {addr}");
     call_next(tail_code, 1, ctx)
+}
+
+#[inline(always)]
+unsafe fn internal_op_drop(size: usize, ctx: &mut ExecuteContext) {
+    ctx.stack_mut().drop(size);
 }
 
 #[inline(always)]
@@ -17,7 +50,7 @@ unsafe fn local_set<const SIZE: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
-    ctx.stack.local_set(&ctx.local_reference(), addr, SIZE);
+    ctx.local_set(addr, SIZE);
     call_next(tail_code, 1, ctx)
 }
 
@@ -27,7 +60,7 @@ unsafe fn local_tee<const SIZE: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
-    ctx.stack.local_tee(&ctx.local_reference(), addr, SIZE);
+    ctx.local_tee(addr, SIZE);
     call_next(tail_code, 1, ctx)
 }
 
@@ -49,8 +82,7 @@ unsafe fn local_tee<const SIZE: usize>(
 pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let size = (*tail_code).operand.drop_size as usize;
     trace!("op_drop: {size}");
-
-    ctx.stack.drop(size);
+    internal_op_drop(size, ctx);
     call_next(tail_code, 1, ctx)
 }
 
@@ -70,13 +102,13 @@ pub unsafe fn op_drop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - This helper must not keep borrows or guards alive across the follow-up stack push.
 unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let x = (*tail_code).operand.select as usize;
-    let cond = ctx.stack.pop_u32();
+    let cond = ctx.stack_mut().pop_u32();
 
-    let a = ctx.stack.pop_u8_array_generic::<8>(x);
-    let b = ctx.stack.pop_u8_array_generic::<8>(x);
-    let value = if cond == 0 { a } else { b };
+    let a = ctx.stack_mut().pop_u8_array_generic::<8>(x);
+    let b = ctx.stack_mut().pop_u8_array_generic::<8>(x);
+    let value = if select_uses_top_value(cond) { a } else { b };
     trace!("op_select: {x} {cond} {a:?} {b:?} => {value:?}");
-    vm_try!(ctx.stack.push_slice(&value[0..x]));
+    vm_try!(ctx.stack_mut().push_slice(&value[0..x]));
     VMResult::Success(())
 }
 

@@ -7,11 +7,11 @@ use std::{
         atomic::{AtomicU8, Ordering},
         Arc,
     },
-    time::Duration,
+    task::{Context, Poll},
 };
 
+use futures::task::AtomicWaker;
 use parking_lot::Mutex;
-use tokio::sync::Notify;
 use vstd::prelude::*;
 
 use super::{Stack, VMResult, PAGE_SIZE};
@@ -417,24 +417,23 @@ impl SharedWaitRegistration {
         self.address
     }
 
-    pub async fn wait_result(self, shared: Arc<SharedMemoryObject>, timeout_ns: i64) -> i32 {
-        if timeout_ns < 0 {
-            self.waiter.wait().await;
-            return 0;
-        }
+    pub fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.waiter.poll_wait(cx)
+    }
 
-        let sleep = tokio::time::sleep(Duration::from_nanos(timeout_ns as u64));
-        tokio::pin!(sleep);
-        tokio::select! {
-            _ = self.waiter.wait() => 0,
-            _ = &mut sleep => {
-                if self.waiter.try_mark_timed_out() {
-                    shared.remove_waiter(self.address, self.waiter.id());
-                    2
-                } else {
-                    0
-                }
-            }
+    pub fn finish_notified(self, shared: &SharedMemoryObject) -> i32 {
+        shared.consume_waiter_result(self.waiter.id());
+        0
+    }
+
+    pub fn finish_timeout(self, shared: &SharedMemoryObject) -> i32 {
+        if self.waiter.try_mark_timed_out() {
+            shared.mark_waiter_timed_out(self.address, self.waiter.id());
+            shared.consume_waiter_result(self.waiter.id());
+            2
+        } else {
+            shared.consume_waiter_result(self.waiter.id());
+            0
         }
     }
 }
@@ -449,7 +448,7 @@ pub enum AtomicWaitResult {
 struct SharedWaiter {
     id: u64,
     state: AtomicU8,
-    notify: Notify,
+    waker: AtomicWaker,
 }
 
 impl SharedWaiter {
@@ -461,7 +460,7 @@ impl SharedWaiter {
         Self {
             id,
             state: AtomicU8::new(Self::WAITING),
-            notify: Notify::new(),
+            waker: AtomicWaker::new(),
         }
     }
 
@@ -469,11 +468,16 @@ impl SharedWaiter {
         self.id
     }
 
-    async fn wait(&self) {
+    fn poll_wait(&self, cx: &mut Context<'_>) -> Poll<()> {
         if self.state.load(Ordering::Acquire) == Self::NOTIFIED {
-            return;
+            return Poll::Ready(());
         }
-        self.notify.notified().await;
+        self.waker.register(cx.waker());
+        if self.state.load(Ordering::Acquire) == Self::NOTIFIED {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
     }
 
     fn try_mark_notified(&self) -> bool {
@@ -500,6 +504,137 @@ impl SharedWaiter {
 
     fn is_waiting(&self) -> bool {
         self.state.load(Ordering::Acquire) == Self::WAITING
+    }
+
+    fn wake(&self) {
+        self.waker.wake();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SharedWaitStateProjection {
+    Waiting,
+    Notified,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinearMemoryProjection {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) current_pages: u32,
+    pub(crate) max_pages: u32,
+    pub(crate) shared: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SharedWaitQueueProjection {
+    pub(crate) address: usize,
+    pub(crate) waiter_ids: Vec<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SharedWaiterProjection {
+    pub(crate) waiter_id: u64,
+    pub(crate) state: SharedWaitStateProjection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SharedMemoryProjection {
+    pub(crate) memory: LinearMemoryProjection,
+    pub(crate) wait_queues: Vec<SharedWaitQueueProjection>,
+    pub(crate) waiters: Vec<SharedWaiterProjection>,
+    pub(crate) next_waiter_id: u64,
+}
+
+impl SharedMemoryProjection {
+    #[cfg(test)]
+    fn queue_position(&self, address: usize) -> Option<usize> {
+        self.wait_queues
+            .iter()
+            .position(|queue| queue.address == address)
+    }
+
+    #[cfg(test)]
+    fn waiter_position(&self, waiter_id: u64) -> Option<usize> {
+        self.waiters
+            .iter()
+            .position(|waiter| waiter.waiter_id == waiter_id)
+    }
+
+    #[cfg(test)]
+    fn protocol_register_wait(&self, address: usize) -> Self {
+        let mut next = self.clone();
+        let waiter_id = next.next_waiter_id;
+        next.next_waiter_id += 1;
+        match next.queue_position(address) {
+            Some(index) => next.wait_queues[index].waiter_ids.push(waiter_id),
+            None => next.wait_queues.push(SharedWaitQueueProjection {
+                address,
+                waiter_ids: vec![waiter_id],
+            }),
+        }
+        next.wait_queues.sort_by_key(|queue| queue.address);
+        next.waiters.push(SharedWaiterProjection {
+            waiter_id,
+            state: SharedWaitStateProjection::Waiting,
+        });
+        next.waiters.sort_by_key(|waiter| waiter.waiter_id);
+        next
+    }
+
+    #[cfg(test)]
+    fn protocol_notify_waiters(
+        &self,
+        address: usize,
+        count: u32,
+    ) -> (Self, Vec<SharedWaiterProjection>) {
+        let mut next = self.clone();
+        let mut woke = Vec::new();
+        if let Some(index) = next.queue_position(address) {
+            let (notified_ids, remove_queue) = {
+                let queue = &mut next.wait_queues[index].waiter_ids;
+                let wake_count = std::cmp::min(queue.len(), count as usize);
+                let notified_ids: Vec<u64> = queue.drain(0..wake_count).collect();
+                (notified_ids, queue.is_empty())
+            };
+            for waiter_id in &notified_ids {
+                if let Some(waiter_index) = next.waiter_position(*waiter_id) {
+                    next.waiters[waiter_index].state = SharedWaitStateProjection::Notified;
+                    woke.push(next.waiters[waiter_index].clone());
+                }
+            }
+            if remove_queue {
+                next.wait_queues.remove(index);
+            }
+        }
+        (next, woke)
+    }
+
+    #[cfg(test)]
+    fn protocol_consume_waiter(&self, waiter_id: u64) -> Self {
+        let mut next = self.clone();
+        if let Some(index) = next.waiter_position(waiter_id) {
+            next.waiters.remove(index);
+        }
+        next
+    }
+
+    #[cfg(test)]
+    fn protocol_timeout_wait(&self, address: usize, waiter_id: u64) -> Self {
+        let mut next = self.clone();
+        if let Some(index) = next.queue_position(address) {
+            let queue = &mut next.wait_queues[index].waiter_ids;
+            if let Some(waiter_index) = queue.iter().position(|current| *current == waiter_id) {
+                queue.remove(waiter_index);
+            }
+            if queue.is_empty() {
+                next.wait_queues.remove(index);
+            }
+        }
+        if let Some(index) = next.waiter_position(waiter_id) {
+            next.waiters[index].state = SharedWaitStateProjection::TimedOut;
+        }
+        next.protocol_consume_waiter(waiter_id)
     }
 }
 
@@ -574,6 +709,7 @@ pub struct Memory {
     region: MmapRegion,
     current_pages: u32,
     max_pages: u32,
+    shared: bool,
 }
 
 impl fmt::Debug for Memory {
@@ -601,6 +737,7 @@ impl Memory {
             region,
             current_pages: page_count,
             max_pages: max_page_size,
+            shared,
         }
     }
 
@@ -610,6 +747,15 @@ impl Memory {
 
     pub fn data_size(&self) -> usize {
         self.current_pages as usize * PAGE_SIZE
+    }
+
+    pub(crate) fn projection(&self) -> LinearMemoryProjection {
+        LinearMemoryProjection {
+            bytes: self.slice().to_vec(),
+            current_pages: self.current_pages,
+            max_pages: self.max_pages,
+            shared: self.shared,
+        }
     }
 
     fn slice(&self) -> &[u8] {
@@ -1057,6 +1203,10 @@ impl LocalMemoryObject {
         self.memory.page_size()
     }
 
+    pub(crate) fn projection(&self) -> LinearMemoryProjection {
+        self.memory.projection()
+    }
+
     #[inline(always)]
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> VMResult<[u8; N]> {
         self.memory.read_u8_array::<N>(offset)
@@ -1242,6 +1392,7 @@ impl LocalMemoryObject {
 struct SharedMemoryState {
     memory: Memory,
     wait_queues: HashMap<usize, VecDeque<Arc<SharedWaiter>>>,
+    waiters: HashMap<u64, SharedWaitStateProjection>,
     next_waiter_id: u64,
 }
 
@@ -1256,6 +1407,7 @@ impl SharedMemoryObject {
             state: Mutex::new(SharedMemoryState {
                 memory: Memory::new_shared(page_count, max_page_size),
                 wait_queues: HashMap::new(),
+                waiters: HashMap::new(),
                 next_waiter_id: 1,
             }),
         })
@@ -1263,6 +1415,34 @@ impl SharedMemoryObject {
 
     pub fn page_size(&self) -> u32 {
         self.state.lock().memory.page_size()
+    }
+
+    pub(crate) fn projection(&self) -> SharedMemoryProjection {
+        let state = self.state.lock();
+        let mut wait_queues = state
+            .wait_queues
+            .iter()
+            .map(|(address, queue)| SharedWaitQueueProjection {
+                address: *address,
+                waiter_ids: queue.iter().map(|waiter| waiter.id()).collect(),
+            })
+            .collect::<Vec<_>>();
+        wait_queues.sort_by_key(|queue| queue.address);
+        let mut waiters = state
+            .waiters
+            .iter()
+            .map(|(waiter_id, state)| SharedWaiterProjection {
+                waiter_id: *waiter_id,
+                state: *state,
+            })
+            .collect::<Vec<_>>();
+        waiters.sort_by_key(|waiter| waiter.waiter_id);
+        SharedMemoryProjection {
+            memory: state.memory.projection(),
+            wait_queues,
+            waiters,
+            next_waiter_id: state.next_waiter_id,
+        }
     }
 
     #[inline(always)]
@@ -1437,6 +1617,9 @@ impl SharedMemoryObject {
         let waiter = Arc::new(SharedWaiter::new(state.next_waiter_id));
         state.next_waiter_id += 1;
         state
+            .waiters
+            .insert(waiter.id(), SharedWaitStateProjection::Waiting);
+        state
             .wait_queues
             .entry(offset)
             .or_default()
@@ -1457,6 +1640,9 @@ impl SharedMemoryObject {
         let waiter = Arc::new(SharedWaiter::new(state.next_waiter_id));
         state.next_waiter_id += 1;
         state
+            .waiters
+            .insert(waiter.id(), SharedWaitStateProjection::Waiting);
+        state
             .wait_queues
             .entry(offset)
             .or_default()
@@ -1471,31 +1657,40 @@ impl SharedMemoryObject {
         let mut state = self.state.lock();
         vm_try!(state.memory.atomic_load_u32(offset));
         let mut wake = Vec::new();
+        let mut notified_ids = Vec::new();
         let mut remaining = count;
+        let mut remove_queue = false;
         if let Some(queue) = state.wait_queues.get_mut(&offset) {
             while remaining != 0 {
                 let Some(waiter) = queue.pop_front() else {
                     break;
                 };
                 if waiter.try_mark_notified() {
+                    notified_ids.push(waiter.id());
                     wake.push(waiter);
                     remaining -= 1;
                 }
             }
             queue.retain(|waiter| waiter.is_waiting());
-            if queue.is_empty() {
-                state.wait_queues.remove(&offset);
-            }
+            remove_queue = queue.is_empty();
+        }
+        for waiter_id in notified_ids {
+            state
+                .waiters
+                .insert(waiter_id, SharedWaitStateProjection::Notified);
+        }
+        if remove_queue {
+            state.wait_queues.remove(&offset);
         }
         let woken = wake.len() as u32;
         drop(state);
         for waiter in wake {
-            waiter.notify.notify_one();
+            waiter.wake();
         }
         VMResult::Success(woken)
     }
 
-    fn remove_waiter(&self, offset: usize, waiter_id: u64) {
+    fn mark_waiter_timed_out(&self, offset: usize, waiter_id: u64) {
         let mut state = self.state.lock();
         if let Some(queue) = state.wait_queues.get_mut(&offset) {
             if let Some(index) = queue.iter().position(|waiter| waiter.id() == waiter_id) {
@@ -1505,6 +1700,13 @@ impl SharedMemoryObject {
                 state.wait_queues.remove(&offset);
             }
         }
+        state
+            .waiters
+            .insert(waiter_id, SharedWaitStateProjection::TimedOut);
+    }
+
+    fn consume_waiter_result(&self, waiter_id: u64) {
+        self.state.lock().waiters.remove(&waiter_id);
     }
 
     #[inline(always)]
@@ -1531,6 +1733,26 @@ impl SharedMemoryObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::future::poll_fn;
+    use std::{sync::Arc, time::Duration};
+
+    async fn wait_result(
+        shared: Arc<SharedMemoryObject>,
+        wait: SharedWaitRegistration,
+        timeout_ns: i64,
+    ) -> i32 {
+        if timeout_ns < 0 {
+            poll_fn(|cx| wait.poll_wait(cx)).await;
+            wait.finish_notified(&shared)
+        } else {
+            let sleep = tokio::time::sleep(Duration::from_nanos(timeout_ns as u64));
+            tokio::pin!(sleep);
+            tokio::select! {
+                _ = poll_fn(|cx| wait.poll_wait(cx)) => wait.finish_notified(&shared),
+                _ = &mut sleep => wait.finish_timeout(&shared),
+            }
+        }
+    }
 
     #[test]
     fn memory_write_copy_fill_and_grow_match_linear_model_bytes() {
@@ -1563,6 +1785,12 @@ mod tests {
         assert!(memory.slice()[PAGE_SIZE..PAGE_SIZE + 16]
             .iter()
             .all(|byte| *byte == 0));
+
+        let projection = memory.projection();
+        assert_eq!(projection.current_pages, 2);
+        assert_eq!(projection.max_pages, 3);
+        assert!(!projection.shared);
+        assert_eq!(&projection.bytes[0..16], &memory.slice()[0..16]);
     }
 
     #[tokio::test]
@@ -1573,14 +1801,19 @@ mod tests {
             VMResult::Success(())
         ));
 
+        let mut expected = shared.projection();
         let first = match shared.register_wait32(0, 7).unwrap() {
             AtomicWaitResult::Pending(wait) => wait,
             AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
         };
+        let first_waiter_id = first.waiter.id();
+        expected = expected.protocol_register_wait(0);
         let second = match shared.register_wait32(0, 7).unwrap() {
             AtomicWaitResult::Pending(wait) => wait,
             AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
         };
+        let second_waiter_id = second.waiter.id();
+        expected = expected.protocol_register_wait(0);
 
         {
             let state = shared.state.lock();
@@ -1588,24 +1821,55 @@ mod tests {
             assert_eq!(queue.len(), 2);
             assert!(queue.iter().all(|waiter| waiter.is_waiting()));
             assert_eq!(state.next_waiter_id, 3);
+            assert_eq!(
+                state.waiters.get(&first_waiter_id),
+                Some(&SharedWaitStateProjection::Waiting)
+            );
+            assert_eq!(
+                state.waiters.get(&second_waiter_id),
+                Some(&SharedWaitStateProjection::Waiting)
+            );
         }
 
         assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
-        assert_eq!(first.wait_result(shared.clone(), -1).await, 0);
+        let (expected_after_notify, _) = expected.protocol_notify_waiters(0, 1);
+        assert_eq!(shared.projection(), expected_after_notify);
+        {
+            let state = shared.state.lock();
+            assert_eq!(
+                state.waiters.get(&first_waiter_id),
+                Some(&SharedWaitStateProjection::Notified)
+            );
+            assert_eq!(
+                state.waiters.get(&second_waiter_id),
+                Some(&SharedWaitStateProjection::Waiting)
+            );
+        }
+        assert_eq!(wait_result(shared.clone(), first, -1).await, 0);
+        let expected_after_first = expected_after_notify.protocol_consume_waiter(first_waiter_id);
+        assert_eq!(shared.projection(), expected_after_first);
 
         {
             let state = shared.state.lock();
             let queue = state.wait_queues.get(&0).expect("one waiter should remain");
             assert_eq!(queue.len(), 1);
-            assert_eq!(queue.front().unwrap().id(), second.waiter.id());
+            assert_eq!(queue.front().unwrap().id(), second_waiter_id);
             assert!(queue.front().unwrap().is_waiting());
+            assert!(!state.waiters.contains_key(&first_waiter_id));
+            assert_eq!(
+                state.waiters.get(&second_waiter_id),
+                Some(&SharedWaitStateProjection::Waiting)
+            );
         }
 
-        assert_eq!(second.wait_result(shared.clone(), 0).await, 2);
+        assert_eq!(wait_result(shared.clone(), second, 0).await, 2);
+        let expected_after_second = expected_after_first.protocol_timeout_wait(0, second_waiter_id);
+        assert_eq!(shared.projection(), expected_after_second);
 
         {
             let state = shared.state.lock();
             assert!(!state.wait_queues.contains_key(&0));
+            assert!(state.waiters.is_empty());
         }
         assert_eq!(shared.notify_waiters(0, 1).unwrap(), 0);
     }
@@ -1637,8 +1901,8 @@ mod tests {
         };
 
         assert_eq!(shared.notify_waiters(0, 2).unwrap(), 2);
-        assert_eq!(first.wait_result(shared.clone(), 0).await, 0);
-        assert_eq!(second.wait_result(shared.clone(), 0).await, 0);
+        assert_eq!(wait_result(shared.clone(), first, 0).await, 0);
+        assert_eq!(wait_result(shared.clone(), second, 0).await, 0);
 
         {
             let state = shared.state.lock();
@@ -1648,7 +1912,70 @@ mod tests {
         }
 
         assert_eq!(shared.notify_waiters(0, 10).unwrap(), 1);
-        assert_eq!(third.wait_result(shared.clone(), 0).await, 0);
+        assert_eq!(wait_result(shared.clone(), third, 0).await, 0);
         assert_eq!(shared.notify_waiters(0, 1).unwrap(), 0);
+    }
+
+    #[test]
+    fn shared_memory_projection_tracks_queue_ids_and_waiter_states() {
+        let shared = SharedMemoryObject::new(1, 1);
+        assert!(matches!(
+            shared.atomic_store_u32(0, 21),
+            VMResult::Success(())
+        ));
+
+        let mut expected = shared.projection();
+        let first = match shared.register_wait32(0, 21).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+        expected = expected.protocol_register_wait(0);
+        assert_eq!(shared.projection(), expected);
+        let second = match shared.register_wait32(0, 21).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+        expected = expected.protocol_register_wait(0);
+
+        let before = shared.projection();
+        assert_eq!(before, expected);
+        assert!(before.memory.shared);
+        assert_eq!(before.next_waiter_id, 3);
+        assert_eq!(before.wait_queues.len(), 1);
+        assert_eq!(before.wait_queues[0].address, 0);
+        assert_eq!(
+            before.wait_queues[0].waiter_ids,
+            vec![first.waiter.id(), second.waiter.id()]
+        );
+        assert!(before
+            .waiters
+            .iter()
+            .all(|waiter| waiter.state == SharedWaitStateProjection::Waiting));
+
+        assert_eq!(shared.notify_waiters(0, 1).unwrap(), 1);
+        let (after_notify, woke) = expected.protocol_notify_waiters(0, 1);
+        let after = shared.projection();
+        assert_eq!(after, after_notify);
+        assert_eq!(woke.len(), 1);
+        assert_eq!(woke[0].waiter_id, first.waiter.id());
+        assert_eq!(after.wait_queues[0].waiter_ids, vec![second.waiter.id()]);
+        assert_eq!(
+            after
+                .waiters
+                .iter()
+                .find(|waiter| waiter.waiter_id == first.waiter.id())
+                .unwrap()
+                .state,
+            SharedWaitStateProjection::Notified
+        );
+        assert_eq!(
+            after
+                .waiters
+                .iter()
+                .find(|waiter| waiter.waiter_id == second.waiter.id())
+                .unwrap()
+                .state,
+            SharedWaitStateProjection::Waiting
+        );
     }
 }

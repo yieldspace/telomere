@@ -8,8 +8,8 @@ use crate::ir::{
 use crate::linker::{ComponentLinkerInstance, LinkerBinding};
 use crate::support::common::InstanceHandle;
 use crate::support::common::{
-    ExecuteContext, FuncType as CoreFuncType, HostFunctionDefinition, Instr, NativeModule,
-    VMResult, ValType as CoreValType, WasmValue,
+    FuncType as CoreFuncType, HostCallContext, HostCallControl, HostFunctionDefinition,
+    NativeModule, VMResult, ValType as CoreValType, WasmValue,
 };
 use crate::support::runtime::instantiate_native_module;
 use crate::support::{aliasing, Module, Registry, ResultValue, Store, VMResult as CoreVMResult};

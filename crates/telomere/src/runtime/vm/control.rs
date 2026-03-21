@@ -3,6 +3,14 @@ use vstd::prelude::*;
 
 verus! {
 
+pub open spec fn spec_branch_target(taken: bool, branch_addr: nat, fallthrough_addr: nat) -> nat {
+    if taken { branch_addr } else { fallthrough_addr }
+}
+
+pub open spec fn spec_branch_outcome() -> crate::common::formal::CoreOutcome {
+    crate::common::formal::outcome_continue()
+}
+
 #[inline(always)]
 fn branch_taken(cond: u32) -> (taken: bool)
     ensures
@@ -44,8 +52,7 @@ unsafe fn block_return_continue(
     stack_top: usize,
     return_size: usize,
 ) -> VMResult<()> {
-    ctx.stack
-        .block_return(&ctx.local_reference(), stack_top, return_size);
+    ctx.block_return(stack_top, return_size);
     tail_jump(tail_code, 1, ctx)
 }
 
@@ -149,7 +156,7 @@ pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let cond = ctx.stack.pop_u32();
+    let cond = ctx.stack_mut().pop_u32();
     trace!("op_br_if: {cond}");
     let ptr = conditional_jump_target(
         tail_code,
@@ -176,7 +183,7 @@ pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_br_table(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let index = ctx.stack.pop_u32();
+    let index = ctx.stack_mut().pop_u32();
     let table_size = (*tail_code).operand.u32;
 
     let addr = if index < table_size {
@@ -239,7 +246,7 @@ pub unsafe fn op_loop(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let else_addr = (*tail_code).operand.jump_addr;
-    let value = ctx.stack.pop_u32();
+    let value = ctx.stack_mut().pop_u32();
     trace!("op_if: {else_addr} {value}");
 
     let ptr = conditional_jump_target(tail_code, ctx, !branch_taken(value), else_addr);
@@ -266,12 +273,7 @@ pub unsafe fn special_function_return(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     trace!("function return");
-    let (prev_local_ref, tail_code) = ctx.stack.function_return(
-        &ctx.local_reference(),
-        (*tail_code).operand.drop_size as usize,
-        ctx.gc,
-    );
-    ctx.set_local_reference(prev_local_ref);
+    let tail_code = ctx.function_return((*tail_code).operand.drop_size as usize);
     call_next(tail_code, 0, ctx)
 }
 
@@ -299,14 +301,13 @@ pub unsafe fn special_block_return(
         "block return: {:?} {:?} {:?}",
         ctx.local_reference(),
         block_return,
-        ctx.stack
+        ctx.stack_ref()
     );
-    ctx.stack.block_return(
-        &ctx.local_reference(),
+    ctx.block_return(
         block_return.stack_top as usize,
         block_return.return_size as usize,
     );
-    trace!("stack: {:?}", ctx.stack);
+    trace!("stack: {:?}", ctx.stack_ref());
     tail_jump(tail_code, 1, ctx)
 }
 
@@ -329,10 +330,7 @@ pub unsafe fn special_function_vm_end(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    if wait_effect(ctx, ctx.cont) {
-        return VMResult::Success(());
-    }
-    ctx.cont = std::ptr::null();
+    ctx.clear_cont();
     VMResult::Success(())
 }
 

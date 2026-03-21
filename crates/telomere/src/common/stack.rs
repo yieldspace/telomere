@@ -300,6 +300,11 @@ impl CallFrameCache {
             ))),
         }
     }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn projection_memory(self) -> MemoryHandleProjection {
+        MemoryHandleProjection::from_handle(self.memory0_handle())
+    }
 }
 
 pub trait IntoCallFrameCache {
@@ -325,11 +330,60 @@ impl IntoCallFrameCache for GcRef {
         CallFrameCache::from_parts(self, func, memory0)
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct LocalReference {
     pub local_top: usize,
     pub local_size: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct MemoryHandleProjection {
+    pub(crate) present: bool,
+    pub(crate) shared: bool,
+    pub(crate) raw: u32,
+}
+
+impl MemoryHandleProjection {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn from_handle(handle: Option<MemoryHandle>) -> Self {
+        match handle {
+            Some(MemoryHandle::Local(id)) => Self {
+                present: true,
+                shared: false,
+                raw: id.raw(),
+            },
+            Some(MemoryHandle::Shared(id)) => Self {
+                present: true,
+                shared: true,
+                raw: id.raw(),
+            },
+            None => Self {
+                present: false,
+                shared: false,
+                raw: 0,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct FrameProjection {
+    pub(crate) return_pc: usize,
+    pub(crate) instance_raw: u32,
+    pub(crate) default_memory: MemoryHandleProjection,
+    pub(crate) prev_local: LocalReference,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct StackProjection {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) top: usize,
+    pub(crate) frame_stack: Vec<FrameProjection>,
+    pub(crate) active_local: LocalReference,
 }
 impl Stack {
     pub fn new(size: usize) -> Self {
@@ -583,6 +637,46 @@ impl Stack {
             memory0_raw: info.memory0_raw,
         }
     }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn frame_projection(
+        &self,
+        reference: &LocalReference,
+        runtime: &StoreInner,
+    ) -> FrameProjection {
+        let info = self.call_stack_info(reference);
+        let prev_local = self.previous_local_reference(reference);
+        let frame = self.frame_cache(reference);
+        FrameProjection {
+            return_pc: info.return_pc.resolve(runtime, self, prev_local) as usize,
+            instance_raw: frame.instance.raw(),
+            default_memory: frame.projection_memory(),
+            prev_local,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn projection(
+        &self,
+        active_local: &LocalReference,
+        runtime: &StoreInner,
+    ) -> StackProjection {
+        let mut frame_stack = Vec::new();
+        let mut cursor = *active_local;
+        let frame_bytes = std::mem::size_of::<CallStackInfo>() as u32;
+        while cursor.local_size >= frame_bytes {
+            frame_stack.push(self.frame_projection(&cursor, runtime));
+            cursor = self.previous_local_reference(&cursor);
+        }
+        frame_stack.reverse();
+        StackProjection {
+            bytes: self.memory[0..self.top].to_vec(),
+            top: self.top,
+            frame_stack,
+            active_local: *active_local,
+        }
+    }
+
     pub fn function_call<F: IntoCallFrameCache>(
         &mut self,
         param_size: usize,
@@ -1040,5 +1134,54 @@ mod tests {
         assert_eq!(stack.top, 12);
         assert_eq!(&stack.memory[1..5], &[1, 2, 3, 4]);
         assert_eq!(&stack.memory[8..12], &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn stack_projection_tracks_frame_chain_and_memory_cache() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let caller = stack
+            .function_call(
+                0,
+                4,
+                frame(CachedMemoryKind::Local, 7),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let callee = stack
+            .function_call(
+                0,
+                8,
+                frame(CachedMemoryKind::Shared, 9),
+                caller,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        let projection = stack.projection(&callee, &runtime);
+        assert_eq!(projection.top, stack.top);
+        assert_eq!(projection.bytes, stack.memory[0..stack.top].to_vec());
+        assert_eq!(projection.active_local, callee);
+        assert_eq!(projection.frame_stack.len(), 2);
+        assert_eq!(
+            projection.frame_stack[0].default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                LocalMemoryId::from_raw(7),
+            )))
+        );
+        assert_eq!(
+            projection.frame_stack[1].default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Shared(
+                SharedMemoryId::from_raw(9),
+            )))
+        );
+        assert_eq!(projection.frame_stack[1].prev_local, caller);
     }
 }

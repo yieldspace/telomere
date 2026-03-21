@@ -2,15 +2,15 @@ use crate::{
     common::{
         execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
-        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
-        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
-        FunctionInstanceData, GcRef, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
-        ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
+        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection, Export,
+        ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstanceData, GcRef, GlobalIdx,
+        HostCallContext, HostCallControl, HostFunction, HostFunctionDefinition, ImportDesc,
+        ImportSection, InstanceData, InstanceHandle, Limits, LocalReference, MemIdx,
         ModuleInstance, NativeModule, StablePc, StoreInner, TableIdx, TypeIdx, TypeSection,
         PAGE_SIZE_MAX,
     },
     runtime::{
-        scheduler::{ReadyFlag, Scheduler, Task},
+        scheduler::{ExecutionKernel, ReadyFlag, Task, TokioDriver},
         vm,
     },
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -133,7 +133,7 @@ fn convert_native_module_to_module(m: NativeModule) -> Module {
     }
 }
 
-fn async_host_placeholder(_ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+fn async_host_placeholder(_ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
     VMResult::Unreachable
 }
 
@@ -223,7 +223,7 @@ pub async fn instantiate(
         ..
     } = m;
 
-    let mut scheduler = Scheduler::new(store);
+    let mut kernel = ExecutionKernel::new(store);
     let (addr, has_start) = {
         let mut gc = store.lock_gc();
         let instance_id = store.new_instance_id();
@@ -500,13 +500,13 @@ pub async fn instantiate(
                     &gc,
                 ));
 
-                scheduler.push(Task {
+                kernel.push(Task {
                     task_id: 0,
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
                     fp: StablePc::from_stable_ptr(vm::START_HOST_FUNCTION_PROGRAM.as_ptr()),
-                    pending_effects: 0,
+                    pending_ops: 0,
                     terminal_result: None,
                 });
             } else {
@@ -531,13 +531,13 @@ pub async fn instantiate(
                     &gc,
                 ));
 
-                scheduler.push(Task {
+                kernel.push(Task {
                     fp: StablePc::from_relative_index(0),
                     task_id: 0,
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
-                    pending_effects: 0,
+                    pending_ops: 0,
                     terminal_result: None,
                 });
             }
@@ -550,8 +550,9 @@ pub async fn instantiate(
     };
 
     if has_start {
-        scheduler.run().await;
-        vm_try!(scheduler.completed_tasks.pop().unwrap().result);
+        let mut driver = TokioDriver::new();
+        kernel.run(&mut driver).await;
+        vm_try!(kernel.completed_tasks.pop().unwrap().result);
     }
 
     VMResult::Success(addr)

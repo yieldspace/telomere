@@ -3,6 +3,17 @@ use vstd::prelude::*;
 
 verus! {
 
+pub open spec fn spec_global_get_result(global: crate::common::formal::GlobalView) -> Seq<u8> {
+    crate::common::formal::global_get_bytes(global)
+}
+
+pub open spec fn spec_global_set_result(
+    global: crate::common::formal::GlobalView,
+    bytes: Seq<u8>,
+) -> crate::common::formal::GlobalView {
+    crate::common::formal::global_set_bytes(global, bytes)
+}
+
 #[inline(always)]
 fn global_index(idx: usize) -> (result: usize)
     ensures
@@ -25,9 +36,9 @@ unsafe fn global_get<const SIZE: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let addr = global_addr(tail_code, ctx);
-    let bytes = ctx.gc.get_global(addr);
+    let bytes = ctx.gc_ref().get_global(addr).to_vec();
     debug_assert_eq!(bytes.len(), SIZE);
-    vm_try!(ctx.stack.push_slice(bytes));
+    vm_try!(ctx.push_slice(&bytes));
     call_next(tail_code, 1, ctx)
 }
 
@@ -37,9 +48,8 @@ unsafe fn global_set<const SIZE: usize>(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let addr = global_addr(tail_code, ctx);
-    ctx.gc
-        .get_global_mut(addr)
-        .copy_from_slice(&ctx.stack.pop_u8_array::<SIZE>());
+    let value = ctx.pop_u8_array::<SIZE>();
+    ctx.gc_mut().get_global_mut(addr).copy_from_slice(&value);
     call_next(tail_code, 1, ctx)
 }
 

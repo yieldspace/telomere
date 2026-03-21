@@ -301,157 +301,18 @@ fn register_host_bindings(
     });
 }
 
-fn component_host_trampoline(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
-    let key = (ctx.instance_id(), ctx.func().funcidx);
+fn component_host_trampoline(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
+    let key = (ctx.instance_id(), ctx.func_idx());
     let binding = HOST_BINDINGS.with(|bindings| bindings.borrow().get(&key).cloned());
     let Some(binding) = binding else {
         return VMResult::Unlinkable;
     };
-    let args = match read_core_args_from_locals(ctx, &binding.signature()) {
-        Ok(args) => args,
-        Err(_) => return VMResult::Unreachable,
-    };
-    let results = match binding.call_sync(ctx.store, &args) {
+    let args = ctx.params().iter().cloned().collect::<Vec<_>>();
+    let results = match binding.call_sync(ctx.store(), &args) {
         Ok(results) => results,
         Err(_) => return VMResult::Unreachable,
     };
-    let slot = ctx.return_slot();
-    let mut offset = 0usize;
-    for value in &results {
-        match value {
-            WasmValue::I32(v) => {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        v.to_le_bytes().as_ptr(),
-                        slot.as_mut_ptr().add(offset),
-                        4,
-                    )
-                };
-                offset += 4;
-            }
-            WasmValue::I64(v) => {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        v.to_le_bytes().as_ptr(),
-                        slot.as_mut_ptr().add(offset),
-                        8,
-                    )
-                };
-                offset += 8;
-            }
-            WasmValue::F32(v) => {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        v.to_le_bytes().as_ptr(),
-                        slot.as_mut_ptr().add(offset),
-                        4,
-                    )
-                };
-                offset += 4;
-            }
-            WasmValue::F64(v) => {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        v.to_le_bytes().as_ptr(),
-                        slot.as_mut_ptr().add(offset),
-                        8,
-                    )
-                };
-                offset += 8;
-            }
-            WasmValue::FuncRef(v) | WasmValue::ExternRef(v) => {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        v.to_le_bytes().as_ptr(),
-                        slot.as_mut_ptr().add(offset),
-                        4,
-                    )
-                };
-                offset += 4;
-            }
-            WasmValue::V128(v) => {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        v.to_le_bytes().as_ptr(),
-                        slot.as_mut_ptr().add(offset),
-                        16,
-                    )
-                };
-                offset += 16;
-            }
-        }
-    }
-    let (prev_local_ref, return_addr) =
-        ctx.stack
-            .function_return_in_place(&ctx.local_reference, offset, ctx.gc);
-    ctx.set_local_reference(prev_local_ref);
-    VMResult::Success(return_addr)
-}
-
-fn read_core_args_from_locals(
-    ctx: &mut ExecuteContext,
-    signature: &CoreFuncType,
-) -> Result<Vec<WasmValue>, ComponentError> {
-    let mut offset = 0u32;
-    let mut args = Vec::with_capacity(signature.0 .0.len());
-    for ty in signature.0.iter() {
-        match ty {
-            CoreValType::I32 | CoreValType::F32 | CoreValType::FuncRef | CoreValType::ExternRef => {
-                match ctx
-                    .stack
-                    .local_get(&ctx.local_reference(), offset as usize, 4)
-                {
-                    VMResult::Success(()) => {}
-                    other => {
-                        return Err(vm_result_to_component_error(
-                            other,
-                            "host trampoline local_get",
-                        ))
-                    }
-                }
-            }
-            CoreValType::I64 | CoreValType::F64 => {
-                match ctx
-                    .stack
-                    .local_get(&ctx.local_reference(), offset as usize, 8)
-                {
-                    VMResult::Success(()) => {}
-                    other => {
-                        return Err(vm_result_to_component_error(
-                            other,
-                            "host trampoline local_get",
-                        ))
-                    }
-                }
-            }
-            CoreValType::V128 => {
-                match ctx
-                    .stack
-                    .local_get(&ctx.local_reference(), offset as usize, 16)
-                {
-                    VMResult::Success(()) => {}
-                    other => {
-                        return Err(vm_result_to_component_error(
-                            other,
-                            "host trampoline local_get",
-                        ))
-                    }
-                }
-            }
-        }
-        let value = match ty {
-            CoreValType::I32 => WasmValue::I32(ctx.stack.pop_i32()),
-            CoreValType::I64 => WasmValue::I64(ctx.stack.pop_i64()),
-            CoreValType::F32 => WasmValue::F32(ctx.stack.pop_f32()),
-            CoreValType::F64 => WasmValue::F64(ctx.stack.pop_f64()),
-            CoreValType::FuncRef => WasmValue::FuncRef(ctx.stack.pop_u32()),
-            CoreValType::ExternRef => WasmValue::ExternRef(ctx.stack.pop_u32()),
-            CoreValType::V128 => WasmValue::V128(ctx.stack.pop_u128()),
-        };
-        args.push(value);
-        offset += ty.stack_size().u32();
-    }
-    Ok(args)
+    VMResult::Success(HostCallControl::Return(ResultValue::new(results)))
 }
 
 pub(super) fn linker_binding_to_callable(binding: LinkerBinding) -> ResolvedCallable {
