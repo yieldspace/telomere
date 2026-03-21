@@ -19,12 +19,12 @@ use super::*;
 pub(crate) unsafe fn internal_op_call(
     return_addr: *const Instr,
     funcaddr: GcRef,
-    ctx: &mut ExecuteContext,
+    facade: &mut ExecuteContextFacade<'_, '_>,
     is_return_call: bool,
 ) -> VMResult<*const Instr> {
-    let funcinst = ctx.func_by_addr(funcaddr);
+    let funcinst = facade.func_by_addr(funcaddr);
     let (frame, param_types, result_types) = {
-        let gc = ctx.gc_ref();
+        let gc = facade.gc_ref();
         let instance = gc.instance(funcinst.instance);
         let memory0 = instance
             .memory_slots
@@ -46,16 +46,18 @@ pub(crate) unsafe fn internal_op_call(
     trace!(
         "op_call_internal: {:?}({:?}) {funcaddr:?}",
         funcinst.funcidx,
-        ctx.gc_ref().gc_ref_for_instance(funcinst.instance)
+        facade.gc_ref().gc_ref_for_instance(funcinst.instance)
     );
     let param_size = funcinst.param_size();
     if funcinst.is_host_func() {
         if is_return_call {
-            vm_try!(ctx.enter_function_return_call(param_size, 0, frame));
+            vm_try!(facade.enter_function_return_call(param_size, 0, frame));
         } else {
-            vm_try!(ctx.enter_function_call(param_size, 0, frame, return_addr));
+            vm_try!(facade.enter_function_call(param_size, 0, frame, return_addr));
         }
-        vm_try!(unsafe { invoke_host_function(return_addr, ctx, param_types, result_types) });
+        vm_try!(unsafe {
+            invoke_host_function(return_addr, facade.as_ctx_mut(), param_types, result_types)
+        });
         VMResult::Success(std::ptr::null())
     } else {
         let code_ptr = funcinst
@@ -63,9 +65,9 @@ pub(crate) unsafe fn internal_op_call(
             .expect("wasm function must expose a code pointer");
         let local_size = funcinst.local_size();
         if is_return_call {
-            vm_try!(ctx.enter_function_return_call(param_size, local_size, frame,));
+            vm_try!(facade.enter_function_return_call(param_size, local_size, frame,));
         } else {
-            vm_try!(ctx.enter_function_call(param_size, local_size, frame, return_addr,));
+            vm_try!(facade.enter_function_call(param_size, local_size, frame, return_addr,));
         }
 
         VMResult::Success(code_ptr)
@@ -88,13 +90,14 @@ pub(crate) unsafe fn internal_op_call(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let mut facade = ExecuteContextFacade::new(ctx);
     let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false));
+    let funcaddr = facade.instance().funcs.as_slice()[funcidx as usize];
+    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, &mut facade, false));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
-        call_next(ptr, 0, ctx)
+        call_next(ptr, 0, facade.as_ctx_mut())
     }
 }
 
@@ -131,13 +134,14 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let mut facade = ExecuteContextFacade::new(ctx);
     let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true));
+    let funcaddr = facade.instance().funcs.as_slice()[funcidx as usize];
+    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, &mut facade, true));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
-        call_next(ptr, 0, ctx)
+        call_next(ptr, 0, facade.as_ctx_mut())
     }
 }
 
@@ -177,16 +181,16 @@ pub unsafe fn op_return_call_import(
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
 unsafe fn resolve_indirect_call_target(
     tail_code: *const Instr,
-    ctx: &mut ExecuteContext,
+    facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<GcRef> {
-    let i = ctx.stack_mut().pop_u32();
+    let i = facade.stack_mut().pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
     let table_addr = *vm_try!(VMResult::from_option(
-        ctx.instance().tables.as_slice().get(tableidx),
+        facade.instance().tables.as_slice().get(tableidx),
         || { VMResult::TableIndexOutOfRange }
     ));
     let func_addr = {
-        let table = ctx.gc_mut().get_table(table_addr);
+        let table = facade.gc_mut().get_table(table_addr);
         let func_addr = *vm_try!(VMResult::from_option(table.1.get(i as usize), || {
             VMResult::TableIndexOutOfRange
         }));
@@ -198,7 +202,7 @@ unsafe fn resolve_indirect_call_target(
     }
     let func_addr = GcRef(func_addr);
     let (actual_ft, expected_ft) = {
-        let gc = ctx.gc_ref();
+        let gc = facade.gc_ref();
         let funcinst = gc.get_func(func_addr);
         let instance = gc.instance(funcinst.instance);
         let module = gc.get_module(instance.module_addr);
@@ -206,7 +210,7 @@ unsafe fn resolve_indirect_call_target(
             .function_types
             .get_unchecked(funcinst.typeidx.0 as usize) as *const FuncType;
         let expected_typeidx = (*tail_code.offset(1)).operand.u32;
-        let expected_ft = ctx
+        let expected_ft = facade
             .module()
             .function_types
             .get(expected_typeidx as usize)
@@ -238,12 +242,13 @@ unsafe fn resolve_indirect_call_target(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, ctx));
-    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, ctx, false));
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, &mut facade));
+    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, &mut facade, false));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
-        call_next(ptr, 0, ctx)
+        call_next(ptr, 0, facade.as_ctx_mut())
     }
 }
 
@@ -264,12 +269,13 @@ pub unsafe fn op_return_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, ctx));
-    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, ctx, true));
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, &mut facade));
+    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, &mut facade, true));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
-        call_next(ptr, 0, ctx)
+        call_next(ptr, 0, facade.as_ctx_mut())
     }
 }
 
@@ -292,11 +298,12 @@ pub unsafe fn special_start_function_call(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let function_type = unsafe { &*current_function_type_ptr(ctx) };
+    let mut facade = ExecuteContextFacade::new(ctx);
+    let function_type = unsafe { &*current_function_type_ptr(&mut facade) };
     unsafe {
         invoke_host_function(
             &VM_END as *const Instr,
-            ctx,
+            facade.as_ctx_mut(),
             &function_type.0,
             &function_type.1,
         )

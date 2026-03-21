@@ -212,7 +212,7 @@ pub enum HostCallControl {
 }
 
 pub struct HostCallContext<'ctx, 'store> {
-    facade: ExecuteContextFacade<'ctx, 'store>,
+    ctx: &'ctx mut ExecuteContext<'store>,
     param_types: &'ctx ResultType,
     result_types: &'ctx ResultType,
     params: OnceCell<ResultValue>,
@@ -225,7 +225,7 @@ impl<'ctx, 'store> HostCallContext<'ctx, 'store> {
         result_types: &'ctx ResultType,
     ) -> Self {
         Self {
-            facade: ExecuteContextFacade { ctx },
+            ctx,
             param_types,
             result_types,
             params: OnceCell::new(),
@@ -282,7 +282,7 @@ impl<'ctx, 'store> HostCallContext<'ctx, 'store> {
     }
 
     pub fn store(&self) -> &Store {
-        self.facade.store_ref()
+        self.ctx.store_ref()
     }
 
     pub fn store_state(&self) -> StoreState {
@@ -290,19 +290,19 @@ impl<'ctx, 'store> HostCallContext<'ctx, 'store> {
     }
 
     pub fn instance_id(&self) -> u32 {
-        self.facade.instance_id()
+        self.ctx.instance_id()
     }
 
     pub fn func_idx(&self) -> u32 {
-        self.facade.func_idx()
+        self.ctx.func().funcidx
     }
 
     pub fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
-        self.facade.with_memory(f)
+        self.ctx.with_memory(f)
     }
 
     pub fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
-        self.facade.with_caller_memory(f)
+        self.ctx.with_caller_memory(f)
     }
 
     fn decode_param(&self, index: usize) -> Option<WasmValue> {
@@ -312,10 +312,10 @@ impl<'ctx, 'store> HostCallContext<'ctx, 'store> {
             local_addr += ty.stack_size().usize();
         }
         let size = ty.stack_size().usize();
-        let ctx: &ExecuteContext<'store> = &*self.facade.ctx;
         read_marshaled_value(
-            ctx.stack_ref()
-                .local_bytes(&ctx.local_reference(), local_addr, size),
+            self.ctx
+                .stack_ref()
+                .local_bytes(&self.ctx.local_reference(), local_addr, size),
             ty,
         )
     }
@@ -744,24 +744,1018 @@ pub(crate) struct ExecuteContextFacade<'ctx, 'store> {
 }
 
 impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
+    #[inline(always)]
+    pub(crate) fn new(ctx: &'ctx mut ExecuteContext<'store>) -> Self {
+        Self { ctx }
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_ctx(&self) -> &ExecuteContext<'store> {
+        self.ctx
+    }
+
+    #[inline(always)]
+    pub(crate) fn as_ctx_mut(&mut self) -> &mut ExecuteContext<'store> {
+        self.ctx
+    }
+
+    #[inline(always)]
     pub(crate) fn store_ref(&self) -> &Store {
-        self.ctx.store_ref()
+        self.as_ctx().store_ref()
     }
 
+    #[inline(always)]
     pub(crate) fn instance_id(&self) -> u32 {
-        self.ctx.instance_id()
+        self.as_ctx().instance_id()
     }
 
+    #[inline(always)]
     pub(crate) fn func_idx(&self) -> u32 {
-        self.ctx.func().funcidx
+        self.as_ctx().func().funcidx
     }
 
+    #[inline(always)]
     pub(crate) fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
-        self.ctx.with_memory(f)
+        self.as_ctx_mut().with_memory(f)
     }
 
+    #[inline(always)]
     pub(crate) fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
-        self.ctx.with_caller_memory(f)
+        self.as_ctx_mut().with_caller_memory(f)
+    }
+
+    #[inline(always)]
+    pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
+        self.as_ctx().snapshot()
+    }
+
+    #[inline(always)]
+    pub(crate) fn projection(&self) -> ExecuteContextProjection {
+        self.as_ctx().projection()
+    }
+
+    #[inline(always)]
+    pub(crate) fn token_projection(&self) -> Option<ExecContextTokenProjection> {
+        self.projection().token_projection()
+    }
+
+    #[inline(always)]
+    pub(crate) fn has_default_memory(&self) -> bool {
+        self.as_ctx().current_frame.memory0_handle().is_some()
+    }
+
+    #[inline(always)]
+    pub(crate) fn gc_ref(&self) -> &StoreInner {
+        self.as_ctx().gc_ref()
+    }
+
+    #[inline(always)]
+    pub(crate) fn gc_mut(&mut self) -> &mut StoreInner {
+        self.as_ctx_mut().gc_mut()
+    }
+
+    #[inline(always)]
+    pub(crate) fn instance(&self) -> &InstanceData {
+        self.as_ctx().instance()
+    }
+
+    #[inline(always)]
+    pub(crate) fn instance_addr(&self) -> GcRef {
+        self.as_ctx().instance_addr()
+    }
+
+    #[inline(always)]
+    pub(crate) fn module(&self) -> &ModuleInstance {
+        self.as_ctx().module()
+    }
+
+    #[inline(always)]
+    pub(crate) fn func(&self) -> &FunctionInstanceData {
+        self.as_ctx().func()
+    }
+
+    #[inline(always)]
+    pub(crate) fn func_by_addr(&self, funcaddr: GcRef) -> &FunctionInstanceData {
+        self.as_ctx().func_by_addr(funcaddr)
+    }
+
+    #[inline(always)]
+    pub(crate) fn stack_ref(&self) -> &Stack {
+        self.as_ctx().stack_ref()
+    }
+
+    #[inline(always)]
+    pub(crate) fn stack_mut(&mut self) -> &mut Stack {
+        self.as_ctx_mut().stack_mut()
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_reference(&self) -> LocalReference {
+        self.as_ctx().local_reference()
+    }
+
+    #[inline(always)]
+    pub(crate) fn pending_mut(&mut self) -> &mut PendingOpEmitter<'store> {
+        self.as_ctx_mut().pending_mut()
+    }
+
+    #[inline(always)]
+    pub(crate) fn task_id(&self) -> u32 {
+        self.as_ctx().task_id()
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_cont(&mut self, cont: *const Instr) {
+        self.as_ctx_mut().set_cont(cont)
+    }
+
+    #[inline(always)]
+    pub(crate) fn clone_shared_memory(
+        &self,
+        id: store::SharedMemoryId,
+    ) -> std::sync::Arc<SharedMemoryObject> {
+        self.as_ctx().clone_shared_memory(id)
+    }
+
+    #[inline(always)]
+    pub(crate) fn enter_function_call(
+        &mut self,
+        param_size: usize,
+        local_size: usize,
+        frame: CallFrameCache,
+        return_addr: *const Instr,
+    ) -> VMResult<()> {
+        self.as_ctx_mut()
+            .enter_function_call(param_size, local_size, frame, return_addr)
+    }
+
+    #[inline(always)]
+    pub(crate) fn enter_function_return_call(
+        &mut self,
+        param_size: usize,
+        local_size: usize,
+        frame: CallFrameCache,
+    ) -> VMResult<()> {
+        self.as_ctx_mut()
+            .enter_function_return_call(param_size, local_size, frame)
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn default_local_memory_id_unchecked(&self) -> store::LocalMemoryId {
+        unsafe { self.as_ctx().default_local_memory_id_unchecked() }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn default_shared_memory_id_unchecked(&self) -> store::SharedMemoryId {
+        unsafe { self.as_ctx().default_shared_memory_id_unchecked() }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn local_memory_id_at_unchecked(&self, memidx: u32) -> store::LocalMemoryId {
+        unsafe { self.as_ctx().local_memory_id_at_unchecked(memidx) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn shared_memory_id_at_unchecked(
+        &self,
+        memidx: u32,
+    ) -> store::SharedMemoryId {
+        unsafe { self.as_ctx().shared_memory_id_at_unchecked(memidx) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_memory_u8_array<const N: usize>(&mut self, offset: usize) -> VMResult<[u8; N]> {
+        self.as_ctx_mut().read_memory_u8_array::<N>(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn push_memory_to_stack<const N: usize>(&mut self, offset: usize) -> VMResult<()> {
+        self.as_ctx_mut().push_memory_to_stack::<N>(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_memory_u8(&mut self, offset: usize) -> VMResult<u8> {
+        self.as_ctx_mut().read_memory_u8(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_memory_i8(&mut self, offset: usize) -> VMResult<i8> {
+        self.as_ctx_mut().read_memory_i8(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_memory_u16(&mut self, offset: usize) -> VMResult<u16> {
+        self.as_ctx_mut().read_memory_u16(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_memory_i16(&mut self, offset: usize) -> VMResult<i16> {
+        self.as_ctx_mut().read_memory_i16(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_memory_u32(&mut self, offset: usize) -> VMResult<u32> {
+        self.as_ctx_mut().read_memory_u32(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn read_memory_i32(&mut self, offset: usize) -> VMResult<i32> {
+        self.as_ctx_mut().read_memory_i32(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn write_memory_bytes(&mut self, offset: usize, bytes: &[u8]) -> VMResult<()> {
+        self.as_ctx_mut().write_memory_bytes(offset, bytes)
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn push_memory_to_stack_local_indexed<const N: usize>(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().push_memory_to_stack_local_indexed::<N>(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn push_memory_to_stack_shared_indexed<const N: usize>(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().push_memory_to_stack_shared_indexed::<N>(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u8_array_local_indexed<const N: usize>(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<[u8; N]> {
+        unsafe { self.as_ctx_mut().read_u8_array_local_indexed::<N>(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u8_array_shared_indexed<const N: usize>(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<[u8; N]> {
+        unsafe { self.as_ctx_mut().read_u8_array_shared_indexed::<N>(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u8_at_local_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u8> {
+        unsafe { self.as_ctx_mut().read_u8_at_local_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u8_at_shared_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u8> {
+        unsafe { self.as_ctx_mut().read_u8_at_shared_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i8_at_local_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i8> {
+        unsafe { self.as_ctx_mut().read_i8_at_local_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i8_at_shared_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i8> {
+        unsafe { self.as_ctx_mut().read_i8_at_shared_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u16_at_local_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u16> {
+        unsafe { self.as_ctx_mut().read_u16_at_local_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u16_at_shared_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u16> {
+        unsafe { self.as_ctx_mut().read_u16_at_shared_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i16_at_local_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i16> {
+        unsafe { self.as_ctx_mut().read_i16_at_local_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i16_at_shared_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i16> {
+        unsafe { self.as_ctx_mut().read_i16_at_shared_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u32_at_local_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u32> {
+        unsafe { self.as_ctx_mut().read_u32_at_local_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u32_at_shared_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u32> {
+        unsafe { self.as_ctx_mut().read_u32_at_shared_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i32_at_local_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i32> {
+        unsafe { self.as_ctx_mut().read_i32_at_local_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i32_at_shared_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i32> {
+        unsafe { self.as_ctx_mut().read_i32_at_shared_indexed(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn write_memory_bytes_local_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().write_memory_bytes_local_indexed(memidx, offset, bytes) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn write_memory_bytes_shared_indexed(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().write_memory_bytes_shared_indexed(memidx, offset, bytes) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn grow_memory(&mut self, page_size_delta: u32) -> VMResult<i32> {
+        self.as_ctx_mut().grow_memory(page_size_delta)
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn grow_memory_local_indexed(
+        &mut self,
+        memidx: u32,
+        page_size_delta: u32,
+    ) -> VMResult<i32> {
+        unsafe { self.as_ctx_mut().grow_memory_local_indexed(memidx, page_size_delta) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn grow_memory_shared_indexed(
+        &mut self,
+        memidx: u32,
+        page_size_delta: u32,
+    ) -> VMResult<i32> {
+        unsafe { self.as_ctx_mut().grow_memory_shared_indexed(memidx, page_size_delta) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn memory_page_size(&self) -> Option<u32> {
+        self.as_ctx().memory_page_size()
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn memory_page_size_local_indexed(&self, memidx: u32) -> u32 {
+        unsafe { self.as_ctx().memory_page_size_local_indexed(memidx) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn memory_page_size_shared_indexed(&self, memidx: u32) -> u32 {
+        unsafe { self.as_ctx().memory_page_size_shared_indexed(memidx) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn copy_memory(&mut self, dst: u32, src: u32, len: u32) -> VMResult<()> {
+        self.as_ctx_mut().copy_memory(dst, src, len)
+    }
+
+    #[inline(always)]
+    pub(crate) fn fill_memory(&mut self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
+        self.as_ctx_mut().fill_memory(ptr, len, data)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_fence(&mut self) {
+        self.as_ctx_mut().local_atomic_fence()
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_fence(&mut self) {
+        self.as_ctx_mut().shared_atomic_fence()
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_load_u8(&mut self, offset: usize) -> VMResult<u8> {
+        self.as_ctx_mut().local_atomic_load_u8(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_load_u16(&mut self, offset: usize) -> VMResult<u16> {
+        self.as_ctx_mut().local_atomic_load_u16(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_load_u32(&mut self, offset: usize) -> VMResult<u32> {
+        self.as_ctx_mut().local_atomic_load_u32(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_load_u64(&mut self, offset: usize) -> VMResult<u64> {
+        self.as_ctx_mut().local_atomic_load_u64(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_load_u8(&mut self, offset: usize) -> VMResult<u8> {
+        self.as_ctx_mut().shared_atomic_load_u8(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_load_u16(&mut self, offset: usize) -> VMResult<u16> {
+        self.as_ctx_mut().shared_atomic_load_u16(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_load_u32(&mut self, offset: usize) -> VMResult<u32> {
+        self.as_ctx_mut().shared_atomic_load_u32(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_load_u64(&mut self, offset: usize) -> VMResult<u64> {
+        self.as_ctx_mut().shared_atomic_load_u64(offset)
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_load_u8(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u8> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_load_u8(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_load_u16(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u16> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_load_u16(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_load_u32(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u32> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_load_u32(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_load_u64(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u64> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_load_u64(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_load_u8(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u8> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_load_u8(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_load_u16(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u16> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_load_u16(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_load_u32(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u32> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_load_u32(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_load_u64(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u64> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_load_u64(memidx, offset) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_store_u8(&mut self, offset: usize, value: u8) -> VMResult<()> {
+        self.as_ctx_mut().local_atomic_store_u8(offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_store_u16(&mut self, offset: usize, value: u16) -> VMResult<()> {
+        self.as_ctx_mut().local_atomic_store_u16(offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_store_u32(&mut self, offset: usize, value: u32) -> VMResult<()> {
+        self.as_ctx_mut().local_atomic_store_u32(offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_store_u64(&mut self, offset: usize, value: u64) -> VMResult<()> {
+        self.as_ctx_mut().local_atomic_store_u64(offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_store_u8(&mut self, offset: usize, value: u8) -> VMResult<()> {
+        self.as_ctx_mut().shared_atomic_store_u8(offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_store_u16(&mut self, offset: usize, value: u16) -> VMResult<()> {
+        self.as_ctx_mut().shared_atomic_store_u16(offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_store_u32(&mut self, offset: usize, value: u32) -> VMResult<()> {
+        self.as_ctx_mut().shared_atomic_store_u32(offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_store_u64(&mut self, offset: usize, value: u64) -> VMResult<()> {
+        self.as_ctx_mut().shared_atomic_store_u64(offset, value)
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_store_u8(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        value: u8,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_store_u8(memidx, offset, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_store_u16(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        value: u16,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_store_u16(memidx, offset, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_store_u32(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        value: u32,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_store_u32(memidx, offset, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_store_u64(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        value: u64,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_store_u64(memidx, offset, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_store_u8(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        value: u8,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_store_u8(memidx, offset, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_store_u16(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        value: u16,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_store_u16(memidx, offset, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_store_u32(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        value: u32,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_store_u32(memidx, offset, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_store_u64(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        value: u64,
+    ) -> VMResult<()> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_store_u64(memidx, offset, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_rmw_u8(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
+        self.as_ctx_mut().local_atomic_rmw_u8(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_rmw_u16(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.as_ctx_mut().local_atomic_rmw_u16(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_rmw_u32(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.as_ctx_mut().local_atomic_rmw_u32(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_rmw_u64(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.as_ctx_mut().local_atomic_rmw_u64(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_rmw_u8(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
+        self.as_ctx_mut().shared_atomic_rmw_u8(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_rmw_u16(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
+        self.as_ctx_mut().shared_atomic_rmw_u16(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_rmw_u32(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
+        self.as_ctx_mut().shared_atomic_rmw_u32(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_rmw_u64(
+        &mut self,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
+        self.as_ctx_mut().shared_atomic_rmw_u64(offset, op, value)
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_rmw_u8(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_rmw_u8(memidx, offset, op, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_rmw_u16(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_rmw_u16(memidx, offset, op, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_rmw_u32(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_rmw_u32(memidx, offset, op, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_rmw_u64(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_rmw_u64(memidx, offset, op, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_rmw_u8(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u8,
+    ) -> VMResult<u8> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_rmw_u8(memidx, offset, op, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_rmw_u16(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u16,
+    ) -> VMResult<u16> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_rmw_u16(memidx, offset, op, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_rmw_u32(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u32,
+    ) -> VMResult<u32> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_rmw_u32(memidx, offset, op, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_rmw_u64(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        op: AtomicRmwOp,
+        value: u64,
+    ) -> VMResult<u64> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_rmw_u64(memidx, offset, op, value) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_cmpxchg_u8(
+        &mut self,
+        offset: usize,
+        current: u8,
+        new: u8,
+    ) -> VMResult<u8> {
+        self.as_ctx_mut().local_atomic_cmpxchg_u8(offset, current, new)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_cmpxchg_u16(
+        &mut self,
+        offset: usize,
+        current: u16,
+        new: u16,
+    ) -> VMResult<u16> {
+        self.as_ctx_mut().local_atomic_cmpxchg_u16(offset, current, new)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_cmpxchg_u32(
+        &mut self,
+        offset: usize,
+        current: u32,
+        new: u32,
+    ) -> VMResult<u32> {
+        self.as_ctx_mut().local_atomic_cmpxchg_u32(offset, current, new)
+    }
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_cmpxchg_u64(
+        &mut self,
+        offset: usize,
+        current: u64,
+        new: u64,
+    ) -> VMResult<u64> {
+        self.as_ctx_mut().local_atomic_cmpxchg_u64(offset, current, new)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_cmpxchg_u8(
+        &mut self,
+        offset: usize,
+        current: u8,
+        new: u8,
+    ) -> VMResult<u8> {
+        self.as_ctx_mut().shared_atomic_cmpxchg_u8(offset, current, new)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_cmpxchg_u16(
+        &mut self,
+        offset: usize,
+        current: u16,
+        new: u16,
+    ) -> VMResult<u16> {
+        self.as_ctx_mut().shared_atomic_cmpxchg_u16(offset, current, new)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_cmpxchg_u32(
+        &mut self,
+        offset: usize,
+        current: u32,
+        new: u32,
+    ) -> VMResult<u32> {
+        self.as_ctx_mut().shared_atomic_cmpxchg_u32(offset, current, new)
+    }
+
+    #[inline(always)]
+    pub(crate) fn shared_atomic_cmpxchg_u64(
+        &mut self,
+        offset: usize,
+        current: u64,
+        new: u64,
+    ) -> VMResult<u64> {
+        self.as_ctx_mut().shared_atomic_cmpxchg_u64(offset, current, new)
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_cmpxchg_u8(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        current: u8,
+        new: u8,
+    ) -> VMResult<u8> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_cmpxchg_u8(memidx, offset, current, new) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_cmpxchg_u16(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        current: u16,
+        new: u16,
+    ) -> VMResult<u16> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_cmpxchg_u16(memidx, offset, current, new) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_cmpxchg_u32(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        current: u32,
+        new: u32,
+    ) -> VMResult<u32> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_cmpxchg_u32(memidx, offset, current, new) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_local_atomic_cmpxchg_u64(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        current: u64,
+        new: u64,
+    ) -> VMResult<u64> {
+        unsafe { self.as_ctx_mut().indexed_local_atomic_cmpxchg_u64(memidx, offset, current, new) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_cmpxchg_u8(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        current: u8,
+        new: u8,
+    ) -> VMResult<u8> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_cmpxchg_u8(memidx, offset, current, new) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_cmpxchg_u16(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        current: u16,
+        new: u16,
+    ) -> VMResult<u16> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_cmpxchg_u16(memidx, offset, current, new) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_cmpxchg_u32(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        current: u32,
+        new: u32,
+    ) -> VMResult<u32> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_cmpxchg_u32(memidx, offset, current, new) }
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn indexed_shared_atomic_cmpxchg_u64(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+        current: u64,
+        new: u64,
+    ) -> VMResult<u64> {
+        unsafe { self.as_ctx_mut().indexed_shared_atomic_cmpxchg_u64(memidx, offset, current, new) }
     }
 }
 
@@ -2376,6 +3370,14 @@ mod tests {
 
         let before = ctx.snapshot();
         let before_projection = ctx.projection();
+        let before_facade_projection = {
+            let facade = ExecuteContextFacade::new(&mut ctx);
+            facade.projection()
+        };
+        let before_facade_token = {
+            let facade = ExecuteContextFacade::new(&mut ctx);
+            facade.token_projection().unwrap()
+        };
         let callee_local_top = callee.local_top;
         let callee_local_size = callee.local_size;
         let root_local_top = root.local_top;
@@ -2449,6 +3451,12 @@ mod tests {
             )))
         );
         let before_token = before_projection.token_projection().unwrap();
+        assert_eq!(before_facade_projection.default_memory, before_projection.default_memory);
+        assert_eq!(before_facade_projection.caller_memory, before_projection.caller_memory);
+        assert_eq!(before_facade_projection.cont_addr, before_projection.cont_addr);
+        assert_eq!(before_facade_projection.task_id, before_projection.task_id);
+        assert_eq!(before_facade_token.cont_addr, before_token.cont_addr);
+        assert_eq!(before_facade_token.task_id, before_token.task_id);
         assert_eq!(
             before_token.current_frame.default_memory,
             MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
@@ -2469,6 +3477,14 @@ mod tests {
 
         let after = ctx.snapshot();
         let after_projection = ctx.projection();
+        let after_facade_projection = {
+            let facade = ExecuteContextFacade::new(&mut ctx);
+            facade.projection()
+        };
+        let after_facade_token = {
+            let facade = ExecuteContextFacade::new(&mut ctx);
+            facade.token_projection().unwrap()
+        };
         let tail_local_top = tail.local_top;
         let tail_local_size = tail.local_size;
         assert_eq!(
@@ -2541,6 +3557,12 @@ mod tests {
             )))
         );
         let after_token = after_projection.token_projection().unwrap();
+        assert_eq!(after_facade_projection.default_memory, after_projection.default_memory);
+        assert_eq!(after_facade_projection.caller_memory, after_projection.caller_memory);
+        assert_eq!(after_facade_projection.cont_addr, after_projection.cont_addr);
+        assert_eq!(after_facade_projection.task_id, after_projection.task_id);
+        assert_eq!(after_facade_token.cont_addr, after_token.cont_addr);
+        assert_eq!(after_facade_token.task_id, after_token.task_id);
         assert_eq!(
             after_token.current_frame.default_memory,
             MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
