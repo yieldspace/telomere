@@ -1585,6 +1585,51 @@ pub open spec fn shared_consume_wake(
     }
 }
 
+pub open spec fn shared_atomic_store(
+    protocol: SharedMemoryProtocol,
+    start: int,
+    value_bytes: Seq<u8>,
+) -> SharedMemoryProtocol {
+    SharedMemoryProtocol {
+        memory: linear_write_bytes(protocol.memory, start, value_bytes),
+        wait_queues: protocol.wait_queues,
+        waiters: protocol.waiters,
+        next_waiter_id: protocol.next_waiter_id,
+    }
+}
+
+pub open spec fn shared_atomic_rmw(
+    protocol: SharedMemoryProtocol,
+    start: int,
+    value_bytes: Seq<u8>,
+) -> SharedMemoryProtocol {
+    shared_atomic_store(protocol, start, value_bytes)
+}
+
+pub open spec fn shared_atomic_cmpxchg(
+    protocol: SharedMemoryProtocol,
+    start: int,
+    expected: AtomicCmpxchgExpected,
+    value_bytes: Seq<u8>,
+) -> SharedMemoryProtocol
+    recommends
+        value_bytes.len() == atomic_cmpxchg_width(expected),
+        0 <= start,
+        start + value_bytes.len() <= protocol.memory.bytes.len(),
+{
+    let old_bytes = protocol.memory.bytes.subrange(start, start + value_bytes.len());
+    SharedMemoryProtocol {
+        memory: if old_bytes == atomic_expected_bytes(expected) {
+            linear_write_bytes(protocol.memory, start, value_bytes)
+        } else {
+            protocol.memory
+        },
+        wait_queues: protocol.wait_queues,
+        waiters: protocol.waiters,
+        next_waiter_id: protocol.next_waiter_id,
+    }
+}
+
 pub closed spec fn wait_result_not_equal_code() -> int {
     1
 }
@@ -2849,21 +2894,50 @@ pub open spec fn spec_step_atomic(
             if !aligned {
                 core_step_trap_state(state, TrapCode::UnalignedAtomic)
             } else {
-                match resolve_linear_memory(state, selector) {
-                    Some(memory) if start + bytes.len() as nat <= memory.bytes.len() as nat => {
-                        match core_step_state_with_selected_memory(
-                            state,
-                            selector,
-                            linear_write_bytes(memory, start as int, bytes),
-                        ) {
-                            Some(next_state) => core_step_continue_state(core_step_state_with_exec(
-                                next_state,
-                                context_with_cont(state.context, next_cont),
-                            )),
+                match resolve_memory_handle(state, selector) {
+                    Some(MemoryHandleView::Local(_)) => {
+                        match resolve_linear_memory(state, selector) {
+                            Some(memory)
+                                if start + bytes.len() as nat <= memory.bytes.len() as nat =>
+                            {
+                                match core_step_state_with_selected_memory(
+                                    state,
+                                    selector,
+                                    linear_write_bytes(memory, start as int, bytes),
+                                ) {
+                                    Some(next_state) => core_step_continue_state(
+                                        core_step_state_with_exec(
+                                            next_state,
+                                            context_with_cont(state.context, next_cont),
+                                        ),
+                                    ),
+                                    None => {
+                                        core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange)
+                                    }
+                                }
+                            }
+                            Some(_) => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                             None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                         }
                     }
-                    Some(_) => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
+                    Some(MemoryHandleView::Shared(memory_id)) => {
+                        match resolve_shared_protocol(state, selector) {
+                            Some(protocol)
+                                if start + bytes.len() as nat <= protocol.memory.bytes.len() as nat =>
+                            {
+                                core_step_continue_state(core_step_state_with_exec(
+                                    core_step_state_with_shared_protocol(
+                                        state,
+                                        memory_id,
+                                        shared_atomic_store(protocol, start as int, bytes),
+                                    ),
+                                    context_with_cont(state.context, next_cont),
+                                ))
+                            }
+                            Some(_) => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
+                            None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
+                        }
+                    }
                     None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                 }
             }
@@ -2881,26 +2955,53 @@ pub open spec fn spec_step_atomic(
             } else if state.stack.top != state.stack.bytes.len() as nat {
                 core_step_trap_state(state, TrapCode::InvalidOperand)
             } else {
-                match resolve_linear_memory(state, selector) {
-                    Some(memory)
-                        if start + write_bytes.len() as nat <= memory.bytes.len() as nat =>
-                    {
-                        match core_step_state_with_selected_memory(
-                            state,
-                            selector,
-                            linear_write_bytes(memory, start as int, write_bytes),
-                        ) {
-                            Some(next_state) => {
+                match resolve_memory_handle(state, selector) {
+                    Some(MemoryHandleView::Local(_)) => {
+                        match resolve_linear_memory(state, selector) {
+                            Some(memory)
+                                if start + write_bytes.len() as nat <= memory.bytes.len() as nat =>
+                            {
+                                match core_step_state_with_selected_memory(
+                                    state,
+                                    selector,
+                                    linear_write_bytes(memory, start as int, write_bytes),
+                                ) {
+                                    Some(next_state) => {
+                                        core_step_continue_state(core_step_state_with_stack_exec(
+                                            next_state,
+                                            stack_push_bytes(state.stack, result_bytes),
+                                            context_with_cont(state.context, next_cont),
+                                        ))
+                                    }
+                                    None => {
+                                        core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange)
+                                    }
+                                }
+                            }
+                            Some(_) => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
+                            None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
+                        }
+                    }
+                    Some(MemoryHandleView::Shared(memory_id)) => {
+                        match resolve_shared_protocol(state, selector) {
+                            Some(protocol)
+                                if start + write_bytes.len() as nat
+                                    <= protocol.memory.bytes.len() as nat =>
+                            {
                                 core_step_continue_state(core_step_state_with_stack_exec(
-                                    next_state,
+                                    core_step_state_with_shared_protocol(
+                                        state,
+                                        memory_id,
+                                        shared_atomic_rmw(protocol, start as int, write_bytes),
+                                    ),
                                     stack_push_bytes(state.stack, result_bytes),
                                     context_with_cont(state.context, next_cont),
                                 ))
                             }
+                            Some(_) => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                             None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                         }
                     }
-                    Some(_) => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                     None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                 }
             }
@@ -2922,30 +3023,75 @@ pub open spec fn spec_step_atomic(
                 if value_bytes.len() != width {
                     core_step_trap_state(state, TrapCode::InvalidOperand)
                 } else {
-                    match resolve_linear_memory(state, selector) {
-                        Some(memory) => match linear_read_bytes(memory, start, width) {
-                            Some(old_bytes) => {
-                                let updated =
-                                    if old_bytes == atomic_expected_bytes(expected) {
-                                        linear_write_bytes(memory, start as int, value_bytes)
-                                    } else {
-                                        memory
-                                    };
-                                match core_step_state_with_selected_memory(state, selector, updated) {
-                                    Some(next_state) => {
-                                        core_step_continue_state(core_step_state_with_stack_exec(
-                                            next_state,
-                                            stack_push_bytes(state.stack, old_bytes),
-                                            context_with_cont(state.context, next_cont),
-                                        ))
+                    match resolve_memory_handle(state, selector) {
+                        Some(MemoryHandleView::Local(_)) => {
+                            match resolve_linear_memory(state, selector) {
+                                Some(memory) => match linear_read_bytes(memory, start, width) {
+                                    Some(old_bytes) => {
+                                        let updated =
+                                            if old_bytes == atomic_expected_bytes(expected) {
+                                                linear_write_bytes(memory, start as int, value_bytes)
+                                            } else {
+                                                memory
+                                            };
+                                        match core_step_state_with_selected_memory(
+                                            state,
+                                            selector,
+                                            updated,
+                                        ) {
+                                            Some(next_state) => {
+                                                core_step_continue_state(
+                                                    core_step_state_with_stack_exec(
+                                                        next_state,
+                                                        stack_push_bytes(state.stack, old_bytes),
+                                                        context_with_cont(
+                                                            state.context,
+                                                            next_cont,
+                                                        ),
+                                                    ),
+                                                )
+                                            }
+                                            None => core_step_trap_state(
+                                                state,
+                                                TrapCode::MemoryIndexOutOfRange,
+                                            ),
+                                        }
                                     }
                                     None => {
                                         core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange)
                                     }
-                                }
+                                },
+                                None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                             }
-                            None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
-                        },
+                        }
+                        Some(MemoryHandleView::Shared(memory_id)) => {
+                            match resolve_shared_protocol(state, selector) {
+                                Some(protocol) => {
+                                    match linear_read_bytes(protocol.memory, start, width) {
+                                        Some(old_bytes) => {
+                                            core_step_continue_state(core_step_state_with_stack_exec(
+                                                core_step_state_with_shared_protocol(
+                                                    state,
+                                                    memory_id,
+                                                    shared_atomic_cmpxchg(
+                                                        protocol,
+                                                        start as int,
+                                                        expected,
+                                                        value_bytes,
+                                                    ),
+                                                ),
+                                                stack_push_bytes(state.stack, old_bytes),
+                                                context_with_cont(state.context, next_cont),
+                                            ))
+                                        }
+                                        None => {
+                                            core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange)
+                                        }
+                                    }
+                                }
+                                None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
+                            }
+                        }
                         None => core_step_trap_state(state, TrapCode::MemoryIndexOutOfRange),
                     }
                 }
@@ -3392,7 +3538,7 @@ tokenized_state_machine!(SharedMemoryProtocolToks {
             init shared = memory.shared;
             init wait_queues = Map::empty();
             init waiters = Map::empty();
-            init next_waiter_id = 0;
+            init next_waiter_id = 1;
             init shared_mem_tok = Some(());
             init wait_ticket_tok = Multiset::empty();
             init wake_tok = Multiset::empty();
@@ -3487,27 +3633,22 @@ tokenized_state_machine!(SharedMemoryProtocolToks {
     }
 
     transition!{
-        atomic_rmw_u32(start: int, value_bytes: Seq<u8>) {
+        atomic_rmw(start: int, value_bytes: Seq<u8>) {
             require(0 <= start);
-            require(value_bytes.len() == 4);
-            require(start + 4 <= pre.bytes.len());
+            require(start + value_bytes.len() <= pre.bytes.len());
             update bytes = spec_write_range(pre.bytes, start, value_bytes);
         }
     }
 
     transition!{
-        atomic_cmpxchg_u32(start: int, expected: u32, value_bytes: Seq<u8>) {
+        atomic_cmpxchg(start: int, expected_bytes: Seq<u8>, value_bytes: Seq<u8>) {
             require(0 <= start);
-            require(value_bytes.len() == 4);
-            require(start + 4 <= pre.bytes.len());
+            require(expected_bytes.len() == value_bytes.len());
+            require(start + value_bytes.len() <= pre.bytes.len());
 
-            let old_bytes = pre.bytes.subrange(start, start + 4);
+            let old_bytes = pre.bytes.subrange(start, start + value_bytes.len());
             update bytes =
-                if spec_atomic_cmpxchg_u32(
-                    spec_le_u32(old_bytes),
-                    expected,
-                    spec_le_u32(value_bytes),
-                ) == spec_le_u32(value_bytes) {
+                if old_bytes == expected_bytes {
                     spec_write_range(pre.bytes, start, value_bytes)
                 } else {
                     pre.bytes

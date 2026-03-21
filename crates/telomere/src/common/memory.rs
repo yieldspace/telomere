@@ -421,20 +421,30 @@ impl SharedWaitRegistration {
         self.waiter.poll_wait(cx)
     }
 
+    pub(crate) fn finish_notified_protocol(
+        self,
+        shared: &SharedMemoryObject,
+    ) -> SharedAtomicProtocolResult<i32> {
+        shared.consume_wake(self.address, self.waiter.id())
+    }
+
     pub fn finish_notified(self, shared: &SharedMemoryObject) -> i32 {
-        shared.consume_waiter_result(self.waiter.id());
-        0
+        self.finish_notified_protocol(shared).result
+    }
+
+    pub(crate) fn finish_timeout_protocol(
+        self,
+        shared: &SharedMemoryObject,
+    ) -> SharedAtomicProtocolResult<i32> {
+        if self.waiter.try_mark_timed_out() {
+            shared.consume_timed_out(self.address, self.waiter.id())
+        } else {
+            shared.consume_wake(self.address, self.waiter.id())
+        }
     }
 
     pub fn finish_timeout(self, shared: &SharedMemoryObject) -> i32 {
-        if self.waiter.try_mark_timed_out() {
-            shared.mark_waiter_timed_out(self.address, self.waiter.id());
-            shared.consume_waiter_result(self.waiter.id());
-            2
-        } else {
-            shared.consume_waiter_result(self.waiter.id());
-            0
-        }
+        self.finish_timeout_protocol(shared).result
     }
 }
 
@@ -555,6 +565,41 @@ pub(crate) struct SharedMemoryProjection {
     pub(crate) next_waiter_id: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct SharedMemoryProjectionParts {
+    pub(crate) memory: LinearMemoryProjectionParts,
+    pub(crate) wait_queues: Vec<SharedWaitQueueProjection>,
+    pub(crate) waiters: Vec<SharedWaiterProjection>,
+    pub(crate) next_waiter_id: u64,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) struct SharedProtocolRegistration {
+    pub(crate) wait: SharedWaitRegistration,
+    pub(crate) ticket: (u64, usize),
+    pub(crate) before: SharedMemoryProjection,
+    pub(crate) after: SharedMemoryProjection,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) struct SharedNotifyProtocolResult {
+    pub(crate) woken: u32,
+    pub(crate) wake_tokens: Vec<(u64, usize)>,
+    pub(crate) before: SharedMemoryProjection,
+    pub(crate) after: SharedMemoryProjection,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub(crate) struct SharedAtomicProtocolResult<T> {
+    pub(crate) result: T,
+    pub(crate) before: SharedMemoryProjection,
+    pub(crate) after: SharedMemoryProjection,
+}
+
 impl LinearMemoryProjection {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn proof_ready(&self) -> bool {
@@ -578,38 +623,72 @@ impl LinearMemoryProjection {
 impl SharedMemoryProjection {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn proof_ready(&self) -> bool {
-        if !self.memory.proof_ready() {
+        if !self.memory.proof_ready() || !self.memory.shared || self.next_waiter_id == 0 {
             return false;
         }
-        let waiter_ids = self
-            .waiters
-            .iter()
-            .map(|waiter| waiter.waiter_id)
-            .collect::<HashSet<_>>();
-        self.wait_queues.iter().all(|queue| {
-            queue
-                .waiter_ids
-                .iter()
-                .all(|waiter_id| waiter_ids.contains(waiter_id))
+        let mut waiter_states = HashMap::new();
+        for waiter in &self.waiters {
+            if waiter.waiter_id >= self.next_waiter_id {
+                return false;
+            }
+            if waiter_states
+                .insert(waiter.waiter_id, waiter.state)
+                .is_some()
+            {
+                return false;
+            }
+        }
+
+        let mut queue_addresses = HashSet::new();
+        let mut queued_waiters = HashSet::new();
+        for queue in &self.wait_queues {
+            if !queue_addresses.insert(queue.address) {
+                return false;
+            }
+            for waiter_id in &queue.waiter_ids {
+                if !queued_waiters.insert(*waiter_id) {
+                    return false;
+                }
+                if waiter_states.get(waiter_id) != Some(&SharedWaitStateProjection::Waiting) {
+                    return false;
+                }
+            }
+        }
+
+        self.waiters.iter().all(|waiter| match waiter.state {
+            SharedWaitStateProjection::Waiting => queued_waiters.contains(&waiter.waiter_id),
+            SharedWaitStateProjection::Notified | SharedWaitStateProjection::TimedOut => {
+                !queued_waiters.contains(&waiter.waiter_id)
+            }
         })
     }
 
-    #[cfg(test)]
-    fn queue_position(&self, address: usize) -> Option<usize> {
+    #[allow(dead_code)]
+    pub(crate) fn formal_builder_parts(&self) -> SharedMemoryProjectionParts {
+        SharedMemoryProjectionParts {
+            memory: self.memory.formal_builder_parts(),
+            wait_queues: self.wait_queues.clone(),
+            waiters: self.waiters.clone(),
+            next_waiter_id: self.next_waiter_id,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn queue_position(&self, address: usize) -> Option<usize> {
         self.wait_queues
             .iter()
             .position(|queue| queue.address == address)
     }
 
-    #[cfg(test)]
-    fn waiter_position(&self, waiter_id: u64) -> Option<usize> {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn waiter_position(&self, waiter_id: u64) -> Option<usize> {
         self.waiters
             .iter()
             .position(|waiter| waiter.waiter_id == waiter_id)
     }
 
-    #[cfg(test)]
-    fn protocol_register_wait(&self, address: usize) -> Self {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn protocol_register_wait(&self, address: usize) -> Self {
         let mut next = self.clone();
         let waiter_id = next.next_waiter_id;
         next.next_waiter_id += 1;
@@ -629,8 +708,8 @@ impl SharedMemoryProjection {
         next
     }
 
-    #[cfg(test)]
-    fn protocol_notify_waiters(
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn protocol_notify_waiters(
         &self,
         address: usize,
         count: u32,
@@ -657,8 +736,8 @@ impl SharedMemoryProjection {
         (next, woke)
     }
 
-    #[cfg(test)]
-    fn protocol_consume_waiter(&self, waiter_id: u64) -> Self {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn protocol_consume_waiter(&self, waiter_id: u64) -> Self {
         let mut next = self.clone();
         if let Some(index) = next.waiter_position(waiter_id) {
             next.waiters.remove(index);
@@ -666,8 +745,8 @@ impl SharedMemoryProjection {
         next
     }
 
-    #[cfg(test)]
-    fn protocol_timeout_wait(&self, address: usize, waiter_id: u64) -> Self {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn protocol_timeout_wait(&self, address: usize, waiter_id: u64) -> Self {
         let mut next = self.clone();
         if let Some(index) = next.queue_position(address) {
             let queue = &mut next.wait_queues[index].waiter_ids;
@@ -1443,6 +1522,56 @@ struct SharedMemoryState {
     next_waiter_id: u64,
 }
 
+impl SharedMemoryState {
+    fn projection(&self) -> SharedMemoryProjection {
+        let mut wait_queues = self
+            .wait_queues
+            .iter()
+            .map(|(address, queue)| SharedWaitQueueProjection {
+                address: *address,
+                waiter_ids: queue.iter().map(|waiter| waiter.id()).collect(),
+            })
+            .collect::<Vec<_>>();
+        wait_queues.sort_by_key(|queue| queue.address);
+        let mut waiters = self
+            .waiters
+            .iter()
+            .map(|(waiter_id, state)| SharedWaiterProjection {
+                waiter_id: *waiter_id,
+                state: *state,
+            })
+            .collect::<Vec<_>>();
+        waiters.sort_by_key(|waiter| waiter.waiter_id);
+        SharedMemoryProjection {
+            memory: self.memory.projection(),
+            wait_queues,
+            waiters,
+            next_waiter_id: self.next_waiter_id,
+        }
+    }
+
+    fn remove_waiter_from_queue(&mut self, address: usize, waiter_id: u64) {
+        if let Some(queue) = self.wait_queues.get_mut(&address) {
+            if let Some(index) = queue.iter().position(|waiter| waiter.id() == waiter_id) {
+                queue.remove(index);
+            }
+            if queue.is_empty() {
+                self.wait_queues.remove(&address);
+            }
+        }
+    }
+
+    fn timeout_wait(&mut self, address: usize, waiter_id: u64) {
+        self.remove_waiter_from_queue(address, waiter_id);
+        self.waiters
+            .insert(waiter_id, SharedWaitStateProjection::TimedOut);
+    }
+
+    fn consume_waiter(&mut self, waiter_id: u64) {
+        self.waiters.remove(&waiter_id);
+    }
+}
+
 #[derive(Debug)]
 pub struct SharedMemoryObject {
     state: Mutex<SharedMemoryState>,
@@ -1465,31 +1594,7 @@ impl SharedMemoryObject {
     }
 
     pub(crate) fn projection(&self) -> SharedMemoryProjection {
-        let state = self.state.lock();
-        let mut wait_queues = state
-            .wait_queues
-            .iter()
-            .map(|(address, queue)| SharedWaitQueueProjection {
-                address: *address,
-                waiter_ids: queue.iter().map(|waiter| waiter.id()).collect(),
-            })
-            .collect::<Vec<_>>();
-        wait_queues.sort_by_key(|queue| queue.address);
-        let mut waiters = state
-            .waiters
-            .iter()
-            .map(|(waiter_id, state)| SharedWaiterProjection {
-                waiter_id: *waiter_id,
-                state: *state,
-            })
-            .collect::<Vec<_>>();
-        waiters.sort_by_key(|waiter| waiter.waiter_id);
-        SharedMemoryProjection {
-            memory: state.memory.projection(),
-            wait_queues,
-            waiters,
-            next_waiter_id: state.next_waiter_id,
-        }
+        self.state.lock().projection()
     }
 
     #[inline(always)]
@@ -1579,74 +1684,74 @@ impl SharedMemoryObject {
 
     #[inline(always)]
     pub fn atomic_store_u8(&self, offset: usize, value: u8) -> VMResult<()> {
-        self.state.lock().memory.atomic_store_u8(offset, value)
+        vm_try!(self.atomic_store_protocol_u8(offset, value));
+        VMResult::Success(())
     }
 
     #[inline(always)]
     pub fn atomic_store_u16(&self, offset: usize, value: u16) -> VMResult<()> {
-        self.state.lock().memory.atomic_store_u16(offset, value)
+        vm_try!(self.atomic_store_protocol_u16(offset, value));
+        VMResult::Success(())
     }
 
     #[inline(always)]
     pub fn atomic_store_u32(&self, offset: usize, value: u32) -> VMResult<()> {
-        self.state.lock().memory.atomic_store_u32(offset, value)
+        vm_try!(self.atomic_store_protocol_u32(offset, value));
+        VMResult::Success(())
     }
 
     #[inline(always)]
     pub fn atomic_store_u64(&self, offset: usize, value: u64) -> VMResult<()> {
-        self.state.lock().memory.atomic_store_u64(offset, value)
+        vm_try!(self.atomic_store_protocol_u64(offset, value));
+        VMResult::Success(())
     }
 
     #[inline(always)]
     pub fn atomic_rmw_u8(&self, offset: usize, op: AtomicRmwOp, value: u8) -> VMResult<u8> {
-        self.state.lock().memory.atomic_rmw_u8(offset, op, value)
+        let protocol = vm_try!(self.atomic_rmw_protocol_u8(offset, op, value));
+        VMResult::Success(protocol.result)
     }
 
     #[inline(always)]
     pub fn atomic_rmw_u16(&self, offset: usize, op: AtomicRmwOp, value: u16) -> VMResult<u16> {
-        self.state.lock().memory.atomic_rmw_u16(offset, op, value)
+        let protocol = vm_try!(self.atomic_rmw_protocol_u16(offset, op, value));
+        VMResult::Success(protocol.result)
     }
 
     #[inline(always)]
     pub fn atomic_rmw_u32(&self, offset: usize, op: AtomicRmwOp, value: u32) -> VMResult<u32> {
-        self.state.lock().memory.atomic_rmw_u32(offset, op, value)
+        let protocol = vm_try!(self.atomic_rmw_protocol_u32(offset, op, value));
+        VMResult::Success(protocol.result)
     }
 
     #[inline(always)]
     pub fn atomic_rmw_u64(&self, offset: usize, op: AtomicRmwOp, value: u64) -> VMResult<u64> {
-        self.state.lock().memory.atomic_rmw_u64(offset, op, value)
+        let protocol = vm_try!(self.atomic_rmw_protocol_u64(offset, op, value));
+        VMResult::Success(protocol.result)
     }
 
     #[inline(always)]
     pub fn atomic_cmpxchg_u8(&self, offset: usize, expected: u8, value: u8) -> VMResult<u8> {
-        self.state
-            .lock()
-            .memory
-            .atomic_cmpxchg_u8(offset, expected, value)
+        let protocol = vm_try!(self.atomic_cmpxchg_protocol_u8(offset, expected, value));
+        VMResult::Success(protocol.result)
     }
 
     #[inline(always)]
     pub fn atomic_cmpxchg_u16(&self, offset: usize, expected: u16, value: u16) -> VMResult<u16> {
-        self.state
-            .lock()
-            .memory
-            .atomic_cmpxchg_u16(offset, expected, value)
+        let protocol = vm_try!(self.atomic_cmpxchg_protocol_u16(offset, expected, value));
+        VMResult::Success(protocol.result)
     }
 
     #[inline(always)]
     pub fn atomic_cmpxchg_u32(&self, offset: usize, expected: u32, value: u32) -> VMResult<u32> {
-        self.state
-            .lock()
-            .memory
-            .atomic_cmpxchg_u32(offset, expected, value)
+        let protocol = vm_try!(self.atomic_cmpxchg_protocol_u32(offset, expected, value));
+        VMResult::Success(protocol.result)
     }
 
     #[inline(always)]
     pub fn atomic_cmpxchg_u64(&self, offset: usize, expected: u64, value: u64) -> VMResult<u64> {
-        self.state
-            .lock()
-            .memory
-            .atomic_cmpxchg_u64(offset, expected, value)
+        let protocol = vm_try!(self.atomic_cmpxchg_protocol_u64(offset, expected, value));
+        VMResult::Success(protocol.result)
     }
 
     #[inline(always)]
@@ -1654,12 +1759,17 @@ impl SharedMemoryObject {
         let _state = self.state.lock();
     }
 
-    pub fn register_wait32(&self, offset: usize, expected: u32) -> VMResult<AtomicWaitResult> {
+    pub(crate) fn register_wait32_protocol(
+        &self,
+        offset: usize,
+        expected: u32,
+    ) -> VMResult<Option<SharedProtocolRegistration>> {
         let mut state = self.state.lock();
+        let before = state.projection();
         vm_try!(ensure_atomic_alignment(offset, 4));
         let current = vm_try!(state.memory.atomic_load_u32(offset));
         if current != expected {
-            return VMResult::Success(AtomicWaitResult::NotEqual);
+            return VMResult::Success(None);
         }
         let waiter = Arc::new(SharedWaiter::new(state.next_waiter_id));
         state.next_waiter_id += 1;
@@ -1671,37 +1781,73 @@ impl SharedMemoryObject {
             .entry(offset)
             .or_default()
             .push_back(waiter.clone());
-        VMResult::Success(AtomicWaitResult::Pending(SharedWaitRegistration {
-            address: offset,
-            waiter,
+        let after = state.projection();
+        VMResult::Success(Some(SharedProtocolRegistration {
+            ticket: (waiter.id(), offset),
+            wait: SharedWaitRegistration {
+                address: offset,
+                waiter,
+            },
+            before,
+            after,
+        }))
+    }
+
+    pub fn register_wait32(&self, offset: usize, expected: u32) -> VMResult<AtomicWaitResult> {
+        match vm_try!(self.register_wait32_protocol(offset, expected)) {
+            Some(protocol) => VMResult::Success(AtomicWaitResult::Pending(protocol.wait)),
+            None => VMResult::Success(AtomicWaitResult::NotEqual),
+        }
+    }
+
+    pub(crate) fn register_wait64_protocol(
+        &self,
+        offset: usize,
+        expected: u64,
+    ) -> VMResult<Option<SharedProtocolRegistration>> {
+        let mut state = self.state.lock();
+        let before = state.projection();
+        vm_try!(ensure_atomic_alignment(offset, 8));
+        let current = vm_try!(state.memory.atomic_load_u64(offset));
+        if current != expected {
+            return VMResult::Success(None);
+        }
+        let waiter = Arc::new(SharedWaiter::new(state.next_waiter_id));
+        state.next_waiter_id += 1;
+        state
+            .waiters
+            .insert(waiter.id(), SharedWaitStateProjection::Waiting);
+        state
+            .wait_queues
+            .entry(offset)
+            .or_default()
+            .push_back(waiter.clone());
+        let after = state.projection();
+        VMResult::Success(Some(SharedProtocolRegistration {
+            ticket: (waiter.id(), offset),
+            wait: SharedWaitRegistration {
+                address: offset,
+                waiter,
+            },
+            before,
+            after,
         }))
     }
 
     pub fn register_wait64(&self, offset: usize, expected: u64) -> VMResult<AtomicWaitResult> {
-        let mut state = self.state.lock();
-        vm_try!(ensure_atomic_alignment(offset, 8));
-        let current = vm_try!(state.memory.atomic_load_u64(offset));
-        if current != expected {
-            return VMResult::Success(AtomicWaitResult::NotEqual);
+        match vm_try!(self.register_wait64_protocol(offset, expected)) {
+            Some(protocol) => VMResult::Success(AtomicWaitResult::Pending(protocol.wait)),
+            None => VMResult::Success(AtomicWaitResult::NotEqual),
         }
-        let waiter = Arc::new(SharedWaiter::new(state.next_waiter_id));
-        state.next_waiter_id += 1;
-        state
-            .waiters
-            .insert(waiter.id(), SharedWaitStateProjection::Waiting);
-        state
-            .wait_queues
-            .entry(offset)
-            .or_default()
-            .push_back(waiter.clone());
-        VMResult::Success(AtomicWaitResult::Pending(SharedWaitRegistration {
-            address: offset,
-            waiter,
-        }))
     }
 
-    pub fn notify_waiters(&self, offset: usize, count: u32) -> VMResult<u32> {
+    pub(crate) fn notify_waiters_protocol(
+        &self,
+        offset: usize,
+        count: u32,
+    ) -> VMResult<SharedNotifyProtocolResult> {
         let mut state = self.state.lock();
+        let before = state.projection();
         vm_try!(state.memory.atomic_load_u32(offset));
         let mut wake = Vec::new();
         let mut notified_ids = Vec::new();
@@ -1721,39 +1867,62 @@ impl SharedMemoryObject {
             queue.retain(|waiter| waiter.is_waiting());
             remove_queue = queue.is_empty();
         }
-        for waiter_id in notified_ids {
+        for waiter_id in &notified_ids {
             state
                 .waiters
-                .insert(waiter_id, SharedWaitStateProjection::Notified);
+                .insert(*waiter_id, SharedWaitStateProjection::Notified);
         }
         if remove_queue {
             state.wait_queues.remove(&offset);
         }
-        let woken = wake.len() as u32;
+        let wake_tokens = notified_ids
+            .iter()
+            .copied()
+            .map(|waiter_id| (waiter_id, offset))
+            .collect::<Vec<_>>();
+        let woken = wake_tokens.len() as u32;
+        let after = state.projection();
         drop(state);
         for waiter in wake {
             waiter.wake();
         }
-        VMResult::Success(woken)
+        VMResult::Success(SharedNotifyProtocolResult {
+            woken,
+            wake_tokens,
+            before,
+            after,
+        })
     }
 
-    fn mark_waiter_timed_out(&self, offset: usize, waiter_id: u64) {
+    pub fn notify_waiters(&self, offset: usize, count: u32) -> VMResult<u32> {
+        let protocol = vm_try!(self.notify_waiters_protocol(offset, count));
+        VMResult::Success(protocol.woken)
+    }
+
+    fn consume_wake(&self, address: usize, waiter_id: u64) -> SharedAtomicProtocolResult<i32> {
         let mut state = self.state.lock();
-        if let Some(queue) = state.wait_queues.get_mut(&offset) {
-            if let Some(index) = queue.iter().position(|waiter| waiter.id() == waiter_id) {
-                queue.remove(index);
-            }
-            if queue.is_empty() {
-                state.wait_queues.remove(&offset);
-            }
+        let before = state.projection();
+        state.remove_waiter_from_queue(address, waiter_id);
+        state.consume_waiter(waiter_id);
+        let after = state.projection();
+        SharedAtomicProtocolResult {
+            result: 0,
+            before,
+            after,
         }
-        state
-            .waiters
-            .insert(waiter_id, SharedWaitStateProjection::TimedOut);
     }
 
-    fn consume_waiter_result(&self, waiter_id: u64) {
-        self.state.lock().waiters.remove(&waiter_id);
+    fn consume_timed_out(&self, address: usize, waiter_id: u64) -> SharedAtomicProtocolResult<i32> {
+        let mut state = self.state.lock();
+        let before = state.projection();
+        state.timeout_wait(address, waiter_id);
+        state.consume_waiter(waiter_id);
+        let after = state.projection();
+        SharedAtomicProtocolResult {
+            result: 2,
+            before,
+            after,
+        }
     }
 
     #[inline(always)]
@@ -1775,6 +1944,88 @@ impl SharedMemoryObject {
         let mut state = self.state.lock();
         f(&mut state.memory)
     }
+}
+
+macro_rules! define_shared_atomic_store_protocol {
+    ($protocol:ident, $public:ident, $ty:ty) => {
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub(crate) fn $protocol(
+            &self,
+            offset: usize,
+            value: $ty,
+        ) -> VMResult<SharedAtomicProtocolResult<()>> {
+            let mut state = self.state.lock();
+            let before = state.projection();
+            vm_try!(state.memory.$public(offset, value));
+            let after = state.projection();
+            VMResult::Success(SharedAtomicProtocolResult {
+                result: (),
+                before,
+                after,
+            })
+        }
+    };
+}
+
+macro_rules! define_shared_atomic_rmw_protocol {
+    ($protocol:ident, $public:ident, $ty:ty) => {
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub(crate) fn $protocol(
+            &self,
+            offset: usize,
+            op: AtomicRmwOp,
+            value: $ty,
+        ) -> VMResult<SharedAtomicProtocolResult<$ty>> {
+            let mut state = self.state.lock();
+            let before = state.projection();
+            let result = vm_try!(state.memory.$public(offset, op, value));
+            let after = state.projection();
+            VMResult::Success(SharedAtomicProtocolResult {
+                result,
+                before,
+                after,
+            })
+        }
+    };
+}
+
+macro_rules! define_shared_atomic_cmpxchg_protocol {
+    ($protocol:ident, $public:ident, $ty:ty) => {
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub(crate) fn $protocol(
+            &self,
+            offset: usize,
+            expected: $ty,
+            value: $ty,
+        ) -> VMResult<SharedAtomicProtocolResult<$ty>> {
+            let mut state = self.state.lock();
+            let before = state.projection();
+            let result = vm_try!(state.memory.$public(offset, expected, value));
+            let after = state.projection();
+            VMResult::Success(SharedAtomicProtocolResult {
+                result,
+                before,
+                after,
+            })
+        }
+    };
+}
+
+impl SharedMemoryObject {
+    define_shared_atomic_store_protocol!(atomic_store_protocol_u8, atomic_store_u8, u8);
+    define_shared_atomic_store_protocol!(atomic_store_protocol_u16, atomic_store_u16, u16);
+    define_shared_atomic_store_protocol!(atomic_store_protocol_u32, atomic_store_u32, u32);
+    define_shared_atomic_store_protocol!(atomic_store_protocol_u64, atomic_store_u64, u64);
+
+    define_shared_atomic_rmw_protocol!(atomic_rmw_protocol_u8, atomic_rmw_u8, u8);
+    define_shared_atomic_rmw_protocol!(atomic_rmw_protocol_u16, atomic_rmw_u16, u16);
+    define_shared_atomic_rmw_protocol!(atomic_rmw_protocol_u32, atomic_rmw_u32, u32);
+    define_shared_atomic_rmw_protocol!(atomic_rmw_protocol_u64, atomic_rmw_u64, u64);
+
+    define_shared_atomic_cmpxchg_protocol!(atomic_cmpxchg_protocol_u8, atomic_cmpxchg_u8, u8);
+    define_shared_atomic_cmpxchg_protocol!(atomic_cmpxchg_protocol_u16, atomic_cmpxchg_u16, u16);
+    define_shared_atomic_cmpxchg_protocol!(atomic_cmpxchg_protocol_u32, atomic_cmpxchg_u32, u32);
+    define_shared_atomic_cmpxchg_protocol!(atomic_cmpxchg_protocol_u64, atomic_cmpxchg_u64, u64);
 }
 
 #[cfg(test)]
@@ -2038,5 +2289,180 @@ mod tests {
 
         unsorted.wait_queues[0].waiter_ids.push(u64::MAX);
         assert!(!unsorted.proof_ready());
+    }
+
+    #[test]
+    fn shared_memory_projection_parts_capture_protocol_fields() {
+        let shared = SharedMemoryObject::new(1, 1);
+        assert!(matches!(
+            shared.atomic_store_u32(0, 21),
+            VMResult::Success(())
+        ));
+
+        let registration = shared
+            .register_wait32_protocol(0, 21)
+            .unwrap()
+            .expect("expected waiting registration");
+        let projection = shared.projection();
+        let parts = projection.formal_builder_parts();
+
+        assert!(projection.proof_ready());
+        assert_eq!(parts.memory.bytes, projection.memory.bytes);
+        assert_eq!(parts.memory.current_pages, projection.memory.current_pages);
+        assert_eq!(parts.memory.max_pages, projection.memory.max_pages);
+        assert_eq!(parts.memory.shared, projection.memory.shared);
+        assert_eq!(parts.wait_queues, projection.wait_queues);
+        assert_eq!(parts.waiters, projection.waiters);
+        assert_eq!(parts.next_waiter_id, projection.next_waiter_id);
+        assert_eq!(registration.after, projection);
+    }
+
+    #[test]
+    fn shared_memory_proof_ready_rejects_protocol_violations() {
+        let shared = SharedMemoryObject::new(1, 1);
+        assert!(matches!(
+            shared.atomic_store_u32(0, 33),
+            VMResult::Success(())
+        ));
+        let _registration = shared
+            .register_wait32_protocol(0, 33)
+            .unwrap()
+            .expect("expected waiting registration");
+
+        let projection = shared.projection();
+        assert!(projection.proof_ready());
+
+        let mut duplicate_waiter = projection.clone();
+        duplicate_waiter
+            .waiters
+            .push(duplicate_waiter.waiters[0].clone());
+        assert!(!duplicate_waiter.proof_ready());
+
+        let mut unqueued_waiting = projection.clone();
+        unqueued_waiting.wait_queues.clear();
+        assert!(!unqueued_waiting.proof_ready());
+
+        let mut queued_notified = projection.clone();
+        queued_notified.waiters[0].state = SharedWaitStateProjection::Notified;
+        assert!(!queued_notified.proof_ready());
+
+        let mut local_like = projection.clone();
+        local_like.memory.shared = false;
+        assert!(!local_like.proof_ready());
+    }
+
+    #[test]
+    fn shared_wait_protocol_wrappers_track_before_after_states() {
+        let shared = SharedMemoryObject::new(1, 1);
+        assert!(matches!(
+            shared.atomic_store_u32(0, 7),
+            VMResult::Success(())
+        ));
+        assert!(shared.register_wait32_protocol(0, 9).unwrap().is_none());
+
+        let first = shared
+            .register_wait32_protocol(0, 7)
+            .unwrap()
+            .expect("expected first waiting registration");
+        assert_eq!(first.ticket, (1, 0));
+        assert_eq!(first.after, first.before.protocol_register_wait(0));
+
+        let second = shared
+            .register_wait32_protocol(0, 7)
+            .unwrap()
+            .expect("expected second waiting registration");
+        assert_eq!(second.ticket, (2, 0));
+        assert_eq!(second.before, first.after);
+        assert_eq!(second.after, second.before.protocol_register_wait(0));
+
+        let notify = shared.notify_waiters_protocol(0, 1).unwrap();
+        let (expected_after_notify, woke) = notify.before.protocol_notify_waiters(0, 1);
+        assert_eq!(notify.before, second.after);
+        assert_eq!(notify.after, expected_after_notify);
+        assert_eq!(notify.woken, 1);
+        assert_eq!(notify.wake_tokens, vec![(woke[0].waiter_id, 0)]);
+
+        let first_waiter_id = first.ticket.0;
+        let finish_notified = first.wait.finish_notified_protocol(&shared);
+        assert_eq!(finish_notified.before, notify.after);
+        assert_eq!(
+            finish_notified.after,
+            finish_notified
+                .before
+                .protocol_consume_waiter(first_waiter_id)
+        );
+        assert_eq!(finish_notified.result, 0);
+
+        let second_waiter_id = second.ticket.0;
+        let finish_timeout = second.wait.finish_timeout_protocol(&shared);
+        assert_eq!(finish_timeout.before, finish_notified.after);
+        assert_eq!(
+            finish_timeout.after,
+            finish_timeout
+                .before
+                .protocol_timeout_wait(0, second_waiter_id)
+        );
+        assert_eq!(finish_timeout.result, 2);
+        assert_eq!(shared.projection(), finish_timeout.after);
+    }
+
+    #[test]
+    fn shared_atomic_protocol_wrappers_cover_all_widths() {
+        let shared = SharedMemoryObject::new(1, 1);
+
+        let store_u8 = shared.atomic_store_protocol_u8(0, 0x10).unwrap();
+        let store_u16 = shared.atomic_store_protocol_u16(2, 0x1122).unwrap();
+        let store_u32 = shared.atomic_store_protocol_u32(4, 0x3344_5566).unwrap();
+        let store_u64 = shared
+            .atomic_store_protocol_u64(8, 0x0102_0304_0506_0708)
+            .unwrap();
+        assert!(store_u8.after.proof_ready());
+        assert_eq!(shared.atomic_load_u8(0).unwrap(), 0x10);
+        assert_eq!(shared.atomic_load_u16(2).unwrap(), 0x1122);
+        assert_eq!(shared.atomic_load_u32(4).unwrap(), 0x3344_5566);
+        assert_eq!(shared.atomic_load_u64(8).unwrap(), 0x0102_0304_0506_0708);
+        assert_eq!(store_u16.after, store_u32.before);
+        assert_eq!(store_u32.after, store_u64.before);
+
+        let rmw_u8 = shared
+            .atomic_rmw_protocol_u8(0, AtomicRmwOp::Add, 1)
+            .unwrap();
+        let rmw_u16 = shared
+            .atomic_rmw_protocol_u16(2, AtomicRmwOp::Xor, 0x00ff)
+            .unwrap();
+        let rmw_u32 = shared
+            .atomic_rmw_protocol_u32(4, AtomicRmwOp::Add, 1)
+            .unwrap();
+        let rmw_u64 = shared
+            .atomic_rmw_protocol_u64(8, AtomicRmwOp::Xchg, 0xf0e0_d0c0_b0a0_9080)
+            .unwrap();
+        assert_eq!(rmw_u8.result, 0x10);
+        assert_eq!(rmw_u16.result, 0x1122);
+        assert_eq!(rmw_u32.result, 0x3344_5566);
+        assert_eq!(rmw_u64.result, 0x0102_0304_0506_0708);
+        assert_eq!(shared.atomic_load_u8(0).unwrap(), 0x11);
+        assert_eq!(shared.atomic_load_u16(2).unwrap(), 0x11dd);
+        assert_eq!(shared.atomic_load_u32(4).unwrap(), 0x3344_5567);
+        assert_eq!(shared.atomic_load_u64(8).unwrap(), 0xf0e0_d0c0_b0a0_9080);
+
+        let cmpxchg_u8 = shared.atomic_cmpxchg_protocol_u8(0, 0x11, 0xaa).unwrap();
+        let cmpxchg_u16 = shared
+            .atomic_cmpxchg_protocol_u16(2, 0xffff, 0xbeef)
+            .unwrap();
+        let cmpxchg_u32 = shared
+            .atomic_cmpxchg_protocol_u32(4, 0x3344_5567, 0x4455_6677)
+            .unwrap();
+        let cmpxchg_u64 = shared
+            .atomic_cmpxchg_protocol_u64(8, 0xf0e0_d0c0_b0a0_9080, 0x8877_6655_4433_2211)
+            .unwrap();
+        assert_eq!(cmpxchg_u8.result, 0x11);
+        assert_eq!(cmpxchg_u16.result, 0x11dd);
+        assert_eq!(cmpxchg_u32.result, 0x3344_5567);
+        assert_eq!(cmpxchg_u64.result, 0xf0e0_d0c0_b0a0_9080);
+        assert_eq!(shared.atomic_load_u8(0).unwrap(), 0xaa);
+        assert_eq!(shared.atomic_load_u16(2).unwrap(), 0x11dd);
+        assert_eq!(shared.atomic_load_u32(4).unwrap(), 0x4455_6677);
+        assert_eq!(shared.atomic_load_u64(8).unwrap(), 0x8877_6655_4433_2211);
+        assert!(cmpxchg_u64.after.proof_ready());
     }
 }

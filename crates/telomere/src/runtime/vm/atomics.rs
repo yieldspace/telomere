@@ -1,6 +1,5 @@
 use super::*;
 use crate::common::AtomicRmwOp;
-use crate::common::AtomicWaitResult;
 use vstd::prelude::*;
 
 verus! {
@@ -2244,11 +2243,11 @@ pub unsafe fn op_memory_atomic_notify_shared(
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
     let (start, count) = vm_try!(pop_notify_operands(tail_code, &mut facade));
-    let woken = vm_try!(facade
+    let notify = vm_try!(facade
         .gc_ref()
         .shared_memory(facade.default_shared_memory_id_unchecked())
-        .notify_waiters(start, count));
-    push_u32_and_continue(tail_code, &mut facade, 1, woken)
+        .notify_waiters_protocol(start, count));
+    push_u32_and_continue(tail_code, &mut facade, 1, notify.woken)
 }
 
 /// WebAssembly `memory.atomic.notify` on unshared indexed memory.
@@ -2293,11 +2292,11 @@ pub unsafe fn op_memory_atomic_notify_indexed_shared(
     let mut facade = ExecuteContextFacade::new(ctx);
     let (start, memidx, count) = vm_try!(pop_notify_operands_indexed(tail_code, &mut facade));
     let shared_id = unsafe { facade.shared_memory_id_at_unchecked(memidx) };
-    let woken = vm_try!(facade
+    let notify = vm_try!(facade
         .gc_ref()
         .shared_memory(shared_id)
-        .notify_waiters(start, count));
-    push_u32_and_continue(tail_code, &mut facade, 2, woken)
+        .notify_waiters_protocol(start, count));
+    push_u32_and_continue(tail_code, &mut facade, 2, notify.woken)
 }
 
 /// WebAssembly threads `memory.atomic.wait` completion helper.
@@ -2327,7 +2326,8 @@ unsafe fn enqueue_wait_pending(
         facade.local_reference(),
         resume_pc,
     );
-    facade.pending_mut()
+    facade
+        .pending_mut()
         .push_pending(crate::runtime::memory_effect::PendingOp::MemoryWait(
             crate::runtime::memory_effect::MemoryWaitPending {
                 task_id,
@@ -2383,12 +2383,12 @@ pub unsafe fn op_memory_atomic_wait32_shared(
     let (start, expected, timeout_ns) = vm_try!(pop_wait32_operands(tail_code, &mut facade));
     let shared_id = unsafe { facade.default_shared_memory_id_unchecked() };
     let shared = facade.gc_ref().shared_memory(shared_id);
-    match vm_try!(shared.register_wait32(start, expected)) {
-        AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, &mut facade, 1),
-        AtomicWaitResult::Pending(wait) => {
+    match vm_try!(shared.register_wait32_protocol(start, expected)) {
+        None => finish_wait_not_equal(tail_code, &mut facade, 1),
+        Some(protocol) => {
             let resume_pc = tail_code.offset(1);
             let shared = facade.clone_shared_memory(shared_id);
-            enqueue_wait_pending(&mut facade, shared, wait, timeout_ns, resume_pc);
+            enqueue_wait_pending(&mut facade, shared, protocol.wait, timeout_ns, resume_pc);
             facade.set_cont(resume_pc);
             VMResult::Success(())
         }
@@ -2440,12 +2440,12 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared(
         vm_try!(pop_wait32_operands_indexed(tail_code, &mut facade));
     let shared_id = unsafe { facade.shared_memory_id_at_unchecked(memidx) };
     let shared = facade.gc_ref().shared_memory(shared_id);
-    match vm_try!(shared.register_wait32(start, expected)) {
-        AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, &mut facade, 2),
-        AtomicWaitResult::Pending(wait) => {
+    match vm_try!(shared.register_wait32_protocol(start, expected)) {
+        None => finish_wait_not_equal(tail_code, &mut facade, 2),
+        Some(protocol) => {
             let resume_pc = tail_code.offset(2);
             let shared = facade.clone_shared_memory(shared_id);
-            enqueue_wait_pending(&mut facade, shared, wait, timeout_ns, resume_pc);
+            enqueue_wait_pending(&mut facade, shared, protocol.wait, timeout_ns, resume_pc);
             facade.set_cont(resume_pc);
             VMResult::Success(())
         }
@@ -2496,12 +2496,12 @@ pub unsafe fn op_memory_atomic_wait64_shared(
     let (start, expected, timeout_ns) = vm_try!(pop_wait64_operands(tail_code, &mut facade));
     let shared_id = unsafe { facade.default_shared_memory_id_unchecked() };
     let shared = facade.gc_ref().shared_memory(shared_id);
-    match vm_try!(shared.register_wait64(start, expected)) {
-        AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, &mut facade, 1),
-        AtomicWaitResult::Pending(wait) => {
+    match vm_try!(shared.register_wait64_protocol(start, expected)) {
+        None => finish_wait_not_equal(tail_code, &mut facade, 1),
+        Some(protocol) => {
             let resume_pc = tail_code.offset(1);
             let shared = facade.clone_shared_memory(shared_id);
-            enqueue_wait_pending(&mut facade, shared, wait, timeout_ns, resume_pc);
+            enqueue_wait_pending(&mut facade, shared, protocol.wait, timeout_ns, resume_pc);
             facade.set_cont(resume_pc);
             VMResult::Success(())
         }
@@ -2553,12 +2553,12 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
         vm_try!(pop_wait64_operands_indexed(tail_code, &mut facade));
     let shared_id = unsafe { facade.shared_memory_id_at_unchecked(memidx) };
     let shared = facade.gc_ref().shared_memory(shared_id);
-    match vm_try!(shared.register_wait64(start, expected)) {
-        AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, &mut facade, 2),
-        AtomicWaitResult::Pending(wait) => {
+    match vm_try!(shared.register_wait64_protocol(start, expected)) {
+        None => finish_wait_not_equal(tail_code, &mut facade, 2),
+        Some(protocol) => {
             let resume_pc = tail_code.offset(2);
             let shared = facade.clone_shared_memory(shared_id);
-            enqueue_wait_pending(&mut facade, shared, wait, timeout_ns, resume_pc);
+            enqueue_wait_pending(&mut facade, shared, protocol.wait, timeout_ns, resume_pc);
             facade.set_cont(resume_pc);
             VMResult::Success(())
         }
@@ -2633,7 +2633,8 @@ mod tests {
         common::{
             stack::{CachedMemoryKind, CallFrameCache},
             store::InstanceId,
-            ExecuteContext, GcRef, LocalReference, Operand, SharedMemoryObject, Store, StoreInner,
+            AtomicWaitResult, ExecuteContext, GcRef, LocalReference, MemoryHandle, Operand,
+            SharedMemoryObject, Store, StoreInner,
         },
         runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter},
     };
@@ -2657,13 +2658,31 @@ mod tests {
         pending_effects: &'a mut u32,
         pending_ops: &'a mut VecDeque<PendingOp>,
     ) -> ExecuteContext<'a> {
+        test_context_with_frame(
+            stack,
+            store,
+            gc,
+            pending_effects,
+            pending_ops,
+            frame(CachedMemoryKind::Local, 1),
+        )
+    }
+
+    fn test_context_with_frame<'a>(
+        stack: &'a mut Stack,
+        store: &'a Store,
+        gc: &'a mut StoreInner,
+        pending_effects: &'a mut u32,
+        pending_ops: &'a mut VecDeque<PendingOp>,
+        frame: CallFrameCache,
+    ) -> ExecuteContext<'a> {
         ExecuteContext::new(
             stack,
             LocalReference {
                 local_top: 0,
                 local_size: 0,
             },
-            frame(CachedMemoryKind::Local, 1),
+            frame,
             store,
             gc,
             PendingOpEmitter::from_parts(9, pending_effects, pending_ops),
@@ -2826,5 +2845,137 @@ mod tests {
         }];
         let result = unsafe { op_memory_atomic_wait32(wait_program.as_ptr(), &mut ctx) };
         assert!(matches!(result, VMResult::InvalidOperand));
+    }
+
+    #[test]
+    fn shared_wait_and_notify_helpers_route_through_protocol_wrappers() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops = VecDeque::new();
+        let mut stack = Stack::new(64);
+        let shared_id = match gc.alloc_shared_memory(SharedMemoryObject::new(1, 1)) {
+            MemoryHandle::Shared(id) => id,
+            MemoryHandle::Local(_) => panic!("expected shared memory handle"),
+        };
+        let shared = gc.clone_shared_memory(shared_id);
+        shared.atomic_store_u32(0, 7).unwrap();
+
+        {
+            let mut ctx = test_context_with_frame(
+                &mut stack,
+                &store,
+                &mut gc,
+                &mut pending_effects,
+                &mut pending_ops,
+                frame(CachedMemoryKind::Shared, shared_id.raw()),
+            );
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            facade.stack_mut().push_u32(0).unwrap();
+            facade.stack_mut().push_u32(7).unwrap();
+            facade.stack_mut().push_i64(-1).unwrap();
+            let wait_program = [
+                Instr {
+                    operand: Operand {
+                        memarg: MemArg {
+                            align: 2,
+                            offset: 0,
+                        },
+                    },
+                },
+                Instr { op: stop_op },
+            ];
+            unsafe {
+                op_memory_atomic_wait32_shared(wait_program.as_ptr(), &mut ctx).unwrap();
+            }
+        }
+
+        assert_eq!(pending_effects, 1);
+        assert_eq!(pending_ops.len(), 1);
+        let after_wait = shared.projection();
+        assert_eq!(after_wait.wait_queues.len(), 1);
+        assert_eq!(after_wait.wait_queues[0].waiter_ids, vec![1]);
+
+        {
+            let mut ctx = test_context_with_frame(
+                &mut stack,
+                &store,
+                &mut gc,
+                &mut pending_effects,
+                &mut pending_ops,
+                frame(CachedMemoryKind::Shared, shared_id.raw()),
+            );
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            facade.stack_mut().push_u32(0).unwrap();
+            facade.stack_mut().push_u32(1).unwrap();
+            let notify_program = [
+                Instr {
+                    operand: Operand {
+                        memarg: MemArg {
+                            align: 2,
+                            offset: 0,
+                        },
+                    },
+                },
+                Instr { op: stop_op },
+            ];
+            unsafe {
+                op_memory_atomic_notify_shared(notify_program.as_ptr(), &mut ctx).unwrap();
+            }
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            assert_eq!(facade.stack_mut().pop_u32(), 1);
+        }
+
+        let after_notify = shared.projection();
+        assert!(after_notify.wait_queues.is_empty());
+        assert_ne!(after_notify.waiters[0].state, after_wait.waiters[0].state);
+    }
+
+    #[test]
+    fn shared_wait64_not_equal_returns_immediate_code() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops = VecDeque::new();
+        let mut stack = Stack::new(64);
+        let shared_id = match gc.alloc_shared_memory(SharedMemoryObject::new(1, 1)) {
+            MemoryHandle::Shared(id) => id,
+            MemoryHandle::Local(_) => panic!("expected shared memory handle"),
+        };
+        let shared = gc.clone_shared_memory(shared_id);
+        shared.atomic_store_u64(8, 0x0102_0304_0506_0708).unwrap();
+
+        let mut ctx = test_context_with_frame(
+            &mut stack,
+            &store,
+            &mut gc,
+            &mut pending_effects,
+            &mut pending_ops,
+            frame(CachedMemoryKind::Shared, shared_id.raw()),
+        );
+        {
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            facade.stack_mut().push_u32(8).unwrap();
+            facade.stack_mut().push_u64(0xffff_ffff_ffff_ffff).unwrap();
+            facade.stack_mut().push_i64(0).unwrap();
+        }
+        let wait_program = [
+            Instr {
+                operand: Operand {
+                    memarg: MemArg {
+                        align: 3,
+                        offset: 0,
+                    },
+                },
+            },
+            Instr { op: stop_op },
+        ];
+        unsafe {
+            op_memory_atomic_wait64_shared(wait_program.as_ptr(), &mut ctx).unwrap();
+        }
+        let mut facade = ExecuteContextFacade::new(&mut ctx);
+        assert_eq!(facade.stack_mut().pop_i32(), wait_result_not_equal());
+        assert_eq!(pending_effects, 0);
+        assert!(pending_ops.is_empty());
     }
 }
