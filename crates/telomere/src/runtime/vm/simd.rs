@@ -6,6 +6,7 @@ use crate::{
     },
 };
 use telomere_macros::define_simd_operation;
+use vstd::prelude::*;
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::{
@@ -13,6 +14,43 @@ use crate::{
     runtime::vm::facade_call_next,
     Stack, VMResult,
 };
+
+verus! {
+
+pub open spec fn simd_continue_cont(step: crate::common::formal::SimdStep) -> nat {
+    match step {
+        crate::common::formal::SimdStep::ReplaceTop { next_cont, .. } => next_cont,
+        crate::common::formal::SimdStep::Load { next_cont, .. } => next_cont,
+        crate::common::formal::SimdStep::Store { next_cont, .. } => next_cont,
+    }
+}
+
+pub proof fn lemma_simd_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::SimdStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Simd(step),
+        ) == crate::common::formal::spec_step_simd(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_simd(before, step).0,
+        ),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_simd(before, step).1,
+        ) {
+            crate::common::formal::spec_step_simd(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_simd(before, step).0.context.cont_addr
+                == simd_continue_cont(step)
+        },
+{
+}
+
+} // verus!
 
 /// Telomere internal SIMD local-memory push helper.
 ///

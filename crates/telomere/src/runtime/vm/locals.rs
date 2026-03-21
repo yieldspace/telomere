@@ -18,6 +18,47 @@ pub open spec fn spec_select_result(
     crate::common::formal::stack_select_bytes(view, size, cond)
 }
 
+pub open spec fn local_continue_cont(step: crate::common::formal::LocalStep) -> nat {
+    match step {
+        crate::common::formal::LocalStep::Drop { next_cont, .. } => next_cont,
+        crate::common::formal::LocalStep::Select { next_cont, .. } => next_cont,
+        crate::common::formal::LocalStep::Get { next_cont, .. } => next_cont,
+        crate::common::formal::LocalStep::Set { next_cont, .. } => next_cont,
+        crate::common::formal::LocalStep::Tee { next_cont, .. } => next_cont,
+    }
+}
+
+pub proof fn lemma_local_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::LocalStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Local(step),
+        ) == crate::common::formal::spec_step_local(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_local(before, step).0,
+        ),
+        crate::common::formal::current_default_memory_of(
+            crate::common::formal::spec_step_local(before, step).0,
+        ) == crate::common::formal::current_default_memory_of(before),
+        crate::common::formal::caller_default_memory_of(
+            crate::common::formal::spec_step_local(before, step).0,
+        ) == crate::common::formal::caller_default_memory_of(before),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_local(before, step).1,
+        ) {
+            crate::common::formal::spec_step_local(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_local(before, step).0.context.cont_addr
+                == local_continue_cont(step)
+        },
+{
+}
+
 } // verus!
 
 #[inline(always)]

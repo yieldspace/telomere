@@ -30,6 +30,50 @@ pub open spec fn spec_table_grow_result(
     crate::common::formal::table_grow_result(table, count, value)
 }
 
+pub open spec fn table_continue_cont(step: crate::common::formal::TableStep) -> nat {
+    match step {
+        crate::common::formal::TableStep::Get { next_cont, .. } => next_cont,
+        crate::common::formal::TableStep::Set { next_cont, .. } => next_cont,
+        crate::common::formal::TableStep::Size { next_cont, .. } => next_cont,
+        crate::common::formal::TableStep::Grow { next_cont, .. } => next_cont,
+        crate::common::formal::TableStep::Fill { next_cont, .. } => next_cont,
+        crate::common::formal::TableStep::Copy { next_cont, .. } => next_cont,
+        crate::common::formal::TableStep::Init { next_cont, .. } => next_cont,
+        crate::common::formal::TableStep::ElemDrop { next_cont, .. } => next_cont,
+    }
+}
+
+pub proof fn lemma_table_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::TableStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Table(step),
+        ) == crate::common::formal::spec_step_table(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_table(before, step).0,
+        ),
+        crate::common::formal::current_default_memory_of(
+            crate::common::formal::spec_step_table(before, step).0,
+        ) == crate::common::formal::current_default_memory_of(before),
+        crate::common::formal::caller_default_memory_of(
+            crate::common::formal::spec_step_table(before, step).0,
+        ) == crate::common::formal::caller_default_memory_of(before),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_table(before, step).1,
+        ) {
+            crate::common::formal::spec_step_table(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_table(before, step).0.context.cont_addr
+                == table_continue_cont(step)
+        },
+{
+}
+
 } // verus!
 
 #[inline(always)]

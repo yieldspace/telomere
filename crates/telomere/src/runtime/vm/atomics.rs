@@ -42,6 +42,41 @@ pub open spec fn spec_atomic_start_indexed_result(
     }
 }
 
+pub open spec fn atomic_continue_cont(step: crate::common::formal::AtomicStep) -> nat {
+    match step {
+        crate::common::formal::AtomicStep::Notify { next_cont, .. } => next_cont,
+        crate::common::formal::AtomicStep::Wait { next_cont, .. } => next_cont,
+        crate::common::formal::AtomicStep::Store { next_cont, .. } => next_cont,
+        crate::common::formal::AtomicStep::Rmw { next_cont, .. } => next_cont,
+        crate::common::formal::AtomicStep::Cmpxchg { next_cont, .. } => next_cont,
+    }
+}
+
+pub proof fn lemma_atomic_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::AtomicStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Atomic(step),
+        ) == crate::common::formal::spec_step_atomic(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_atomic(before, step).0,
+        ),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_atomic(before, step).1,
+        ) {
+            crate::common::formal::spec_step_atomic(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_atomic(before, step).0.context.cont_addr
+                == atomic_continue_cont(step)
+        },
+{
+}
+
 } // verus!
 
 #[inline(always)]

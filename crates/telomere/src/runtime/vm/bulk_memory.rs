@@ -1,4 +1,43 @@
 use super::*;
+use vstd::prelude::*;
+
+verus! {
+
+pub open spec fn bulk_memory_continue_cont(step: crate::common::formal::BulkMemoryStep) -> nat {
+    match step {
+        crate::common::formal::BulkMemoryStep::Init { next_cont, .. } => next_cont,
+        crate::common::formal::BulkMemoryStep::Copy { next_cont, .. } => next_cont,
+        crate::common::formal::BulkMemoryStep::Fill { next_cont, .. } => next_cont,
+        crate::common::formal::BulkMemoryStep::DataDrop { next_cont, .. } => next_cont,
+    }
+}
+
+pub proof fn lemma_bulk_memory_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::BulkMemoryStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::BulkMemory(step),
+        ) == crate::common::formal::spec_step_bulk_memory(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_bulk_memory(before, step).0,
+        ),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_bulk_memory(before, step).1,
+        ) {
+            crate::common::formal::spec_step_bulk_memory(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_bulk_memory(before, step).0.context.cont_addr
+                == bulk_memory_continue_cont(step)
+        },
+{
+}
+
+} // verus!
 
 #[inline(always)]
 unsafe fn pop_copy_operands(facade: &mut ExecuteContextFacade<'_, '_>) -> (u32, u32, u32) {

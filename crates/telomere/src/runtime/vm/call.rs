@@ -1,4 +1,25 @@
 use super::*;
+use vstd::prelude::*;
+
+verus! {
+
+pub proof fn lemma_call_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::CallStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Call(step),
+        ) == crate::common::formal::spec_step_call(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_call(before, step).0,
+        ),
+{
+}
+
+} // verus!
 
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.

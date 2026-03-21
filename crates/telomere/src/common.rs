@@ -763,6 +763,35 @@ struct ExecContextTokenProjectionParts {
     task_id: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct FunctionProjectionParts {
+    pub(crate) instance_raw: u32,
+    pub(crate) entry_pc: usize,
+    pub(crate) param_size: u32,
+    pub(crate) local_size: u32,
+    pub(crate) type_id: u32,
+    pub(crate) default_memory_present: bool,
+    pub(crate) default_memory_shared: bool,
+    pub(crate) default_memory_raw: u32,
+    pub(crate) is_host: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct CoreStepStateProjectionParts {
+    pub(crate) stack: stack::StackProjectionParts,
+    pub(crate) context: ExecContextTokenProjectionParts,
+    pub(crate) tables: Vec<(u32, store::TableProjectionParts)>,
+    pub(crate) globals: Vec<(u32, Vec<u8>)>,
+    pub(crate) functions: Vec<(u32, FunctionProjectionParts)>,
+    pub(crate) local_memories: Vec<(u32, memory::LinearMemoryProjectionParts)>,
+    pub(crate) shared_memories: Vec<(u32, memory::SharedMemoryProjectionParts)>,
+    pub(crate) data_segments: Vec<(u32, Vec<u8>)>,
+    pub(crate) elem_segments: Vec<(u32, Vec<u32>)>,
+    pub(crate) frame_metadata_len: usize,
+}
+
 pub(crate) struct ExecuteContextFacade<'ctx, 'store> {
     ctx: &'ctx mut ExecuteContext<'store>,
 }
@@ -809,6 +838,14 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
     #[inline(always)]
     pub(crate) fn token_projection(&self) -> Option<ExecContextTokenProjection> {
         self.projection().token_projection()
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[inline(always)]
+    pub(crate) fn core_step_state_projection_parts(
+        &mut self,
+    ) -> Option<CoreStepStateProjectionParts> {
+        self.as_ctx_mut().core_step_state_projection_parts()
     }
 
     #[inline(always)]
@@ -2744,6 +2781,40 @@ impl ProofReadyExecuteContextProjection {
     }
 }
 
+impl ExecContextTokenProjection {
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn formal_builder_parts(&self) -> ExecContextTokenProjectionParts {
+        let current = self.current_frame.formal_builder_parts();
+        let caller = self
+            .caller_frame
+            .as_ref()
+            .map(FrameProjection::formal_builder_parts);
+        ExecContextTokenProjectionParts {
+            current_return_pc: current.return_pc,
+            current_instance_raw: current.instance_raw,
+            current_default_memory_present: current.default_memory_present,
+            current_default_memory_shared: current.default_memory_shared,
+            current_default_memory_raw: current.default_memory_raw,
+            current_prev_local_top: current.prev_local_top,
+            current_prev_local_size: current.prev_local_size,
+            caller_present: caller.is_some(),
+            caller_return_pc: caller.map(|frame| frame.return_pc).unwrap_or(0),
+            caller_instance_raw: caller.map(|frame| frame.instance_raw).unwrap_or(0),
+            caller_default_memory_present: caller
+                .map(|frame| frame.default_memory_present)
+                .unwrap_or(false),
+            caller_default_memory_shared: caller
+                .map(|frame| frame.default_memory_shared)
+                .unwrap_or(false),
+            caller_default_memory_raw: caller.map(|frame| frame.default_memory_raw).unwrap_or(0),
+            caller_prev_local_top: caller.map(|frame| frame.prev_local_top).unwrap_or(0),
+            caller_prev_local_size: caller.map(|frame| frame.prev_local_size).unwrap_or(0),
+            cont_addr: self.cont_addr,
+            task_id: self.task_id,
+        }
+    }
+}
+
 macro_rules! define_execute_context_atomic_load {
     ($default_local:ident, $default_shared:ident, $indexed_local:ident, $indexed_shared:ident, $store_local:ident, $store_shared:ident, $ty:ty) => {
         #[inline(always)]
@@ -3019,6 +3090,131 @@ impl<'a> ExecuteContext<'a> {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn projection(&self) -> ExecuteContextProjection {
         self.snapshot().projection(self.stack, self.gc)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn function_projection_parts(&self, funcaddr: GcRef) -> FunctionProjectionParts {
+        let func = self.gc.get_func(funcaddr);
+        let instance = self.gc.instance(func.instance);
+        let default_memory = MemoryHandleProjection::from_handle(
+            instance
+                .memory_slots
+                .first()
+                .copied()
+                .and_then(|slot| slot.handle()),
+        );
+        FunctionProjectionParts {
+            instance_raw: func.instance.raw(),
+            // Formal call semantics treat wasm entry as the first instruction in the body.
+            entry_pc: 0,
+            param_size: func.param_size,
+            local_size: func.local_size,
+            type_id: func.typeidx.0,
+            default_memory_present: default_memory.present,
+            default_memory_shared: default_memory.shared,
+            default_memory_raw: default_memory.raw,
+            is_host: func.is_host_func(),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn core_step_state_projection_parts(
+        &mut self,
+    ) -> Option<CoreStepStateProjectionParts> {
+        let stack_projection = self.stack.projection(&self.local_reference, self.gc);
+        if !stack_projection.proof_ready() {
+            return None;
+        }
+        let context_projection = self.projection().token_projection()?;
+
+        let table_addrs = self.instance().tables.as_slice().to_vec();
+        let global_addrs = self.instance().globals.as_slice().to_vec();
+        let func_addrs = self.instance().funcs.as_slice().to_vec();
+        let memory_slots = self.instance().memory_slots.clone();
+
+        let tables = table_addrs
+            .into_iter()
+            .map(|addr| {
+                (
+                    addr.get(),
+                    self.gc.table_projection(addr).formal_builder_parts(),
+                )
+            })
+            .collect();
+        let globals = global_addrs
+            .into_iter()
+            .map(|addr| (addr.get(), self.gc.global_projection(addr).bytes))
+            .collect();
+        let functions = func_addrs
+            .into_iter()
+            .map(|addr| (addr.get(), self.function_projection_parts(addr)))
+            .collect();
+
+        let mut local_memories = Vec::new();
+        let mut shared_memories = Vec::new();
+        for slot in memory_slots {
+            match slot.handle() {
+                Some(MemoryHandle::Local(id))
+                    if !local_memories.iter().any(|(raw, _)| *raw == id.raw()) =>
+                {
+                    local_memories.push((
+                        id.raw(),
+                        self.gc.local_memory(id).projection().formal_builder_parts(),
+                    ));
+                }
+                Some(MemoryHandle::Shared(id))
+                    if !shared_memories.iter().any(|(raw, _)| *raw == id.raw()) =>
+                {
+                    shared_memories.push((
+                        id.raw(),
+                        self.gc
+                            .shared_memory(id)
+                            .projection()
+                            .formal_builder_parts(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        local_memories.sort_by_key(|(raw, _)| *raw);
+        shared_memories.sort_by_key(|(raw, _)| *raw);
+
+        let instance_id = self.instance_id();
+        let segments = self.store.lock_segments();
+        let mut data_segments = segments
+            .data
+            .iter()
+            .filter(|((owner, _), _)| *owner == instance_id)
+            .map(|((_, idx), data)| (*idx, data.init.clone()))
+            .collect::<Vec<_>>();
+        let mut elem_segments = segments
+            .elems
+            .iter()
+            .filter(|((owner, _), _)| *owner == instance_id)
+            .map(|((_, idx), elem)| {
+                let init = match &elem.init {
+                    ElemInit::FuncIdx(values) => values.clone(),
+                    ElemInit::ConstExpr(_) => Vec::new(),
+                };
+                (*idx, init)
+            })
+            .collect::<Vec<_>>();
+        drop(segments);
+        data_segments.sort_by_key(|(idx, _)| *idx);
+        elem_segments.sort_by_key(|(idx, _)| *idx);
+
+        Some(CoreStepStateProjectionParts {
+            stack: stack_projection.formal_builder_parts(),
+            context: context_projection.formal_builder_parts(),
+            tables,
+            globals,
+            functions,
+            local_memories,
+            shared_memories,
+            data_segments,
+            elem_segments,
+            frame_metadata_len: stack::call_stack_metadata_len(),
+        })
     }
 
     pub(crate) fn stack_ref(&self) -> &Stack {
@@ -4224,6 +4420,7 @@ mod tests {
     use super::*;
     use crate::runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter};
     use std::collections::VecDeque;
+    use std::sync::Arc;
 
     fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
         CallFrameCache {
@@ -4669,5 +4866,166 @@ mod tests {
             gc.global_projection(global).bytes,
             0xaabb_ccdd_u32.to_le_bytes().to_vec()
         );
+    }
+
+    #[test]
+    fn core_step_state_projection_parts_capture_runtime_state() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops: VecDeque<PendingOp> = VecDeque::new();
+
+        let local = match gc.alloc_local_memory(LocalMemoryObject::new(1, 2)) {
+            MemoryHandle::Local(id) => id,
+            MemoryHandle::Shared(_) => panic!("expected local memory"),
+        };
+        let shared = match gc.alloc_shared_memory(SharedMemoryObject::new(1, 2)) {
+            MemoryHandle::Shared(id) => id,
+            MemoryHandle::Local(_) => panic!("expected shared memory"),
+        };
+        gc.local_write_bytes(local, 0, &[1, 2, 3, 4]).unwrap();
+        gc.shared_write_bytes(shared, 0, &[5, 6, 7, 8]).unwrap();
+
+        let global = gc.new_global_data4(0x1122_3344);
+        let table = gc.new_table(TableType {
+            reftype: RefType::FuncRef,
+            limits: Limits {
+                min: 0,
+                max: Some(2),
+            },
+        });
+        let instance = store::InstanceId::from_index(0);
+        let func = gc.new_func(&store::FunctionInstanceData {
+            instance,
+            funcidx: 0,
+            typeidx: TypeIdx(0),
+            param_size: 4,
+            local_size: 8,
+            body: store::FunctionBody::Wasm {
+                locals: LocalsData::default(),
+                code: Arc::<[Instr]>::from(vec![crate::runtime::vm::VM_END]),
+            },
+        });
+        gc.get_table(table).1.push(func.get());
+
+        let _instance_addr = gc.new_instance(&InstanceData {
+            instance_id: 9,
+            module_addr: GcRef(0),
+            globals: vec![global],
+            funcs: vec![func],
+            tables: vec![table],
+            mems: Vec::new(),
+            memory_slots: vec![
+                store::InstanceMemorySlot::Local(local),
+                store::InstanceMemorySlot::Shared(shared),
+            ],
+        });
+
+        {
+            let mut segments = store.lock_segments();
+            segments.data.insert(
+                (9, 0),
+                Data {
+                    init: vec![9, 8, 7],
+                    mode: DataMode::Passive,
+                },
+            );
+            segments.elems.insert(
+                (9, 0),
+                Elem {
+                    kind: RefType::FuncRef,
+                    init: ElemInit::FuncIdx(vec![func.get()]),
+                    mode: ElemMode::Passive,
+                },
+            );
+        }
+
+        let mut stack = Stack::new(256);
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let root = stack
+            .function_call(
+                0,
+                0,
+                CallFrameCache {
+                    code_addr: func,
+                    code_base: std::ptr::null(),
+                    instance,
+                    memory0_kind: CachedMemoryKind::Local,
+                    memory0_raw: local.raw(),
+                },
+                empty,
+                std::ptr::null(),
+                &gc,
+            )
+            .unwrap();
+        let callee = stack
+            .function_call(
+                0,
+                0,
+                CallFrameCache {
+                    code_addr: func,
+                    code_base: std::ptr::null(),
+                    instance,
+                    memory0_kind: CachedMemoryKind::Shared,
+                    memory0_raw: shared.raw(),
+                },
+                root,
+                std::ptr::null(),
+                &gc,
+            )
+            .unwrap();
+
+        let program = [crate::runtime::vm::VM_END, crate::runtime::vm::VM_END];
+        let mut ctx = ExecuteContext::new(
+            &mut stack,
+            callee,
+            CallFrameCache {
+                code_addr: func,
+                code_base: std::ptr::null(),
+                instance,
+                memory0_kind: CachedMemoryKind::Shared,
+                memory0_raw: shared.raw(),
+            },
+            &store,
+            &mut gc,
+            PendingOpEmitter::from_parts(77, &mut pending_effects, &mut pending_ops),
+            unsafe { program.as_ptr().add(1) },
+            77,
+        );
+
+        let parts = ExecuteContextFacade::new(&mut ctx)
+            .core_step_state_projection_parts()
+            .unwrap();
+        assert_eq!(parts.context.task_id, 77);
+        assert_eq!(parts.context.cont_addr, unsafe { program.as_ptr().add(1) }
+            as usize);
+        assert_eq!(parts.functions.len(), 1);
+        assert_eq!(parts.functions[0].0, func.get());
+        assert_eq!(parts.functions[0].1.param_size, 4);
+        assert_eq!(parts.functions[0].1.local_size, 8);
+        assert!(!parts.functions[0].1.is_host);
+        assert_eq!(parts.functions[0].1.default_memory_raw, local.raw());
+        assert_eq!(parts.tables.len(), 1);
+        assert_eq!(parts.tables[0].0, table.get());
+        assert_eq!(parts.tables[0].1.elements, vec![func.get()]);
+        assert_eq!(
+            parts.globals,
+            vec![(global.get(), 0x1122_3344_u32.to_le_bytes().to_vec())]
+        );
+        assert_eq!(parts.local_memories.len(), 1);
+        assert_eq!(parts.local_memories[0].0, local.raw());
+        assert_eq!(&parts.local_memories[0].1.bytes[0..4], &[1, 2, 3, 4]);
+        assert_eq!(parts.shared_memories.len(), 1);
+        assert_eq!(parts.shared_memories[0].0, shared.raw());
+        assert_eq!(
+            &parts.shared_memories[0].1.memory.bytes[0..4],
+            &[5, 6, 7, 8]
+        );
+        assert_eq!(parts.data_segments, vec![(0, vec![9, 8, 7])]);
+        assert_eq!(parts.elem_segments, vec![(0, vec![func.get()])]);
+        assert_eq!(parts.frame_metadata_len, stack::call_stack_metadata_len());
     }
 }

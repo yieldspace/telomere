@@ -498,6 +498,11 @@ impl StackProjection {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn call_stack_metadata_len() -> usize {
+    std::mem::size_of::<CallStackInfo>()
+}
+
 impl Stack {
     pub fn new(size: usize) -> Self {
         let vec = vec![0; size];

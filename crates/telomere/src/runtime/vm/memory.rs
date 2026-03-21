@@ -150,6 +150,46 @@ pub open spec fn spec_load_start_indexed_result(
     }
 }
 
+pub open spec fn memory_continue_cont(step: crate::common::formal::MemoryStep) -> nat {
+    match step {
+        crate::common::formal::MemoryStep::Load { next_cont, .. } => next_cont,
+        crate::common::formal::MemoryStep::Store { next_cont, .. } => next_cont,
+        crate::common::formal::MemoryStep::Size { next_cont, .. } => next_cont,
+        crate::common::formal::MemoryStep::Grow { next_cont, .. } => next_cont,
+    }
+}
+
+pub proof fn lemma_memory_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::MemoryStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Memory(step),
+        ) == crate::common::formal::spec_step_memory(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_memory(before, step).0,
+        ),
+        crate::common::formal::current_default_memory_of(
+            crate::common::formal::spec_step_memory(before, step).0,
+        ) == crate::common::formal::current_default_memory_of(before),
+        crate::common::formal::caller_default_memory_of(
+            crate::common::formal::spec_step_memory(before, step).0,
+        ) == crate::common::formal::caller_default_memory_of(before),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_memory(before, step).1,
+        ) {
+            crate::common::formal::spec_step_memory(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_memory(before, step).0.context.cont_addr
+                == memory_continue_cont(step)
+        },
+{
+}
+
 } // verus!
 
 #[inline(always)]

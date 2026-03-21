@@ -1723,6 +1723,85 @@ pub open spec fn exec_context_token_from_projection_parts(
     )
 }
 
+pub open spec fn option_u32_to_nat(value: Option<u32>) -> Option<nat> {
+    match value {
+        Some(value) => Some(value as nat),
+        None => None,
+    }
+}
+
+pub open spec fn function_view_from_parts(
+    instance: nat,
+    entry_pc: nat,
+    param_size: nat,
+    local_size: nat,
+    type_id: TypeId,
+    default_memory: Option<MemoryHandleView>,
+    is_host: bool,
+) -> FunctionView {
+    FunctionView {
+        instance,
+        entry_pc,
+        param_size,
+        local_size,
+        type_id,
+        default_memory,
+        kind: if is_host {
+            FunctionKind::Host
+        } else {
+            FunctionKind::Wasm
+        },
+    }
+}
+
+pub open spec fn core_step_state_from_parts(
+    stack: StackView,
+    context: ExecContextToken,
+    tables: Map<TableId, TableView>,
+    globals: Map<GlobalId, GlobalView>,
+    functions: Map<FunctionId, FunctionView>,
+    local_memories: Map<MemoryId, LinearMemoryView>,
+    shared_memories: Map<MemoryId, SharedMemoryProtocol>,
+    data_segments: Map<SegmentId, Seq<u8>>,
+    elem_segments: Map<SegmentId, Seq<u32>>,
+    frame_metadata_len: nat,
+) -> CoreStepState {
+    CoreStepState {
+        stack,
+        context,
+        tables,
+        globals,
+        functions,
+        local_memories,
+        shared_memories,
+        data_segments,
+        elem_segments,
+        frame_metadata_len,
+    }
+}
+
+pub open spec fn current_default_memory_of(state: CoreStepState) -> Option<MemoryHandleView> {
+    state.context.current_frame.default_memory
+}
+
+pub open spec fn caller_default_memory_of(state: CoreStepState) -> Option<MemoryHandleView> {
+    match state.context.caller_frame {
+        Some(frame) => frame.default_memory,
+        None => None,
+    }
+}
+
+pub open spec fn task_id_preserved(before: CoreStepState, after: CoreStepState) -> bool {
+    after.context.task_id == before.context.task_id
+}
+
+pub open spec fn outcome_is_trap(outcome: CoreOutcome) -> bool {
+    match outcome {
+        CoreOutcome::Trap(_) => true,
+        _ => false,
+    }
+}
+
 pub open spec fn core_step_state_with_stack(state: CoreStepState, stack: StackView) -> CoreStepState {
     CoreStepState {
         stack,
@@ -3492,6 +3571,33 @@ pub proof fn lemma_exec_context_projection_builder_preserves_fields(
 }
 
 } // verus!
+
+pub(crate) fn trap_code_from_vm_result<T>(result: &crate::common::VMResult<T>) -> Option<TrapCode> {
+    match result {
+        crate::common::VMResult::Success(_) => None,
+        crate::common::VMResult::Unreachable => Some(TrapCode::Unreachable),
+        crate::common::VMResult::StackOverflow => None,
+        crate::common::VMResult::MemoryIndexOutOfRange => Some(TrapCode::MemoryIndexOutOfRange),
+        crate::common::VMResult::UnalignedAtomic => Some(TrapCode::UnalignedAtomic),
+        crate::common::VMResult::TableIndexOutOfRange => Some(TrapCode::TableIndexOutOfRange),
+        crate::common::VMResult::CallIndirectInvalidType => Some(TrapCode::CallIndirectInvalidType),
+        crate::common::VMResult::TableUninitialized => Some(TrapCode::TableUninitialized),
+        crate::common::VMResult::Unlinkable => None,
+        crate::common::VMResult::InvalidOperand => Some(TrapCode::InvalidOperand),
+    }
+}
+
+pub(crate) fn core_outcome_from_vm_result<T>(
+    result: &crate::common::VMResult<T>,
+) -> Option<CoreOutcome> {
+    match trap_code_from_vm_result(result) {
+        Some(code) => Some(CoreOutcome::Trap(code)),
+        None if matches!(result, crate::common::VMResult::Success(_)) => {
+            Some(CoreOutcome::Continue)
+        }
+        None => None,
+    }
+}
 
 #[cfg(verus_keep_ghost)]
 use verus_state_machines_macros::tokenized_state_machine;

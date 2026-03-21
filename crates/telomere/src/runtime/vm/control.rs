@@ -11,6 +11,52 @@ pub open spec fn spec_branch_outcome() -> crate::common::formal::CoreOutcome {
     crate::common::formal::outcome_continue()
 }
 
+pub open spec fn control_continue_cont(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::ControlStep,
+) -> nat {
+    match step {
+        crate::common::formal::ControlStep::SetCont { cont_addr } => cont_addr,
+        crate::common::formal::ControlStep::ConditionalCont {
+            taken,
+            true_addr,
+            false_addr,
+        } => {
+            if taken { true_addr } else { false_addr }
+        }
+        crate::common::formal::ControlStep::BlockReturn { cont_addr, .. } => cont_addr,
+        crate::common::formal::ControlStep::FunctionReturn { .. } => {
+            before.context.current_frame.return_pc as nat
+        }
+        crate::common::formal::ControlStep::Trap { .. } => before.context.cont_addr,
+    }
+}
+
+pub proof fn lemma_control_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::ControlStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Control(step),
+        ) == crate::common::formal::spec_step_control(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_control(before, step).0,
+        ),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_control(before, step).1,
+        ) {
+            crate::common::formal::spec_step_control(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_control(before, step).0.context.cont_addr
+                == control_continue_cont(before, step)
+        },
+{
+}
+
 } // verus!
 
 #[inline(always)]

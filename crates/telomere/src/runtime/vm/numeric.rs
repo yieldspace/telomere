@@ -36,6 +36,44 @@ pub open spec fn spec_numeric_compare_result(
     crate::common::formal::stack_compare_result(view, operand_width, result)
 }
 
+pub open spec fn numeric_continue_cont(step: crate::common::formal::NumericStep) -> nat {
+    match step {
+        crate::common::formal::NumericStep::PushConst { next_cont, .. } => next_cont,
+        crate::common::formal::NumericStep::ReplaceTop { next_cont, .. } => next_cont,
+    }
+}
+
+pub proof fn lemma_numeric_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::NumericStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Numeric(step),
+        ) == crate::common::formal::spec_step_numeric(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_numeric(before, step).0,
+        ),
+        crate::common::formal::current_default_memory_of(
+            crate::common::formal::spec_step_numeric(before, step).0,
+        ) == crate::common::formal::current_default_memory_of(before),
+        crate::common::formal::caller_default_memory_of(
+            crate::common::formal::spec_step_numeric(before, step).0,
+        ) == crate::common::formal::caller_default_memory_of(before),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_numeric(before, step).1,
+        ) {
+            crate::common::formal::spec_step_numeric(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_numeric(before, step).0.context.cont_addr
+                == numeric_continue_cont(step)
+        },
+{
+}
+
 #[inline(always)]
 fn bool_to_u32(value: bool) -> (result: u32)
     ensures
