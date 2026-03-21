@@ -517,9 +517,13 @@ pub open spec fn global_view_from_bytes(bytes: Seq<u8>) -> GlobalView {
 }
 
 pub open spec fn table_view_from_elements(elements: Seq<u32>) -> TableView {
+    table_view_from_parts(elements, None)
+}
+
+pub open spec fn table_view_from_parts(elements: Seq<u32>, max_len: Option<nat>) -> TableView {
     TableView {
         entries: elements,
-        max_len: None,
+        max_len,
     }
 }
 
@@ -3242,6 +3246,64 @@ pub proof fn lemma_exec_context_projection_builder_preserves_fields(
     task_id: u32,
 )
     ensures
+        exec_context_token_from_projection_parts(
+            current_return_pc,
+            current_instance_raw,
+            current_default_memory_present,
+            current_default_memory_shared,
+            current_default_memory_raw,
+            current_prev_local_top,
+            current_prev_local_size,
+            caller_present,
+            caller_return_pc,
+            caller_instance_raw,
+            caller_default_memory_present,
+            caller_default_memory_shared,
+            caller_default_memory_raw,
+            caller_prev_local_top,
+            caller_prev_local_size,
+            cont_addr,
+            task_id,
+        ).current_frame == frame_view_from_projection_parts(
+            current_return_pc,
+            current_instance_raw,
+            current_default_memory_present,
+            current_default_memory_shared,
+            current_default_memory_raw,
+            current_prev_local_top,
+            current_prev_local_size,
+        ),
+        exec_context_token_from_projection_parts(
+            current_return_pc,
+            current_instance_raw,
+            current_default_memory_present,
+            current_default_memory_shared,
+            current_default_memory_raw,
+            current_prev_local_top,
+            current_prev_local_size,
+            caller_present,
+            caller_return_pc,
+            caller_instance_raw,
+            caller_default_memory_present,
+            caller_default_memory_shared,
+            caller_default_memory_raw,
+            caller_prev_local_top,
+            caller_prev_local_size,
+            cont_addr,
+            task_id,
+        ).caller_frame == if caller_present {
+            Some(frame_view_from_projection_parts(
+                caller_return_pc,
+                caller_instance_raw,
+                caller_default_memory_present,
+                caller_default_memory_shared,
+                caller_default_memory_raw,
+                caller_prev_local_top,
+                caller_prev_local_size,
+            ))
+        } else {
+            None
+        },
         exec_context_token_from_projection_parts(
             current_return_pc,
             current_instance_raw,

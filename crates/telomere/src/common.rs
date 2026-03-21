@@ -12,6 +12,7 @@ pub use memory::{AtomicRmwOp, LocalMemoryObject, MemArg, Memory, SharedMemoryObj
 pub use memory::{AtomicWaitResult, SharedWaitRegistration};
 pub(crate) mod formal;
 pub(crate) mod stack;
+use stack::local_reference_has_call_stack_info;
 use stack::CachedMemoryKind;
 use stack::IntoCallFrameCache;
 pub(crate) use stack::{CallFrameCache, FrameProjection, MemoryHandleProjection};
@@ -708,13 +709,6 @@ pub(crate) struct ExecuteContextSnapshot {
     pub(crate) caller_local: Option<LocalReference>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct FrameCacheProjection {
-    pub(crate) instance_raw: u32,
-    pub(crate) default_memory: MemoryHandleProjection,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct ExecuteContextProjection {
@@ -722,10 +716,8 @@ pub(crate) struct ExecuteContextProjection {
     pub(crate) caller_memory: MemoryHandleProjection,
     pub(crate) cont_addr: usize,
     pub(crate) task_id: u32,
-    pub(crate) current_frame: FrameCacheProjection,
-    pub(crate) caller_frame: Option<FrameCacheProjection>,
-    pub(crate) active_frame_slot: Option<FrameProjection>,
-    pub(crate) caller_frame_slot: Option<FrameProjection>,
+    pub(crate) current_frame: Option<FrameProjection>,
+    pub(crate) caller_frame: Option<FrameProjection>,
     pub(crate) active_local: LocalReference,
     pub(crate) caller_local: Option<LocalReference>,
 }
@@ -737,6 +729,37 @@ pub(crate) struct ExecContextTokenProjection {
     pub(crate) caller_frame: Option<FrameProjection>,
     pub(crate) cont_addr: usize,
     pub(crate) task_id: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct ProofReadyExecuteContextProjection {
+    current_frame: FrameProjection,
+    caller_frame: Option<FrameProjection>,
+    cont_addr: usize,
+    task_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+struct ExecContextTokenProjectionParts {
+    current_return_pc: usize,
+    current_instance_raw: u32,
+    current_default_memory_present: bool,
+    current_default_memory_shared: bool,
+    current_default_memory_raw: u32,
+    current_prev_local_top: usize,
+    current_prev_local_size: u32,
+    caller_present: bool,
+    caller_return_pc: usize,
+    caller_instance_raw: u32,
+    caller_default_memory_present: bool,
+    caller_default_memory_shared: bool,
+    caller_default_memory_raw: u32,
+    caller_prev_local_top: usize,
+    caller_prev_local_size: u32,
+    cont_addr: usize,
+    task_id: u32,
 }
 
 pub(crate) struct ExecuteContextFacade<'ctx, 'store> {
@@ -924,7 +947,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
     }
 
     #[inline(always)]
-    pub(crate) fn read_memory_u8_array<const N: usize>(&mut self, offset: usize) -> VMResult<[u8; N]> {
+    pub(crate) fn read_memory_u8_array<const N: usize>(
+        &mut self,
+        offset: usize,
+    ) -> VMResult<[u8; N]> {
         self.as_ctx_mut().read_memory_u8_array::<N>(offset)
     }
 
@@ -974,7 +1000,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().push_memory_to_stack_local_indexed::<N>(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .push_memory_to_stack_local_indexed::<N>(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -983,7 +1012,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().push_memory_to_stack_shared_indexed::<N>(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .push_memory_to_stack_shared_indexed::<N>(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -992,7 +1024,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<[u8; N]> {
-        unsafe { self.as_ctx_mut().read_u8_array_local_indexed::<N>(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .read_u8_array_local_indexed::<N>(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1001,7 +1036,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<[u8; N]> {
-        unsafe { self.as_ctx_mut().read_u8_array_shared_indexed::<N>(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .read_u8_array_shared_indexed::<N>(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1119,7 +1157,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         bytes: &[u8],
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().write_memory_bytes_local_indexed(memidx, offset, bytes) }
+        unsafe {
+            self.as_ctx_mut()
+                .write_memory_bytes_local_indexed(memidx, offset, bytes)
+        }
     }
 
     #[inline(always)]
@@ -1129,7 +1170,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         bytes: &[u8],
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().write_memory_bytes_shared_indexed(memidx, offset, bytes) }
+        unsafe {
+            self.as_ctx_mut()
+                .write_memory_bytes_shared_indexed(memidx, offset, bytes)
+        }
     }
 
     #[inline(always)]
@@ -1143,7 +1187,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         page_size_delta: u32,
     ) -> VMResult<i32> {
-        unsafe { self.as_ctx_mut().grow_memory_local_indexed(memidx, page_size_delta) }
+        unsafe {
+            self.as_ctx_mut()
+                .grow_memory_local_indexed(memidx, page_size_delta)
+        }
     }
 
     #[inline(always)]
@@ -1152,7 +1199,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         page_size_delta: u32,
     ) -> VMResult<i32> {
-        unsafe { self.as_ctx_mut().grow_memory_shared_indexed(memidx, page_size_delta) }
+        unsafe {
+            self.as_ctx_mut()
+                .grow_memory_shared_indexed(memidx, page_size_delta)
+        }
     }
 
     #[inline(always)]
@@ -1236,7 +1286,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<u8> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_load_u8(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_load_u8(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1245,7 +1298,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<u16> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_load_u16(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_load_u16(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1254,7 +1310,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<u32> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_load_u32(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_load_u32(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1263,7 +1322,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<u64> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_load_u64(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_load_u64(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1272,7 +1334,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<u8> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_load_u8(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_load_u8(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1281,7 +1346,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<u16> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_load_u16(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_load_u16(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1290,7 +1358,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<u32> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_load_u32(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_load_u32(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1299,7 +1370,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         memidx: u32,
         offset: usize,
     ) -> VMResult<u64> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_load_u64(memidx, offset) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_load_u64(memidx, offset)
+        }
     }
 
     #[inline(always)]
@@ -1349,7 +1423,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         value: u8,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_store_u8(memidx, offset, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_store_u8(memidx, offset, value)
+        }
     }
 
     #[inline(always)]
@@ -1359,7 +1436,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         value: u16,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_store_u16(memidx, offset, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_store_u16(memidx, offset, value)
+        }
     }
 
     #[inline(always)]
@@ -1369,7 +1449,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         value: u32,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_store_u32(memidx, offset, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_store_u32(memidx, offset, value)
+        }
     }
 
     #[inline(always)]
@@ -1379,7 +1462,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         value: u64,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_store_u64(memidx, offset, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_store_u64(memidx, offset, value)
+        }
     }
 
     #[inline(always)]
@@ -1389,7 +1475,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         value: u8,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_store_u8(memidx, offset, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_store_u8(memidx, offset, value)
+        }
     }
 
     #[inline(always)]
@@ -1399,7 +1488,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         value: u16,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_store_u16(memidx, offset, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_store_u16(memidx, offset, value)
+        }
     }
 
     #[inline(always)]
@@ -1409,7 +1501,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         value: u32,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_store_u32(memidx, offset, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_store_u32(memidx, offset, value)
+        }
     }
 
     #[inline(always)]
@@ -1419,7 +1514,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         offset: usize,
         value: u64,
     ) -> VMResult<()> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_store_u64(memidx, offset, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_store_u64(memidx, offset, value)
+        }
     }
 
     #[inline(always)]
@@ -1510,7 +1608,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         op: AtomicRmwOp,
         value: u8,
     ) -> VMResult<u8> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_rmw_u8(memidx, offset, op, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_rmw_u8(memidx, offset, op, value)
+        }
     }
 
     #[inline(always)]
@@ -1521,7 +1622,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         op: AtomicRmwOp,
         value: u16,
     ) -> VMResult<u16> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_rmw_u16(memidx, offset, op, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_rmw_u16(memidx, offset, op, value)
+        }
     }
 
     #[inline(always)]
@@ -1532,7 +1636,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         op: AtomicRmwOp,
         value: u32,
     ) -> VMResult<u32> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_rmw_u32(memidx, offset, op, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_rmw_u32(memidx, offset, op, value)
+        }
     }
 
     #[inline(always)]
@@ -1543,7 +1650,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         op: AtomicRmwOp,
         value: u64,
     ) -> VMResult<u64> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_rmw_u64(memidx, offset, op, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_rmw_u64(memidx, offset, op, value)
+        }
     }
 
     #[inline(always)]
@@ -1554,7 +1664,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         op: AtomicRmwOp,
         value: u8,
     ) -> VMResult<u8> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_rmw_u8(memidx, offset, op, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_rmw_u8(memidx, offset, op, value)
+        }
     }
 
     #[inline(always)]
@@ -1565,7 +1678,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         op: AtomicRmwOp,
         value: u16,
     ) -> VMResult<u16> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_rmw_u16(memidx, offset, op, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_rmw_u16(memidx, offset, op, value)
+        }
     }
 
     #[inline(always)]
@@ -1576,7 +1692,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         op: AtomicRmwOp,
         value: u32,
     ) -> VMResult<u32> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_rmw_u32(memidx, offset, op, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_rmw_u32(memidx, offset, op, value)
+        }
     }
 
     #[inline(always)]
@@ -1587,7 +1706,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         op: AtomicRmwOp,
         value: u64,
     ) -> VMResult<u64> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_rmw_u64(memidx, offset, op, value) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_rmw_u64(memidx, offset, op, value)
+        }
     }
 
     #[inline(always)]
@@ -1597,7 +1719,8 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u8,
         new: u8,
     ) -> VMResult<u8> {
-        self.as_ctx_mut().local_atomic_cmpxchg_u8(offset, current, new)
+        self.as_ctx_mut()
+            .local_atomic_cmpxchg_u8(offset, current, new)
     }
 
     #[inline(always)]
@@ -1607,7 +1730,8 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u16,
         new: u16,
     ) -> VMResult<u16> {
-        self.as_ctx_mut().local_atomic_cmpxchg_u16(offset, current, new)
+        self.as_ctx_mut()
+            .local_atomic_cmpxchg_u16(offset, current, new)
     }
 
     #[inline(always)]
@@ -1617,7 +1741,8 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u32,
         new: u32,
     ) -> VMResult<u32> {
-        self.as_ctx_mut().local_atomic_cmpxchg_u32(offset, current, new)
+        self.as_ctx_mut()
+            .local_atomic_cmpxchg_u32(offset, current, new)
     }
 
     #[inline(always)]
@@ -1627,7 +1752,8 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u64,
         new: u64,
     ) -> VMResult<u64> {
-        self.as_ctx_mut().local_atomic_cmpxchg_u64(offset, current, new)
+        self.as_ctx_mut()
+            .local_atomic_cmpxchg_u64(offset, current, new)
     }
 
     #[inline(always)]
@@ -1637,7 +1763,8 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u8,
         new: u8,
     ) -> VMResult<u8> {
-        self.as_ctx_mut().shared_atomic_cmpxchg_u8(offset, current, new)
+        self.as_ctx_mut()
+            .shared_atomic_cmpxchg_u8(offset, current, new)
     }
 
     #[inline(always)]
@@ -1647,7 +1774,8 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u16,
         new: u16,
     ) -> VMResult<u16> {
-        self.as_ctx_mut().shared_atomic_cmpxchg_u16(offset, current, new)
+        self.as_ctx_mut()
+            .shared_atomic_cmpxchg_u16(offset, current, new)
     }
 
     #[inline(always)]
@@ -1657,7 +1785,8 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u32,
         new: u32,
     ) -> VMResult<u32> {
-        self.as_ctx_mut().shared_atomic_cmpxchg_u32(offset, current, new)
+        self.as_ctx_mut()
+            .shared_atomic_cmpxchg_u32(offset, current, new)
     }
 
     #[inline(always)]
@@ -1667,7 +1796,8 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u64,
         new: u64,
     ) -> VMResult<u64> {
-        self.as_ctx_mut().shared_atomic_cmpxchg_u64(offset, current, new)
+        self.as_ctx_mut()
+            .shared_atomic_cmpxchg_u64(offset, current, new)
     }
 
     #[inline(always)]
@@ -1678,7 +1808,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u8,
         new: u8,
     ) -> VMResult<u8> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_cmpxchg_u8(memidx, offset, current, new) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_cmpxchg_u8(memidx, offset, current, new)
+        }
     }
 
     #[inline(always)]
@@ -1689,7 +1822,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u16,
         new: u16,
     ) -> VMResult<u16> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_cmpxchg_u16(memidx, offset, current, new) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_cmpxchg_u16(memidx, offset, current, new)
+        }
     }
 
     #[inline(always)]
@@ -1700,7 +1836,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u32,
         new: u32,
     ) -> VMResult<u32> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_cmpxchg_u32(memidx, offset, current, new) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_cmpxchg_u32(memidx, offset, current, new)
+        }
     }
 
     #[inline(always)]
@@ -1711,7 +1850,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u64,
         new: u64,
     ) -> VMResult<u64> {
-        unsafe { self.as_ctx_mut().indexed_local_atomic_cmpxchg_u64(memidx, offset, current, new) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_local_atomic_cmpxchg_u64(memidx, offset, current, new)
+        }
     }
 
     #[inline(always)]
@@ -1722,7 +1864,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u8,
         new: u8,
     ) -> VMResult<u8> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_cmpxchg_u8(memidx, offset, current, new) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_cmpxchg_u8(memidx, offset, current, new)
+        }
     }
 
     #[inline(always)]
@@ -1733,7 +1878,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u16,
         new: u16,
     ) -> VMResult<u16> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_cmpxchg_u16(memidx, offset, current, new) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_cmpxchg_u16(memidx, offset, current, new)
+        }
     }
 
     #[inline(always)]
@@ -1744,7 +1892,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u32,
         new: u32,
     ) -> VMResult<u32> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_cmpxchg_u32(memidx, offset, current, new) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_cmpxchg_u32(memidx, offset, current, new)
+        }
     }
 
     #[inline(always)]
@@ -1755,7 +1906,10 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
         current: u64,
         new: u64,
     ) -> VMResult<u64> {
-        unsafe { self.as_ctx_mut().indexed_shared_atomic_cmpxchg_u64(memidx, offset, current, new) }
+        unsafe {
+            self.as_ctx_mut()
+                .indexed_shared_atomic_cmpxchg_u64(memidx, offset, current, new)
+        }
     }
 }
 
@@ -1770,31 +1924,27 @@ impl ExecuteContextSnapshot {
         stack: &Stack,
         runtime: &StoreInner,
     ) -> ExecuteContextProjection {
-        let current_frame = FrameCacheProjection {
-            instance_raw: self.current_frame.instance.raw(),
-            default_memory: self.current_frame.projection_memory(),
-        };
-        let caller_frame = self.caller_frame.map(|frame| FrameCacheProjection {
-            instance_raw: frame.instance.raw(),
-            default_memory: frame.projection_memory(),
+        let current_frame = local_reference_has_call_stack_info(self.active_local)
+            .then(|| stack.frame_projection(&self.active_local, runtime));
+        let caller_frame = self.caller_local.and_then(|reference| {
+            local_reference_has_call_stack_info(reference)
+                .then(|| stack.frame_projection(&reference, runtime))
         });
-        let active_frame_slot = (self.active_local.local_size as usize
-            >= std::mem::size_of::<crate::common::stack::CallStackInfo>())
-        .then(|| stack.frame_projection(&self.active_local, runtime));
-        let caller_frame_slot = self.caller_local.and_then(|reference| {
-            (reference.local_size as usize
-                >= std::mem::size_of::<crate::common::stack::CallStackInfo>())
-            .then(|| stack.frame_projection(&reference, runtime))
-        });
+        let default_memory = current_frame
+            .as_ref()
+            .map(|frame| frame.default_memory)
+            .unwrap_or_else(|| MemoryHandleProjection::from_handle(self.default_memory));
+        let caller_memory = caller_frame
+            .as_ref()
+            .map(|frame| frame.default_memory)
+            .unwrap_or_else(|| MemoryHandleProjection::from_handle(self.caller_memory));
         ExecuteContextProjection {
-            default_memory: MemoryHandleProjection::from_handle(self.default_memory),
-            caller_memory: MemoryHandleProjection::from_handle(self.caller_memory),
+            default_memory,
+            caller_memory,
             cont_addr: self.cont_addr,
             task_id: self.task_id,
             current_frame,
             caller_frame,
-            active_frame_slot,
-            caller_frame_slot,
             active_local: self.active_local,
             caller_local: self.caller_local,
         }
@@ -1803,13 +1953,88 @@ impl ExecuteContextSnapshot {
 
 impl ExecuteContextProjection {
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn token_projection(&self) -> Option<ExecContextTokenProjection> {
-        Some(ExecContextTokenProjection {
-            current_frame: self.active_frame_slot.clone()?,
-            caller_frame: self.caller_frame_slot.clone(),
+    fn proof_ready(&self) -> Option<ProofReadyExecuteContextProjection> {
+        let current_frame = self.current_frame.clone()?;
+        if current_frame.local_ref != self.active_local {
+            return None;
+        }
+        if self.default_memory != current_frame.default_memory {
+            return None;
+        }
+        let expected_caller_memory = self
+            .caller_frame
+            .as_ref()
+            .map(|frame| frame.default_memory)
+            .unwrap_or_else(|| MemoryHandleProjection::from_handle(None));
+        if self.caller_memory != expected_caller_memory {
+            return None;
+        }
+
+        match (&self.caller_frame, self.caller_local) {
+            (Some(caller_frame), Some(caller_local))
+                if caller_frame.local_ref == caller_local
+                    && current_frame.prev_local == caller_frame.local_ref => {}
+            (None, None)
+                if current_frame.prev_local.local_size == 0
+                    && current_frame.prev_local.local_top == 0 => {}
+            _ => return None,
+        }
+
+        Some(ProofReadyExecuteContextProjection {
+            current_frame,
+            caller_frame: self.caller_frame.clone(),
             cont_addr: self.cont_addr,
             task_id: self.task_id,
         })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn token_projection(&self) -> Option<ExecContextTokenProjection> {
+        Some(self.proof_ready()?.token_projection())
+    }
+}
+
+impl ProofReadyExecuteContextProjection {
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn token_projection(&self) -> ExecContextTokenProjection {
+        ExecContextTokenProjection {
+            current_frame: self.current_frame.clone(),
+            caller_frame: self.caller_frame.clone(),
+            cont_addr: self.cont_addr,
+            task_id: self.task_id,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn formal_builder_parts(&self) -> ExecContextTokenProjectionParts {
+        let current = self.current_frame.formal_builder_parts();
+        let caller = self
+            .caller_frame
+            .as_ref()
+            .map(FrameProjection::formal_builder_parts);
+        ExecContextTokenProjectionParts {
+            current_return_pc: current.return_pc,
+            current_instance_raw: current.instance_raw,
+            current_default_memory_present: current.default_memory_present,
+            current_default_memory_shared: current.default_memory_shared,
+            current_default_memory_raw: current.default_memory_raw,
+            current_prev_local_top: current.prev_local_top,
+            current_prev_local_size: current.prev_local_size,
+            caller_present: caller.is_some(),
+            caller_return_pc: caller.map(|frame| frame.return_pc).unwrap_or(0),
+            caller_instance_raw: caller.map(|frame| frame.instance_raw).unwrap_or(0),
+            caller_default_memory_present: caller
+                .map(|frame| frame.default_memory_present)
+                .unwrap_or(false),
+            caller_default_memory_shared: caller
+                .map(|frame| frame.default_memory_shared)
+                .unwrap_or(false),
+            caller_default_memory_raw: caller.map(|frame| frame.default_memory_raw).unwrap_or(0),
+            caller_prev_local_top: caller.map(|frame| frame.prev_local_top).unwrap_or(0),
+            caller_prev_local_size: caller.map(|frame| frame.prev_local_size).unwrap_or(0),
+            cont_addr: self.cont_addr,
+            task_id: self.task_id,
+        }
     }
 }
 
@@ -2045,6 +2270,17 @@ impl<'a> ExecuteContext<'a> {
         cont: *const Instr,
         task_id: u32,
     ) -> ExecuteContext<'a> {
+        let current_frame = if local_reference_has_call_stack_info(local_reference) {
+            let canonical = stack.frame_cache(&local_reference);
+            #[cfg(not(test))]
+            debug_assert!(
+                current_frame.subset_matches(canonical),
+                "ExecuteContext::new received stale frame cache for a real stack frame",
+            );
+            canonical
+        } else {
+            current_frame
+        };
         ExecuteContext {
             stack,
             local_reference,
@@ -2121,9 +2357,7 @@ impl<'a> ExecuteContext<'a> {
 
     pub fn set_local_reference(&mut self, local_reference: LocalReference) {
         self.local_reference = local_reference;
-        if local_reference.local_size as usize
-            >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
-        {
+        if local_reference_has_call_stack_info(local_reference) {
             self.current_frame = self.stack.frame_cache(&local_reference);
         }
     }
@@ -3320,7 +3554,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_context_snapshot_tracks_tail_call_memory_cache() {
+    fn execute_context_projection_canonicalizes_stale_tail_call_cache() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
         let empty = LocalReference {
@@ -3370,6 +3604,7 @@ mod tests {
 
         let before = ctx.snapshot();
         let before_projection = ctx.projection();
+        let before_proof = before_projection.proof_ready().unwrap();
         let before_facade_projection = {
             let facade = ExecuteContextFacade::new(&mut ctx);
             facade.projection()
@@ -3384,12 +3619,14 @@ mod tests {
         let root_local_size = root.local_size;
         assert_eq!(
             before.default_memory,
-            Some(MemoryHandle::Shared(store::SharedMemoryId::from_raw(2)))
+            Some(MemoryHandle::Local(store::LocalMemoryId::from_raw(3)))
         );
+        assert!(!frame(CachedMemoryKind::Shared, 2).subset_matches(before.current_frame));
         assert_eq!(
             before.caller_memory,
             Some(MemoryHandle::Local(store::LocalMemoryId::from_raw(1)))
         );
+        assert_eq!(ctx.memory_addr(), before.default_memory);
         assert_eq!(before.current_frame.memory0_handle(), before.default_memory);
         assert_eq!(
             before.caller_frame.unwrap().memory0_handle(),
@@ -3418,21 +3655,15 @@ mod tests {
         );
         assert_eq!(before_projection.cont_addr, before.cont_addr);
         assert_eq!(before_projection.task_id, before.task_id);
+        assert_eq!(before_projection.active_local, callee);
+        assert_eq!(before_projection.caller_local, Some(root));
         assert_eq!(
-            before_projection.current_frame.default_memory,
-            MemoryHandleProjection::from_handle(Some(MemoryHandle::Shared(
-                store::SharedMemoryId::from_raw(2),
-            )))
-        );
-        assert_eq!(
-            before_projection.caller_frame.unwrap().default_memory,
-            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
-                store::LocalMemoryId::from_raw(1),
-            )))
+            before_projection.current_frame.as_ref().unwrap().local_ref,
+            callee
         );
         assert_eq!(
             before_projection
-                .active_frame_slot
+                .current_frame
                 .as_ref()
                 .unwrap()
                 .default_memory,
@@ -3441,8 +3672,12 @@ mod tests {
             )))
         );
         assert_eq!(
+            before_projection.caller_frame.as_ref().unwrap().local_ref,
+            root
+        );
+        assert_eq!(
             before_projection
-                .caller_frame_slot
+                .caller_frame
                 .as_ref()
                 .unwrap()
                 .default_memory,
@@ -3451,12 +3686,15 @@ mod tests {
             )))
         );
         let before_token = before_projection.token_projection().unwrap();
-        assert_eq!(before_facade_projection.default_memory, before_projection.default_memory);
-        assert_eq!(before_facade_projection.caller_memory, before_projection.caller_memory);
-        assert_eq!(before_facade_projection.cont_addr, before_projection.cont_addr);
-        assert_eq!(before_facade_projection.task_id, before_projection.task_id);
-        assert_eq!(before_facade_token.cont_addr, before_token.cont_addr);
-        assert_eq!(before_facade_token.task_id, before_token.task_id);
+        let before_parts = before_proof.formal_builder_parts();
+        assert_eq!(before_facade_projection, before_projection);
+        assert_eq!(before_facade_token, before_token);
+        assert_eq!(before_parts.current_default_memory_raw, 3);
+        assert!(!before_parts.current_default_memory_shared);
+        assert!(before_parts.caller_present);
+        assert_eq!(before_parts.caller_default_memory_raw, 1);
+        assert_eq!(before_parts.cont_addr, before.cont_addr);
+        assert_eq!(before_parts.task_id, before.task_id);
         assert_eq!(
             before_token.current_frame.default_memory,
             MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
@@ -3477,6 +3715,7 @@ mod tests {
 
         let after = ctx.snapshot();
         let after_projection = ctx.projection();
+        let after_proof = after_projection.proof_ready().unwrap();
         let after_facade_projection = {
             let facade = ExecuteContextFacade::new(&mut ctx);
             facade.projection()
@@ -3525,20 +3764,12 @@ mod tests {
         assert_eq!(after_projection.cont_addr, after.cont_addr);
         assert_eq!(after_projection.task_id, after.task_id);
         assert_eq!(
-            after_projection.current_frame.default_memory,
-            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
-                store::LocalMemoryId::from_raw(3),
-            )))
-        );
-        assert_eq!(
-            after_projection.caller_frame.unwrap().default_memory,
-            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
-                store::LocalMemoryId::from_raw(1),
-            )))
+            after_projection.current_frame.as_ref().unwrap().local_ref,
+            tail
         );
         assert_eq!(
             after_projection
-                .active_frame_slot
+                .current_frame
                 .as_ref()
                 .unwrap()
                 .default_memory,
@@ -3547,8 +3778,12 @@ mod tests {
             )))
         );
         assert_eq!(
+            after_projection.caller_frame.as_ref().unwrap().local_ref,
+            root
+        );
+        assert_eq!(
             after_projection
-                .caller_frame_slot
+                .caller_frame
                 .as_ref()
                 .unwrap()
                 .default_memory,
@@ -3557,12 +3792,13 @@ mod tests {
             )))
         );
         let after_token = after_projection.token_projection().unwrap();
-        assert_eq!(after_facade_projection.default_memory, after_projection.default_memory);
-        assert_eq!(after_facade_projection.caller_memory, after_projection.caller_memory);
-        assert_eq!(after_facade_projection.cont_addr, after_projection.cont_addr);
-        assert_eq!(after_facade_projection.task_id, after_projection.task_id);
-        assert_eq!(after_facade_token.cont_addr, after_token.cont_addr);
-        assert_eq!(after_facade_token.task_id, after_token.task_id);
+        let after_parts = after_proof.formal_builder_parts();
+        assert_eq!(after_facade_projection, after_projection);
+        assert_eq!(after_facade_token, after_token);
+        assert_eq!(after_parts.current_default_memory_raw, 3);
+        assert_eq!(after_parts.caller_default_memory_raw, 1);
+        assert_eq!(after_parts.cont_addr, after.cont_addr);
+        assert_eq!(after_parts.task_id, after.task_id);
         assert_eq!(
             after_token.current_frame.default_memory,
             MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
@@ -3577,5 +3813,39 @@ mod tests {
         );
         assert_eq!(after_token.cont_addr, after.cont_addr);
         assert_eq!(after_token.task_id, after.task_id);
+    }
+
+    #[test]
+    fn execute_context_projection_rejects_synthetic_context_for_token_builder() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops: VecDeque<PendingOp> = VecDeque::new();
+        let mut stack = Stack::new(32);
+        let ctx = ExecuteContext::new(
+            &mut stack,
+            LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            frame(CachedMemoryKind::Local, 7),
+            &store,
+            &mut gc,
+            PendingOpEmitter::from_parts(11, &mut pending_effects, &mut pending_ops),
+            std::ptr::null(),
+            11,
+        );
+
+        let projection = ctx.projection();
+        assert_eq!(
+            projection.default_memory,
+            MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
+                store::LocalMemoryId::from_raw(7),
+            )))
+        );
+        assert_eq!(projection.current_frame, None);
+        assert_eq!(projection.caller_frame, None);
+        assert!(projection.proof_ready().is_none());
+        assert!(projection.token_projection().is_none());
     }
 }

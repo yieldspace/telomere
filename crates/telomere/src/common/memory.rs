@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt,
     ptr::NonNull,
     slice::SliceIndex,
@@ -527,6 +527,15 @@ pub(crate) struct LinearMemoryProjection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct LinearMemoryProjectionParts {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) current_pages: u32,
+    pub(crate) max_pages: u32,
+    pub(crate) shared: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SharedWaitQueueProjection {
     pub(crate) address: usize,
     pub(crate) waiter_ids: Vec<u64>,
@@ -546,7 +555,45 @@ pub(crate) struct SharedMemoryProjection {
     pub(crate) next_waiter_id: u64,
 }
 
+impl LinearMemoryProjection {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn proof_ready(&self) -> bool {
+        self.current_pages <= self.max_pages
+            && (self.current_pages as usize)
+                .checked_mul(PAGE_SIZE)
+                .is_some_and(|len| len == self.bytes.len())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn formal_builder_parts(&self) -> LinearMemoryProjectionParts {
+        LinearMemoryProjectionParts {
+            bytes: self.bytes.clone(),
+            current_pages: self.current_pages,
+            max_pages: self.max_pages,
+            shared: self.shared,
+        }
+    }
+}
+
 impl SharedMemoryProjection {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn proof_ready(&self) -> bool {
+        if !self.memory.proof_ready() {
+            return false;
+        }
+        let waiter_ids = self
+            .waiters
+            .iter()
+            .map(|waiter| waiter.waiter_id)
+            .collect::<HashSet<_>>();
+        self.wait_queues.iter().all(|queue| {
+            queue
+                .waiter_ids
+                .iter()
+                .all(|waiter_id| waiter_ids.contains(waiter_id))
+        })
+    }
+
     #[cfg(test)]
     fn queue_position(&self, address: usize) -> Option<usize> {
         self.wait_queues
@@ -1939,6 +1986,11 @@ mod tests {
 
         let before = shared.projection();
         assert_eq!(before, expected);
+        assert!(before.proof_ready());
+        assert!(before.memory.proof_ready());
+        let before_parts = before.memory.formal_builder_parts();
+        assert_eq!(before_parts.current_pages, before.memory.current_pages);
+        assert_eq!(before_parts.max_pages, before.memory.max_pages);
         assert!(before.memory.shared);
         assert_eq!(before.next_waiter_id, 3);
         assert_eq!(before.wait_queues.len(), 1);
@@ -1956,6 +2008,7 @@ mod tests {
         let (after_notify, woke) = expected.protocol_notify_waiters(0, 1);
         let after = shared.projection();
         assert_eq!(after, after_notify);
+        assert!(after.proof_ready());
         assert_eq!(woke.len(), 1);
         assert_eq!(woke[0].waiter_id, first.waiter.id());
         assert_eq!(after.wait_queues[0].waiter_ids, vec![second.waiter.id()]);
@@ -1977,5 +2030,13 @@ mod tests {
                 .state,
             SharedWaitStateProjection::Waiting
         );
+
+        let mut unsorted = after.clone();
+        unsorted.wait_queues.reverse();
+        unsorted.waiters.reverse();
+        assert!(unsorted.proof_ready());
+
+        unsorted.wait_queues[0].waiter_ids.push(u64::MAX);
+        assert!(!unsorted.proof_ready());
     }
 }

@@ -305,6 +305,20 @@ impl CallFrameCache {
     pub(crate) fn projection_memory(self) -> MemoryHandleProjection {
         MemoryHandleProjection::from_handle(self.memory0_handle())
     }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn subset_matches(self, other: Self) -> bool {
+        self.code_addr == other.code_addr
+            && self.code_base == other.code_base
+            && self.instance == other.instance
+            && self.memory0_kind == other.memory0_kind
+            && self.memory0_raw == other.memory0_raw
+    }
+}
+
+#[inline(always)]
+pub(crate) fn local_reference_has_call_stack_info(reference: LocalReference) -> bool {
+    reference.local_size as usize >= std::mem::size_of::<CallStackInfo>()
 }
 
 pub trait IntoCallFrameCache {
@@ -371,6 +385,7 @@ impl MemoryHandleProjection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct FrameProjection {
+    pub(crate) local_ref: LocalReference,
     pub(crate) return_pc: usize,
     pub(crate) instance_raw: u32,
     pub(crate) default_memory: MemoryHandleProjection,
@@ -385,6 +400,104 @@ pub(crate) struct StackProjection {
     pub(crate) frame_stack: Vec<FrameProjection>,
     pub(crate) active_local: LocalReference,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct FrameProjectionParts {
+    pub(crate) return_pc: usize,
+    pub(crate) instance_raw: u32,
+    pub(crate) default_memory_present: bool,
+    pub(crate) default_memory_shared: bool,
+    pub(crate) default_memory_raw: u32,
+    pub(crate) prev_local_top: usize,
+    pub(crate) prev_local_size: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct StackProjectionParts {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) top: usize,
+    pub(crate) frame_stack: Vec<FrameProjectionParts>,
+    pub(crate) active_local_top: usize,
+    pub(crate) active_local_size: u32,
+}
+
+#[inline(always)]
+fn local_reference_within_stack(reference: LocalReference, stack_top: usize) -> bool {
+    reference
+        .local_top
+        .checked_add(reference.local_size as usize)
+        .is_some_and(|end| end <= stack_top)
+}
+
+impl FrameProjection {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn proof_ready(&self, stack_top: usize) -> bool {
+        local_reference_has_call_stack_info(self.local_ref)
+            && local_reference_within_stack(self.local_ref, stack_top)
+            && (self.prev_local.local_size == 0
+                || local_reference_within_stack(self.prev_local, stack_top))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn formal_builder_parts(&self) -> FrameProjectionParts {
+        FrameProjectionParts {
+            return_pc: self.return_pc,
+            instance_raw: self.instance_raw,
+            default_memory_present: self.default_memory.present,
+            default_memory_shared: self.default_memory.shared,
+            default_memory_raw: self.default_memory.raw,
+            prev_local_top: self.prev_local.local_top,
+            prev_local_size: self.prev_local.local_size,
+        }
+    }
+}
+
+impl StackProjection {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn proof_ready(&self) -> bool {
+        if self.top > self.bytes.len() {
+            return false;
+        }
+        if self.frame_stack.is_empty() {
+            return self.active_local.local_size == 0;
+        }
+        if self
+            .frame_stack
+            .iter()
+            .any(|frame| !frame.proof_ready(self.top))
+        {
+            return false;
+        }
+        if self.frame_stack.last().map(|frame| frame.local_ref) != Some(self.active_local) {
+            return false;
+        }
+        let root_prev = self.frame_stack[0].prev_local;
+        if root_prev.local_size != 0 || root_prev.local_top != 0 {
+            return false;
+        }
+        self.frame_stack
+            .windows(2)
+            .all(|frames| frames[1].prev_local == frames[0].local_ref)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn formal_builder_parts(&self) -> StackProjectionParts {
+        StackProjectionParts {
+            bytes: self.bytes.clone(),
+            top: self.top,
+            frame_stack: self
+                .frame_stack
+                .iter()
+                .map(FrameProjection::formal_builder_parts)
+                .collect(),
+            active_local_top: self.active_local.local_top,
+            active_local_size: self.active_local.local_size,
+        }
+    }
+}
+
 impl Stack {
     pub fn new(size: usize) -> Self {
         let vec = vec![0; size];
@@ -648,6 +761,7 @@ impl Stack {
         let prev_local = self.previous_local_reference(reference);
         let frame = self.frame_cache(reference);
         FrameProjection {
+            local_ref: *reference,
             return_pc: info.return_pc.resolve(runtime, self, prev_local) as usize,
             instance_raw: frame.instance.raw(),
             default_memory: frame.projection_memory(),
@@ -1169,7 +1283,10 @@ mod tests {
         assert_eq!(projection.top, stack.top);
         assert_eq!(projection.bytes, stack.memory[0..stack.top].to_vec());
         assert_eq!(projection.active_local, callee);
+        assert!(projection.proof_ready());
         assert_eq!(projection.frame_stack.len(), 2);
+        assert_eq!(projection.frame_stack[0].local_ref, caller);
+        assert_eq!(projection.frame_stack[1].local_ref, callee);
         assert_eq!(
             projection.frame_stack[0].default_memory,
             MemoryHandleProjection::from_handle(Some(MemoryHandle::Local(
@@ -1183,5 +1300,16 @@ mod tests {
             )))
         );
         assert_eq!(projection.frame_stack[1].prev_local, caller);
+
+        let parts = projection.formal_builder_parts();
+        let callee_local_top = callee.local_top;
+        let callee_local_size = callee.local_size;
+        assert_eq!(parts.top, projection.top);
+        assert_eq!(parts.active_local_top, callee_local_top);
+        assert_eq!(parts.active_local_size, callee_local_size);
+
+        let mut broken = projection.clone();
+        broken.frame_stack[1].prev_local = empty;
+        assert!(!broken.proof_ready());
     }
 }
