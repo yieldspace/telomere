@@ -3,8 +3,40 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
-use telomere::{ResultValue, WasmValue};
+use telomere::{
+    common::{
+        FuncType, HostCallContext, HostCallControl, HostFunctionDefinition, NativeModule, ValType,
+    },
+    instantiate, IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
+};
 use tokio::runtime::Runtime;
+
+fn parse_wat(wat: &str) -> telomere::Module {
+    let source = wat::parse_str(wat).expect("wat must parse");
+    let mut reader = IoReadBinaryReader::from(&source[..]);
+    let mut parser = WasmParser::new(&mut reader);
+    parser.parse_module().expect("wat must validate")
+}
+
+async fn instantiate_wat(
+    wat: &str,
+    store: &Store,
+    registry: &Registry,
+) -> telomere::common::InstanceHandle {
+    match instantiate(parse_wat(wat), store, registry).await {
+        VMResult::Success(instance) => instance,
+        other => panic!("wat module must instantiate: {other:?}"),
+    }
+}
+
+fn bench_add_one(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
+    let value = ctx
+        .param_i32(0)
+        .expect("sync host roundtrip benchmark expects one i32 arg");
+    VMResult::Success(HostCallControl::Return(ResultValue::new(vec![
+        WasmValue::I32(value + 1),
+    ])))
+}
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -46,6 +78,171 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                 }
                 duration
             }
+        })
+    });
+
+    group.bench_function("return_call_chain", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func $leaf (param i32) (result i32)
+                    local.get 0
+                    i32.const 1
+                    i32.add)
+                  (func $step3 (param i32) (result i32)
+                    local.get 0
+                    return_call $leaf)
+                  (func $step2 (param i32) (result i32)
+                    local.get 0
+                    return_call $step3)
+                  (func $step1 (param i32) (result i32)
+                    local.get 0
+                    return_call $step2)
+                  (func (export "run") (param i32) (result i32)
+                    local.get 0
+                    return_call $step1))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(41)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(42)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("sync_host_roundtrip_i32", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let mut registry = Registry::new();
+            let host = match telomere::runtime::instantiate_native_module(
+                NativeModule {
+                    functions: vec![HostFunctionDefinition {
+                        name: Some("add-one".to_owned()),
+                        signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                        fp: bench_add_one,
+                    }],
+                },
+                &store,
+                &registry,
+            )
+            .await
+            {
+                VMResult::Success(instance) => instance,
+                other => panic!("host module must instantiate: {other:?}"),
+            };
+            registry.register("host", host);
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (import "host" "add-one" (func $add-one (param i32) (result i32)))
+                  (func (export "run") (param i32) (result i32)
+                    local.get 0
+                    return_call $add-one))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(41)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(42)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("memory_load_store_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        i32.const 0
+                        local.get $i
+                        i32.store
+                        i32.const 0
+                        i32.load
+                        local.get $acc
+                        i32.add
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(523776)])
+                );
+                duration += start.elapsed();
+            }
+            duration
         })
     });
     group.finish();

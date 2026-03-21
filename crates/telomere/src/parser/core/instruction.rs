@@ -148,6 +148,7 @@ pub struct InstructionParser<'a, R: BinaryReader> {
     reader: &'a mut R,
     types: &'a TypeSection,
     functions: &'a [TypeIdx],
+    imported_function_len: u32,
     funcidx: FuncIdx,
     mems: &'a [MemType],
     functype: &'a FuncType,
@@ -162,6 +163,11 @@ impl<R: BinaryReader> WasmBaseParser<R> for InstructionParser<'_, R> {
     }
 }
 impl<'a, R: BinaryReader> InstructionParser<'a, R> {
+    #[inline(always)]
+    fn is_local_direct_call_target(&self, idx: u32) -> bool {
+        idx >= self.imported_function_len
+    }
+
     fn parse_memory_index_immediate(&mut self, _opcode: u8) -> Result<(usize, u32)> {
         self.parse_u32()
     }
@@ -815,7 +821,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
                 checker.op_func_type(ty)?;
 
-                instrs.push(Instr { op: vm::op_call });
+                instrs.push(Instr {
+                    op: if self.is_local_direct_call_target(idx) {
+                        vm::op_call
+                    } else {
+                        vm::op_call_import
+                    },
+                });
                 instrs.push(Instr {
                     operand: Operand { u32: idx },
                 });
@@ -866,7 +878,11 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 checker.unreachable();
 
                 instrs.push(Instr {
-                    op: vm::op_return_call,
+                    op: if self.is_local_direct_call_target(idx) {
+                        vm::op_return_call
+                    } else {
+                        vm::op_return_call_import
+                    },
                 });
                 instrs.push(Instr {
                     operand: Operand { u32: idx },
@@ -4037,6 +4053,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         reader: &'a mut R,
         types: &'a TypeSection,
         functions: &'a [TypeIdx],
+        imported_function_len: u32,
         funcidx: FuncIdx,
         mems: &'a [MemType],
         functype: &'a FuncType,
@@ -4050,6 +4067,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             elems,
             types,
             functions,
+            imported_function_len,
             funcidx,
             mems,
             functype,
@@ -4068,26 +4086,34 @@ mod tests {
         IoReadBinaryReader, WasmParser,
     };
 
-    fn op_at(wat: &str, index: usize) -> crate::common::Op {
+    fn op_at_in_func(wat: &str, func_index: usize, index: usize) -> crate::common::Op {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
         let mut parser = WasmParser::new(&mut reader);
         let module = parser.parse_module().expect("module must parse");
-        let FunctionBody::Wasm(func) = &module.codes.0[0] else {
+        let FunctionBody::Wasm(func) = &module.codes.0[func_index] else {
             panic!("expected wasm function body");
         };
         unsafe { func.expr[index].op }
     }
 
-    fn operand_at(wat: &str, index: usize) -> Operand {
+    fn op_at(wat: &str, index: usize) -> crate::common::Op {
+        op_at_in_func(wat, 0, index)
+    }
+
+    fn operand_at_in_func(wat: &str, func_index: usize, index: usize) -> Operand {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
         let mut parser = WasmParser::new(&mut reader);
         let module = parser.parse_module().expect("module must parse");
-        let FunctionBody::Wasm(func) = &module.codes.0[0] else {
+        let FunctionBody::Wasm(func) = &module.codes.0[func_index] else {
             panic!("expected wasm function body");
         };
         unsafe { func.expr[index].operand }
+    }
+
+    fn operand_at(wat: &str, index: usize) -> Operand {
+        operand_at_in_func(wat, 0, index)
     }
 
     #[test]
@@ -4131,6 +4157,73 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             local,
             vm::op_i32_load_indexed_local as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_local_direct_call_handler() {
+        let op = op_at_in_func(
+            r#"
+            (module
+              (func $callee)
+              (func (export "f")
+                call $callee))
+            "#,
+            1,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op));
+    }
+
+    #[test]
+    fn parser_keeps_import_direct_call_generic() {
+        let op = op_at(
+            r#"
+            (module
+              (import "host" "callee" (func $callee))
+              (func (export "f")
+                call $callee))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_call_import as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_local_return_call_handler() {
+        let op = op_at_in_func(
+            r#"
+            (module
+              (func $callee)
+              (func (export "f")
+                return_call $callee))
+            "#,
+            1,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_return_call as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_keeps_import_return_call_generic() {
+        let op = op_at(
+            r#"
+            (module
+              (import "host" "callee" (func $callee))
+              (func (export "f")
+                return_call $callee))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_return_call_import as crate::common::Op
         ));
     }
 

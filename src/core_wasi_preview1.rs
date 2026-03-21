@@ -398,15 +398,15 @@ fn preview1_state(store: &Store) -> &CoreWasiPreview1State {
 }
 
 fn param_u32(ctx: &HostCallContext<'_, '_>, index: usize) -> u32 {
-    match ctx.param(index) {
-        Some(telomere::WasmValue::I32(value)) => *value as u32,
+    match ctx.param_i32(index) {
+        Some(value) => value as u32,
         other => panic!("expected i32 param at {index}, got {other:?}"),
     }
 }
 
 fn param_i64(ctx: &HostCallContext<'_, '_>, index: usize) -> i64 {
-    match ctx.param(index) {
-        Some(telomere::WasmValue::I64(value)) => *value,
+    match ctx.param_i64(index) {
+        Some(value) => value,
         other => panic!("expected i64 param at {index}, got {other:?}"),
     }
 }

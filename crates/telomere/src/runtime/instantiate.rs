@@ -97,6 +97,11 @@ fn execute_offset_const_expr(
     }
 }
 
+#[inline(always)]
+fn result_type_stack_size(ty: &crate::common::ResultType) -> u32 {
+    ty.iter().map(|value| value.stack_size().u32()).sum()
+}
+
 fn convert_native_module_to_module(m: NativeModule) -> Module {
     let mut codes = vec![];
     let mut functions = vec![];
@@ -382,10 +387,16 @@ pub async fn instantiate(
 
         for func in codes.0.into_iter() {
             let funcidx = funcs.len() as u32;
+            let typeidx = functions[funcidx as usize];
+            let signature = &fts.0[typeidx.0 as usize];
+            let param_size = result_type_stack_size(&signature.0);
 
             let func_addr = match func {
                 FunctionBody::Wasm(code) => gc.new_func(&FunctionInstanceData {
                     instance: inst_id,
+                    typeidx,
+                    param_size,
+                    local_size: code.locals.byte_size() as u32,
                     body: RuntimeFunctionBody::Wasm {
                         locals: code.locals,
                         code: code.expr.into(),
@@ -394,6 +405,9 @@ pub async fn instantiate(
                 }),
                 FunctionBody::Host(fp) => gc.new_func(&FunctionInstanceData {
                     instance: inst_id,
+                    typeidx,
+                    param_size,
+                    local_size: 0,
                     body: RuntimeFunctionBody::Host(fp),
                     funcidx,
                 }),

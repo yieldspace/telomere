@@ -53,12 +53,12 @@ async fn test_print() {
 }
 
 fn tail_call(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let func_ref = match ctx.param(0) {
-        Some(WasmValue::FuncRef(value)) => *value,
+    let func_ref = match ctx.param_funcref(0) {
+        Some(value) => value,
         other => panic!("expected funcref param, got {other:?}"),
     };
-    let arg = match ctx.param(1) {
-        Some(WasmValue::I32(value)) => *value,
+    let arg = match ctx.param_i32(1) {
+        Some(value) => value,
         other => panic!("expected i32 param, got {other:?}"),
     };
     VMResult::Success(HostCallControl::TailCall {
@@ -99,8 +99,8 @@ async fn test_tail_call_wasm() {
 }
 
 fn plus60(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let value = match ctx.param(0) {
-        Some(WasmValue::I32(value)) => *value,
+    let value = match ctx.param_i32(0) {
+        Some(value) => value,
         other => panic!("expected i32 param, got {other:?}"),
     };
     VMResult::Success(HostCallControl::Return(ResultValue::new(vec![

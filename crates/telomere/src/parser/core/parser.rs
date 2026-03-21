@@ -480,12 +480,14 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 idx += 1;
             }
         }
+        let imported_function_len = idx;
 
         let (len, mut codes) = self.parse_vec(|me| {
             let (len, func) = me.parse_code(
                 FuncIdx(idx),
                 type_section,
                 functions,
+                imported_function_len,
                 mems,
                 globals,
                 tables,
@@ -724,6 +726,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         functype: &FuncType,
         type_section: &TypeSection,
         functions: &[TypeIdx],
+        imported_function_len: u32,
         mems: &[MemType],
         globals: &[GlobalType],
         table_section: &[TableType],
@@ -744,6 +747,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             self.reader(),
             type_section,
             functions,
+            imported_function_len,
             funcidx,
             mems,
             functype,
@@ -794,6 +798,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         funcidx: FuncIdx,
         type_section: &TypeSection,
         functions: &[TypeIdx],
+        imported_function_len: u32,
         mems: &[MemType],
         globals: &[GlobalType],
         table_section: &[TableType],
@@ -815,6 +820,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             functype,
             type_section,
             functions,
+            imported_function_len,
             mems,
             globals,
             table_section,

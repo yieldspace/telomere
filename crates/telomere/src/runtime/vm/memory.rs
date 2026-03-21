@@ -211,8 +211,7 @@ macro_rules! define_indexed_push_load {
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            vm_try!(ctx.push_memory_to_stack_handle::<$bytes>(handle, start));
+            vm_try!(ctx.push_memory_to_stack_local_indexed::<$bytes>(memidx, start));
             call_next(tail_code, 2, ctx)
         }
 
@@ -233,15 +232,14 @@ macro_rules! define_indexed_push_load {
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            vm_try!(ctx.push_memory_to_stack_handle::<$bytes>(handle, start));
+            vm_try!(ctx.push_memory_to_stack_shared_indexed::<$bytes>(memidx, start));
             call_next(tail_code, 2, ctx)
         }
     };
 }
 
 macro_rules! define_indexed_scalar_load {
-    ($local:ident, $shared:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:ident) => {
+    ($local:ident, $shared:ident, $mnemonic:literal, $local_reader:ident, $shared_reader:ident, $push:ident, $convert:ident) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` on indexed local memory.")]
         ///
         /// Spec:
@@ -259,8 +257,7 @@ macro_rules! define_indexed_scalar_load {
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            let value = vm_try!(ctx.$reader(handle, start));
+            let value = vm_try!(ctx.$local_reader(memidx, start));
             vm_try!(ctx.stack_mut().$push($convert(value)));
             call_next(tail_code, 2, ctx)
         }
@@ -282,8 +279,7 @@ macro_rules! define_indexed_scalar_load {
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            let value = vm_try!(ctx.$reader(handle, start));
+            let value = vm_try!(ctx.$shared_reader(memidx, start));
             vm_try!(ctx.stack_mut().$push($convert(value)));
             call_next(tail_code, 2, ctx)
         }
@@ -863,8 +859,7 @@ pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_grow(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let page_size_delta = ctx.stack_mut().pop_u32();
-    let handle = vm_try!(ctx.memory_handle_result());
-    let result = vm_try!(ctx.grow_memory_handle(handle, page_size_delta));
+    let result = vm_try!(ctx.grow_memory(page_size_delta));
     vm_try!(ctx.stack_mut().push_i32(result));
     call_next(tail_code, 0, ctx)
 }
@@ -913,8 +908,7 @@ macro_rules! define_shared_scalar_load {
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(load_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            let value = vm_try!(ctx.$reader(handle, start));
+            let value = vm_try!(ctx.$reader(start));
             vm_try!(ctx.stack_mut().$push($convert(value)));
             call_next(tail_code, 1, ctx)
         }
@@ -951,70 +945,70 @@ define_shared_push_load!(op_f64_load_shared, "f64.load", 8);
 define_shared_scalar_load!(
     op_i32_load8_u_shared,
     "i32.load8_u",
-    read_u8_at_handle,
+    read_memory_u8,
     push_u32,
     widen_u8_to_u32
 );
 define_shared_scalar_load!(
     op_i32_load8_s_shared,
     "i32.load8_s",
-    read_i8_at_handle,
+    read_memory_i8,
     push_i32,
     widen_i8_to_i32
 );
 define_shared_scalar_load!(
     op_i32_load16_s_shared,
     "i32.load16_s",
-    read_i16_at_handle,
+    read_memory_i16,
     push_i32,
     widen_i16_to_i32
 );
 define_shared_scalar_load!(
     op_i32_load16_u_shared,
     "i32.load16_u",
-    read_u16_at_handle,
+    read_memory_u16,
     push_u32,
     widen_u16_to_u32
 );
 define_shared_scalar_load!(
     op_i64_load8_s_shared,
     "i64.load8_s",
-    read_i8_at_handle,
+    read_memory_i8,
     push_i64,
     widen_i8_to_i64
 );
 define_shared_scalar_load!(
     op_i64_load8_u_shared,
     "i64.load8_u",
-    read_u8_at_handle,
+    read_memory_u8,
     push_u64,
     widen_u8_to_u64
 );
 define_shared_scalar_load!(
     op_i64_load16_s_shared,
     "i64.load16_s",
-    read_i16_at_handle,
+    read_memory_i16,
     push_i64,
     widen_i16_to_i64
 );
 define_shared_scalar_load!(
     op_i64_load16_u_shared,
     "i64.load16_u",
-    read_u16_at_handle,
+    read_memory_u16,
     push_u64,
     widen_u16_to_u64
 );
 define_shared_scalar_load!(
     op_i64_load32_s_shared,
     "i64.load32_s",
-    read_i32_at_handle,
+    read_memory_i32,
     push_i64,
     widen_i32_to_i64
 );
 define_shared_scalar_load!(
     op_i64_load32_u_shared,
     "i64.load32_u",
-    read_u32_at_handle,
+    read_memory_u32,
     push_u64,
     widen_u32_to_u64
 );
@@ -1074,7 +1068,8 @@ define_indexed_scalar_load!(
     op_i32_load8_u_indexed_local,
     op_i32_load8_u_indexed_shared,
     "i32.load8_u",
-    read_u8_at_handle,
+    read_u8_at_local_indexed,
+    read_u8_at_shared_indexed,
     push_u32,
     widen_u8_to_u32
 );
@@ -1082,7 +1077,8 @@ define_indexed_scalar_load!(
     op_i32_load8_s_indexed_local,
     op_i32_load8_s_indexed_shared,
     "i32.load8_s",
-    read_i8_at_handle,
+    read_i8_at_local_indexed,
+    read_i8_at_shared_indexed,
     push_i32,
     widen_i8_to_i32
 );
@@ -1090,7 +1086,8 @@ define_indexed_scalar_load!(
     op_i32_load16_s_indexed_local,
     op_i32_load16_s_indexed_shared,
     "i32.load16_s",
-    read_i16_at_handle,
+    read_i16_at_local_indexed,
+    read_i16_at_shared_indexed,
     push_i32,
     widen_i16_to_i32
 );
@@ -1098,7 +1095,8 @@ define_indexed_scalar_load!(
     op_i32_load16_u_indexed_local,
     op_i32_load16_u_indexed_shared,
     "i32.load16_u",
-    read_u16_at_handle,
+    read_u16_at_local_indexed,
+    read_u16_at_shared_indexed,
     push_u32,
     widen_u16_to_u32
 );
@@ -1106,7 +1104,8 @@ define_indexed_scalar_load!(
     op_i64_load8_s_indexed_local,
     op_i64_load8_s_indexed_shared,
     "i64.load8_s",
-    read_i8_at_handle,
+    read_i8_at_local_indexed,
+    read_i8_at_shared_indexed,
     push_i64,
     widen_i8_to_i64
 );
@@ -1114,7 +1113,8 @@ define_indexed_scalar_load!(
     op_i64_load8_u_indexed_local,
     op_i64_load8_u_indexed_shared,
     "i64.load8_u",
-    read_u8_at_handle,
+    read_u8_at_local_indexed,
+    read_u8_at_shared_indexed,
     push_u64,
     widen_u8_to_u64
 );
@@ -1122,7 +1122,8 @@ define_indexed_scalar_load!(
     op_i64_load16_s_indexed_local,
     op_i64_load16_s_indexed_shared,
     "i64.load16_s",
-    read_i16_at_handle,
+    read_i16_at_local_indexed,
+    read_i16_at_shared_indexed,
     push_i64,
     widen_i16_to_i64
 );
@@ -1130,7 +1131,8 @@ define_indexed_scalar_load!(
     op_i64_load16_u_indexed_local,
     op_i64_load16_u_indexed_shared,
     "i64.load16_u",
-    read_u16_at_handle,
+    read_u16_at_local_indexed,
+    read_u16_at_shared_indexed,
     push_u64,
     widen_u16_to_u64
 );
@@ -1138,7 +1140,8 @@ define_indexed_scalar_load!(
     op_i64_load32_s_indexed_local,
     op_i64_load32_s_indexed_shared,
     "i64.load32_s",
-    read_i32_at_handle,
+    read_i32_at_local_indexed,
+    read_i32_at_shared_indexed,
     push_i64,
     widen_i32_to_i64
 );
@@ -1146,7 +1149,8 @@ define_indexed_scalar_load!(
     op_i64_load32_u_indexed_local,
     op_i64_load32_u_indexed_shared,
     "i64.load32_u",
-    read_u32_at_handle,
+    read_u32_at_local_indexed,
+    read_u32_at_shared_indexed,
     push_u64,
     widen_u32_to_u64
 );
@@ -1249,8 +1253,7 @@ pub unsafe fn op_mem_grow_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let page_size_delta = ctx.stack_mut().pop_u32();
-    let handle = vm_try!(ctx.memory_handle_result());
-    let result = vm_try!(ctx.grow_memory_handle(handle, page_size_delta));
+    let result = vm_try!(ctx.grow_memory(page_size_delta));
     vm_try!(ctx.stack_mut().push_i32(result));
     call_next(tail_code, 0, ctx)
 }
@@ -1274,8 +1277,7 @@ pub unsafe fn op_mem_size_indexed_local(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let memidx = (*tail_code).operand.u32;
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    let page_size = ctx.memory_page_size_handle(handle);
+    let page_size = ctx.memory_page_size_local_indexed(memidx);
     vm_try!(ctx.stack_mut().push_u32(page_size));
     call_next(tail_code, 1, ctx)
 }
@@ -1299,8 +1301,7 @@ pub unsafe fn op_mem_size_indexed_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let memidx = (*tail_code).operand.u32;
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    let page_size = ctx.memory_page_size_handle(handle);
+    let page_size = ctx.memory_page_size_shared_indexed(memidx);
     vm_try!(ctx.stack_mut().push_u32(page_size));
     call_next(tail_code, 1, ctx)
 }
@@ -1325,8 +1326,7 @@ pub unsafe fn op_mem_grow_indexed_local(
 ) -> VMResult<()> {
     let memidx = (*tail_code).operand.u32;
     let page_size_delta = ctx.stack_mut().pop_u32();
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    let result = vm_try!(ctx.grow_memory_handle(handle, page_size_delta));
+    let result = vm_try!(ctx.grow_memory_local_indexed(memidx, page_size_delta));
     vm_try!(ctx.stack_mut().push_i32(result));
     call_next(tail_code, 1, ctx)
 }
@@ -1351,8 +1351,7 @@ pub unsafe fn op_mem_grow_indexed_shared(
 ) -> VMResult<()> {
     let memidx = (*tail_code).operand.u32;
     let page_size_delta = ctx.stack_mut().pop_u32();
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    let result = vm_try!(ctx.grow_memory_handle(handle, page_size_delta));
+    let result = vm_try!(ctx.grow_memory_shared_indexed(memidx, page_size_delta));
     vm_try!(ctx.stack_mut().push_i32(result));
     call_next(tail_code, 1, ctx)
 }

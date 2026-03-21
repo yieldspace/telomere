@@ -32,8 +32,7 @@ unsafe fn push_memory_to_stack_local<const N: usize>(
     ctx: &mut ExecuteContext,
     start: usize,
 ) -> VMResult<()> {
-    let handle = vm_try!(ctx.memory_handle_result());
-    ctx.push_memory_to_stack_handle::<N>(handle, start)
+    ctx.push_memory_to_stack::<N>(start)
 }
 
 /// Telomere internal SIMD shared-memory push helper.
@@ -54,8 +53,7 @@ unsafe fn push_memory_to_stack_shared<const N: usize>(
     ctx: &mut ExecuteContext,
     start: usize,
 ) -> VMResult<()> {
-    let handle = vm_try!(ctx.memory_handle_result());
-    ctx.push_memory_to_stack_handle::<N>(handle, start)
+    ctx.push_memory_to_stack::<N>(start)
 }
 
 #[inline(always)]
@@ -65,8 +63,7 @@ unsafe fn push_memory_to_stack_local_indexed<const N: usize>(
     start: usize,
 ) -> VMResult<()> {
     let memidx = (*tail_code.add(1)).operand.u32;
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    ctx.push_memory_to_stack_handle::<N>(handle, start)
+    ctx.push_memory_to_stack_local_indexed::<N>(memidx, start)
 }
 
 #[inline(always)]
@@ -76,8 +73,7 @@ unsafe fn push_memory_to_stack_shared_indexed<const N: usize>(
     start: usize,
 ) -> VMResult<()> {
     let memidx = (*tail_code.add(1)).operand.u32;
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    ctx.push_memory_to_stack_handle::<N>(handle, start)
+    ctx.push_memory_to_stack_shared_indexed::<N>(memidx, start)
 }
 
 /// Telomere internal SIMD local-memory read helper.
@@ -101,8 +97,7 @@ unsafe fn read_memory_bytes_local<const N: usize>(
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack_mut().pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    let handle = vm_try!(ctx.memory_handle_result());
-    ctx.read_u8_array_handle::<N>(handle, start)
+    ctx.read_memory_u8_array::<N>(start)
 }
 
 /// Telomere internal SIMD shared-memory read helper.
@@ -126,8 +121,7 @@ unsafe fn read_memory_bytes_shared<const N: usize>(
     let memarg = (*tail_code).operand.memarg;
     let offset = ctx.stack_mut().pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    let handle = vm_try!(ctx.memory_handle_result());
-    ctx.read_u8_array_handle::<N>(handle, start)
+    ctx.read_memory_u8_array::<N>(start)
 }
 
 #[inline(always)]
@@ -139,8 +133,7 @@ unsafe fn read_memory_bytes_local_indexed<const N: usize>(
     let offset = ctx.stack_mut().pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     let memidx = (*tail_code.add(1)).operand.u32;
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    ctx.read_u8_array_handle::<N>(handle, start)
+    ctx.read_u8_array_local_indexed::<N>(memidx, start)
 }
 
 #[inline(always)]
@@ -152,8 +145,7 @@ unsafe fn read_memory_bytes_shared_indexed<const N: usize>(
     let offset = ctx.stack_mut().pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     let memidx = (*tail_code.add(1)).operand.u32;
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    ctx.read_u8_array_handle::<N>(handle, start)
+    ctx.read_u8_array_shared_indexed::<N>(memidx, start)
 }
 
 #[inline(always)]
@@ -1100,15 +1092,26 @@ unsafe fn store_lane_internal<const N: usize, const SHARED: bool, const INDEXED:
     let start = lane * N;
     let offset = ctx.stack_mut().pop_u32();
     let mem_start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
-    let handle = if INDEXED {
+    if INDEXED {
         let memidx = (*tail_code.add(2)).operand.u32;
-        vm_try!(ctx.memory_handle_at_result(memidx))
+        if SHARED {
+            vm_try!(ctx.write_memory_bytes_shared_indexed(
+                memidx,
+                mem_start,
+                &bytes[start..start + N]
+            ));
+        } else {
+            vm_try!(ctx.write_memory_bytes_local_indexed(
+                memidx,
+                mem_start,
+                &bytes[start..start + N]
+            ));
+        }
+        call_next(tail_code, 3, ctx)
     } else {
-        vm_try!(ctx.memory_handle_result())
-    };
-    let _ = SHARED;
-    vm_try!(ctx.write_memory_bytes_handle(handle, mem_start, &bytes[start..start + N]));
-    call_next(tail_code, if INDEXED { 3 } else { 2 }, ctx)
+        vm_try!(ctx.write_memory_bytes(mem_start, &bytes[start..start + N]));
+        call_next(tail_code, 2, ctx)
+    }
 }
 
 /// WebAssembly `i8x16.shuffle`.

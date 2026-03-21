@@ -102,8 +102,8 @@ fn async_fail(_ctx: AsyncHostCallContext) -> AsyncHostFuture {
 }
 
 fn sync_add_two(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let value = match ctx.param(0) {
-        Some(WasmValue::I32(value)) => *value,
+    let value = match ctx.param_i32(0) {
+        Some(value) => value,
         other => panic!("expected i32 param, got {other:?}"),
     };
     VMResult::Success(HostCallControl::Return(ResultValue::new(vec![

@@ -226,60 +226,78 @@ fn push_result_values(stack: &mut Stack, types: &ResultType, values: &ResultValu
     VMResult::Success(())
 }
 
-fn encode_result_values(types: &ResultType, values: &ResultValue) -> VMResult<Vec<u8>> {
-    if types.0.len() != values.len() {
-        return VMResult::InvalidOperand;
-    }
-    let mut encoded = Vec::with_capacity(result_type_size(types));
-    for (ty, value) in types.iter().zip(values.iter()) {
-        let size = ty.stack_size().usize();
-        let start = encoded.len();
-        encoded.resize(start + size, 0);
-        match (ty, value) {
-            (ValType::I32, WasmValue::I32(value)) => {
-                encoded[start..start + size].copy_from_slice(&value.to_le_bytes())
-            }
-            (ValType::I64, WasmValue::I64(value)) => {
-                encoded[start..start + size].copy_from_slice(&value.to_le_bytes())
-            }
-            (ValType::F32, WasmValue::F32(value)) => {
-                encoded[start..start + size].copy_from_slice(&value.to_bits().to_le_bytes())
-            }
-            (ValType::F64, WasmValue::F64(value)) => {
-                encoded[start..start + size].copy_from_slice(&value.to_bits().to_le_bytes())
-            }
-            (ValType::V128, WasmValue::V128(value)) => {
-                encoded[start..start + size].copy_from_slice(&value.to_le_bytes())
-            }
-            (ValType::FuncRef, WasmValue::FuncRef(value)) => {
-                encoded[start..start + size].copy_from_slice(&value.to_le_bytes())
-            }
-            (ValType::ExternRef, WasmValue::ExternRef(value)) => {
-                encoded[start..start + size].copy_from_slice(&value.to_le_bytes())
-            }
-            _ => return VMResult::InvalidOperand,
-        }
-    }
-    VMResult::Success(encoded)
-}
-
 fn write_marshaled_results(
     stack: &mut Stack,
     slot_offset: usize,
     types: &ResultType,
     values: &ResultValue,
 ) -> VMResult<()> {
-    let encoded = vm_try!(encode_result_values(types, values));
     let slot = LocalReference {
         local_top: slot_offset,
-        local_size: encoded.len() as u32,
+        local_size: result_type_size(types) as u32,
     };
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            encoded.as_ptr(),
-            stack.local_area_mut_ptr(&slot),
-            encoded.len(),
-        );
+    if types.0.len() != values.len() {
+        return VMResult::InvalidOperand;
+    }
+    let mut offset = 0usize;
+    let dst = unsafe { stack.local_area_mut_ptr(&slot) };
+    for (ty, value) in types.iter().zip(values.iter()) {
+        let size = ty.stack_size().usize();
+        unsafe {
+            match (ty, value) {
+                (ValType::I32, WasmValue::I32(value)) => {
+                    std::ptr::copy_nonoverlapping(
+                        value.to_le_bytes().as_ptr(),
+                        dst.add(offset),
+                        size,
+                    );
+                }
+                (ValType::I64, WasmValue::I64(value)) => {
+                    std::ptr::copy_nonoverlapping(
+                        value.to_le_bytes().as_ptr(),
+                        dst.add(offset),
+                        size,
+                    );
+                }
+                (ValType::F32, WasmValue::F32(value)) => {
+                    std::ptr::copy_nonoverlapping(
+                        value.to_bits().to_le_bytes().as_ptr(),
+                        dst.add(offset),
+                        size,
+                    );
+                }
+                (ValType::F64, WasmValue::F64(value)) => {
+                    std::ptr::copy_nonoverlapping(
+                        value.to_bits().to_le_bytes().as_ptr(),
+                        dst.add(offset),
+                        size,
+                    );
+                }
+                (ValType::V128, WasmValue::V128(value)) => {
+                    std::ptr::copy_nonoverlapping(
+                        value.to_le_bytes().as_ptr(),
+                        dst.add(offset),
+                        size,
+                    );
+                }
+                (ValType::FuncRef, WasmValue::FuncRef(value)) => {
+                    std::ptr::copy_nonoverlapping(
+                        value.to_le_bytes().as_ptr(),
+                        dst.add(offset),
+                        size,
+                    );
+                }
+                (ValType::ExternRef, WasmValue::ExternRef(value)) => {
+                    std::ptr::copy_nonoverlapping(
+                        value.to_le_bytes().as_ptr(),
+                        dst.add(offset),
+                        size,
+                    );
+                }
+                _ => return VMResult::InvalidOperand,
+            }
+        }
+        offset += size;
     }
     VMResult::Success(())
 }
@@ -340,30 +358,36 @@ fn marshal_local_values(
     VMResult::Success(ResultValue::new(values))
 }
 
-fn current_function_type(ctx: &ExecuteContext) -> FuncType {
-    let func = ctx.func();
-    let instance = ctx.gc_ref().instance(func.instance);
-    let module = ctx.gc_ref().get_module(instance.module_addr);
-    let typeidx = module.functions[func.funcidx as usize];
-    module.function_types[typeidx.0 as usize].clone()
+unsafe fn function_type_ptr_by_func(
+    ctx: &ExecuteContext,
+    func: &crate::common::FunctionInstanceData,
+) -> *const FuncType {
+    let gc = ctx.gc_ref();
+    let instance = gc.instance(func.instance);
+    let module = gc.get_module(instance.module_addr);
+    module.function_types.get_unchecked(func.typeidx.0 as usize) as *const FuncType
 }
 
-fn function_type_by_addr(ctx: &ExecuteContext, funcaddr: GcRef) -> FuncType {
-    let func = ctx.func_by_addr(funcaddr);
-    let instance = ctx.gc_ref().instance(func.instance);
-    let module = ctx.gc_ref().get_module(instance.module_addr);
-    let typeidx = module.functions[func.funcidx as usize];
-    module.function_types[typeidx.0 as usize].clone()
+unsafe fn current_function_type_ptr(ctx: &ExecuteContext) -> *const FuncType {
+    unsafe { function_type_ptr_by_func(ctx, ctx.func()) }
 }
 
-fn start_async_host_call(ctx: &mut ExecuteContext, function_type: &FuncType) -> VMResult<()> {
+unsafe fn function_type_ptr_by_addr(ctx: &ExecuteContext, funcaddr: GcRef) -> *const FuncType {
+    unsafe { function_type_ptr_by_func(ctx, ctx.func_by_addr(funcaddr)) }
+}
+
+fn start_async_host_call(
+    ctx: &mut ExecuteContext,
+    param_types: &ResultType,
+    result_types: &ResultType,
+) -> VMResult<()> {
     let async_host = ctx.func().async_host_code_pointer();
     let params = vm_try!(marshal_local_values(
         ctx.stack_ref(),
         &ctx.local_reference(),
-        &function_type.0,
+        param_types,
     ));
-    let result_types = function_type.1.clone();
+    let result_types = result_types.clone();
     let result_slot = ctx.local_reference().local_top;
     let return_size = result_type_size(&result_types);
     let (resume_pc, _slot) = ctx.function_return_in_place(return_size);
@@ -416,67 +440,63 @@ fn resolve_host_tail_call_target(
 
 fn complete_sync_host_return(
     ctx: &mut ExecuteContext,
-    function_type: &FuncType,
+    result_types: &ResultType,
     values: ResultValue,
-) -> VMResult<Option<*const Instr>> {
-    let result_types = function_type.1.clone();
-    let return_size = result_type_size(&result_types);
+) -> VMResult<()> {
+    let return_size = result_type_size(result_types);
     let (return_addr, result_slot) = ctx.function_return_in_place(return_size);
     vm_try!(write_marshaled_results(
         ctx.stack_mut(),
         result_slot,
-        &result_types,
+        result_types,
         &values,
     ));
-    VMResult::Success(Some(return_addr))
+    unsafe { call_code(return_addr, ctx) }
 }
 
 fn complete_sync_host_tail_call(
     ctx: &mut ExecuteContext,
     target: HostTailCallTarget,
     params: ResultValue,
-) -> VMResult<Option<*const Instr>> {
+) -> VMResult<()> {
     let funcaddr = vm_try!(resolve_host_tail_call_target(ctx, target));
-    let function_type = function_type_by_addr(ctx, funcaddr);
+    let function_type = unsafe { &*function_type_ptr_by_addr(ctx, funcaddr) };
     vm_try!(push_result_values(
         ctx.stack_mut(),
         &function_type.0,
         &params,
     ));
-    unsafe { call::internal_op_call(std::ptr::null(), funcaddr, ctx, true) }
+    let ptr = vm_try!(unsafe { call::internal_op_call(std::ptr::null(), funcaddr, ctx, true) });
+    if ptr.is_null() {
+        VMResult::Success(())
+    } else {
+        unsafe { call_next(ptr, 0, ctx) }
+    }
 }
 
-fn invoke_host_function(
+unsafe fn invoke_host_function(
     return_addr: *const Instr,
     ctx: &mut ExecuteContext,
-    function_type: &FuncType,
-) -> VMResult<Option<*const Instr>> {
+    param_types: *const ResultType,
+    result_types: *const ResultType,
+) -> VMResult<()> {
+    let param_types = unsafe { &*param_types };
+    let result_types = unsafe { &*result_types };
     if ctx.func().is_async_host_func() {
         let _ = return_addr;
-        vm_try!(start_async_host_call(ctx, function_type));
-        VMResult::Success(None)
+        vm_try!(start_async_host_call(ctx, param_types, result_types));
+        VMResult::Success(())
     } else {
         let fp = ctx.func().host_code_pointer();
-        let params = vm_try!(marshal_local_values(
-            ctx.stack_ref(),
-            &ctx.local_reference(),
-            &function_type.0,
-        ));
-        let control = vm_try!(fp(HostCallContext::new(
-            ctx,
-            params,
-            function_type.1.clone(),
-        )));
+        let control = vm_try!(fp(HostCallContext::new(ctx, param_types, result_types)));
         match control {
-            HostCallControl::Return(values) => {
-                complete_sync_host_return(ctx, function_type, values)
-            }
+            HostCallControl::Return(values) => complete_sync_host_return(ctx, result_types, values),
             HostCallControl::TailCall { target, params } => {
                 complete_sync_host_tail_call(ctx, target, params)
             }
             HostCallControl::EndProgram => {
                 ctx.end_program();
-                VMResult::Success(None)
+                VMResult::Success(())
             }
         }
     }
@@ -492,7 +512,8 @@ pub(crate) use bulk_memory::{
     op_mem_init_shared,
 };
 pub(crate) use call::{
-    op_call, op_call_indirect, op_return_call, op_return_call_indirect, special_start_function_call,
+    op_call, op_call_import, op_call_indirect, op_return_call, op_return_call_import,
+    op_return_call_indirect, special_start_function_call,
 };
 pub use control::special_function_return;
 pub(crate) use control::*;
@@ -528,8 +549,7 @@ pub(crate) unsafe fn store_internal_local(
     trace!("op_store: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    let handle = vm_try!(ctx.memory_handle_result());
-    vm_try!(ctx.write_memory_bytes_handle(handle, start, bytes));
+    vm_try!(ctx.write_memory_bytes(start, bytes));
     call_next(tail_code, 1, ctx)
 }
 
@@ -559,8 +579,7 @@ pub(crate) unsafe fn store_internal_shared(
     trace!("op_store_shared: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    let handle = vm_try!(ctx.memory_handle_result());
-    vm_try!(ctx.write_memory_bytes_handle(handle, start, bytes));
+    vm_try!(ctx.write_memory_bytes(start, bytes));
     call_next(tail_code, 1, ctx)
 }
 
@@ -589,8 +608,7 @@ pub(crate) unsafe fn store_internal_local_indexed(
     let offset = ctx.stack_mut().pop_u32();
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    vm_try!(ctx.write_memory_bytes_handle(handle, start, bytes));
+    vm_try!(ctx.write_memory_bytes_local_indexed(memidx, start, bytes));
     call_next(tail_code, 2, ctx)
 }
 
@@ -619,8 +637,7 @@ pub(crate) unsafe fn store_internal_shared_indexed(
     let offset = ctx.stack_mut().pop_u32();
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    vm_try!(ctx.write_memory_bytes_handle(handle, start, bytes));
+    vm_try!(ctx.write_memory_bytes_shared_indexed(memidx, start, bytes));
     call_next(tail_code, 2, ctx)
 }
 pub(crate) const VM_END: Instr = Instr {

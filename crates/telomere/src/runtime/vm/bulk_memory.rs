@@ -82,11 +82,8 @@ fn mem_init_impl_local_with_id(
     len: u32,
 ) -> VMResult<()> {
     let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
-    ctx.write_memory_bytes_handle(
-        crate::common::MemoryHandle::Local(memory),
-        dst as usize,
-        copied.as_deref().unwrap_or(&[]),
-    )
+    ctx.gc_mut()
+        .local_write_bytes(memory, dst as usize, copied.as_deref().unwrap_or(&[]))
 }
 
 #[inline(never)]
@@ -117,11 +114,8 @@ fn mem_init_impl_shared_with_id(
     len: u32,
 ) -> VMResult<()> {
     let copied = vm_try!(mem_init_bytes(ctx, idx, src, len));
-    ctx.write_memory_bytes_handle(
-        crate::common::MemoryHandle::Shared(memory),
-        dst as usize,
-        copied.as_deref().unwrap_or(&[]),
-    )
+    ctx.gc_mut()
+        .shared_write_bytes(memory, dst as usize, copied.as_deref().unwrap_or(&[]))
 }
 
 #[inline(never)]
@@ -141,7 +135,7 @@ fn mem_copy_impl_local_with_id(
     src: u32,
     len: u32,
 ) -> VMResult<()> {
-    ctx.copy_memory_handle(crate::common::MemoryHandle::Local(memory), dst, src, len)
+    ctx.gc_mut().local_copy_memory(memory, dst, src, len)
 }
 
 #[inline(never)]
@@ -152,7 +146,7 @@ fn mem_copy_impl_shared_with_id(
     src: u32,
     len: u32,
 ) -> VMResult<()> {
-    ctx.copy_memory_handle(crate::common::MemoryHandle::Shared(memory), dst, src, len)
+    ctx.gc_mut().shared_copy_memory(memory, dst, src, len)
 }
 
 #[inline(never)]
@@ -163,7 +157,7 @@ fn mem_fill_impl_local_with_id(
     len: u32,
     data: u32,
 ) -> VMResult<()> {
-    ctx.fill_memory_handle(crate::common::MemoryHandle::Local(memory), ptr, len, data)
+    ctx.gc_mut().local_fill_memory(memory, ptr, len, data)
 }
 
 #[inline(never)]
@@ -174,7 +168,7 @@ fn mem_fill_impl_shared_with_id(
     len: u32,
     data: u32,
 ) -> VMResult<()> {
-    ctx.fill_memory_handle(crate::common::MemoryHandle::Shared(memory), ptr, len, data)
+    ctx.gc_mut().shared_fill_memory(memory, ptr, len, data)
 }
 
 #[inline(never)]
@@ -186,13 +180,8 @@ fn mem_copy_impl_local_to_local(
     src_offset: u32,
     len: u32,
 ) -> VMResult<()> {
-    ctx.copy_memory_between_handles(
-        crate::common::MemoryHandle::Local(dst),
-        crate::common::MemoryHandle::Local(src),
-        dst_offset,
-        src_offset,
-        len,
-    )
+    ctx.gc_mut()
+        .copy_memory_local_to_local(dst, src, dst_offset, src_offset, len)
 }
 
 #[inline(never)]
@@ -204,13 +193,8 @@ fn mem_copy_impl_shared_to_local(
     src_offset: u32,
     len: u32,
 ) -> VMResult<()> {
-    ctx.copy_memory_between_handles(
-        crate::common::MemoryHandle::Local(dst),
-        crate::common::MemoryHandle::Shared(src),
-        dst_offset,
-        src_offset,
-        len,
-    )
+    ctx.gc_mut()
+        .copy_memory_shared_to_local(dst, src, dst_offset, src_offset, len)
 }
 
 #[inline(never)]
@@ -222,13 +206,8 @@ fn mem_copy_impl_local_to_shared(
     src_offset: u32,
     len: u32,
 ) -> VMResult<()> {
-    ctx.copy_memory_between_handles(
-        crate::common::MemoryHandle::Shared(dst),
-        crate::common::MemoryHandle::Local(src),
-        dst_offset,
-        src_offset,
-        len,
-    )
+    ctx.gc_mut()
+        .copy_memory_local_to_shared(dst, src, dst_offset, src_offset, len)
 }
 
 #[inline(never)]
@@ -240,13 +219,8 @@ fn mem_copy_impl_shared_to_shared(
     src_offset: u32,
     len: u32,
 ) -> VMResult<()> {
-    ctx.copy_memory_between_handles(
-        crate::common::MemoryHandle::Shared(dst),
-        crate::common::MemoryHandle::Shared(src),
-        dst_offset,
-        src_offset,
-        len,
-    )
+    ctx.gc_mut()
+        .copy_memory_shared_to_shared(dst, src, dst_offset, src_offset, len)
 }
 
 /// WebAssembly `memory.init`.

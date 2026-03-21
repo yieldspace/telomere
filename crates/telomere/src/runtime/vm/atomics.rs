@@ -202,8 +202,7 @@ macro_rules! atomic_load_op {
         #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            let value = vm_try!(ctx.$reader(handle, start));
+            let value = vm_try!(ctx.$reader(start));
             vm_try!(ctx.stack_mut().$push(value as $cast));
             call_next(tail_code, 1, ctx)
         }
@@ -227,8 +226,7 @@ macro_rules! atomic_load_op_shared {
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            let value = vm_try!(ctx.$reader(handle, start));
+            let value = vm_try!(ctx.$reader(start));
             vm_try!(ctx.stack_mut().$push(value as $cast));
             call_next(tail_code, 1, ctx)
         }
@@ -253,8 +251,7 @@ macro_rules! atomic_store_op {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack_mut().$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            vm_try!(ctx.$writer(handle, start, value));
+            vm_try!(ctx.$writer(start, value));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -278,8 +275,7 @@ macro_rules! atomic_store_op_shared {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack_mut().$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            vm_try!(ctx.$writer(handle, start, value));
+            vm_try!(ctx.$writer(start, value));
             call_next(tail_code, 1, ctx)
         }
     };
@@ -303,8 +299,7 @@ macro_rules! atomic_rmw_op {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack_mut().$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            let old = vm_try!(ctx.$rmw(handle, start, $op, value));
+            let old = vm_try!(ctx.$rmw(start, $op, value));
             vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
@@ -329,8 +324,7 @@ macro_rules! atomic_rmw_op_shared {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack_mut().$pop() as $pop_ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            let old = vm_try!(ctx.$rmw(handle, start, $op, value));
+            let old = vm_try!(ctx.$rmw(start, $op, value));
             vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
@@ -356,8 +350,7 @@ macro_rules! atomic_cmpxchg_op {
             let value = ctx.stack_mut().$pop() as $ty;
             let expected = ctx.stack_mut().$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            let old = vm_try!(ctx.$cmpxchg(handle, start, expected, value));
+            let old = vm_try!(ctx.$cmpxchg(start, expected, value));
             vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
@@ -383,8 +376,7 @@ macro_rules! atomic_cmpxchg_op_shared {
             let value = ctx.stack_mut().$pop() as $ty;
             let expected = ctx.stack_mut().$pop() as $ty;
             let start = vm_try!(atomic_start(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_result());
-            let old = vm_try!(ctx.$cmpxchg(handle, start, expected, value));
+            let old = vm_try!(ctx.$cmpxchg(start, expected, value));
             vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 1, ctx)
         }
@@ -407,8 +399,7 @@ macro_rules! atomic_load_op_indexed {
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and local.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            let value = vm_try!(ctx.$reader_local(handle, start));
+            let value = vm_try!(unsafe { ctx.$reader_local(memidx, start) });
             vm_try!(ctx.stack_mut().$push(value as $cast));
             call_next(tail_code, 2, ctx)
         }
@@ -427,8 +418,7 @@ macro_rules! atomic_load_op_indexed {
         /// - `ctx` must reference a live execution context whose indexed memory operand is in-bounds and shared.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            let value = vm_try!(ctx.$reader_shared(handle, start));
+            let value = vm_try!(unsafe { ctx.$reader_shared(memidx, start) });
             vm_try!(ctx.stack_mut().$push(value as $cast));
             call_next(tail_code, 2, ctx)
         }
@@ -452,8 +442,7 @@ macro_rules! atomic_store_op_indexed {
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack_mut().$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            vm_try!(ctx.$writer_local(handle, start, value));
+            vm_try!(unsafe { ctx.$writer_local(memidx, start, value) });
             call_next(tail_code, 2, ctx)
         }
 
@@ -472,8 +461,7 @@ macro_rules! atomic_store_op_indexed {
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack_mut().$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            vm_try!(ctx.$writer_shared(handle, start, value));
+            vm_try!(unsafe { ctx.$writer_shared(memidx, start, value) });
             call_next(tail_code, 2, ctx)
         }
     };
@@ -496,8 +484,7 @@ macro_rules! atomic_rmw_op_indexed {
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack_mut().$pop() as $pop_ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            let old = vm_try!(ctx.$rmw_local(handle, start, $op, value));
+            let old = vm_try!(unsafe { ctx.$rmw_local(memidx, start, $op, value) });
             vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 2, ctx)
         }
@@ -517,8 +504,7 @@ macro_rules! atomic_rmw_op_indexed {
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             let value = ctx.stack_mut().$pop() as $pop_ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            let old = vm_try!(ctx.$rmw_shared(handle, start, $op, value));
+            let old = vm_try!(unsafe { ctx.$rmw_shared(memidx, start, $op, value) });
             vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 2, ctx)
         }
@@ -543,8 +529,7 @@ macro_rules! atomic_cmpxchg_op_indexed {
             let value = ctx.stack_mut().$pop() as $ty;
             let expected = ctx.stack_mut().$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            let old = vm_try!(ctx.$cmpxchg_local(handle, start, expected, value));
+            let old = vm_try!(unsafe { ctx.$cmpxchg_local(memidx, start, expected, value) });
             vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 2, ctx)
         }
@@ -565,8 +550,7 @@ macro_rules! atomic_cmpxchg_op_indexed {
             let value = ctx.stack_mut().$pop() as $ty;
             let expected = ctx.stack_mut().$pop() as $ty;
             let (start, memidx) = vm_try!(atomic_start_indexed(tail_code, ctx));
-            let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-            let old = vm_try!(ctx.$cmpxchg_shared(handle, start, expected, value));
+            let old = vm_try!(unsafe { ctx.$cmpxchg_shared(memidx, start, expected, value) });
             vm_try!(ctx.stack_mut().$push(old as $push_ty));
             call_next(tail_code, 2, ctx)
         }
@@ -1554,56 +1538,56 @@ atomic_cmpxchg_op_shared!(
 atomic_load_op_indexed!(
     op_i32_atomic_load_indexed_local,
     op_i32_atomic_load_indexed_shared,
-    local_atomic_load_u32,
-    shared_atomic_load_u32,
+    indexed_local_atomic_load_u32,
+    indexed_shared_atomic_load_u32,
     push_u32,
     u32
 );
 atomic_load_op_indexed!(
     op_i64_atomic_load_indexed_local,
     op_i64_atomic_load_indexed_shared,
-    local_atomic_load_u64,
-    shared_atomic_load_u64,
+    indexed_local_atomic_load_u64,
+    indexed_shared_atomic_load_u64,
     push_u64,
     u64
 );
 atomic_load_op_indexed!(
     op_i32_atomic_load8_u_indexed_local,
     op_i32_atomic_load8_u_indexed_shared,
-    local_atomic_load_u8,
-    shared_atomic_load_u8,
+    indexed_local_atomic_load_u8,
+    indexed_shared_atomic_load_u8,
     push_u32,
     u32
 );
 atomic_load_op_indexed!(
     op_i32_atomic_load16_u_indexed_local,
     op_i32_atomic_load16_u_indexed_shared,
-    local_atomic_load_u16,
-    shared_atomic_load_u16,
+    indexed_local_atomic_load_u16,
+    indexed_shared_atomic_load_u16,
     push_u32,
     u32
 );
 atomic_load_op_indexed!(
     op_i64_atomic_load8_u_indexed_local,
     op_i64_atomic_load8_u_indexed_shared,
-    local_atomic_load_u8,
-    shared_atomic_load_u8,
+    indexed_local_atomic_load_u8,
+    indexed_shared_atomic_load_u8,
     push_u64,
     u64
 );
 atomic_load_op_indexed!(
     op_i64_atomic_load16_u_indexed_local,
     op_i64_atomic_load16_u_indexed_shared,
-    local_atomic_load_u16,
-    shared_atomic_load_u16,
+    indexed_local_atomic_load_u16,
+    indexed_shared_atomic_load_u16,
     push_u64,
     u64
 );
 atomic_load_op_indexed!(
     op_i64_atomic_load32_u_indexed_local,
     op_i64_atomic_load32_u_indexed_shared,
-    local_atomic_load_u32,
-    shared_atomic_load_u32,
+    indexed_local_atomic_load_u32,
+    indexed_shared_atomic_load_u32,
     push_u64,
     u64
 );
@@ -1612,56 +1596,56 @@ atomic_store_op_indexed!(
     op_i32_atomic_store_indexed_local,
     op_i32_atomic_store_indexed_shared,
     pop_u32,
-    local_atomic_store_u32,
-    shared_atomic_store_u32,
+    indexed_local_atomic_store_u32,
+    indexed_shared_atomic_store_u32,
     u32
 );
 atomic_store_op_indexed!(
     op_i64_atomic_store_indexed_local,
     op_i64_atomic_store_indexed_shared,
     pop_u64,
-    local_atomic_store_u64,
-    shared_atomic_store_u64,
+    indexed_local_atomic_store_u64,
+    indexed_shared_atomic_store_u64,
     u64
 );
 atomic_store_op_indexed!(
     op_i32_atomic_store8_indexed_local,
     op_i32_atomic_store8_indexed_shared,
     pop_u32,
-    local_atomic_store_u8,
-    shared_atomic_store_u8,
+    indexed_local_atomic_store_u8,
+    indexed_shared_atomic_store_u8,
     u8
 );
 atomic_store_op_indexed!(
     op_i32_atomic_store16_indexed_local,
     op_i32_atomic_store16_indexed_shared,
     pop_u32,
-    local_atomic_store_u16,
-    shared_atomic_store_u16,
+    indexed_local_atomic_store_u16,
+    indexed_shared_atomic_store_u16,
     u16
 );
 atomic_store_op_indexed!(
     op_i64_atomic_store8_indexed_local,
     op_i64_atomic_store8_indexed_shared,
     pop_u64,
-    local_atomic_store_u8,
-    shared_atomic_store_u8,
+    indexed_local_atomic_store_u8,
+    indexed_shared_atomic_store_u8,
     u8
 );
 atomic_store_op_indexed!(
     op_i64_atomic_store16_indexed_local,
     op_i64_atomic_store16_indexed_shared,
     pop_u64,
-    local_atomic_store_u16,
-    shared_atomic_store_u16,
+    indexed_local_atomic_store_u16,
+    indexed_shared_atomic_store_u16,
     u16
 );
 atomic_store_op_indexed!(
     op_i64_atomic_store32_indexed_local,
     op_i64_atomic_store32_indexed_shared,
     pop_u64,
-    local_atomic_store_u32,
-    shared_atomic_store_u32,
+    indexed_local_atomic_store_u32,
+    indexed_shared_atomic_store_u32,
     u32
 );
 
@@ -1669,8 +1653,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw_add_indexed_local,
     op_i32_atomic_rmw_add_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -1680,8 +1664,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw_add_indexed_local,
     op_i64_atomic_rmw_add_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u64,
-    shared_atomic_rmw_u64,
+    indexed_local_atomic_rmw_u64,
+    indexed_shared_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -1691,8 +1675,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw8_add_u_indexed_local,
     op_i32_atomic_rmw8_add_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -1702,8 +1686,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw16_add_u_indexed_local,
     op_i32_atomic_rmw16_add_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -1713,8 +1697,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw8_add_u_indexed_local,
     op_i64_atomic_rmw8_add_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -1724,8 +1708,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw16_add_u_indexed_local,
     op_i64_atomic_rmw16_add_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -1735,8 +1719,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw32_add_u_indexed_local,
     op_i64_atomic_rmw32_add_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -1746,8 +1730,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw_sub_indexed_local,
     op_i32_atomic_rmw_sub_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -1757,8 +1741,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw_sub_indexed_local,
     op_i64_atomic_rmw_sub_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u64,
-    shared_atomic_rmw_u64,
+    indexed_local_atomic_rmw_u64,
+    indexed_shared_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -1768,8 +1752,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw8_sub_u_indexed_local,
     op_i32_atomic_rmw8_sub_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -1779,8 +1763,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw16_sub_u_indexed_local,
     op_i32_atomic_rmw16_sub_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -1790,8 +1774,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw8_sub_u_indexed_local,
     op_i64_atomic_rmw8_sub_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -1801,8 +1785,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw16_sub_u_indexed_local,
     op_i64_atomic_rmw16_sub_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -1812,8 +1796,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw32_sub_u_indexed_local,
     op_i64_atomic_rmw32_sub_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -1823,8 +1807,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw_and_indexed_local,
     op_i32_atomic_rmw_and_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -1834,8 +1818,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw_and_indexed_local,
     op_i64_atomic_rmw_and_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u64,
-    shared_atomic_rmw_u64,
+    indexed_local_atomic_rmw_u64,
+    indexed_shared_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -1845,8 +1829,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw8_and_u_indexed_local,
     op_i32_atomic_rmw8_and_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -1856,8 +1840,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw16_and_u_indexed_local,
     op_i32_atomic_rmw16_and_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -1867,8 +1851,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw8_and_u_indexed_local,
     op_i64_atomic_rmw8_and_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -1878,8 +1862,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw16_and_u_indexed_local,
     op_i64_atomic_rmw16_and_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -1889,8 +1873,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw32_and_u_indexed_local,
     op_i64_atomic_rmw32_and_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -1900,8 +1884,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw_or_indexed_local,
     op_i32_atomic_rmw_or_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -1911,8 +1895,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw_or_indexed_local,
     op_i64_atomic_rmw_or_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u64,
-    shared_atomic_rmw_u64,
+    indexed_local_atomic_rmw_u64,
+    indexed_shared_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -1922,8 +1906,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw8_or_u_indexed_local,
     op_i32_atomic_rmw8_or_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -1933,8 +1917,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw16_or_u_indexed_local,
     op_i32_atomic_rmw16_or_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -1944,8 +1928,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw8_or_u_indexed_local,
     op_i64_atomic_rmw8_or_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -1955,8 +1939,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw16_or_u_indexed_local,
     op_i64_atomic_rmw16_or_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -1966,8 +1950,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw32_or_u_indexed_local,
     op_i64_atomic_rmw32_or_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -1977,8 +1961,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw_xor_indexed_local,
     op_i32_atomic_rmw_xor_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -1988,8 +1972,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw_xor_indexed_local,
     op_i64_atomic_rmw_xor_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u64,
-    shared_atomic_rmw_u64,
+    indexed_local_atomic_rmw_u64,
+    indexed_shared_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -1999,8 +1983,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw8_xor_u_indexed_local,
     op_i32_atomic_rmw8_xor_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -2010,8 +1994,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw16_xor_u_indexed_local,
     op_i32_atomic_rmw16_xor_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -2021,8 +2005,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw8_xor_u_indexed_local,
     op_i64_atomic_rmw8_xor_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -2032,8 +2016,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw16_xor_u_indexed_local,
     op_i64_atomic_rmw16_xor_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -2043,8 +2027,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw32_xor_u_indexed_local,
     op_i64_atomic_rmw32_xor_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -2054,8 +2038,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw_xchg_indexed_local,
     op_i32_atomic_rmw_xchg_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u32,
     u32,
     u32,
@@ -2065,8 +2049,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw_xchg_indexed_local,
     op_i64_atomic_rmw_xchg_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u64,
-    shared_atomic_rmw_u64,
+    indexed_local_atomic_rmw_u64,
+    indexed_shared_atomic_rmw_u64,
     push_u64,
     u64,
     u64,
@@ -2076,8 +2060,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw8_xchg_u_indexed_local,
     op_i32_atomic_rmw8_xchg_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u32,
     u8,
     u32,
@@ -2087,8 +2071,8 @@ atomic_rmw_op_indexed!(
     op_i32_atomic_rmw16_xchg_u_indexed_local,
     op_i32_atomic_rmw16_xchg_u_indexed_shared,
     pop_u32,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u32,
     u16,
     u32,
@@ -2098,8 +2082,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw8_xchg_u_indexed_local,
     op_i64_atomic_rmw8_xchg_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u8,
-    shared_atomic_rmw_u8,
+    indexed_local_atomic_rmw_u8,
+    indexed_shared_atomic_rmw_u8,
     push_u64,
     u8,
     u64,
@@ -2109,8 +2093,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw16_xchg_u_indexed_local,
     op_i64_atomic_rmw16_xchg_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u16,
-    shared_atomic_rmw_u16,
+    indexed_local_atomic_rmw_u16,
+    indexed_shared_atomic_rmw_u16,
     push_u64,
     u16,
     u64,
@@ -2120,8 +2104,8 @@ atomic_rmw_op_indexed!(
     op_i64_atomic_rmw32_xchg_u_indexed_local,
     op_i64_atomic_rmw32_xchg_u_indexed_shared,
     pop_u64,
-    local_atomic_rmw_u32,
-    shared_atomic_rmw_u32,
+    indexed_local_atomic_rmw_u32,
+    indexed_shared_atomic_rmw_u32,
     push_u64,
     u32,
     u64,
@@ -2132,8 +2116,8 @@ atomic_cmpxchg_op_indexed!(
     op_i32_atomic_rmw_cmpxchg_indexed_local,
     op_i32_atomic_rmw_cmpxchg_indexed_shared,
     pop_u32,
-    local_atomic_cmpxchg_u32,
-    shared_atomic_cmpxchg_u32,
+    indexed_local_atomic_cmpxchg_u32,
+    indexed_shared_atomic_cmpxchg_u32,
     push_u32,
     u32,
     u32
@@ -2142,8 +2126,8 @@ atomic_cmpxchg_op_indexed!(
     op_i64_atomic_rmw_cmpxchg_indexed_local,
     op_i64_atomic_rmw_cmpxchg_indexed_shared,
     pop_u64,
-    local_atomic_cmpxchg_u64,
-    shared_atomic_cmpxchg_u64,
+    indexed_local_atomic_cmpxchg_u64,
+    indexed_shared_atomic_cmpxchg_u64,
     push_u64,
     u64,
     u64
@@ -2152,8 +2136,8 @@ atomic_cmpxchg_op_indexed!(
     op_i32_atomic_rmw8_cmpxchg_u_indexed_local,
     op_i32_atomic_rmw8_cmpxchg_u_indexed_shared,
     pop_u32,
-    local_atomic_cmpxchg_u8,
-    shared_atomic_cmpxchg_u8,
+    indexed_local_atomic_cmpxchg_u8,
+    indexed_shared_atomic_cmpxchg_u8,
     push_u32,
     u8,
     u32
@@ -2162,8 +2146,8 @@ atomic_cmpxchg_op_indexed!(
     op_i32_atomic_rmw16_cmpxchg_u_indexed_local,
     op_i32_atomic_rmw16_cmpxchg_u_indexed_shared,
     pop_u32,
-    local_atomic_cmpxchg_u16,
-    shared_atomic_cmpxchg_u16,
+    indexed_local_atomic_cmpxchg_u16,
+    indexed_shared_atomic_cmpxchg_u16,
     push_u32,
     u16,
     u32
@@ -2172,8 +2156,8 @@ atomic_cmpxchg_op_indexed!(
     op_i64_atomic_rmw8_cmpxchg_u_indexed_local,
     op_i64_atomic_rmw8_cmpxchg_u_indexed_shared,
     pop_u64,
-    local_atomic_cmpxchg_u8,
-    shared_atomic_cmpxchg_u8,
+    indexed_local_atomic_cmpxchg_u8,
+    indexed_shared_atomic_cmpxchg_u8,
     push_u64,
     u8,
     u64
@@ -2182,8 +2166,8 @@ atomic_cmpxchg_op_indexed!(
     op_i64_atomic_rmw16_cmpxchg_u_indexed_local,
     op_i64_atomic_rmw16_cmpxchg_u_indexed_shared,
     pop_u64,
-    local_atomic_cmpxchg_u16,
-    shared_atomic_cmpxchg_u16,
+    indexed_local_atomic_cmpxchg_u16,
+    indexed_shared_atomic_cmpxchg_u16,
     push_u64,
     u16,
     u64
@@ -2192,8 +2176,8 @@ atomic_cmpxchg_op_indexed!(
     op_i64_atomic_rmw32_cmpxchg_u_indexed_local,
     op_i64_atomic_rmw32_cmpxchg_u_indexed_shared,
     pop_u64,
-    local_atomic_cmpxchg_u32,
-    shared_atomic_cmpxchg_u32,
+    indexed_local_atomic_cmpxchg_u32,
+    indexed_shared_atomic_cmpxchg_u32,
     push_u64,
     u32,
     u64
@@ -2285,10 +2269,7 @@ pub unsafe fn op_memory_atomic_notify_indexed_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let (start, memidx, count) = vm_try!(pop_notify_operands_indexed(tail_code, ctx));
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    let crate::common::MemoryHandle::Shared(shared_id) = handle else {
-        return VMResult::InvalidOperand;
-    };
+    let shared_id = unsafe { ctx.shared_memory_id_at_unchecked(memidx) };
     let woken = vm_try!(ctx
         .gc_ref()
         .shared_memory(shared_id)
@@ -2430,10 +2411,7 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared(
 ) -> VMResult<()> {
     let (start, memidx, expected, timeout_ns) =
         vm_try!(pop_wait32_operands_indexed(tail_code, ctx));
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    let crate::common::MemoryHandle::Shared(shared_id) = handle else {
-        return VMResult::InvalidOperand;
-    };
+    let shared_id = unsafe { ctx.shared_memory_id_at_unchecked(memidx) };
     let shared = ctx.gc_ref().shared_memory(shared_id);
     match vm_try!(shared.register_wait32(start, expected)) {
         AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, ctx, 2),
@@ -2542,10 +2520,7 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
 ) -> VMResult<()> {
     let (start, memidx, expected, timeout_ns) =
         vm_try!(pop_wait64_operands_indexed(tail_code, ctx));
-    let handle = vm_try!(ctx.memory_handle_at_result(memidx));
-    let crate::common::MemoryHandle::Shared(shared_id) = handle else {
-        return VMResult::InvalidOperand;
-    };
+    let shared_id = unsafe { ctx.shared_memory_id_at_unchecked(memidx) };
     let shared = ctx.gc_ref().shared_memory(shared_id);
     match vm_try!(shared.register_wait64(start, expected)) {
         AtomicWaitResult::NotEqual => finish_wait_not_equal(tail_code, ctx, 2),
@@ -2574,8 +2549,7 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 /// - Callers must preserve the shared-memory linearization contract by dropping temporary guards before the tail-dispatch completes.
 pub unsafe fn op_atomic_fence(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let handle = vm_try!(ctx.memory_handle_result());
-    ctx.local_atomic_fence(handle);
+    ctx.local_atomic_fence();
     call_next(tail_code, 1, ctx)
 }
 
@@ -2596,8 +2570,7 @@ pub unsafe fn op_atomic_fence_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let handle = vm_try!(ctx.memory_handle_result());
-    ctx.shared_atomic_fence(handle);
+    ctx.shared_atomic_fence();
     call_next(tail_code, 1, ctx)
 }
 

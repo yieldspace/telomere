@@ -2,7 +2,7 @@
 
 #[macro_use]
 mod vm_result;
-use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
+use std::{cell::OnceCell, fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
 
@@ -117,6 +117,27 @@ impl ResultValue {
         self.0.is_empty()
     }
 }
+
+#[inline(always)]
+fn read_marshaled_value(bytes: &[u8], ty: ValType) -> Option<WasmValue> {
+    match ty {
+        ValType::I32 => Some(WasmValue::I32(i32::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::I64 => Some(WasmValue::I64(i64::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::F32 => Some(WasmValue::F32(f32::from_bits(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        )))),
+        ValType::F64 => Some(WasmValue::F64(f64::from_bits(u64::from_le_bytes(
+            bytes.try_into().ok()?,
+        )))),
+        ValType::V128 => Some(WasmValue::V128(u128::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::FuncRef => Some(WasmValue::FuncRef(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        ))),
+        ValType::ExternRef => Some(WasmValue::ExternRef(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        ))),
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableType {
     pub reftype: RefType,
@@ -192,33 +213,72 @@ pub enum HostCallControl {
 
 pub struct HostCallContext<'ctx, 'store> {
     facade: ExecuteContextFacade<'ctx, 'store>,
-    params: ResultValue,
-    result_types: ResultType,
+    param_types: &'ctx ResultType,
+    result_types: &'ctx ResultType,
+    params: OnceCell<ResultValue>,
 }
 
 impl<'ctx, 'store> HostCallContext<'ctx, 'store> {
     pub(crate) fn new(
         ctx: &'ctx mut ExecuteContext<'store>,
-        params: ResultValue,
-        result_types: ResultType,
+        param_types: &'ctx ResultType,
+        result_types: &'ctx ResultType,
     ) -> Self {
         Self {
             facade: ExecuteContextFacade { ctx },
-            params,
+            param_types,
             result_types,
+            params: OnceCell::new(),
         }
     }
 
     pub fn params(&self) -> &ResultValue {
-        &self.params
+        self.params.get_or_init(|| {
+            let mut values = Vec::with_capacity(self.param_types.0.len());
+            for index in 0..self.param_types.0.len() {
+                values.push(
+                    self.decode_param(index)
+                        .expect("host params must decode from validated local frame"),
+                );
+            }
+            ResultValue::new(values)
+        })
     }
 
     pub fn param(&self, index: usize) -> Option<&WasmValue> {
-        self.params.0.get(index)
+        self.params().0.get(index)
+    }
+
+    pub fn param_i32(&self, index: usize) -> Option<i32> {
+        match self.decode_param(index)? {
+            WasmValue::I32(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn param_i64(&self, index: usize) -> Option<i64> {
+        match self.decode_param(index)? {
+            WasmValue::I64(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn param_funcref(&self, index: usize) -> Option<u32> {
+        match self.decode_param(index)? {
+            WasmValue::FuncRef(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn param_externref(&self, index: usize) -> Option<u32> {
+        match self.decode_param(index)? {
+            WasmValue::ExternRef(value) => Some(value),
+            _ => None,
+        }
     }
 
     pub fn result_types(&self) -> &ResultType {
-        &self.result_types
+        self.result_types
     }
 
     pub fn store(&self) -> &Store {
@@ -243,6 +303,21 @@ impl<'ctx, 'store> HostCallContext<'ctx, 'store> {
 
     pub fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
         self.facade.with_caller_memory(f)
+    }
+
+    fn decode_param(&self, index: usize) -> Option<WasmValue> {
+        let ty = *self.param_types.0.get(index)?;
+        let mut local_addr = 0usize;
+        for ty in self.param_types.iter().take(index) {
+            local_addr += ty.stack_size().usize();
+        }
+        let size = ty.stack_size().usize();
+        let ctx: &ExecuteContext<'store> = &*self.facade.ctx;
+        read_marshaled_value(
+            ctx.stack_ref()
+                .local_bytes(&ctx.local_reference(), local_addr, size),
+            ty,
+        )
     }
 }
 
@@ -744,6 +819,226 @@ impl ExecuteContextProjection {
     }
 }
 
+macro_rules! define_execute_context_atomic_load {
+    ($default_local:ident, $default_shared:ident, $indexed_local:ident, $indexed_shared:ident, $store_local:ident, $store_shared:ident, $ty:ty) => {
+        #[inline(always)]
+        pub(crate) fn $default_local(&mut self, offset: usize) -> VMResult<$ty> {
+            self.gc
+                .$store_local(unsafe { self.default_local_memory_id_unchecked() }, offset)
+        }
+
+        #[inline(always)]
+        pub(crate) fn $default_shared(&mut self, offset: usize) -> VMResult<$ty> {
+            self.gc
+                .$store_shared(unsafe { self.default_shared_memory_id_unchecked() }, offset)
+        }
+
+        #[inline(always)]
+        pub(crate) unsafe fn $indexed_local(
+            &mut self,
+            memidx: u32,
+            offset: usize,
+        ) -> VMResult<$ty> {
+            self.gc
+                .$store_local(unsafe { self.local_memory_id_at_unchecked(memidx) }, offset)
+        }
+
+        #[inline(always)]
+        pub(crate) unsafe fn $indexed_shared(
+            &mut self,
+            memidx: u32,
+            offset: usize,
+        ) -> VMResult<$ty> {
+            self.gc.$store_shared(
+                unsafe { self.shared_memory_id_at_unchecked(memidx) },
+                offset,
+            )
+        }
+    };
+}
+
+macro_rules! define_execute_context_atomic_store {
+    ($default_local:ident, $default_shared:ident, $indexed_local:ident, $indexed_shared:ident, $store_local:ident, $store_shared:ident, $ty:ty) => {
+        #[inline(always)]
+        pub(crate) fn $default_local(&mut self, offset: usize, value: $ty) -> VMResult<()> {
+            self.gc.$store_local(
+                unsafe { self.default_local_memory_id_unchecked() },
+                offset,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) fn $default_shared(&mut self, offset: usize, value: $ty) -> VMResult<()> {
+            self.gc.$store_shared(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                offset,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) unsafe fn $indexed_local(
+            &mut self,
+            memidx: u32,
+            offset: usize,
+            value: $ty,
+        ) -> VMResult<()> {
+            self.gc.$store_local(
+                unsafe { self.local_memory_id_at_unchecked(memidx) },
+                offset,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) unsafe fn $indexed_shared(
+            &mut self,
+            memidx: u32,
+            offset: usize,
+            value: $ty,
+        ) -> VMResult<()> {
+            self.gc.$store_shared(
+                unsafe { self.shared_memory_id_at_unchecked(memidx) },
+                offset,
+                value,
+            )
+        }
+    };
+}
+
+macro_rules! define_execute_context_atomic_rmw {
+    ($default_local:ident, $default_shared:ident, $indexed_local:ident, $indexed_shared:ident, $store_local:ident, $store_shared:ident, $ty:ty) => {
+        #[inline(always)]
+        pub(crate) fn $default_local(
+            &mut self,
+            offset: usize,
+            op: AtomicRmwOp,
+            value: $ty,
+        ) -> VMResult<$ty> {
+            self.gc.$store_local(
+                unsafe { self.default_local_memory_id_unchecked() },
+                offset,
+                op,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) fn $default_shared(
+            &mut self,
+            offset: usize,
+            op: AtomicRmwOp,
+            value: $ty,
+        ) -> VMResult<$ty> {
+            self.gc.$store_shared(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                offset,
+                op,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) unsafe fn $indexed_local(
+            &mut self,
+            memidx: u32,
+            offset: usize,
+            op: AtomicRmwOp,
+            value: $ty,
+        ) -> VMResult<$ty> {
+            self.gc.$store_local(
+                unsafe { self.local_memory_id_at_unchecked(memidx) },
+                offset,
+                op,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) unsafe fn $indexed_shared(
+            &mut self,
+            memidx: u32,
+            offset: usize,
+            op: AtomicRmwOp,
+            value: $ty,
+        ) -> VMResult<$ty> {
+            self.gc.$store_shared(
+                unsafe { self.shared_memory_id_at_unchecked(memidx) },
+                offset,
+                op,
+                value,
+            )
+        }
+    };
+}
+
+macro_rules! define_execute_context_atomic_cmpxchg {
+    ($default_local:ident, $default_shared:ident, $indexed_local:ident, $indexed_shared:ident, $store_local:ident, $store_shared:ident, $ty:ty) => {
+        #[inline(always)]
+        pub(crate) fn $default_local(
+            &mut self,
+            offset: usize,
+            expected: $ty,
+            value: $ty,
+        ) -> VMResult<$ty> {
+            self.gc.$store_local(
+                unsafe { self.default_local_memory_id_unchecked() },
+                offset,
+                expected,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) fn $default_shared(
+            &mut self,
+            offset: usize,
+            expected: $ty,
+            value: $ty,
+        ) -> VMResult<$ty> {
+            self.gc.$store_shared(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                offset,
+                expected,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) unsafe fn $indexed_local(
+            &mut self,
+            memidx: u32,
+            offset: usize,
+            expected: $ty,
+            value: $ty,
+        ) -> VMResult<$ty> {
+            self.gc.$store_local(
+                unsafe { self.local_memory_id_at_unchecked(memidx) },
+                offset,
+                expected,
+                value,
+            )
+        }
+
+        #[inline(always)]
+        pub(crate) unsafe fn $indexed_shared(
+            &mut self,
+            memidx: u32,
+            offset: usize,
+            expected: $ty,
+            value: $ty,
+        ) -> VMResult<$ty> {
+            self.gc.$store_shared(
+                unsafe { self.shared_memory_id_at_unchecked(memidx) },
+                offset,
+                expected,
+                value,
+            )
+        }
+    };
+}
+
 impl<'a> ExecuteContext<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -1067,709 +1362,587 @@ impl<'a> ExecuteContext<'a> {
 
     #[inline(always)]
     pub fn read_memory_u8_array<const N: usize>(&mut self, offset: usize) -> VMResult<[u8; N]> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_u8_array::<N>(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self.gc.local_read_u8_array::<N>(
+                unsafe { self.default_local_memory_id_unchecked() },
+                offset,
+            ),
+            CachedMemoryKind::Shared => self.gc.shared_read_u8_array::<N>(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                offset,
+            ),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn push_memory_to_stack<const N: usize>(&mut self, offset: usize) -> VMResult<()> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc
-            .push_memory_to_stack::<N>(handle, self.stack, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self.gc.local_push_memory_to_stack::<N>(
+                unsafe { self.default_local_memory_id_unchecked() },
+                self.stack,
+                offset,
+            ),
+            CachedMemoryKind::Shared => self.gc.shared_push_memory_to_stack::<N>(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                self.stack,
+                offset,
+            ),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_u8(&mut self, offset: usize) -> VMResult<u8> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_u8_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_u8_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_u8_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_i8(&mut self, offset: usize) -> VMResult<i8> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_i8_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_i8_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_i8_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_u16(&mut self, offset: usize) -> VMResult<u16> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_u16_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_u16_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_u16_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_i16(&mut self, offset: usize) -> VMResult<i16> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_i16_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_i16_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_i16_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_u32(&mut self, offset: usize) -> VMResult<u32> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_u32_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_u32_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_u32_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_i32(&mut self, offset: usize) -> VMResult<i32> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_i32_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_i32_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_i32_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_u64(&mut self, offset: usize) -> VMResult<u64> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_u64_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_u64_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_u64_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_i64(&mut self, offset: usize) -> VMResult<i64> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_i64_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_i64_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_i64_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_f32(&mut self, offset: usize) -> VMResult<f32> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_f32_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_f32_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_f32_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn read_memory_f64(&mut self, offset: usize) -> VMResult<f64> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.read_f64_at(handle, offset)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_read_f64_at(unsafe { self.default_local_memory_id_unchecked() }, offset),
+            CachedMemoryKind::Shared => self
+                .gc
+                .shared_read_f64_at(unsafe { self.default_shared_memory_id_unchecked() }, offset),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn write_memory_bytes(&mut self, offset: usize, bytes: &[u8]) -> VMResult<()> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.write_bytes(handle, offset, bytes)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self.gc.local_write_bytes(
+                unsafe { self.default_local_memory_id_unchecked() },
+                offset,
+                bytes,
+            ),
+            CachedMemoryKind::Shared => self.gc.shared_write_bytes(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                offset,
+                bytes,
+            ),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
-    pub(crate) fn memory_handle_at_result(&self, memidx: u32) -> VMResult<MemoryHandle> {
-        VMResult::from_option(
-            self.memory_slot_at(memidx).and_then(|slot| slot.handle()),
-            || VMResult::MemoryIndexOutOfRange,
+    pub(crate) unsafe fn push_memory_to_stack_local_indexed<const N: usize>(
+        &mut self,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<()> {
+        self.gc.local_push_memory_to_stack::<N>(
+            unsafe { self.local_memory_id_at_unchecked(memidx) },
+            self.stack,
+            offset,
         )
     }
 
     #[inline(always)]
-    pub(crate) fn push_memory_to_stack_handle<const N: usize>(
+    pub(crate) unsafe fn push_memory_to_stack_shared_indexed<const N: usize>(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
         offset: usize,
     ) -> VMResult<()> {
-        self.gc
-            .push_memory_to_stack::<N>(handle, self.stack, offset)
+        self.gc.shared_push_memory_to_stack::<N>(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            self.stack,
+            offset,
+        )
     }
 
     #[inline(always)]
-    pub(crate) fn read_u8_array_handle<const N: usize>(
+    pub(crate) unsafe fn read_u8_array_local_indexed<const N: usize>(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
         offset: usize,
     ) -> VMResult<[u8; N]> {
-        self.gc.read_u8_array::<N>(handle, offset)
+        self.gc
+            .local_read_u8_array::<N>(unsafe { self.local_memory_id_at_unchecked(memidx) }, offset)
     }
 
     #[inline(always)]
-    pub(crate) fn read_u8_at_handle(
+    pub(crate) unsafe fn read_u8_array_shared_indexed<const N: usize>(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<[u8; N]> {
+        self.gc.shared_read_u8_array::<N>(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            offset,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u8_at_local_indexed(
+        &mut self,
+        memidx: u32,
         offset: usize,
     ) -> VMResult<u8> {
-        self.gc.read_u8_at(handle, offset)
+        self.gc
+            .local_read_u8_at(unsafe { self.local_memory_id_at_unchecked(memidx) }, offset)
     }
 
     #[inline(always)]
-    pub(crate) fn read_i8_at_handle(
+    pub(crate) unsafe fn read_u8_at_shared_indexed(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u8> {
+        self.gc.shared_read_u8_at(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            offset,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i8_at_local_indexed(
+        &mut self,
+        memidx: u32,
         offset: usize,
     ) -> VMResult<i8> {
-        self.gc.read_i8_at(handle, offset)
+        self.gc
+            .local_read_i8_at(unsafe { self.local_memory_id_at_unchecked(memidx) }, offset)
     }
 
     #[inline(always)]
-    pub(crate) fn read_u16_at_handle(
+    pub(crate) unsafe fn read_i8_at_shared_indexed(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i8> {
+        self.gc.shared_read_i8_at(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            offset,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u16_at_local_indexed(
+        &mut self,
+        memidx: u32,
         offset: usize,
     ) -> VMResult<u16> {
-        self.gc.read_u16_at(handle, offset)
+        self.gc
+            .local_read_u16_at(unsafe { self.local_memory_id_at_unchecked(memidx) }, offset)
     }
 
     #[inline(always)]
-    pub(crate) fn read_i16_at_handle(
+    pub(crate) unsafe fn read_u16_at_shared_indexed(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u16> {
+        self.gc.shared_read_u16_at(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            offset,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i16_at_local_indexed(
+        &mut self,
+        memidx: u32,
         offset: usize,
     ) -> VMResult<i16> {
-        self.gc.read_i16_at(handle, offset)
+        self.gc
+            .local_read_i16_at(unsafe { self.local_memory_id_at_unchecked(memidx) }, offset)
     }
 
     #[inline(always)]
-    pub(crate) fn read_u32_at_handle(
+    pub(crate) unsafe fn read_i16_at_shared_indexed(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i16> {
+        self.gc.shared_read_i16_at(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            offset,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_u32_at_local_indexed(
+        &mut self,
+        memidx: u32,
         offset: usize,
     ) -> VMResult<u32> {
-        self.gc.read_u32_at(handle, offset)
+        self.gc
+            .local_read_u32_at(unsafe { self.local_memory_id_at_unchecked(memidx) }, offset)
     }
 
     #[inline(always)]
-    pub(crate) fn read_i32_at_handle(
+    pub(crate) unsafe fn read_u32_at_shared_indexed(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<u32> {
+        self.gc.shared_read_u32_at(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            offset,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn read_i32_at_local_indexed(
+        &mut self,
+        memidx: u32,
         offset: usize,
     ) -> VMResult<i32> {
-        self.gc.read_i32_at(handle, offset)
+        self.gc
+            .local_read_i32_at(unsafe { self.local_memory_id_at_unchecked(memidx) }, offset)
     }
 
     #[inline(always)]
-    pub(crate) fn write_memory_bytes_handle(
+    pub(crate) unsafe fn read_i32_at_shared_indexed(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
+        offset: usize,
+    ) -> VMResult<i32> {
+        self.gc.shared_read_i32_at(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            offset,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn write_memory_bytes_local_indexed(
+        &mut self,
+        memidx: u32,
         offset: usize,
         bytes: &[u8],
     ) -> VMResult<()> {
-        self.gc.write_bytes(handle, offset, bytes)
+        self.gc.local_write_bytes(
+            unsafe { self.local_memory_id_at_unchecked(memidx) },
+            offset,
+            bytes,
+        )
     }
 
     #[inline(always)]
-    pub(crate) fn grow_memory_handle(
+    pub(crate) unsafe fn write_memory_bytes_shared_indexed(
         &mut self,
-        handle: MemoryHandle,
+        memidx: u32,
+        offset: usize,
+        bytes: &[u8],
+    ) -> VMResult<()> {
+        self.gc.shared_write_bytes(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            offset,
+            bytes,
+        )
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn grow_memory_local_indexed(
+        &mut self,
+        memidx: u32,
         page_size_delta: u32,
     ) -> VMResult<i32> {
-        self.gc.grow_memory(handle, page_size_delta)
+        self.gc.local_grow_memory(
+            unsafe { self.local_memory_id_at_unchecked(memidx) },
+            page_size_delta,
+        )
     }
 
     #[inline(always)]
-    pub(crate) fn copy_memory_handle(
+    pub(crate) unsafe fn grow_memory_shared_indexed(
         &mut self,
-        handle: MemoryHandle,
-        dst: u32,
-        src: u32,
-        len: u32,
-    ) -> VMResult<()> {
-        self.gc.copy_memory(handle, dst, src, len)
+        memidx: u32,
+        page_size_delta: u32,
+    ) -> VMResult<i32> {
+        self.gc.shared_grow_memory(
+            unsafe { self.shared_memory_id_at_unchecked(memidx) },
+            page_size_delta,
+        )
     }
 
     #[inline(always)]
-    pub(crate) fn copy_memory_between_handles(
-        &mut self,
-        dst: MemoryHandle,
-        src: MemoryHandle,
-        dst_offset: u32,
-        src_offset: u32,
-        len: u32,
-    ) -> VMResult<()> {
-        match (dst, src) {
-            (MemoryHandle::Local(dst), MemoryHandle::Local(src)) => self
-                .gc
-                .copy_memory_local_to_local(dst, src, dst_offset, src_offset, len),
-            (MemoryHandle::Local(dst), MemoryHandle::Shared(src)) => self
-                .gc
-                .copy_memory_shared_to_local(dst, src, dst_offset, src_offset, len),
-            (MemoryHandle::Shared(dst), MemoryHandle::Local(src)) => self
-                .gc
-                .copy_memory_local_to_shared(dst, src, dst_offset, src_offset, len),
-            (MemoryHandle::Shared(dst), MemoryHandle::Shared(src)) => self
-                .gc
-                .copy_memory_shared_to_shared(dst, src, dst_offset, src_offset, len),
-        }
+    pub(crate) unsafe fn memory_page_size_local_indexed(&self, memidx: u32) -> u32 {
+        self.gc
+            .local_memory(unsafe { self.local_memory_id_at_unchecked(memidx) })
+            .page_size()
     }
 
     #[inline(always)]
-    pub(crate) fn fill_memory_handle(
-        &mut self,
-        handle: MemoryHandle,
-        ptr: u32,
-        len: u32,
-        data: u32,
-    ) -> VMResult<()> {
-        self.gc.fill_memory(handle, ptr, len, data)
+    pub(crate) unsafe fn memory_page_size_shared_indexed(&self, memidx: u32) -> u32 {
+        self.gc
+            .shared_memory(unsafe { self.shared_memory_id_at_unchecked(memidx) })
+            .page_size()
+    }
+
+    define_execute_context_atomic_load!(
+        local_atomic_load_u8,
+        shared_atomic_load_u8,
+        indexed_local_atomic_load_u8,
+        indexed_shared_atomic_load_u8,
+        local_atomic_load_u8,
+        shared_atomic_load_u8,
+        u8
+    );
+    define_execute_context_atomic_load!(
+        local_atomic_load_u16,
+        shared_atomic_load_u16,
+        indexed_local_atomic_load_u16,
+        indexed_shared_atomic_load_u16,
+        local_atomic_load_u16,
+        shared_atomic_load_u16,
+        u16
+    );
+    define_execute_context_atomic_load!(
+        local_atomic_load_u32,
+        shared_atomic_load_u32,
+        indexed_local_atomic_load_u32,
+        indexed_shared_atomic_load_u32,
+        local_atomic_load_u32,
+        shared_atomic_load_u32,
+        u32
+    );
+    define_execute_context_atomic_load!(
+        local_atomic_load_u64,
+        shared_atomic_load_u64,
+        indexed_local_atomic_load_u64,
+        indexed_shared_atomic_load_u64,
+        local_atomic_load_u64,
+        shared_atomic_load_u64,
+        u64
+    );
+
+    define_execute_context_atomic_store!(
+        local_atomic_store_u8,
+        shared_atomic_store_u8,
+        indexed_local_atomic_store_u8,
+        indexed_shared_atomic_store_u8,
+        local_atomic_store_u8,
+        shared_atomic_store_u8,
+        u8
+    );
+    define_execute_context_atomic_store!(
+        local_atomic_store_u16,
+        shared_atomic_store_u16,
+        indexed_local_atomic_store_u16,
+        indexed_shared_atomic_store_u16,
+        local_atomic_store_u16,
+        shared_atomic_store_u16,
+        u16
+    );
+    define_execute_context_atomic_store!(
+        local_atomic_store_u32,
+        shared_atomic_store_u32,
+        indexed_local_atomic_store_u32,
+        indexed_shared_atomic_store_u32,
+        local_atomic_store_u32,
+        shared_atomic_store_u32,
+        u32
+    );
+    define_execute_context_atomic_store!(
+        local_atomic_store_u64,
+        shared_atomic_store_u64,
+        indexed_local_atomic_store_u64,
+        indexed_shared_atomic_store_u64,
+        local_atomic_store_u64,
+        shared_atomic_store_u64,
+        u64
+    );
+
+    define_execute_context_atomic_rmw!(
+        local_atomic_rmw_u8,
+        shared_atomic_rmw_u8,
+        indexed_local_atomic_rmw_u8,
+        indexed_shared_atomic_rmw_u8,
+        local_atomic_rmw_u8,
+        shared_atomic_rmw_u8,
+        u8
+    );
+    define_execute_context_atomic_rmw!(
+        local_atomic_rmw_u16,
+        shared_atomic_rmw_u16,
+        indexed_local_atomic_rmw_u16,
+        indexed_shared_atomic_rmw_u16,
+        local_atomic_rmw_u16,
+        shared_atomic_rmw_u16,
+        u16
+    );
+    define_execute_context_atomic_rmw!(
+        local_atomic_rmw_u32,
+        shared_atomic_rmw_u32,
+        indexed_local_atomic_rmw_u32,
+        indexed_shared_atomic_rmw_u32,
+        local_atomic_rmw_u32,
+        shared_atomic_rmw_u32,
+        u32
+    );
+    define_execute_context_atomic_rmw!(
+        local_atomic_rmw_u64,
+        shared_atomic_rmw_u64,
+        indexed_local_atomic_rmw_u64,
+        indexed_shared_atomic_rmw_u64,
+        local_atomic_rmw_u64,
+        shared_atomic_rmw_u64,
+        u64
+    );
+
+    define_execute_context_atomic_cmpxchg!(
+        local_atomic_cmpxchg_u8,
+        shared_atomic_cmpxchg_u8,
+        indexed_local_atomic_cmpxchg_u8,
+        indexed_shared_atomic_cmpxchg_u8,
+        local_atomic_cmpxchg_u8,
+        shared_atomic_cmpxchg_u8,
+        u8
+    );
+    define_execute_context_atomic_cmpxchg!(
+        local_atomic_cmpxchg_u16,
+        shared_atomic_cmpxchg_u16,
+        indexed_local_atomic_cmpxchg_u16,
+        indexed_shared_atomic_cmpxchg_u16,
+        local_atomic_cmpxchg_u16,
+        shared_atomic_cmpxchg_u16,
+        u16
+    );
+    define_execute_context_atomic_cmpxchg!(
+        local_atomic_cmpxchg_u32,
+        shared_atomic_cmpxchg_u32,
+        indexed_local_atomic_cmpxchg_u32,
+        indexed_shared_atomic_cmpxchg_u32,
+        local_atomic_cmpxchg_u32,
+        shared_atomic_cmpxchg_u32,
+        u32
+    );
+    define_execute_context_atomic_cmpxchg!(
+        local_atomic_cmpxchg_u64,
+        shared_atomic_cmpxchg_u64,
+        indexed_local_atomic_cmpxchg_u64,
+        indexed_shared_atomic_cmpxchg_u64,
+        local_atomic_cmpxchg_u64,
+        shared_atomic_cmpxchg_u64,
+        u64
+    );
+
+    #[inline(always)]
+    pub(crate) fn local_atomic_fence(&mut self) {
+        self.gc
+            .local_atomic_fence(unsafe { self.default_local_memory_id_unchecked() });
     }
 
     #[inline(always)]
-    pub(crate) fn memory_page_size_handle(&self, handle: MemoryHandle) -> u32 {
-        match handle {
-            MemoryHandle::Local(id) => self.gc.local_memory(id).page_size(),
-            MemoryHandle::Shared(id) => self.gc.shared_memory(id).page_size(),
-        }
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_load_u8_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u8> {
-        self.gc.atomic_load_u8(handle, offset)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_load_u16_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u16> {
-        self.gc.atomic_load_u16(handle, offset)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_load_u32_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u32> {
-        self.gc.atomic_load_u32(handle, offset)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_load_u64_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u64> {
-        self.gc.atomic_load_u64(handle, offset)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_store_u8_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u8,
-    ) -> VMResult<()> {
-        self.gc.atomic_store_u8(handle, offset, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_store_u16_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u16,
-    ) -> VMResult<()> {
-        self.gc.atomic_store_u16(handle, offset, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_store_u32_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u32,
-    ) -> VMResult<()> {
-        self.gc.atomic_store_u32(handle, offset, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_store_u64_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u64,
-    ) -> VMResult<()> {
-        self.gc.atomic_store_u64(handle, offset, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_rmw_u8_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u8,
-    ) -> VMResult<u8> {
-        self.gc.atomic_rmw_u8(handle, offset, op, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_rmw_u16_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u16,
-    ) -> VMResult<u16> {
-        self.gc.atomic_rmw_u16(handle, offset, op, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_rmw_u32_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u32,
-    ) -> VMResult<u32> {
-        self.gc.atomic_rmw_u32(handle, offset, op, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_rmw_u64_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u64,
-    ) -> VMResult<u64> {
-        self.gc.atomic_rmw_u64(handle, offset, op, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_cmpxchg_u8_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u8,
-        value: u8,
-    ) -> VMResult<u8> {
-        self.gc.atomic_cmpxchg_u8(handle, offset, expected, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_cmpxchg_u16_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u16,
-        value: u16,
-    ) -> VMResult<u16> {
-        self.gc.atomic_cmpxchg_u16(handle, offset, expected, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_cmpxchg_u32_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u32,
-        value: u32,
-    ) -> VMResult<u32> {
-        self.gc.atomic_cmpxchg_u32(handle, offset, expected, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_cmpxchg_u64_handle(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u64,
-        value: u64,
-    ) -> VMResult<u64> {
-        self.gc.atomic_cmpxchg_u64(handle, offset, expected, value)
-    }
-
-    #[inline(always)]
-    pub(crate) fn atomic_fence_handle(&mut self, handle: MemoryHandle) {
-        self.gc.atomic_fence(handle);
-    }
-
-    pub(crate) fn local_atomic_load_u8(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u8> {
-        self.atomic_load_u8_handle(handle, offset)
-    }
-
-    pub(crate) fn local_atomic_load_u16(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u16> {
-        self.atomic_load_u16_handle(handle, offset)
-    }
-
-    pub(crate) fn local_atomic_load_u32(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u32> {
-        self.atomic_load_u32_handle(handle, offset)
-    }
-
-    pub(crate) fn local_atomic_load_u64(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u64> {
-        self.atomic_load_u64_handle(handle, offset)
-    }
-
-    pub(crate) fn shared_atomic_load_u8(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u8> {
-        self.atomic_load_u8_handle(handle, offset)
-    }
-
-    pub(crate) fn shared_atomic_load_u16(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u16> {
-        self.atomic_load_u16_handle(handle, offset)
-    }
-
-    pub(crate) fn shared_atomic_load_u32(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u32> {
-        self.atomic_load_u32_handle(handle, offset)
-    }
-
-    pub(crate) fn shared_atomic_load_u64(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-    ) -> VMResult<u64> {
-        self.atomic_load_u64_handle(handle, offset)
-    }
-
-    pub(crate) fn local_atomic_store_u8(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u8,
-    ) -> VMResult<()> {
-        self.atomic_store_u8_handle(handle, offset, value)
-    }
-
-    pub(crate) fn local_atomic_store_u16(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u16,
-    ) -> VMResult<()> {
-        self.atomic_store_u16_handle(handle, offset, value)
-    }
-
-    pub(crate) fn local_atomic_store_u32(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u32,
-    ) -> VMResult<()> {
-        self.atomic_store_u32_handle(handle, offset, value)
-    }
-
-    pub(crate) fn local_atomic_store_u64(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u64,
-    ) -> VMResult<()> {
-        self.atomic_store_u64_handle(handle, offset, value)
-    }
-
-    pub(crate) fn shared_atomic_store_u8(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u8,
-    ) -> VMResult<()> {
-        self.atomic_store_u8_handle(handle, offset, value)
-    }
-
-    pub(crate) fn shared_atomic_store_u16(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u16,
-    ) -> VMResult<()> {
-        self.atomic_store_u16_handle(handle, offset, value)
-    }
-
-    pub(crate) fn shared_atomic_store_u32(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u32,
-    ) -> VMResult<()> {
-        self.atomic_store_u32_handle(handle, offset, value)
-    }
-
-    pub(crate) fn shared_atomic_store_u64(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        value: u64,
-    ) -> VMResult<()> {
-        self.atomic_store_u64_handle(handle, offset, value)
-    }
-
-    pub(crate) fn local_atomic_rmw_u8(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u8,
-    ) -> VMResult<u8> {
-        self.atomic_rmw_u8_handle(handle, offset, op, value)
-    }
-
-    pub(crate) fn local_atomic_rmw_u16(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u16,
-    ) -> VMResult<u16> {
-        self.atomic_rmw_u16_handle(handle, offset, op, value)
-    }
-
-    pub(crate) fn local_atomic_rmw_u32(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u32,
-    ) -> VMResult<u32> {
-        self.atomic_rmw_u32_handle(handle, offset, op, value)
-    }
-
-    pub(crate) fn local_atomic_rmw_u64(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u64,
-    ) -> VMResult<u64> {
-        self.atomic_rmw_u64_handle(handle, offset, op, value)
-    }
-
-    pub(crate) fn shared_atomic_rmw_u8(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u8,
-    ) -> VMResult<u8> {
-        self.atomic_rmw_u8_handle(handle, offset, op, value)
-    }
-
-    pub(crate) fn shared_atomic_rmw_u16(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u16,
-    ) -> VMResult<u16> {
-        self.atomic_rmw_u16_handle(handle, offset, op, value)
-    }
-
-    pub(crate) fn shared_atomic_rmw_u32(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u32,
-    ) -> VMResult<u32> {
-        self.atomic_rmw_u32_handle(handle, offset, op, value)
-    }
-
-    pub(crate) fn shared_atomic_rmw_u64(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        op: AtomicRmwOp,
-        value: u64,
-    ) -> VMResult<u64> {
-        self.atomic_rmw_u64_handle(handle, offset, op, value)
-    }
-
-    pub(crate) fn local_atomic_cmpxchg_u8(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u8,
-        value: u8,
-    ) -> VMResult<u8> {
-        self.atomic_cmpxchg_u8_handle(handle, offset, expected, value)
-    }
-
-    pub(crate) fn local_atomic_cmpxchg_u16(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u16,
-        value: u16,
-    ) -> VMResult<u16> {
-        self.atomic_cmpxchg_u16_handle(handle, offset, expected, value)
-    }
-
-    pub(crate) fn local_atomic_cmpxchg_u32(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u32,
-        value: u32,
-    ) -> VMResult<u32> {
-        self.atomic_cmpxchg_u32_handle(handle, offset, expected, value)
-    }
-
-    pub(crate) fn local_atomic_cmpxchg_u64(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u64,
-        value: u64,
-    ) -> VMResult<u64> {
-        self.atomic_cmpxchg_u64_handle(handle, offset, expected, value)
-    }
-
-    pub(crate) fn shared_atomic_cmpxchg_u8(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u8,
-        value: u8,
-    ) -> VMResult<u8> {
-        self.atomic_cmpxchg_u8_handle(handle, offset, expected, value)
-    }
-
-    pub(crate) fn shared_atomic_cmpxchg_u16(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u16,
-        value: u16,
-    ) -> VMResult<u16> {
-        self.atomic_cmpxchg_u16_handle(handle, offset, expected, value)
-    }
-
-    pub(crate) fn shared_atomic_cmpxchg_u32(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u32,
-        value: u32,
-    ) -> VMResult<u32> {
-        self.atomic_cmpxchg_u32_handle(handle, offset, expected, value)
-    }
-
-    pub(crate) fn shared_atomic_cmpxchg_u64(
-        &mut self,
-        handle: MemoryHandle,
-        offset: usize,
-        expected: u64,
-        value: u64,
-    ) -> VMResult<u64> {
-        self.atomic_cmpxchg_u64_handle(handle, offset, expected, value)
-    }
-
-    pub(crate) fn local_atomic_fence(&mut self, handle: MemoryHandle) {
-        self.atomic_fence_handle(handle);
-    }
-
-    pub(crate) fn shared_atomic_fence(&mut self, handle: MemoryHandle) {
-        self.atomic_fence_handle(handle);
+    pub(crate) fn shared_atomic_fence(&mut self) {
+        self.gc
+            .shared_atomic_fence(unsafe { self.default_shared_memory_id_unchecked() });
     }
 
     #[inline(always)]
@@ -1779,20 +1952,55 @@ impl<'a> ExecuteContext<'a> {
 
     #[inline(always)]
     pub fn grow_memory(&mut self, page_size_delta: u32) -> VMResult<i32> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.grow_memory(handle, page_size_delta)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self.gc.local_grow_memory(
+                unsafe { self.default_local_memory_id_unchecked() },
+                page_size_delta,
+            ),
+            CachedMemoryKind::Shared => self.gc.shared_grow_memory(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                page_size_delta,
+            ),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn copy_memory(&mut self, dst: u32, src: u32, len: u32) -> VMResult<()> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.copy_memory(handle, dst, src, len)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self.gc.local_copy_memory(
+                unsafe { self.default_local_memory_id_unchecked() },
+                dst,
+                src,
+                len,
+            ),
+            CachedMemoryKind::Shared => self.gc.shared_copy_memory(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                dst,
+                src,
+                len,
+            ),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     #[inline(always)]
     pub fn fill_memory(&mut self, ptr: u32, len: u32, data: u32) -> VMResult<()> {
-        let handle = vm_try!(self.memory_handle_result());
-        self.gc.fill_memory(handle, ptr, len, data)
+        match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self.gc.local_fill_memory(
+                unsafe { self.default_local_memory_id_unchecked() },
+                ptr,
+                len,
+                data,
+            ),
+            CachedMemoryKind::Shared => self.gc.shared_fill_memory(
+                unsafe { self.default_shared_memory_id_unchecked() },
+                ptr,
+                len,
+                data,
+            ),
+            CachedMemoryKind::None => VMResult::MemoryIndexOutOfRange,
+        }
     }
 
     pub fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {

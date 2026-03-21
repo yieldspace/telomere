@@ -58,7 +58,8 @@ struct Case {
 }
 
 fn main() -> ExitCode {
-    let args = Arguments::from_args();
+    let mut args = Arguments::from_args();
+    args.test_threads.get_or_insert(1);
     let tests = collect_trials();
     libtest_mimic::run(&args, tests).exit_code()
 }

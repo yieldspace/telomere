@@ -8,8 +8,8 @@ use telomere::{
     common::{
         FuncIdx, HostCallContext, HostCallControl, HostTailCallTarget, InstanceHandle, StoreState,
     },
-    link_host_function_with_export_name, link_host_function_with_function_idx, Registry,
-    ResultValue, Store, VMResult, WasmValue,
+    link_host_function_with_export_name, link_host_function_with_function_idx, run_module_function,
+    Registry, ResultValue, Store, VMResult, WasmValue,
 };
 
 const PRINT_HOST_WAT: &str = r#"
@@ -114,6 +114,39 @@ async fn test_imported_host_start() {
 }
 
 #[tokio::test]
+async fn test_imported_call_stays_dynamic_after_caller_instantiation() {
+    let counter = Box::new(LinkState {
+        counter: AtomicUsize::new(0),
+        host: Mutex::new(None),
+    });
+    let store = Store::new_with_state(unsafe {
+        StoreState::from_ptr(counter.as_ref() as *const LinkState)
+    });
+    let mut registry = Registry::new();
+    let host = instantiate_wat(PRINT_HOST_WAT, &store, &registry).await;
+    registry.register("host", host.clone());
+    *counter.host.lock().unwrap() = Some(host.clone());
+
+    let caller = instantiate_wat(
+        r#"
+    (module
+      (import "host" "print" (func $print))
+      (func (export "wasm_print") (call $print))
+    )
+    "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    link_host_function_with_function_idx(&host, 0, print, &store);
+    let result =
+        run_module_function(&caller, &store, "wasm_print", &ResultValue::new(vec![])).await;
+    assert!(matches!(result, VMResult::Success(values) if values.is_empty()));
+    assert_eq!(counter.counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn test_reentrant_link_host_function_with_function_idx_fails_closed() {
     let counter = Box::new(LinkState {
         counter: AtomicUsize::new(0),
@@ -152,8 +185,8 @@ async fn test_reentrant_link_host_function_with_export_name_fails_closed() {
 }
 
 fn tail_call(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let arg = match ctx.param(0) {
-        Some(WasmValue::I32(value)) => *value,
+    let arg = match ctx.param_i32(0) {
+        Some(value) => value,
         other => panic!("expected i32 param, got {other:?}"),
     };
     VMResult::Success(HostCallControl::TailCall {
@@ -190,8 +223,8 @@ async fn test_tail_call_wasm() {
 }
 
 fn plus60(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let value = match ctx.param(0) {
-        Some(WasmValue::I32(value)) => *value,
+    let value = match ctx.param_i32(0) {
+        Some(value) => value,
         other => panic!("expected i32 param, got {other:?}"),
     };
     VMResult::Success(HostCallControl::Return(ResultValue::new(vec![

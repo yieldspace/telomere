@@ -156,6 +156,9 @@ impl fmt::Debug for FunctionBody {
 pub struct FunctionInstanceData {
     pub instance: InstanceId,
     pub funcidx: u32,
+    pub typeidx: TypeIdx,
+    pub param_size: u32,
+    pub local_size: u32,
     pub body: FunctionBody,
 }
 
@@ -176,6 +179,16 @@ impl FunctionInstanceData {
             FunctionBody::Wasm { locals, .. } => locals.clone(),
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => LocalsData::default(),
         }
+    }
+
+    #[inline(always)]
+    pub fn param_size(&self) -> usize {
+        self.param_size as usize
+    }
+
+    #[inline(always)]
+    pub fn local_size(&self) -> usize {
+        self.local_size as usize
     }
 
     pub(crate) fn code(&self) -> Option<&[Instr]> {
