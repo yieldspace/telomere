@@ -1,183 +1,23 @@
 #![allow(private_interfaces)]
-
-use vstd::prelude::*;
 #[cfg(feature = "simd")]
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::VMResult;
 use std::fmt::Debug;
+use vstd::prelude::*;
 
 use super::{
     gc::GcRef,
-    memory::trusted_copy_from_slice,
+    memory::{
+        trusted_copy_from_slice, trusted_read_u128, trusted_read_u32, trusted_read_u64,
+        trusted_write_u128, trusted_write_u32, trusted_write_u64,
+    },
     store::{
         FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId, MemoryHandle,
         SharedMemoryId,
     },
     Instr, StablePc, StoreInner,
 };
-
-verus! {
-
-pub closed spec fn spec_stack_u32_to_le_bytes(x: u32) -> Seq<u8> {
-    seq![
-        (x & 0xff) as u8,
-        ((x >> 8) & 0xff) as u8,
-        ((x >> 16) & 0xff) as u8,
-        ((x >> 24) & 0xff) as u8,
-    ]
-}
-
-pub closed spec fn spec_stack_u32_from_le_bytes(s: Seq<u8>) -> u32
-    recommends
-        s.len() == 4,
-{
-    (s[0] as u32) | (s[1] as u32) << 8 | (s[2] as u32) << 16 | (s[3] as u32) << 24
-}
-
-pub closed spec fn spec_stack_u64_to_le_bytes(x: u64) -> Seq<u8> {
-    seq![
-        (x & 0xff) as u8,
-        ((x >> 8) & 0xff) as u8,
-        ((x >> 16) & 0xff) as u8,
-        ((x >> 24) & 0xff) as u8,
-        ((x >> 32) & 0xff) as u8,
-        ((x >> 40) & 0xff) as u8,
-        ((x >> 48) & 0xff) as u8,
-        ((x >> 56) & 0xff) as u8,
-    ]
-}
-
-pub closed spec fn spec_stack_u64_from_le_bytes(s: Seq<u8>) -> u64
-    recommends
-        s.len() == 8,
-{
-    (s[0] as u64)
-        | (s[1] as u64) << 8
-        | (s[2] as u64) << 16
-        | (s[3] as u64) << 24
-        | (s[4] as u64) << 32
-        | (s[5] as u64) << 40
-        | (s[6] as u64) << 48
-        | (s[7] as u64) << 56
-}
-
-pub closed spec fn spec_stack_u128_to_le_bytes(x: u128) -> Seq<u8> {
-    seq![
-        (x & 0xff) as u8,
-        ((x >> 8) & 0xff) as u8,
-        ((x >> 16) & 0xff) as u8,
-        ((x >> 24) & 0xff) as u8,
-        ((x >> 32) & 0xff) as u8,
-        ((x >> 40) & 0xff) as u8,
-        ((x >> 48) & 0xff) as u8,
-        ((x >> 56) & 0xff) as u8,
-        ((x >> 64) & 0xff) as u8,
-        ((x >> 72) & 0xff) as u8,
-        ((x >> 80) & 0xff) as u8,
-        ((x >> 88) & 0xff) as u8,
-        ((x >> 96) & 0xff) as u8,
-        ((x >> 104) & 0xff) as u8,
-        ((x >> 112) & 0xff) as u8,
-        ((x >> 120) & 0xff) as u8,
-    ]
-}
-
-pub closed spec fn spec_stack_u128_from_le_bytes(s: Seq<u8>) -> u128
-    recommends
-        s.len() == 16,
-{
-    (s[0] as u128)
-        | (s[1] as u128) << 8
-        | (s[2] as u128) << 16
-        | (s[3] as u128) << 24
-        | (s[4] as u128) << 32
-        | (s[5] as u128) << 40
-        | (s[6] as u128) << 48
-        | (s[7] as u128) << 56
-        | (s[8] as u128) << 64
-        | (s[9] as u128) << 72
-        | (s[10] as u128) << 80
-        | (s[11] as u128) << 88
-        | (s[12] as u128) << 96
-        | (s[13] as u128) << 104
-        | (s[14] as u128) << 112
-        | (s[15] as u128) << 120
-}
-
-#[verifier::external_body]
-#[inline(always)]
-fn trusted_write_u32(dst: &mut [u8], value: u32)
-    requires
-        old(dst)@.len() == 4,
-    ensures
-        dst@ == spec_stack_u32_to_le_bytes(value),
-{
-    unsafe {
-        dst.as_mut_ptr().cast::<u32>().write_unaligned(value.to_le());
-    }
-}
-
-#[verifier::external_body]
-#[inline(always)]
-fn trusted_write_u64(dst: &mut [u8], value: u64)
-    requires
-        old(dst)@.len() == 8,
-    ensures
-        dst@ == spec_stack_u64_to_le_bytes(value),
-{
-    unsafe {
-        dst.as_mut_ptr().cast::<u64>().write_unaligned(value.to_le());
-    }
-}
-
-#[verifier::external_body]
-#[inline(always)]
-fn trusted_write_u128(dst: &mut [u8], value: u128)
-    requires
-        old(dst)@.len() == 16,
-    ensures
-        dst@ == spec_stack_u128_to_le_bytes(value),
-{
-    unsafe {
-        dst.as_mut_ptr().cast::<u128>().write_unaligned(value.to_le());
-    }
-}
-
-#[verifier::external_body]
-#[inline(always)]
-fn trusted_read_u32(src: &[u8]) -> (value: u32)
-    requires
-        src@.len() == 4,
-    ensures
-        value == spec_stack_u32_from_le_bytes(src@),
-{
-    unsafe { u32::from_le(src.as_ptr().cast::<u32>().read_unaligned()) }
-}
-
-#[verifier::external_body]
-#[inline(always)]
-fn trusted_read_u64(src: &[u8]) -> (value: u64)
-    requires
-        src@.len() == 8,
-    ensures
-        value == spec_stack_u64_from_le_bytes(src@),
-{
-    unsafe { u64::from_le(src.as_ptr().cast::<u64>().read_unaligned()) }
-}
-
-#[verifier::external_body]
-#[inline(always)]
-fn trusted_read_u128(src: &[u8]) -> (value: u128)
-    requires
-        src@.len() == 16,
-    ensures
-        value == spec_stack_u128_from_le_bytes(src@),
-{
-    unsafe { u128::from_le(src.as_ptr().cast::<u128>().read_unaligned()) }
-}
-
-} // verus!
 
 pub(crate) trait LaneType
 where
@@ -223,6 +63,11 @@ impl Debug for Stack {
         write!(f, "Stack({},{:?})", self.top, &self.memory[0..self.top])
     }
 }
+
+/// Packed frame trailer stored at the end of each active call frame.
+///
+/// TCB reason: the unified stack treats this struct as a raw byte record, so its
+/// layout and byte round-trip are part of the trusted stack frontier.
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub(crate) struct CallStackInfo {
@@ -401,6 +246,8 @@ pub(crate) struct StackProjection {
     pub(crate) active_local: LocalReference,
 }
 
+verus! {
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct FrameProjectionParts {
@@ -413,7 +260,7 @@ pub(crate) struct FrameProjectionParts {
     pub(crate) prev_local_size: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct StackProjectionParts {
     pub(crate) bytes: Vec<u8>,
@@ -422,6 +269,38 @@ pub(crate) struct StackProjectionParts {
     pub(crate) active_local_top: usize,
     pub(crate) active_local_size: u32,
 }
+
+pub(crate) open spec fn frame_view_from_projection_parts(
+    parts: FrameProjectionParts,
+) -> crate::common::formal::FrameView {
+    crate::common::formal::frame_view_from_projection_parts(
+        parts.return_pc as nat,
+        parts.instance_raw,
+        parts.default_memory_present,
+        parts.default_memory_shared,
+        parts.default_memory_raw,
+        parts.prev_local_top as nat,
+        parts.prev_local_size as nat,
+    )
+}
+
+pub(crate) open spec fn stack_view_from_projection_parts(
+    parts: StackProjectionParts,
+) -> crate::common::formal::StackView {
+    crate::common::formal::StackView {
+        bytes: parts.bytes@,
+        top: parts.top as nat,
+        frame_stack: Seq::new(parts.frame_stack@.len(), |i: int| {
+            frame_view_from_projection_parts(parts.frame_stack@[i])
+        }),
+        active_local: crate::common::formal::LocalRefView {
+            local_top: parts.active_local_top as nat,
+            local_size: parts.active_local_size as nat,
+        },
+    }
+}
+
+} // verus!
 
 #[inline(always)]
 fn local_reference_within_stack(reference: LocalReference, stack_top: usize) -> bool {
@@ -681,8 +560,17 @@ impl Stack {
         .fill(0);
         VMResult::Success(())
     }
+    /// Returns a raw pointer to the current frame's local area.
+    ///
+    /// TCB reason: this is the explicit escape hatch that exposes unified-stack
+    /// bytes to code outside the verified stack transition helpers.
+    ///
     /// # Safety
-    /// Caller must ensure the returned pointer is not used after the stack is dropped or reallocated.
+    /// - `reference` must identify a live frame in this stack.
+    /// - The returned pointer must not be used after the stack is dropped,
+    ///   reallocated, or otherwise moved.
+    /// - The caller must preserve frame boundaries and avoid aliasing mutable
+    ///   access that would invalidate stack invariants.
     pub unsafe fn local_area_mut_ptr(&mut self, reference: &LocalReference) -> *mut u8 {
         self.memory.as_mut_ptr().add(reference.local_top)
     }
@@ -708,6 +596,15 @@ impl Stack {
         let start = reference.local_top + local_addr;
         trusted_write_u128(&mut self.memory[start..start + 16], value);
     }
+
+    /// Decodes the packed `CallStackInfo` trailer from the end of one frame.
+    ///
+    /// Preconditions:
+    /// - `reference` must describe a frame whose trailing bytes contain a valid
+    ///   `CallStackInfo` written by `push_call_stack_info`.
+    ///
+    /// TCB reason: this performs an unaligned raw read of the packed trailer, so
+    /// proofs rely on the frame layout contract staying exact.
     fn call_stack_info(&self, reference: &LocalReference) -> CallStackInfo {
         let info_top = reference.local_top + reference.local_size as usize
             - std::mem::size_of::<CallStackInfo>();
@@ -720,6 +617,15 @@ impl Stack {
             )
         }
     }
+
+    /// Encodes one `CallStackInfo` trailer into the current frame tail.
+    ///
+    /// Preconditions:
+    /// - The caller must have reserved enough free stack space for the trailer.
+    /// - `info` must be a valid packed frame descriptor for the active call.
+    ///
+    /// TCB reason: this converts the packed frame descriptor into raw bytes,
+    /// which is part of the trusted stack/memory marshalling boundary.
     fn push_call_stack_info(&mut self, info: CallStackInfo) -> VMResult<()> {
         let size = std::mem::size_of::<CallStackInfo>();
         let bytes = unsafe {

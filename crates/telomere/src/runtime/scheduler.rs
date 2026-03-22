@@ -138,6 +138,21 @@ impl PendingOpEmitter<'_> {
         self.queue.push_back(op);
         *self.pending_ops += 1;
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    pub(crate) fn appended_pending_code(
+        &self,
+        before_len: usize,
+    ) -> Option<Option<crate::common::formal::PendingCode>> {
+        match self.queue.len().checked_sub(before_len) {
+            Some(0) => Some(None),
+            Some(1) => self.queue.get(before_len).map(PendingOp::pending_code),
+            Some(_) | None => None,
+        }
+    }
 }
 
 type DriverFuture = Pin<Box<dyn Future<Output = Completion>>>;

@@ -94,7 +94,7 @@ pub struct ExecContextToken {
     pub task_id: nat,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrapCode {
     MemoryIndexOutOfRange,
     TableIndexOutOfRange,
@@ -105,13 +105,13 @@ pub enum TrapCode {
     Unreachable,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingCode {
     Wait,
     HostCall,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreOutcome {
     Continue,
     Trap(TrapCode),
@@ -3596,6 +3596,23 @@ pub(crate) fn core_outcome_from_vm_result<T>(
             Some(CoreOutcome::Continue)
         }
         None => None,
+    }
+}
+
+pub(crate) fn core_outcome_from_vm_result_with_pending<T>(
+    result: &crate::common::VMResult<T>,
+    pending_before: usize,
+    pending_after: usize,
+    appended_pending_code: Option<PendingCode>,
+) -> Option<CoreOutcome> {
+    match trap_code_from_vm_result(result) {
+        Some(code) => Some(CoreOutcome::Trap(code)),
+        None if !matches!(result, crate::common::VMResult::Success(_)) => None,
+        None => match pending_after.checked_sub(pending_before) {
+            Some(0) => Some(CoreOutcome::Continue),
+            Some(1) => appended_pending_code.map(CoreOutcome::Pending),
+            Some(_) | None => None,
+        },
     }
 }
 

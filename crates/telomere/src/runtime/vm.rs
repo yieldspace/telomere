@@ -31,6 +31,46 @@ use vstd::prelude::*;
 
 verus! {
 
+#[allow(dead_code)]
+pub(crate) enum MemorySelectorWitness {
+    CurrentDefault,
+    Explicit { shared: bool, raw: u32 },
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn current_default_memory_selector_witness() -> MemorySelectorWitness {
+    MemorySelectorWitness::CurrentDefault
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn explicit_local_memory_selector_witness(raw: u32) -> MemorySelectorWitness {
+    MemorySelectorWitness::Explicit { shared: false, raw }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn explicit_shared_memory_selector_witness(
+    raw: u32,
+) -> MemorySelectorWitness {
+    MemorySelectorWitness::Explicit { shared: true, raw }
+}
+
+pub(crate) open spec fn memory_selector_from_witness(
+    witness: MemorySelectorWitness,
+) -> crate::common::formal::MemorySelector {
+    match witness {
+        MemorySelectorWitness::CurrentDefault => {
+            crate::common::formal::MemorySelector::CurrentDefault
+        }
+        MemorySelectorWitness::Explicit { shared, raw } => {
+            crate::common::formal::MemorySelector::Explicit(if shared {
+                crate::common::formal::MemoryHandleView::Shared(raw as nat)
+            } else {
+                crate::common::formal::MemoryHandleView::Local(raw as nat)
+            })
+        }
+    }
+}
+
 pub open spec fn spec_compute_memory_offset_result(memarg_offset: u32, offset: u32) -> Option<int> {
     if memarg_offset as int + offset as int <= u32::MAX as int {
         Some(memarg_offset as int + offset as int)
@@ -156,6 +196,24 @@ pub(crate) fn compute_memory_offset(memarg: MemArg, offset: u32) -> VMResult<usi
     VMResult::from_option(checked_compute_memory_offset(memarg.offset, offset), || {
         VMResult::MemoryIndexOutOfRange
     })
+}
+
+#[inline(always)]
+/// Decode the single `memarg` immediate for the active instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_memarg_operand(tail_code: *const Instr) -> MemArg {
+    (*tail_code).operand.memarg
+}
+
+#[inline(always)]
+/// Decode the `memarg + memidx` immediates for the active indexed memory instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_indexed_memarg_operand(tail_code: *const Instr) -> (MemArg, u32) {
+    ((*tail_code).operand.memarg, (*tail_code.add(1)).operand.u32)
 }
 
 #[inline(always)]
@@ -497,7 +555,7 @@ pub(crate) unsafe fn store_internal_local(
     make_operation: impl FnOnce(&mut ExecuteContextFacade<'_, '_>) -> StoreBytes,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let memarg = (*tail_code).operand.memarg;
+    let memarg = decode_memarg_operand(tail_code);
     let operation = make_operation(&mut facade);
     let offset = facade.pop::<u32>();
     trace!("op_store: {:?} {}", memarg, offset);
@@ -528,7 +586,7 @@ pub(crate) unsafe fn store_internal_shared(
     make_operation: impl FnOnce(&mut ExecuteContextFacade<'_, '_>) -> StoreBytes,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let memarg = (*tail_code).operand.memarg;
+    let memarg = decode_memarg_operand(tail_code);
     let operation = make_operation(&mut facade);
     let offset = facade.pop::<u32>();
     trace!("op_store_shared: {:?} {}", memarg, offset);
@@ -558,8 +616,7 @@ pub(crate) unsafe fn store_internal_local_indexed(
     make_operation: impl FnOnce(&mut ExecuteContextFacade<'_, '_>) -> StoreBytes,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let memarg = (*tail_code).operand.memarg;
-    let memidx = (*tail_code.add(1)).operand.u32;
+    let (memarg, memidx) = decode_indexed_memarg_operand(tail_code);
     let operation = make_operation(&mut facade);
     let offset = facade.pop::<u32>();
     let bytes = operation.as_slice();
@@ -588,8 +645,7 @@ pub(crate) unsafe fn store_internal_shared_indexed(
     make_operation: impl FnOnce(&mut ExecuteContextFacade<'_, '_>) -> StoreBytes,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let memarg = (*tail_code).operand.memarg;
-    let memidx = (*tail_code.add(1)).operand.u32;
+    let (memarg, memidx) = decode_indexed_memarg_operand(tail_code);
     let operation = make_operation(&mut facade);
     let offset = facade.pop::<u32>();
     let bytes = operation.as_slice();
@@ -818,6 +874,157 @@ fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultVal
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+    use crate::common::{
+        stack::CachedMemoryKind,
+        store::{self, FunctionBody},
+        AsyncHostFuture, ExportSection, FuncType, InstanceData, LocalsData, ModuleInstance,
+        StoreInner, TypeIdx,
+    };
+    use crate::runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter};
+    use std::{collections::VecDeque, future::ready, sync::Arc};
+
+    fn async_host_noop(_ctx: AsyncHostCallContext) -> AsyncHostFuture {
+        Box::pin(ready(VMResult::Success(ResultValue::new(Vec::new()))))
+    }
+
+    fn frame_for(funcaddr: GcRef, instance: store::InstanceId) -> CallFrameCache {
+        CallFrameCache {
+            code_addr: funcaddr,
+            code_base: std::ptr::null(),
+            instance,
+            memory0_kind: CachedMemoryKind::None,
+            memory0_raw: 0,
+        }
+    }
+
+    #[test]
+    fn start_async_host_call_observes_pending_host_call() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let module = gc.new_module(ModuleInstance {
+            exports: ExportSection(Vec::new()),
+            tables: Vec::new(),
+            globals: Vec::new(),
+            functions: vec![TypeIdx(0), TypeIdx(1)],
+            function_types: vec![
+                FuncType(ResultType(Vec::new()), ResultType(Vec::new())),
+                FuncType(ResultType(Vec::new()), ResultType(Vec::new())),
+            ],
+            mems: Vec::new(),
+        });
+        let instance = store::InstanceId::from_index(0);
+        let root_func = gc.new_func(&store::FunctionInstanceData {
+            instance,
+            funcidx: 0,
+            typeidx: TypeIdx(0),
+            param_size: 0,
+            local_size: 0,
+            body: FunctionBody::Wasm {
+                locals: LocalsData::default(),
+                code: Arc::<[Instr]>::from(vec![VM_END]),
+            },
+        });
+        let async_func = gc.new_func(&store::FunctionInstanceData {
+            instance,
+            funcidx: 1,
+            typeidx: TypeIdx(1),
+            param_size: 0,
+            local_size: 0,
+            body: FunctionBody::AsyncHost(async_host_noop),
+        });
+        let _instance_addr = gc.new_instance(&InstanceData {
+            instance_id: 1,
+            module_addr: module,
+            globals: Vec::new(),
+            funcs: vec![root_func, async_func],
+            tables: Vec::new(),
+            mems: Vec::new(),
+            memory_slots: Vec::new(),
+        });
+
+        let mut stack = Stack::new(128);
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let root = stack
+            .function_call(
+                0,
+                0,
+                frame_for(root_func, instance),
+                empty,
+                std::ptr::null(),
+                &gc,
+            )
+            .unwrap();
+        let program = [VM_END, VM_END];
+        let callee = stack
+            .function_call(
+                0,
+                0,
+                frame_for(async_func, instance),
+                root,
+                unsafe { program.as_ptr().add(1) },
+                &gc,
+            )
+            .unwrap();
+
+        let mut pending_effects = 0;
+        let mut pending_ops = VecDeque::new();
+        let cont = {
+            let mut ctx = ExecuteContext::new(
+                &mut stack,
+                callee,
+                frame_for(async_func, instance),
+                &store,
+                &mut gc,
+                PendingOpEmitter::from_parts(41, &mut pending_effects, &mut pending_ops),
+                program.as_ptr(),
+                41,
+            );
+
+            let start = {
+                let mut facade = ExecuteContextFacade::new(&mut ctx);
+                facade.start_core_step_observation().unwrap()
+            };
+            let params = ResultType(Vec::new());
+            let results = ResultType(Vec::new());
+            let result = {
+                let mut facade = ExecuteContextFacade::new(&mut ctx);
+                start_async_host_call(&mut facade, &params, &results)
+            };
+            let observation = {
+                let mut facade = ExecuteContextFacade::new(&mut ctx);
+                facade.finish_core_step_observation(start, &result).unwrap()
+            };
+
+            result.unwrap();
+            assert_eq!(
+                observation.outcome,
+                crate::common::formal::CoreOutcome::Pending(
+                    crate::common::formal::PendingCode::HostCall,
+                )
+            );
+            assert_eq!(
+                observation.pending_code_delta,
+                Some(crate::common::formal::PendingCode::HostCall)
+            );
+            ctx.cont()
+        };
+        assert_eq!(pending_effects, 1);
+        assert_eq!(pending_ops.len(), 1);
+        assert_eq!(cont, unsafe { program.as_ptr().add(1) });
+        let PendingOp::HostCall(pending) = pending_ops.pop_front().unwrap() else {
+            panic!("expected host-call pending op");
+        };
+        assert_eq!(pending.task_id, 41);
     }
 }
 

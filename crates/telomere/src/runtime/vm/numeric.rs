@@ -5,6 +5,52 @@ use vstd::prelude::*;
 
 verus! {
 
+#[allow(dead_code)]
+pub(crate) enum NumericStepWitnessParts {
+    PushConst { bytes: Seq<u8>, next_cont: nat },
+    ReplaceTop { pop_len: nat, result_bytes: Seq<u8>, next_cont: nat },
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn numeric_const_witness_for_handler(
+    bytes: Seq<u8>,
+    next_cont: nat,
+) -> NumericStepWitnessParts {
+    NumericStepWitnessParts::PushConst { bytes, next_cont }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn numeric_replace_top_witness_for_handler(
+    pop_len: nat,
+    result_bytes: Seq<u8>,
+    next_cont: nat,
+) -> NumericStepWitnessParts {
+    NumericStepWitnessParts::ReplaceTop {
+        pop_len,
+        result_bytes,
+        next_cont,
+    }
+}
+
+pub(crate) open spec fn numeric_step_from_witness_parts(
+    witness: NumericStepWitnessParts,
+) -> crate::common::formal::NumericStep {
+    match witness {
+        NumericStepWitnessParts::PushConst { bytes, next_cont } => {
+            crate::common::formal::NumericStep::PushConst { bytes, next_cont }
+        }
+        NumericStepWitnessParts::ReplaceTop {
+            pop_len,
+            result_bytes,
+            next_cont,
+        } => crate::common::formal::NumericStep::ReplaceTop {
+            pop_len,
+            result_bytes,
+            next_cont,
+        },
+    }
+}
+
 pub open spec fn spec_numeric_const_result(
     view: crate::common::formal::StackView,
     bytes: Seq<u8>,
@@ -43,7 +89,32 @@ pub open spec fn numeric_continue_cont(step: crate::common::formal::NumericStep)
     }
 }
 
-pub proof fn lemma_numeric_family_refines_spec_step(
+pub(crate) open spec fn numeric_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::NumericStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    crate::common::runtime_observation_refines_instr(
+        before,
+        crate::common::formal::CoreStepInstr::Numeric(step),
+        after,
+        outcome,
+    ) && crate::common::observation_task_id_preserved(before, after)
+        && crate::common::observation_current_default_memory_preserved(before, after)
+        && crate::common::observation_caller_default_memory_preserved(before, after)
+        && if crate::common::formal::outcome_is_trap(outcome) {
+            crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+                == crate::common::core_step_state_from_projection_parts(before)
+                    .context
+                    .cont_addr
+        } else {
+            crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+                == numeric_continue_cont(step)
+        }
+}
+
+proof fn lemma_numeric_family_state_refines_spec_step(
     before: crate::common::formal::CoreStepState,
     step: crate::common::formal::NumericStep,
 )
@@ -72,6 +143,116 @@ pub proof fn lemma_numeric_family_refines_spec_step(
                 == numeric_continue_cont(step)
         },
 {
+}
+
+pub(crate) proof fn lemma_numeric_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::NumericStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Numeric(step),
+        ) == crate::common::formal::spec_step_numeric(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_numeric(before, step).0,
+        ),
+        crate::common::formal::current_default_memory_of(
+            crate::common::formal::spec_step_numeric(before, step).0,
+        ) == crate::common::formal::current_default_memory_of(before),
+        crate::common::formal::caller_default_memory_of(
+            crate::common::formal::spec_step_numeric(before, step).0,
+        ) == crate::common::formal::caller_default_memory_of(before),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_numeric(before, step).1,
+        ) {
+            crate::common::formal::spec_step_numeric(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_numeric(before, step).0.context.cont_addr
+                == numeric_continue_cont(step)
+        },
+{
+}
+
+pub(crate) proof fn lemma_numeric_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::NumericStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Numeric(step),
+            after,
+            outcome,
+        ),
+    ensures
+        numeric_observation_refines_spec_step(before, step, after, outcome),
+{
+    lemma_numeric_family_refines_spec_step(
+        crate::common::core_step_state_from_projection_parts(before),
+        step,
+    );
+}
+
+pub(crate) open spec fn numeric_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: NumericStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    numeric_observation_refines_spec_step(
+        before,
+        numeric_step_from_witness_parts(witness),
+        after,
+        outcome,
+    )
+}
+
+pub(crate) proof fn lemma_numeric_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: NumericStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Numeric(numeric_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        numeric_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_numeric_observation_refines_spec_step(
+        before,
+        numeric_step_from_witness_parts(witness),
+        after,
+        outcome,
+    );
+}
+
+pub(crate) proof fn lemma_numeric_handler_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: NumericStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Numeric(numeric_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        numeric_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_numeric_witness_observation_refines_spec_step(before, witness, after, outcome);
 }
 
 #[inline(always)]
@@ -131,6 +312,42 @@ where
     let result = vm_try!(f(value));
     vm_try!(facade.push(result));
     facade_call_next(tail_code, 0, &mut facade)
+}
+
+#[inline(always)]
+/// Decode the immediate payload for `i32.const`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_i32_const_value(tail_code: *const Instr) -> i32 {
+    (*tail_code).operand.i32
+}
+
+#[inline(always)]
+/// Decode the immediate payload for `i64.const`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_i64_const_value(tail_code: *const Instr) -> i64 {
+    (*tail_code).operand.i64
+}
+
+#[inline(always)]
+/// Decode the immediate payload for `f32.const`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_f32_const_value(tail_code: *const Instr) -> f32 {
+    (*tail_code).operand.f32
+}
+
+#[inline(always)]
+/// Decode the immediate payload for `f64.const`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_f64_const_value(tail_code: *const Instr) -> f64 {
+    (*tail_code).operand.f64
 }
 
 #[inline(always)]
@@ -232,7 +449,7 @@ where
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let v = (*tail_code).operand.i32;
+    let v = decode_i32_const_value(tail_code);
     trace!("op_i32_const: {v}");
     const_stack_op(tail_code, ctx, v, 1)
 }
@@ -380,7 +597,7 @@ pub unsafe fn op_i64_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_i64_const");
-    const_stack_op(tail_code, ctx, (*tail_code).operand.i64, 1)
+    const_stack_op(tail_code, ctx, decode_i64_const_value(tail_code), 1)
 }
 
 /// WebAssembly `f32.const`.
@@ -400,7 +617,7 @@ pub unsafe fn op_i64_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f32_const");
-    const_stack_op(tail_code, ctx, (*tail_code).operand.f32, 1)
+    const_stack_op(tail_code, ctx, decode_f32_const_value(tail_code), 1)
 }
 
 /// WebAssembly `f64.const`.
@@ -420,7 +637,7 @@ pub unsafe fn op_f32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     trace!("op_f64_const");
-    const_stack_op(tail_code, ctx, (*tail_code).operand.f64, 1)
+    const_stack_op(tail_code, ctx, decode_f64_const_value(tail_code), 1)
 }
 
 /// WebAssembly `f32.lt`.
@@ -3030,4 +3247,93 @@ pub unsafe fn op_i64_extend32_s(tail_code: *const Instr, ctx: &mut ExecuteContex
     unary_stack_into::<u64, i64, _>(tail_code, ctx, |v| {
         i32::from_le_bytes([v as u8, (v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]).into()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        common::{
+            stack::{CachedMemoryKind, CallFrameCache},
+            store::InstanceId,
+            ExecuteContext, GcRef, LocalReference, Store, StoreInner,
+        },
+        runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter},
+    };
+    use std::collections::VecDeque;
+
+    fn frame() -> CallFrameCache {
+        CallFrameCache {
+            code_addr: GcRef(0),
+            code_base: std::ptr::null(),
+            instance: InstanceId::from_index(0),
+            memory0_kind: CachedMemoryKind::None,
+            memory0_raw: 0,
+        }
+    }
+
+    fn test_context<'a>(
+        stack: &'a mut Stack,
+        store: &'a Store,
+        gc: &'a mut StoreInner,
+        pending_effects: &'a mut u32,
+        pending_ops: &'a mut VecDeque<PendingOp>,
+    ) -> ExecuteContext<'a> {
+        ExecuteContext::new(
+            stack,
+            LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            frame(),
+            store,
+            gc,
+            PendingOpEmitter::from_parts(31, pending_effects, pending_ops),
+            std::ptr::null(),
+            31,
+        )
+    }
+
+    unsafe fn stop_op(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
+        VMResult::Success(())
+    }
+
+    #[test]
+    fn numeric_observation_tracks_replace_top_continue() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops = VecDeque::new();
+        let mut stack = Stack::new(32);
+        stack.push_u32(20).unwrap();
+        stack.push_u32(22).unwrap();
+
+        let mut ctx = test_context(
+            &mut stack,
+            &store,
+            &mut gc,
+            &mut pending_effects,
+            &mut pending_ops,
+        );
+        let program = [Instr { op: stop_op }];
+
+        let pending_before = ctx.pending_len();
+        let result = unsafe { op_i32_add(program.as_ptr(), &mut ctx) };
+        let outcome = crate::common::formal::core_outcome_from_vm_result_with_pending(
+            &result,
+            pending_before,
+            ctx.pending_len(),
+            ctx.pending_code_delta(pending_before).unwrap_or(None),
+        )
+        .unwrap();
+
+        assert_eq!(outcome, crate::common::formal::CoreOutcome::Continue);
+        let value = {
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            facade.pop_u32()
+        };
+        assert_eq!(value, 42);
+        assert_eq!(ctx.pending_len(), 0);
+        assert_eq!(ctx.cont(), program.as_ptr());
+    }
 }

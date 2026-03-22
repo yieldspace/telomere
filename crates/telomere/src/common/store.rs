@@ -18,6 +18,7 @@ use std::{
         Arc, Weak,
     },
 };
+use vstd::prelude::*;
 
 thread_local! {
     static ACTIVE_STORE_RUNTIME: RefCell<Vec<(*const (), *mut StoreInner)>> = const { RefCell::new(Vec::new()) };
@@ -277,12 +278,25 @@ pub(crate) struct TableProjection {
     pub(crate) max_len: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+verus! {
+
+#[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct TableProjectionParts {
     pub(crate) elements: Vec<u32>,
     pub(crate) max_len: Option<u32>,
 }
+
+pub(crate) open spec fn table_view_from_projection_parts(
+    parts: TableProjectionParts,
+) -> crate::common::formal::TableView {
+    crate::common::formal::TableView {
+        entries: parts.elements@,
+        max_len: crate::common::formal::option_u32_to_nat(parts.max_len),
+    }
+}
+
+} // verus!
 
 impl TableProjection {
     #[cfg_attr(not(test), allow(dead_code))]

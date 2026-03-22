@@ -17,6 +17,113 @@ use crate::{
 
 verus! {
 
+#[allow(dead_code)]
+pub(crate) enum SimdStepWitnessParts {
+    ReplaceTop {
+        pop_len: nat,
+        result_bytes: Seq<u8>,
+        next_cont: nat,
+    },
+    Load {
+        selector: crate::runtime::vm::MemorySelectorWitness,
+        start: nat,
+        access_width: nat,
+        result_bytes: Seq<u8>,
+        next_cont: nat,
+    },
+    Store {
+        selector: crate::runtime::vm::MemorySelectorWitness,
+        start: nat,
+        len: nat,
+        next_cont: nat,
+    },
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn simd_replace_top_witness_for_handler(
+    pop_len: nat,
+    result_bytes: Seq<u8>,
+    next_cont: nat,
+) -> SimdStepWitnessParts {
+    SimdStepWitnessParts::ReplaceTop {
+        pop_len,
+        result_bytes,
+        next_cont,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn simd_load_witness_for_handler(
+    selector: crate::runtime::vm::MemorySelectorWitness,
+    start: nat,
+    access_width: nat,
+    result_bytes: Seq<u8>,
+    next_cont: nat,
+) -> SimdStepWitnessParts {
+    SimdStepWitnessParts::Load {
+        selector,
+        start,
+        access_width,
+        result_bytes,
+        next_cont,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn simd_store_witness_for_handler(
+    selector: crate::runtime::vm::MemorySelectorWitness,
+    start: nat,
+    len: nat,
+    next_cont: nat,
+) -> SimdStepWitnessParts {
+    SimdStepWitnessParts::Store {
+        selector,
+        start,
+        len,
+        next_cont,
+    }
+}
+
+pub(crate) open spec fn simd_step_from_witness_parts(
+    witness: SimdStepWitnessParts,
+) -> crate::common::formal::SimdStep {
+    match witness {
+        SimdStepWitnessParts::ReplaceTop {
+            pop_len,
+            result_bytes,
+            next_cont,
+        } => crate::common::formal::SimdStep::ReplaceTop {
+            pop_len,
+            result_bytes,
+            next_cont,
+        },
+        SimdStepWitnessParts::Load {
+            selector,
+            start,
+            access_width,
+            result_bytes,
+            next_cont,
+        } => crate::common::formal::SimdStep::Load {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            access_width,
+            result_bytes,
+            next_cont,
+        },
+        SimdStepWitnessParts::Store {
+            selector,
+            start,
+            len,
+            next_cont,
+        } => crate::common::formal::SimdStep::Store {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            len,
+            next_cont,
+        },
+    }
+}
+
 pub open spec fn simd_continue_cont(step: crate::common::formal::SimdStep) -> nat {
     match step {
         crate::common::formal::SimdStep::ReplaceTop { next_cont, .. } => next_cont,
@@ -25,7 +132,30 @@ pub open spec fn simd_continue_cont(step: crate::common::formal::SimdStep) -> na
     }
 }
 
-pub proof fn lemma_simd_family_refines_spec_step(
+pub(crate) open spec fn simd_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::SimdStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    crate::common::runtime_observation_refines_instr(
+        before,
+        crate::common::formal::CoreStepInstr::Simd(step),
+        after,
+        outcome,
+    ) && crate::common::observation_task_id_preserved(before, after)
+        && if crate::common::formal::outcome_is_trap(outcome) {
+            crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+                == crate::common::core_step_state_from_projection_parts(before)
+                    .context
+                    .cont_addr
+        } else {
+            crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+                == simd_continue_cont(step)
+        }
+}
+
+proof fn lemma_simd_family_state_refines_spec_step(
     before: crate::common::formal::CoreStepState,
     step: crate::common::formal::SimdStep,
 )
@@ -50,7 +180,162 @@ pub proof fn lemma_simd_family_refines_spec_step(
 {
 }
 
+pub(crate) proof fn lemma_simd_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::SimdStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Simd(step),
+        ) == crate::common::formal::spec_step_simd(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_simd(before, step).0,
+        ),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_simd(before, step).1,
+        ) {
+            crate::common::formal::spec_step_simd(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_simd(before, step).0.context.cont_addr
+                == simd_continue_cont(step)
+        },
+{
+}
+
+pub(crate) proof fn lemma_simd_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::SimdStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Simd(step),
+            after,
+            outcome,
+        ),
+    ensures
+        simd_observation_refines_spec_step(before, step, after, outcome),
+{
+    lemma_simd_family_refines_spec_step(
+        crate::common::core_step_state_from_projection_parts(before),
+        step,
+    );
+}
+
+pub(crate) open spec fn simd_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: SimdStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    simd_observation_refines_spec_step(
+        before,
+        simd_step_from_witness_parts(witness),
+        after,
+        outcome,
+    )
+}
+
+pub(crate) proof fn lemma_simd_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: SimdStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Simd(simd_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        simd_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_simd_observation_refines_spec_step(
+        before,
+        simd_step_from_witness_parts(witness),
+        after,
+        outcome,
+    );
+}
+
+pub(crate) proof fn lemma_simd_handler_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: SimdStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Simd(simd_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        simd_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_simd_witness_observation_refines_spec_step(before, witness, after, outcome);
+}
+
 } // verus!
+
+#[inline(always)]
+/// Decode the single `memarg` immediate for the active SIMD memory instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_simd_memarg(tail_code: *const Instr) -> crate::common::MemArg {
+    (*tail_code).operand.memarg
+}
+
+#[inline(always)]
+/// Decode the `memarg + memidx` immediates for the active indexed SIMD memory instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_indexed_simd_memarg(tail_code: *const Instr) -> (crate::common::MemArg, u32) {
+    ((*tail_code).operand.memarg, (*tail_code.add(1)).operand.u32)
+}
+
+#[inline(always)]
+/// Decode the lane immediate stored in the current SIMD instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_lane_immediate(tail_code: *const Instr) -> usize {
+    (*tail_code).operand.u32 as usize
+}
+
+#[inline(always)]
+/// Decode the lane immediate stored in the following operand slot.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_following_lane_immediate(tail_code: *const Instr) -> usize {
+    (*tail_code.add(1)).operand.u32 as usize
+}
+
+#[inline(always)]
+fn compute_simd_start(memarg: crate::common::MemArg, offset: u32) -> VMResult<usize> {
+    compute_memory_offset(memarg, offset)
+}
+
+#[inline(always)]
+fn compute_indexed_simd_start(
+    memarg: crate::common::MemArg,
+    memidx: u32,
+    offset: u32,
+) -> VMResult<(usize, u32)> {
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    VMResult::Success((start, memidx))
+}
 
 /// Telomere internal SIMD local-memory push helper.
 ///
@@ -100,7 +385,7 @@ unsafe fn push_memory_to_stack_local_indexed<const N: usize>(
     ctx: &mut ExecuteContext,
     start: usize,
 ) -> VMResult<()> {
-    let memidx = (*tail_code.add(1)).operand.u32;
+    let (_, memidx) = decode_indexed_simd_memarg(tail_code);
     ExecuteContextFacade::new(ctx).push_memory_to_stack_local_indexed::<N>(memidx, start)
 }
 
@@ -110,7 +395,7 @@ unsafe fn push_memory_to_stack_shared_indexed<const N: usize>(
     ctx: &mut ExecuteContext,
     start: usize,
 ) -> VMResult<()> {
-    let memidx = (*tail_code.add(1)).operand.u32;
+    let (_, memidx) = decode_indexed_simd_memarg(tail_code);
     ExecuteContextFacade::new(ctx).push_memory_to_stack_shared_indexed::<N>(memidx, start)
 }
 
@@ -132,10 +417,10 @@ unsafe fn read_memory_bytes_local<const N: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
-    let memarg = (*tail_code).operand.memarg;
+    let memarg = decode_simd_memarg(tail_code);
     let mut facade = ExecuteContextFacade::new(ctx);
     let offset = facade.pop::<u32>();
-    let start = vm_try!(compute_memory_offset(memarg, offset));
+    let start = vm_try!(compute_simd_start(memarg, offset));
     facade.read_memory_u8_array::<N>(start)
 }
 
@@ -157,10 +442,10 @@ unsafe fn read_memory_bytes_shared<const N: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
-    let memarg = (*tail_code).operand.memarg;
+    let memarg = decode_simd_memarg(tail_code);
     let mut facade = ExecuteContextFacade::new(ctx);
     let offset = facade.pop::<u32>();
-    let start = vm_try!(compute_memory_offset(memarg, offset));
+    let start = vm_try!(compute_simd_start(memarg, offset));
     facade.read_memory_u8_array::<N>(start)
 }
 
@@ -169,11 +454,10 @@ unsafe fn read_memory_bytes_local_indexed<const N: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
-    let memarg = (*tail_code).operand.memarg;
+    let (memarg, memidx) = decode_indexed_simd_memarg(tail_code);
     let mut facade = ExecuteContextFacade::new(ctx);
     let offset = facade.pop::<u32>();
-    let start = vm_try!(compute_memory_offset(memarg, offset));
-    let memidx = (*tail_code.add(1)).operand.u32;
+    let (start, memidx) = vm_try!(compute_indexed_simd_start(memarg, memidx, offset));
     facade.read_u8_array_local_indexed::<N>(memidx, start)
 }
 
@@ -182,11 +466,10 @@ unsafe fn read_memory_bytes_shared_indexed<const N: usize>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<[u8; N]> {
-    let memarg = (*tail_code).operand.memarg;
+    let (memarg, memidx) = decode_indexed_simd_memarg(tail_code);
     let mut facade = ExecuteContextFacade::new(ctx);
     let offset = facade.pop::<u32>();
-    let start = vm_try!(compute_memory_offset(memarg, offset));
-    let memidx = (*tail_code.add(1)).operand.u32;
+    let (start, memidx) = vm_try!(compute_indexed_simd_start(memarg, memidx, offset));
     facade.read_u8_array_shared_indexed::<N>(memidx, start)
 }
 
@@ -302,7 +585,7 @@ where
     Stack: StackOperation<T>,
     F: FnOnce(&[u8]) -> T,
 {
-    let lane = (*tail_code).operand.u32 as usize * lane_width;
+    let lane = decode_lane_immediate(tail_code) * lane_width;
     let mut facade = ExecuteContextFacade::new(ctx);
     let bytes = facade.pop_u128().to_le_bytes();
     vm_try!(facade.push(f(&bytes[lane..lane + lane_width])));
@@ -319,7 +602,7 @@ where
     Stack: StackOperation<T>,
     F: FnOnce(T) -> [u8; N],
 {
-    let lane = (*tail_code).operand.u32 as usize;
+    let lane = decode_lane_immediate(tail_code);
     let mut facade = ExecuteContextFacade::new(ctx);
     let value = f(facade.pop());
     let mut bytes = facade.pop_u128().to_le_bytes();
@@ -444,20 +727,26 @@ unsafe fn op_v128_load_impl<const SHARED: bool, const INDEXED: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let memarg = (*tail_code).operand.memarg;
     let offset = ExecuteContextFacade::new(ctx).pop_u32();
-    let start = vm_try!(compute_memory_offset(memarg, offset));
     if SHARED && INDEXED {
+        let (memarg, memidx) = decode_indexed_simd_memarg(tail_code);
+        let (start, _) = vm_try!(compute_indexed_simd_start(memarg, memidx, offset));
         vm_try!(push_memory_to_stack_shared_indexed::<16>(
             tail_code, ctx, start
         ));
     } else if SHARED {
+        let memarg = decode_simd_memarg(tail_code);
+        let start = vm_try!(compute_simd_start(memarg, offset));
         vm_try!(push_memory_to_stack_shared::<16>(ctx, start));
     } else if INDEXED {
+        let (memarg, memidx) = decode_indexed_simd_memarg(tail_code);
+        let (start, _) = vm_try!(compute_indexed_simd_start(memarg, memidx, offset));
         vm_try!(push_memory_to_stack_local_indexed::<16>(
             tail_code, ctx, start
         ));
     } else {
+        let memarg = decode_simd_memarg(tail_code);
+        let start = vm_try!(compute_simd_start(memarg, offset));
         vm_try!(push_memory_to_stack_local::<16>(ctx, start));
     }
     let mut facade = ExecuteContextFacade::new(ctx);
@@ -1122,7 +1411,7 @@ unsafe fn load_lane_internal<const N: usize, const SHARED: bool, const INDEXED: 
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let lane = (*tail_code.add(1)).operand.u32 as usize;
+    let lane = decode_following_lane_immediate(tail_code);
     let mut bytes = ExecuteContextFacade::new(ctx).pop_u128().to_le_bytes();
     let data = vm_try!(read_memory_bytes::<N, SHARED, INDEXED>(tail_code, ctx));
     replace_lane_bytes::<N>(&mut bytes, lane, data);
@@ -1148,14 +1437,15 @@ unsafe fn store_lane_internal<const N: usize, const SHARED: bool, const INDEXED:
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let lane = (*tail_code.add(1)).operand.u32 as usize;
+    let lane = decode_following_lane_immediate(tail_code);
     let mut facade = ExecuteContextFacade::new(ctx);
     let bytes = facade.pop_u128().to_le_bytes();
     let start = lane * N;
     let offset = facade.pop::<u32>();
-    let mem_start = vm_try!(compute_memory_offset((*tail_code).operand.memarg, offset));
+    let memarg = decode_simd_memarg(tail_code);
     if INDEXED {
         let memidx = (*tail_code.add(2)).operand.u32;
+        let (mem_start, _) = vm_try!(compute_indexed_simd_start(memarg, memidx, offset));
         if SHARED {
             vm_try!(facade.write_memory_bytes_shared_indexed(
                 memidx,
@@ -1171,6 +1461,7 @@ unsafe fn store_lane_internal<const N: usize, const SHARED: bool, const INDEXED:
         }
         facade_call_next(tail_code, 3, &mut facade)
     } else {
+        let mem_start = vm_try!(compute_simd_start(memarg, offset));
         vm_try!(facade.write_memory_bytes(mem_start, &bytes[start..start + N]));
         facade_call_next(tail_code, 2, &mut facade)
     }
@@ -3805,4 +4096,91 @@ pub unsafe fn i32x4_dot_i16x8(tail_code: *const Instr, ctx: &mut ExecuteContext)
         i32::wrapping_add(a[6] as i32 * b[6] as i32, a[7] as i32 * b[7] as i32)
     ])));
     facade_call_next(tail_code, 0, &mut facade)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        common::{
+            stack::CachedMemoryKind, store::InstanceId, CallFrameCache, ExecuteContext, GcRef,
+            LocalReference, Store, StoreInner,
+        },
+        runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter},
+    };
+    use std::collections::VecDeque;
+
+    fn frame() -> CallFrameCache {
+        CallFrameCache {
+            code_addr: GcRef(0),
+            code_base: std::ptr::null(),
+            instance: InstanceId::from_index(0),
+            memory0_kind: CachedMemoryKind::None,
+            memory0_raw: 0,
+        }
+    }
+
+    fn test_context<'a>(
+        stack: &'a mut Stack,
+        store: &'a Store,
+        gc: &'a mut StoreInner,
+        pending_effects: &'a mut u32,
+        pending_ops: &'a mut VecDeque<PendingOp>,
+    ) -> ExecuteContext<'a> {
+        ExecuteContext::new(
+            stack,
+            LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            frame(),
+            store,
+            gc,
+            PendingOpEmitter::from_parts(37, pending_effects, pending_ops),
+            std::ptr::null(),
+            37,
+        )
+    }
+
+    unsafe fn stop_op(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
+        VMResult::Success(())
+    }
+
+    #[test]
+    fn simd_observation_tracks_splat_continue() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops = VecDeque::new();
+        let mut stack = Stack::new(64);
+        stack.push_i32(7).unwrap();
+
+        let program = [Instr { op: stop_op }];
+        let mut ctx = test_context(
+            &mut stack,
+            &store,
+            &mut gc,
+            &mut pending_effects,
+            &mut pending_ops,
+        );
+
+        let pending_before = ctx.pending_len();
+        let result = unsafe { i8x16_splat(program.as_ptr(), &mut ctx) };
+        let outcome = crate::common::formal::core_outcome_from_vm_result_with_pending(
+            &result,
+            pending_before,
+            ctx.pending_len(),
+            ctx.pending_code_delta(pending_before).unwrap_or(None),
+        )
+        .unwrap();
+
+        assert_eq!(outcome, crate::common::formal::CoreOutcome::Continue);
+        let value = {
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            facade.pop::<i8x16>()
+        };
+        assert_eq!(value.to_array(), [7_i8; 16]);
+        assert_eq!(ctx.pending_len(), 0);
+        assert_eq!(ctx.cont(), program.as_ptr());
+    }
 }

@@ -3,7 +3,104 @@ use vstd::prelude::*;
 
 verus! {
 
-pub proof fn lemma_call_family_refines_spec_step(
+#[allow(dead_code)]
+pub(crate) enum CallStepWitnessParts {
+    Call { function_id: u32, return_addr: nat, is_return_call: bool },
+    CallIndirect {
+        table_id: u32,
+        elem_index: nat,
+        expected_type_id: u32,
+        return_addr: nat,
+        is_return_call: bool,
+    },
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn call_witness_for_handler(
+    function_id: u32,
+    return_addr: nat,
+    is_return_call: bool,
+) -> CallStepWitnessParts {
+    CallStepWitnessParts::Call {
+        function_id,
+        return_addr,
+        is_return_call,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn call_indirect_witness_for_handler(
+    table_id: u32,
+    elem_index: nat,
+    expected_type_id: u32,
+    return_addr: nat,
+    is_return_call: bool,
+) -> CallStepWitnessParts {
+    CallStepWitnessParts::CallIndirect {
+        table_id,
+        elem_index,
+        expected_type_id,
+        return_addr,
+        is_return_call,
+    }
+}
+
+pub(crate) open spec fn call_step_from_witness_parts(
+    witness: CallStepWitnessParts,
+) -> crate::common::formal::CallStep {
+    match witness {
+        CallStepWitnessParts::Call {
+            function_id,
+            return_addr,
+            is_return_call,
+        } => crate::common::formal::CallStep::Call {
+            function_id: function_id as nat,
+            return_addr,
+            is_return_call,
+        },
+        CallStepWitnessParts::CallIndirect {
+            table_id,
+            elem_index,
+            expected_type_id,
+            return_addr,
+            is_return_call,
+        } => crate::common::formal::CallStep::CallIndirect {
+            table_id: table_id as nat,
+            elem_index,
+            expected_type_id: expected_type_id as nat,
+            return_addr,
+            is_return_call,
+        },
+    }
+}
+
+pub open spec fn call_continue_cont(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::CallStep,
+) -> nat {
+    crate::common::formal::spec_step_call(before, step).0.context.cont_addr
+}
+
+pub(crate) open spec fn call_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::CallStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    crate::common::runtime_observation_refines_instr(
+        before,
+        crate::common::formal::CoreStepInstr::Call(step),
+        after,
+        outcome,
+    ) && crate::common::observation_task_id_preserved(before, after)
+        && crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+            == call_continue_cont(
+                crate::common::core_step_state_from_projection_parts(before),
+                step,
+            )
+}
+
+proof fn lemma_call_family_state_refines_spec_step(
     before: crate::common::formal::CoreStepState,
     step: crate::common::formal::CallStep,
 )
@@ -16,10 +113,165 @@ pub proof fn lemma_call_family_refines_spec_step(
             before,
             crate::common::formal::spec_step_call(before, step).0,
         ),
+        crate::common::formal::spec_step_call(before, step).0.context.cont_addr
+            == call_continue_cont(before, step),
 {
+    assert(
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Call(step),
+        ) == crate::common::formal::spec_step_call(before, step)
+    );
+    assert(crate::common::formal::task_id_preserved(
+        before,
+        crate::common::formal::spec_step_call(before, step).0,
+    ));
+}
+
+pub(crate) proof fn lemma_call_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::CallStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Call(step),
+        ) == crate::common::formal::spec_step_call(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_call(before, step).0,
+        ),
+        crate::common::formal::spec_step_call(before, step).0.context.cont_addr
+            == call_continue_cont(before, step),
+{
+    lemma_call_family_state_refines_spec_step(before, step);
+}
+
+pub(crate) proof fn lemma_call_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::CallStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Call(step),
+            after,
+            outcome,
+        ),
+    ensures
+        call_observation_refines_spec_step(before, step, after, outcome),
+{
+    lemma_call_family_refines_spec_step(
+        crate::common::core_step_state_from_projection_parts(before),
+        step,
+    );
+}
+
+pub(crate) open spec fn call_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: CallStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    call_observation_refines_spec_step(
+        before,
+        call_step_from_witness_parts(witness),
+        after,
+        outcome,
+    )
+}
+
+pub(crate) proof fn lemma_call_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: CallStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Call(call_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        call_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_call_observation_refines_spec_step(
+        before,
+        call_step_from_witness_parts(witness),
+        after,
+        outcome,
+    );
+}
+
+pub(crate) proof fn lemma_call_handler_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: CallStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Call(call_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        call_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_call_witness_observation_refines_spec_step(before, witness, after, outcome);
 }
 
 } // verus!
+
+#[inline(always)]
+/// Decode the direct callee function index immediate.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_direct_call_funcidx(tail_code: *const Instr) -> u32 {
+    (*tail_code).operand.u32
+}
+
+#[inline(always)]
+/// Decode the table index immediate for `call_indirect`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_indirect_call_tableidx(tail_code: *const Instr) -> usize {
+    (*tail_code).operand.u32 as usize
+}
+
+#[inline(always)]
+/// Decode the expected function-type index immediate for `call_indirect`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_indirect_call_expected_typeidx(tail_code: *const Instr) -> u32 {
+    (*tail_code.offset(1)).operand.u32
+}
+
+#[inline(always)]
+/// Compute the return address for direct-call handlers.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn direct_call_return_addr(tail_code: *const Instr) -> *const Instr {
+    tail_code.offset(1)
+}
+
+#[inline(always)]
+/// Compute the return address for indirect-call handlers.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn indirect_call_return_addr(tail_code: *const Instr) -> *const Instr {
+    tail_code.offset(2)
+}
 
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
@@ -112,9 +364,14 @@ pub(crate) unsafe fn internal_op_call(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let funcidx = (*tail_code).operand.u32;
+    let funcidx = decode_direct_call_funcidx(tail_code);
     let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false));
+    let ptr = vm_try!(internal_op_call(
+        direct_call_return_addr(tail_code),
+        funcaddr,
+        ctx,
+        false,
+    ));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
@@ -155,9 +412,14 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let funcidx = (*tail_code).operand.u32;
+    let funcidx = decode_direct_call_funcidx(tail_code);
     let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true));
+    let ptr = vm_try!(internal_op_call(
+        direct_call_return_addr(tail_code),
+        funcaddr,
+        ctx,
+        true,
+    ));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
@@ -205,7 +467,7 @@ unsafe fn resolve_indirect_call_target(
 ) -> VMResult<GcRef> {
     let mut facade = ExecuteContextFacade::new(ctx);
     let i = facade.pop_u32();
-    let tableidx = (*tail_code).operand.u32 as usize;
+    let tableidx = decode_indirect_call_tableidx(tail_code);
     let table_addr = *vm_try!(VMResult::from_option(
         facade.instance().tables.as_slice().get(tableidx),
         || { VMResult::TableIndexOutOfRange }
@@ -220,7 +482,7 @@ unsafe fn resolve_indirect_call_target(
     }
     let func_addr = GcRef(func_addr);
     let actual_ft = facade.function_type_by_addr(func_addr) as *const FuncType;
-    let expected_typeidx = (*tail_code.offset(1)).operand.u32;
+    let expected_typeidx = decode_indirect_call_expected_typeidx(tail_code);
     let expected_ft = facade
         .module_function_type(expected_typeidx)
         .expect("validated call_indirect type index must exist")
@@ -251,7 +513,12 @@ unsafe fn resolve_indirect_call_target(
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let func_addr = vm_try!(resolve_indirect_call_target(tail_code, ctx));
-    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, ctx, false));
+    let ptr = vm_try!(internal_op_call(
+        indirect_call_return_addr(tail_code),
+        func_addr,
+        ctx,
+        false,
+    ));
     if ptr.is_null() {
         VMResult::Success(())
     } else {
@@ -277,7 +544,12 @@ pub unsafe fn op_return_call_indirect(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let func_addr = vm_try!(resolve_indirect_call_target(tail_code, ctx));
-    let ptr = vm_try!(internal_op_call(tail_code.offset(2), func_addr, ctx, true));
+    let ptr = vm_try!(internal_op_call(
+        indirect_call_return_addr(tail_code),
+        func_addr,
+        ctx,
+        true,
+    ));
     if ptr.is_null() {
         VMResult::Success(())
     } else {

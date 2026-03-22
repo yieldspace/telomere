@@ -144,6 +144,49 @@ pub closed spec fn spec_le_u128(bytes: Seq<u8>) -> u128
         | ((bytes[15] as u128) << 120)
 }
 
+pub closed spec fn spec_u32_to_le_bytes(value: u32) -> Seq<u8> {
+    seq![
+        (value & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        ((value >> 16) & 0xff) as u8,
+        ((value >> 24) & 0xff) as u8,
+    ]
+}
+
+pub closed spec fn spec_u64_to_le_bytes(value: u64) -> Seq<u8> {
+    seq![
+        (value & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        ((value >> 16) & 0xff) as u8,
+        ((value >> 24) & 0xff) as u8,
+        ((value >> 32) & 0xff) as u8,
+        ((value >> 40) & 0xff) as u8,
+        ((value >> 48) & 0xff) as u8,
+        ((value >> 56) & 0xff) as u8,
+    ]
+}
+
+pub closed spec fn spec_u128_to_le_bytes(value: u128) -> Seq<u8> {
+    seq![
+        (value & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        ((value >> 16) & 0xff) as u8,
+        ((value >> 24) & 0xff) as u8,
+        ((value >> 32) & 0xff) as u8,
+        ((value >> 40) & 0xff) as u8,
+        ((value >> 48) & 0xff) as u8,
+        ((value >> 56) & 0xff) as u8,
+        ((value >> 64) & 0xff) as u8,
+        ((value >> 72) & 0xff) as u8,
+        ((value >> 80) & 0xff) as u8,
+        ((value >> 88) & 0xff) as u8,
+        ((value >> 96) & 0xff) as u8,
+        ((value >> 104) & 0xff) as u8,
+        ((value >> 112) & 0xff) as u8,
+        ((value >> 120) & 0xff) as u8,
+    ]
+}
+
 pub proof fn lemma_write_range_preserves_len(data: Seq<u8>, start: int, bytes: Seq<u8>)
     ensures
         spec_write_range(data, start, bytes).len() == data.len(),
@@ -200,6 +243,13 @@ pub proof fn lemma_fill_range_preserves_outside_bytes(data: Seq<u8>, start: int,
 {
 }
 
+/// Trusted primitive for exact-length byte copies.
+///
+/// Preconditions:
+/// - `dst` and `src` must have the same length.
+///
+/// TCB reason: higher-level stack and memory proofs reduce Rust's slice copy
+/// operation to this byte-level boundary instead of trusting semantic helpers.
 #[verifier::external_body]
 #[inline(always)]
 pub exec fn trusted_copy_from_slice(dst: &mut [u8], src: &[u8])
@@ -211,6 +261,13 @@ pub exec fn trusted_copy_from_slice(dst: &mut [u8], src: &[u8])
     dst.copy_from_slice(src);
 }
 
+/// Trusted primitive for filling a byte slice with one repeated value.
+///
+/// Preconditions:
+/// - `dst` must be a valid mutable slice.
+///
+/// TCB reason: proofs treat bulk fill as a raw byte primitive and keep all
+/// higher-level linear-memory semantics outside the trusted boundary.
 #[verifier::external_body]
 #[inline(always)]
 pub exec fn trusted_fill_slice(dst: &mut [u8], value: u8)
@@ -220,6 +277,14 @@ pub exec fn trusted_fill_slice(dst: &mut [u8], value: u8)
     dst.fill(value);
 }
 
+/// Trusted primitive for overlapping in-place byte moves within one slice.
+///
+/// Preconditions:
+/// - `src_start <= src_end`.
+/// - The source and destination ranges must stay within `dst`.
+///
+/// TCB reason: overlapping byte movement is trusted only at this primitive
+/// boundary so stack/memory transition proofs can reason about one spec update.
 #[verifier::external_body]
 #[inline(always)]
 pub exec fn trusted_copy_within(dst: &mut [u8], src_start: usize, src_end: usize, dst_start: usize)
@@ -238,6 +303,13 @@ pub exec fn trusted_copy_within(dst: &mut [u8], src_start: usize, src_end: usize
     dst.copy_within(src_start..src_end, dst_start);
 }
 
+/// Trusted primitive for decoding a little-endian `u16` from exactly 2 bytes.
+///
+/// Preconditions:
+/// - `src.len() == 2`.
+///
+/// TCB reason: fixed-width raw loads stay in the trusted byte layer instead of
+/// being reimplemented across stack and memory helper families.
 #[verifier::external_body]
 #[inline(always)]
 pub exec fn trusted_read_u16(src: &[u8]) -> (value: u16)
@@ -249,6 +321,13 @@ pub exec fn trusted_read_u16(src: &[u8]) -> (value: u16)
     unsafe { u16::from_le(src.as_ptr().cast::<u16>().read_unaligned()) }
 }
 
+/// Trusted primitive for decoding a little-endian `u32` from exactly 4 bytes.
+///
+/// Preconditions:
+/// - `src.len() == 4`.
+///
+/// TCB reason: this is the shared raw read primitive used by stack and linear
+/// memory helpers, keeping endian-aware byte decoding in one trusted location.
 #[verifier::external_body]
 #[inline(always)]
 pub exec fn trusted_read_u32(src: &[u8]) -> (value: u32)
@@ -260,6 +339,13 @@ pub exec fn trusted_read_u32(src: &[u8]) -> (value: u32)
     unsafe { u32::from_le(src.as_ptr().cast::<u32>().read_unaligned()) }
 }
 
+/// Trusted primitive for decoding a little-endian `u64` from exactly 8 bytes.
+///
+/// Preconditions:
+/// - `src.len() == 8`.
+///
+/// TCB reason: fixed-width byte decoding remains centralized here so verified
+/// helpers do not need their own `external_body` implementations.
 #[verifier::external_body]
 #[inline(always)]
 pub exec fn trusted_read_u64(src: &[u8]) -> (value: u64)
@@ -271,6 +357,13 @@ pub exec fn trusted_read_u64(src: &[u8]) -> (value: u64)
     unsafe { u64::from_le(src.as_ptr().cast::<u64>().read_unaligned()) }
 }
 
+/// Trusted primitive for decoding a little-endian `u128` from exactly 16 bytes.
+///
+/// Preconditions:
+/// - `src.len() == 16`.
+///
+/// TCB reason: `v128` and 128-bit stack values reuse one raw-byte decoding
+/// boundary instead of duplicating endian-aware trusted code elsewhere.
 #[verifier::external_body]
 #[inline(always)]
 pub exec fn trusted_read_u128(src: &[u8]) -> (value: u128)
@@ -280,6 +373,66 @@ pub exec fn trusted_read_u128(src: &[u8]) -> (value: u128)
         value == spec_le_u128(src@),
 {
     unsafe { u128::from_le(src.as_ptr().cast::<u128>().read_unaligned()) }
+}
+
+/// Trusted primitive for encoding a little-endian `u32` into exactly 4 bytes.
+///
+/// Preconditions:
+/// - `dst.len() == 4`.
+///
+/// TCB reason: stack frame writes and linear-memory stores share this one raw
+/// write primitive so trusted endian conversion does not spread across modules.
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_write_u32(dst: &mut [u8], value: u32)
+    requires
+        old(dst)@.len() == 4,
+    ensures
+        dst@ == spec_u32_to_le_bytes(value),
+{
+    unsafe {
+        dst.as_mut_ptr().cast::<u32>().write_unaligned(value.to_le());
+    }
+}
+
+/// Trusted primitive for encoding a little-endian `u64` into exactly 8 bytes.
+///
+/// Preconditions:
+/// - `dst.len() == 8`.
+///
+/// TCB reason: this keeps fixed-width unaligned writes in the shared byte layer
+/// instead of trusting per-subsystem write helpers.
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_write_u64(dst: &mut [u8], value: u64)
+    requires
+        old(dst)@.len() == 8,
+    ensures
+        dst@ == spec_u64_to_le_bytes(value),
+{
+    unsafe {
+        dst.as_mut_ptr().cast::<u64>().write_unaligned(value.to_le());
+    }
+}
+
+/// Trusted primitive for encoding a little-endian `u128` into exactly 16 bytes.
+///
+/// Preconditions:
+/// - `dst.len() == 16`.
+///
+/// TCB reason: 128-bit stack and memory writes are trusted only through this
+/// single byte primitive so verified code can treat them as abstract updates.
+#[verifier::external_body]
+#[inline(always)]
+pub exec fn trusted_write_u128(dst: &mut [u8], value: u128)
+    requires
+        old(dst)@.len() == 16,
+    ensures
+        dst@ == spec_u128_to_le_bytes(value),
+{
+    unsafe {
+        dst.as_mut_ptr().cast::<u128>().write_unaligned(value.to_le());
+    }
 }
 
 } // verus!
@@ -421,6 +574,16 @@ impl SharedWaitRegistration {
         self.waiter.poll_wait(cx)
     }
 
+    /// Consumes a wake-up that has already been observed and returns the
+    /// protocol-level before/after projections.
+    ///
+    /// Preconditions:
+    /// - `self` must have been registered from `shared`.
+    /// - The waiter must already be marked as notified.
+    ///
+    /// TCB reason: this bridges the runtime wake primitive back into the
+    /// projection-based shared-memory protocol without embedding tracked tokens
+    /// in runtime state.
     pub(crate) fn finish_notified_protocol(
         self,
         shared: &SharedMemoryObject,
@@ -432,6 +595,15 @@ impl SharedWaitRegistration {
         self.finish_notified_protocol(shared).result
     }
 
+    /// Consumes a timeout or races with a wake-up and returns the
+    /// protocol-level before/after projections.
+    ///
+    /// Preconditions:
+    /// - `self` must have been registered from `shared`.
+    /// - The caller must invoke this at most once.
+    ///
+    /// TCB reason: timeout cleanup is where runtime synchronization outcomes are
+    /// reconciled with projection snapshots, so this trusted bridge is explicit.
     pub(crate) fn finish_timeout_protocol(
         self,
         shared: &SharedMemoryObject,
@@ -521,12 +693,16 @@ impl SharedWaiter {
     }
 }
 
+verus! {
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SharedWaitStateProjection {
     Waiting,
     Notified,
     TimedOut,
 }
+
+} // verus!
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LinearMemoryProjection {
@@ -536,7 +712,9 @@ pub(crate) struct LinearMemoryProjection {
     pub(crate) shared: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+verus! {
+
+#[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct LinearMemoryProjectionParts {
     pub(crate) bytes: Vec<u8>,
@@ -545,16 +723,36 @@ pub(crate) struct LinearMemoryProjectionParts {
     pub(crate) shared: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SharedWaitQueueProjection {
     pub(crate) address: usize,
     pub(crate) waiter_ids: Vec<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SharedWaiterProjection {
     pub(crate) waiter_id: u64,
     pub(crate) state: SharedWaitStateProjection,
+}
+
+} // verus!
+
+impl Clone for SharedWaitQueueProjection {
+    fn clone(&self) -> Self {
+        Self {
+            address: self.address,
+            waiter_ids: self.waiter_ids.clone(),
+        }
+    }
+}
+
+impl Clone for SharedWaiterProjection {
+    fn clone(&self) -> Self {
+        Self {
+            waiter_id: self.waiter_id,
+            state: self.state,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -565,7 +763,9 @@ pub(crate) struct SharedMemoryProjection {
     pub(crate) next_waiter_id: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+verus! {
+
+#[derive(Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) struct SharedMemoryProjectionParts {
     pub(crate) memory: LinearMemoryProjectionParts,
@@ -573,6 +773,98 @@ pub(crate) struct SharedMemoryProjectionParts {
     pub(crate) waiters: Vec<SharedWaiterProjection>,
     pub(crate) next_waiter_id: u64,
 }
+
+pub(crate) open spec fn shared_wait_state_from_projection(
+    state: SharedWaitStateProjection,
+) -> crate::common::formal::WaitState {
+    match state {
+        SharedWaitStateProjection::Waiting => crate::common::formal::WaitState::Waiting,
+        SharedWaitStateProjection::Notified => crate::common::formal::WaitState::Notified,
+        SharedWaitStateProjection::TimedOut => crate::common::formal::WaitState::TimedOut,
+    }
+}
+
+pub(crate) open spec fn waiter_ids_from_projection(ids: Seq<u64>) -> Seq<crate::common::formal::WaiterId> {
+    Seq::new(ids.len(), |i: int| ids[i] as nat)
+}
+
+pub(crate) open spec fn wait_queue_pairs_have_key(
+    pairs: Seq<SharedWaitQueueProjection>,
+    key: nat,
+) -> bool {
+    exists|i: int| 0 <= i < pairs.len() && pairs[i].address as nat == key
+}
+
+pub(crate) open spec fn wait_queue_pairs_get(
+    pairs: Seq<SharedWaitQueueProjection>,
+    key: nat,
+) -> Seq<crate::common::formal::WaiterId>
+    recommends
+        wait_queue_pairs_have_key(pairs, key),
+{
+    let i = choose|i: int| 0 <= i < pairs.len() && pairs[i].address as nat == key;
+    waiter_ids_from_projection(pairs[i].waiter_ids@)
+}
+
+pub(crate) open spec fn wait_queue_map_from_projection(
+    pairs: Seq<SharedWaitQueueProjection>,
+) -> Map<crate::common::formal::Address, Seq<crate::common::formal::WaiterId>> {
+    Map::new(
+        |key: nat| wait_queue_pairs_have_key(pairs, key),
+        |key: nat| wait_queue_pairs_get(pairs, key),
+    )
+}
+
+pub(crate) open spec fn waiter_pairs_have_key(
+    pairs: Seq<SharedWaiterProjection>,
+    key: nat,
+) -> bool {
+    exists|i: int| 0 <= i < pairs.len() && pairs[i].waiter_id as nat == key
+}
+
+pub(crate) open spec fn waiter_pairs_get(
+    pairs: Seq<SharedWaiterProjection>,
+    key: nat,
+) -> crate::common::formal::WaitState
+    recommends
+        waiter_pairs_have_key(pairs, key),
+{
+    let i = choose|i: int| 0 <= i < pairs.len() && pairs[i].waiter_id as nat == key;
+    shared_wait_state_from_projection(pairs[i].state)
+}
+
+pub(crate) open spec fn waiter_map_from_projection(
+    pairs: Seq<SharedWaiterProjection>,
+) -> Map<crate::common::formal::WaiterId, crate::common::formal::WaitState> {
+    Map::new(
+        |key: nat| waiter_pairs_have_key(pairs, key),
+        |key: nat| waiter_pairs_get(pairs, key),
+    )
+}
+
+pub(crate) open spec fn linear_memory_view_from_projection_parts(
+    parts: LinearMemoryProjectionParts,
+) -> crate::common::formal::LinearMemoryView {
+    crate::common::formal::LinearMemoryView {
+        bytes: parts.bytes@,
+        current_pages: parts.current_pages as nat,
+        max_pages: parts.max_pages as nat,
+        shared: parts.shared,
+    }
+}
+
+pub(crate) open spec fn shared_memory_protocol_from_projection_parts(
+    parts: SharedMemoryProjectionParts,
+) -> crate::common::formal::SharedMemoryProtocol {
+    crate::common::formal::SharedMemoryProtocol {
+        memory: linear_memory_view_from_projection_parts(parts.memory),
+        wait_queues: wait_queue_map_from_projection(parts.wait_queues@),
+        waiters: waiter_map_from_projection(parts.waiters@),
+        next_waiter_id: parts.next_waiter_id as nat,
+    }
+}
+
+} // verus!
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -764,6 +1056,15 @@ impl SharedMemoryProjection {
     }
 }
 
+/// Reservation-backed raw memory region for linear-memory storage.
+///
+/// Notes:
+/// - The mapping owns a fixed virtual-memory reservation created by `mmap`.
+/// - Safe callers must stay within `len`; the accessors check that bound before
+///   exposing a slice view.
+///
+/// TCB reason: `mmap`/`munmap` and raw slice construction sit below the verified
+/// linear-memory model, so the trusted boundary is documented here explicitly.
 #[derive(Debug)]
 struct MmapRegion {
     ptr: NonNull<u8>,
@@ -771,6 +1072,13 @@ struct MmapRegion {
 }
 
 impl MmapRegion {
+    /// Creates a new anonymous mapping that backs one local or shared memory object.
+    ///
+    /// Preconditions:
+    /// - `len != 0`.
+    ///
+    /// TCB reason: this is the entry point from the verified memory model into
+    /// OS-backed virtual memory reservation.
     fn new(len: usize, shared: bool) -> Self {
         assert!(len != 0, "mmap region length must be non-zero");
         let mut flags = libc::MAP_ANON;
@@ -796,11 +1104,30 @@ impl MmapRegion {
         }
     }
 
+    /// Returns an immutable slice view over the initialized prefix of the mapping.
+    ///
+    /// Preconditions:
+    /// - `len <= self.len`.
+    ///
+    /// TCB reason: slice construction from a raw pointer is trusted here rather
+    /// than in higher-level linear-memory helpers.
     fn as_slice(&self, len: usize) -> &[u8] {
+        assert!(len <= self.len, "mmap slice length exceeds reservation");
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), len) }
     }
 
+    /// Returns a mutable slice view over the initialized prefix of the mapping.
+    ///
+    /// Preconditions:
+    /// - `len <= self.len`.
+    ///
+    /// TCB reason: mutable raw slice exposure stays confined to this mapping
+    /// wrapper instead of leaking through the verified memory API.
     fn as_slice_mut(&mut self, len: usize) -> &mut [u8] {
+        assert!(
+            len <= self.len,
+            "mmap mutable slice length exceeds reservation"
+        );
         unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), len) }
     }
 }
@@ -1550,6 +1877,13 @@ impl SharedMemoryState {
         }
     }
 
+    /// Removes one waiter from the runtime FIFO queue bookkeeping.
+    ///
+    /// Preconditions:
+    /// - The caller must hold the shared-memory mutex.
+    ///
+    /// TCB reason: queue cleanup mutates runtime synchronization state that must
+    /// stay aligned with projection snapshots used by proofs.
     fn remove_waiter_from_queue(&mut self, address: usize, waiter_id: u64) {
         if let Some(queue) = self.wait_queues.get_mut(&address) {
             if let Some(index) = queue.iter().position(|waiter| waiter.id() == waiter_id) {
@@ -1561,12 +1895,26 @@ impl SharedMemoryState {
         }
     }
 
+    /// Marks one waiter as timed out and removes it from runtime queue state.
+    ///
+    /// Preconditions:
+    /// - The caller must hold the shared-memory mutex.
+    ///
+    /// TCB reason: timeout bookkeeping is an unverified runtime effect that must
+    /// remain synchronized with the protocol projection used by proofs.
     fn timeout_wait(&mut self, address: usize, waiter_id: u64) {
         self.remove_waiter_from_queue(address, waiter_id);
         self.waiters
             .insert(waiter_id, SharedWaitStateProjection::TimedOut);
     }
 
+    /// Removes a waiter entry from the runtime waiter-state map.
+    ///
+    /// Preconditions:
+    /// - The caller must hold the shared-memory mutex.
+    ///
+    /// TCB reason: projection-based proofs trust this cleanup to mirror the
+    /// runtime completion of a wake or timeout path exactly once.
     fn consume_waiter(&mut self, waiter_id: u64) {
         self.waiters.remove(&waiter_id);
     }
@@ -1759,6 +2107,16 @@ impl SharedMemoryObject {
         let _state = self.state.lock();
     }
 
+    /// Registers a 32-bit atomic wait and records the protocol transition
+    /// snapshots that correspond to runtime queue mutation.
+    ///
+    /// Preconditions:
+    /// - `offset` must satisfy 4-byte atomic alignment.
+    /// - The current shared-memory contents at `offset` must equal `expected`
+    ///   for a registration to be created.
+    ///
+    /// TCB reason: this function is the explicit bridge between runtime wait
+    /// queues and the projection-based shared-memory protocol.
     pub(crate) fn register_wait32_protocol(
         &self,
         offset: usize,
@@ -1800,6 +2158,16 @@ impl SharedMemoryObject {
         }
     }
 
+    /// Registers a 64-bit atomic wait and records the protocol transition
+    /// snapshots that correspond to runtime queue mutation.
+    ///
+    /// Preconditions:
+    /// - `offset` must satisfy 8-byte atomic alignment.
+    /// - The current shared-memory contents at `offset` must equal `expected`
+    ///   for a registration to be created.
+    ///
+    /// TCB reason: this keeps shared wait registration inside one documented
+    /// bridge from runtime synchronization to proof-visible projections.
     pub(crate) fn register_wait64_protocol(
         &self,
         offset: usize,
@@ -1841,6 +2209,14 @@ impl SharedMemoryObject {
         }
     }
 
+    /// Notifies up to `count` waiters and records the corresponding
+    /// projection-level before/after states.
+    ///
+    /// Preconditions:
+    /// - `offset` must name a valid 32-bit atomic location in shared memory.
+    ///
+    /// TCB reason: wake-up ordering and queue mutation are runtime effects that
+    /// are trusted only through this projection-capturing boundary.
     pub(crate) fn notify_waiters_protocol(
         &self,
         offset: usize,
@@ -1899,6 +2275,13 @@ impl SharedMemoryObject {
         VMResult::Success(protocol.woken)
     }
 
+    /// Consumes a completed wake-up and removes its runtime queue bookkeeping.
+    ///
+    /// Preconditions:
+    /// - `waiter_id` must refer to a waiter previously registered on `address`.
+    ///
+    /// TCB reason: this is the cleanup half of the trusted wait/notify bridge
+    /// that keeps runtime state aligned with protocol projections.
     fn consume_wake(&self, address: usize, waiter_id: u64) -> SharedAtomicProtocolResult<i32> {
         let mut state = self.state.lock();
         let before = state.projection();
@@ -1912,6 +2295,13 @@ impl SharedMemoryObject {
         }
     }
 
+    /// Consumes a timed-out waiter and removes its runtime queue bookkeeping.
+    ///
+    /// Preconditions:
+    /// - `waiter_id` must refer to a waiter previously registered on `address`.
+    ///
+    /// TCB reason: timeout cleanup is trusted here because it reconciles the
+    /// runtime race between timeout and wake with projection-level state changes.
     fn consume_timed_out(&self, address: usize, waiter_id: u64) -> SharedAtomicProtocolResult<i32> {
         let mut state = self.state.lock();
         let before = state.projection();
@@ -2050,6 +2440,33 @@ mod tests {
                 _ = &mut sleep => wait.finish_timeout(&shared),
             }
         }
+    }
+
+    #[test]
+    fn trusted_le_write_helpers_encode_exact_bytes() {
+        let mut bytes4 = [0u8; 4];
+        trusted_write_u32(&mut bytes4, 0x1122_3344);
+        assert_eq!(bytes4, [0x44, 0x33, 0x22, 0x11]);
+        assert_eq!(trusted_read_u32(&bytes4), 0x1122_3344);
+
+        let mut bytes8 = [0u8; 8];
+        trusted_write_u64(&mut bytes8, 0x0102_0304_0506_0708);
+        assert_eq!(bytes8, [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]);
+        assert_eq!(trusted_read_u64(&bytes8), 0x0102_0304_0506_0708);
+
+        let mut bytes16 = [0u8; 16];
+        trusted_write_u128(&mut bytes16, 0x0011_2233_4455_6677_8899_aabb_ccdd_eeff);
+        assert_eq!(
+            bytes16,
+            [
+                0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22,
+                0x11, 0x00,
+            ]
+        );
+        assert_eq!(
+            trusted_read_u128(&bytes16),
+            0x0011_2233_4455_6677_8899_aabb_ccdd_eeff
+        );
     }
 
     #[test]

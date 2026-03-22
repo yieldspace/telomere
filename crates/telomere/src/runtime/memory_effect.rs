@@ -44,6 +44,14 @@ impl PendingOp {
             Self::WasmAsync(op) => op.task_id,
         }
     }
+
+    pub(crate) fn pending_code(&self) -> Option<crate::common::formal::PendingCode> {
+        match self {
+            Self::HostCall(_) => Some(crate::common::formal::PendingCode::HostCall),
+            Self::MemoryWait(_) => Some(crate::common::formal::PendingCode::Wait),
+            Self::WasmAsync(_) => None,
+        }
+    }
 }
 
 impl fmt::Debug for PendingOp {

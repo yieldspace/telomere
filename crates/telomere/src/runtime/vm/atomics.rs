@@ -4,6 +4,298 @@ use vstd::prelude::*;
 
 verus! {
 
+#[allow(dead_code)]
+pub(crate) enum AtomicWaitKindWitness {
+    I32(u32),
+    I64(u64),
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_wait32_witness_for_handler(expected: u32) -> AtomicWaitKindWitness {
+    AtomicWaitKindWitness::I32(expected)
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_wait64_witness_for_handler(expected: u64) -> AtomicWaitKindWitness {
+    AtomicWaitKindWitness::I64(expected)
+}
+
+#[allow(dead_code)]
+pub(crate) enum AtomicCmpxchgExpectedWitness {
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_cmpxchg_u8_witness_for_handler(
+    expected: u8,
+) -> AtomicCmpxchgExpectedWitness {
+    AtomicCmpxchgExpectedWitness::U8(expected)
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_cmpxchg_u16_witness_for_handler(
+    expected: u16,
+) -> AtomicCmpxchgExpectedWitness {
+    AtomicCmpxchgExpectedWitness::U16(expected)
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_cmpxchg_u32_witness_for_handler(
+    expected: u32,
+) -> AtomicCmpxchgExpectedWitness {
+    AtomicCmpxchgExpectedWitness::U32(expected)
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_cmpxchg_u64_witness_for_handler(
+    expected: u64,
+) -> AtomicCmpxchgExpectedWitness {
+    AtomicCmpxchgExpectedWitness::U64(expected)
+}
+
+#[allow(inconsistent_fields)]
+#[allow(dead_code)]
+pub(crate) enum AtomicStepWitnessParts {
+    Notify {
+        selector: MemorySelectorWitness,
+        start: nat,
+        count: u32,
+        aligned: bool,
+        next_cont: nat,
+    },
+    Wait {
+        selector: MemorySelectorWitness,
+        start: nat,
+        expected: AtomicWaitKindWitness,
+        timeout_immediate: bool,
+        aligned: bool,
+        next_cont: nat,
+    },
+    Store {
+        selector: MemorySelectorWitness,
+        start: nat,
+        bytes: Seq<u8>,
+        aligned: bool,
+        next_cont: nat,
+    },
+    Rmw {
+        selector: MemorySelectorWitness,
+        start: nat,
+        result_bytes: Seq<u8>,
+        write_bytes: Seq<u8>,
+        aligned: bool,
+        next_cont: nat,
+    },
+    Cmpxchg {
+        selector: MemorySelectorWitness,
+        start: nat,
+        expected: AtomicCmpxchgExpectedWitness,
+        value_bytes: Seq<u8>,
+        aligned: bool,
+        next_cont: nat,
+    },
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_notify_witness_for_handler(
+    selector: MemorySelectorWitness,
+    start: nat,
+    count: u32,
+    aligned: bool,
+    next_cont: nat,
+) -> AtomicStepWitnessParts {
+    AtomicStepWitnessParts::Notify {
+        selector,
+        start,
+        count,
+        aligned,
+        next_cont,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_wait_witness_for_handler(
+    selector: MemorySelectorWitness,
+    start: nat,
+    expected: AtomicWaitKindWitness,
+    timeout_immediate: bool,
+    aligned: bool,
+    next_cont: nat,
+) -> AtomicStepWitnessParts {
+    AtomicStepWitnessParts::Wait {
+        selector,
+        start,
+        expected,
+        timeout_immediate,
+        aligned,
+        next_cont,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_store_witness_for_handler(
+    selector: MemorySelectorWitness,
+    start: nat,
+    bytes: Seq<u8>,
+    aligned: bool,
+    next_cont: nat,
+) -> AtomicStepWitnessParts {
+    AtomicStepWitnessParts::Store {
+        selector,
+        start,
+        bytes,
+        aligned,
+        next_cont,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_rmw_witness_for_handler(
+    selector: MemorySelectorWitness,
+    start: nat,
+    result_bytes: Seq<u8>,
+    write_bytes: Seq<u8>,
+    aligned: bool,
+    next_cont: nat,
+) -> AtomicStepWitnessParts {
+    AtomicStepWitnessParts::Rmw {
+        selector,
+        start,
+        result_bytes,
+        write_bytes,
+        aligned,
+        next_cont,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn atomic_cmpxchg_witness_for_handler(
+    selector: MemorySelectorWitness,
+    start: nat,
+    expected: AtomicCmpxchgExpectedWitness,
+    value_bytes: Seq<u8>,
+    aligned: bool,
+    next_cont: nat,
+) -> AtomicStepWitnessParts {
+    AtomicStepWitnessParts::Cmpxchg {
+        selector,
+        start,
+        expected,
+        value_bytes,
+        aligned,
+        next_cont,
+    }
+}
+
+pub(crate) open spec fn atomic_wait_kind_from_witness(
+    witness: AtomicWaitKindWitness,
+) -> crate::common::formal::AtomicWaitKind {
+    match witness {
+        AtomicWaitKindWitness::I32(value) => crate::common::formal::AtomicWaitKind::I32(value),
+        AtomicWaitKindWitness::I64(value) => crate::common::formal::AtomicWaitKind::I64(value),
+    }
+}
+
+pub(crate) open spec fn atomic_cmpxchg_expected_from_witness(
+    witness: AtomicCmpxchgExpectedWitness,
+) -> crate::common::formal::AtomicCmpxchgExpected {
+    match witness {
+        AtomicCmpxchgExpectedWitness::U8(value) => {
+            crate::common::formal::AtomicCmpxchgExpected::U8(value)
+        }
+        AtomicCmpxchgExpectedWitness::U16(value) => {
+            crate::common::formal::AtomicCmpxchgExpected::U16(value)
+        }
+        AtomicCmpxchgExpectedWitness::U32(value) => {
+            crate::common::formal::AtomicCmpxchgExpected::U32(value)
+        }
+        AtomicCmpxchgExpectedWitness::U64(value) => {
+            crate::common::formal::AtomicCmpxchgExpected::U64(value)
+        }
+    }
+}
+
+pub(crate) open spec fn atomic_step_from_witness_parts(
+    witness: AtomicStepWitnessParts,
+) -> crate::common::formal::AtomicStep {
+    match witness {
+        AtomicStepWitnessParts::Notify {
+            selector,
+            start,
+            count,
+            aligned,
+            next_cont,
+        } => crate::common::formal::AtomicStep::Notify {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            count,
+            aligned,
+            next_cont,
+        },
+        AtomicStepWitnessParts::Wait {
+            selector,
+            start,
+            expected,
+            timeout_immediate,
+            aligned,
+            next_cont,
+        } => crate::common::formal::AtomicStep::Wait {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            expected: atomic_wait_kind_from_witness(expected),
+            timeout_immediate,
+            aligned,
+            next_cont,
+        },
+        AtomicStepWitnessParts::Store {
+            selector,
+            start,
+            bytes,
+            aligned,
+            next_cont,
+        } => crate::common::formal::AtomicStep::Store {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            bytes,
+            aligned,
+            next_cont,
+        },
+        AtomicStepWitnessParts::Rmw {
+            selector,
+            start,
+            result_bytes,
+            write_bytes,
+            aligned,
+            next_cont,
+        } => crate::common::formal::AtomicStep::Rmw {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            result_bytes,
+            write_bytes,
+            aligned,
+            next_cont,
+        },
+        AtomicStepWitnessParts::Cmpxchg {
+            selector,
+            start,
+            expected,
+            value_bytes,
+            aligned,
+            next_cont,
+        } => crate::common::formal::AtomicStep::Cmpxchg {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            expected: atomic_cmpxchg_expected_from_witness(expected),
+            value_bytes,
+            aligned,
+            next_cont,
+        },
+    }
+}
+
 #[inline(always)]
 fn wait_result_not_equal() -> (result: i32)
     ensures
@@ -52,7 +344,30 @@ pub open spec fn atomic_continue_cont(step: crate::common::formal::AtomicStep) -
     }
 }
 
-pub proof fn lemma_atomic_family_refines_spec_step(
+pub(crate) open spec fn atomic_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::AtomicStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    crate::common::runtime_observation_refines_instr(
+        before,
+        crate::common::formal::CoreStepInstr::Atomic(step),
+        after,
+        outcome,
+    ) && crate::common::observation_task_id_preserved(before, after)
+        && if crate::common::formal::outcome_is_trap(outcome) {
+            crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+                == crate::common::core_step_state_from_projection_parts(before)
+                    .context
+                    .cont_addr
+        } else {
+            crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+                == atomic_continue_cont(step)
+        }
+}
+
+proof fn lemma_atomic_family_state_refines_spec_step(
     before: crate::common::formal::CoreStepState,
     step: crate::common::formal::AtomicStep,
 )
@@ -77,7 +392,149 @@ pub proof fn lemma_atomic_family_refines_spec_step(
 {
 }
 
+pub(crate) proof fn lemma_atomic_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::AtomicStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Atomic(step),
+        ) == crate::common::formal::spec_step_atomic(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_atomic(before, step).0,
+        ),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_atomic(before, step).1,
+        ) {
+            crate::common::formal::spec_step_atomic(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_atomic(before, step).0.context.cont_addr
+                == atomic_continue_cont(step)
+        },
+{
+}
+
+pub(crate) proof fn lemma_atomic_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::AtomicStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Atomic(step),
+            after,
+            outcome,
+        ),
+    ensures
+        atomic_observation_refines_spec_step(before, step, after, outcome),
+{
+    lemma_atomic_family_refines_spec_step(
+        crate::common::core_step_state_from_projection_parts(before),
+        step,
+    );
+}
+
+pub(crate) open spec fn atomic_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: AtomicStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    atomic_observation_refines_spec_step(
+        before,
+        atomic_step_from_witness_parts(witness),
+        after,
+        outcome,
+    )
+}
+
+pub(crate) proof fn lemma_atomic_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: AtomicStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Atomic(atomic_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        atomic_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_atomic_observation_refines_spec_step(
+        before,
+        atomic_step_from_witness_parts(witness),
+        after,
+        outcome,
+    );
+}
+
+pub(crate) proof fn lemma_atomic_handler_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: AtomicStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Atomic(atomic_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        atomic_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_atomic_witness_observation_refines_spec_step(before, witness, after, outcome);
+}
+
 } // verus!
+
+#[inline(always)]
+fn compute_atomic_start(memarg: MemArg, offset: u32) -> VMResult<usize> {
+    match checked_compute_memory_offset(memarg.offset, offset) {
+        Some(start) => VMResult::Success(start),
+        None => VMResult::MemoryIndexOutOfRange,
+    }
+}
+
+#[inline(always)]
+fn compute_atomic_start_indexed(
+    memarg: MemArg,
+    memidx: u32,
+    offset: u32,
+) -> VMResult<(usize, u32)> {
+    match checked_compute_memory_offset(memarg.offset, offset) {
+        Some(start) => VMResult::Success((start, memidx)),
+        None => VMResult::MemoryIndexOutOfRange,
+    }
+}
+
+#[inline(always)]
+/// Decode the single `memarg` immediate for the active atomic instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_atomic_memarg(tail_code: *const Instr) -> MemArg {
+    (*tail_code).operand.memarg
+}
+
+#[inline(always)]
+/// Decode the `memarg + memidx` immediates for the active indexed atomic instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_indexed_atomic_memarg(tail_code: *const Instr) -> (MemArg, u32) {
+    ((*tail_code).operand.memarg, (*tail_code.add(1)).operand.u32)
+}
 
 #[inline(always)]
 /// WebAssembly threads atomic offset helper.
@@ -97,9 +554,9 @@ unsafe fn atomic_start(
     tail_code: *const Instr,
     facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<usize> {
-    let memarg = (*tail_code).operand.memarg;
+    let memarg = decode_atomic_memarg(tail_code);
     let offset = facade.pop_u32();
-    compute_memory_offset(memarg, offset)
+    compute_atomic_start(memarg, offset)
 }
 
 #[inline(always)]
@@ -120,11 +577,9 @@ unsafe fn atomic_start_indexed(
     tail_code: *const Instr,
     facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u32)> {
-    let memarg = (*tail_code).operand.memarg;
-    let memidx = (*tail_code.add(1)).operand.u32;
+    let (memarg, memidx) = decode_indexed_atomic_memarg(tail_code);
     let offset = facade.pop_u32();
-    let start = vm_try!(compute_memory_offset(memarg, offset));
-    VMResult::Success((start, memidx))
+    compute_atomic_start_indexed(memarg, memidx, offset)
 }
 
 #[inline(always)]
@@ -2922,9 +3377,22 @@ mod tests {
                 },
                 Instr { op: stop_op },
             ];
-            unsafe {
-                op_memory_atomic_wait32_shared(wait_program.as_ptr(), &mut ctx).unwrap();
-            }
+            let pending_before = ctx.pending_len();
+            let result = unsafe { op_memory_atomic_wait32_shared(wait_program.as_ptr(), &mut ctx) };
+            let outcome = crate::common::formal::core_outcome_from_vm_result_with_pending(
+                &result,
+                pending_before,
+                ctx.pending_len(),
+                ctx.pending_code_delta(pending_before).unwrap_or(None),
+            )
+            .unwrap();
+            assert_eq!(
+                outcome,
+                crate::common::formal::CoreOutcome::Pending(
+                    crate::common::formal::PendingCode::Wait,
+                )
+            );
+            result.unwrap();
         }
 
         assert_eq!(pending_effects, 1);
@@ -2956,9 +3424,18 @@ mod tests {
                 },
                 Instr { op: stop_op },
             ];
-            unsafe {
-                op_memory_atomic_notify_shared(notify_program.as_ptr(), &mut ctx).unwrap();
-            }
+            let pending_before = ctx.pending_len();
+            let result =
+                unsafe { op_memory_atomic_notify_shared(notify_program.as_ptr(), &mut ctx) };
+            let outcome = crate::common::formal::core_outcome_from_vm_result_with_pending(
+                &result,
+                pending_before,
+                ctx.pending_len(),
+                ctx.pending_code_delta(pending_before).unwrap_or(None),
+            )
+            .unwrap();
+            assert_eq!(outcome, crate::common::formal::CoreOutcome::Continue);
+            result.unwrap();
             let mut facade = ExecuteContextFacade::new(&mut ctx);
             assert_eq!(facade.pop_u32(), 1);
         }

@@ -5,6 +5,7 @@ mod vm_result;
 use std::{cell::OnceCell, fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
+use vstd::prelude::*;
 
 pub use vm_result::VMResult;
 mod memory;
@@ -741,26 +742,28 @@ struct ProofReadyExecuteContextProjection {
     task_id: u32,
 }
 
+verus! {
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
-struct ExecContextTokenProjectionParts {
-    current_return_pc: usize,
-    current_instance_raw: u32,
-    current_default_memory_present: bool,
-    current_default_memory_shared: bool,
-    current_default_memory_raw: u32,
-    current_prev_local_top: usize,
-    current_prev_local_size: u32,
-    caller_present: bool,
-    caller_return_pc: usize,
-    caller_instance_raw: u32,
-    caller_default_memory_present: bool,
-    caller_default_memory_shared: bool,
-    caller_default_memory_raw: u32,
-    caller_prev_local_top: usize,
-    caller_prev_local_size: u32,
-    cont_addr: usize,
-    task_id: u32,
+pub(crate) struct ExecContextTokenProjectionParts {
+    pub(crate) current_return_pc: usize,
+    pub(crate) current_instance_raw: u32,
+    pub(crate) current_default_memory_present: bool,
+    pub(crate) current_default_memory_shared: bool,
+    pub(crate) current_default_memory_raw: u32,
+    pub(crate) current_prev_local_top: usize,
+    pub(crate) current_prev_local_size: u32,
+    pub(crate) caller_present: bool,
+    pub(crate) caller_return_pc: usize,
+    pub(crate) caller_instance_raw: u32,
+    pub(crate) caller_default_memory_present: bool,
+    pub(crate) caller_default_memory_shared: bool,
+    pub(crate) caller_default_memory_raw: u32,
+    pub(crate) caller_prev_local_top: usize,
+    pub(crate) caller_prev_local_size: u32,
+    pub(crate) cont_addr: usize,
+    pub(crate) task_id: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -777,7 +780,7 @@ pub(crate) struct FunctionProjectionParts {
     pub(crate) is_host: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct CoreStepStateProjectionParts {
     pub(crate) stack: stack::StackProjectionParts,
@@ -790,6 +793,302 @@ pub(crate) struct CoreStepStateProjectionParts {
     pub(crate) data_segments: Vec<(u32, Vec<u8>)>,
     pub(crate) elem_segments: Vec<(u32, Vec<u32>)>,
     pub(crate) frame_metadata_len: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct CoreStepObservationStart {
+    pub(crate) before: CoreStepStateProjectionParts,
+    pub(crate) pending_len: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct CoreStepRuntimeObservation {
+    pub(crate) before: CoreStepStateProjectionParts,
+    pub(crate) after: CoreStepStateProjectionParts,
+    pub(crate) outcome: formal::CoreOutcome,
+    pub(crate) pending_code_delta: Option<formal::PendingCode>,
+    pub(crate) pending_len_before: usize,
+    pub(crate) pending_len_after: usize,
+}
+
+pub(crate) open spec fn u32_pairs_have_key<T>(pairs: Seq<(u32, T)>, key: nat) -> bool {
+    exists|i: int| 0 <= i < pairs.len() && pairs[i].0 as nat == key
+}
+
+pub(crate) open spec fn u32_pairs_get<T>(pairs: Seq<(u32, T)>, key: nat) -> T
+    recommends
+        u32_pairs_have_key(pairs, key),
+{
+    let i = choose|i: int| 0 <= i < pairs.len() && pairs[i].0 as nat == key;
+    pairs[i].1
+}
+
+pub(crate) open spec fn map_from_u32_pairs<T>(pairs: Seq<(u32, T)>) -> Map<nat, T> {
+    Map::new(
+        |key: nat| u32_pairs_have_key(pairs, key),
+        |key: nat| u32_pairs_get(pairs, key),
+    )
+}
+
+pub(crate) open spec fn function_view_from_projection_parts(
+    parts: FunctionProjectionParts,
+) -> formal::FunctionView {
+    formal::function_view_from_parts(
+        parts.instance_raw as nat,
+        parts.entry_pc as nat,
+        parts.param_size as nat,
+        parts.local_size as nat,
+        parts.type_id as nat,
+        formal::optional_memory_handle_view_from_raw(
+            parts.default_memory_present,
+            parts.default_memory_shared,
+            parts.default_memory_raw as nat,
+        ),
+        parts.is_host,
+    )
+}
+
+pub(crate) open spec fn exec_context_token_from_projection_parts(
+    parts: ExecContextTokenProjectionParts,
+) -> formal::ExecContextToken {
+    formal::exec_context_token_from_projection_parts(
+        parts.current_return_pc as nat,
+        parts.current_instance_raw,
+        parts.current_default_memory_present,
+        parts.current_default_memory_shared,
+        parts.current_default_memory_raw,
+        parts.current_prev_local_top as nat,
+        parts.current_prev_local_size as nat,
+        parts.caller_present,
+        parts.caller_return_pc as nat,
+        parts.caller_instance_raw,
+        parts.caller_default_memory_present,
+        parts.caller_default_memory_shared,
+        parts.caller_default_memory_raw,
+        parts.caller_prev_local_top as nat,
+        parts.caller_prev_local_size as nat,
+        parts.cont_addr as nat,
+        parts.task_id,
+    )
+}
+
+pub(crate) open spec fn table_map_from_projection_pairs(
+    pairs: Seq<(u32, store::TableProjectionParts)>,
+) -> Map<formal::TableId, formal::TableView> {
+    Map::new(
+        |key: nat| u32_pairs_have_key(pairs, key),
+        |key: nat| store::table_view_from_projection_parts(u32_pairs_get(pairs, key)),
+    )
+}
+
+pub(crate) open spec fn global_map_from_projection_pairs(
+    pairs: Seq<(u32, Vec<u8>)>,
+) -> Map<formal::GlobalId, formal::GlobalView> {
+    Map::new(
+        |key: nat| u32_pairs_have_key(pairs, key),
+        |key: nat| formal::GlobalView {
+            bytes: u32_pairs_get(pairs, key)@,
+        },
+    )
+}
+
+pub(crate) open spec fn function_map_from_projection_pairs(
+    pairs: Seq<(u32, FunctionProjectionParts)>,
+) -> Map<formal::FunctionId, formal::FunctionView> {
+    Map::new(
+        |key: nat| u32_pairs_have_key(pairs, key),
+        |key: nat| function_view_from_projection_parts(u32_pairs_get(pairs, key)),
+    )
+}
+
+pub(crate) open spec fn local_memory_map_from_projection_pairs(
+    pairs: Seq<(u32, memory::LinearMemoryProjectionParts)>,
+) -> Map<formal::MemoryId, formal::LinearMemoryView> {
+    Map::new(
+        |key: nat| u32_pairs_have_key(pairs, key),
+        |key: nat| memory::linear_memory_view_from_projection_parts(u32_pairs_get(pairs, key)),
+    )
+}
+
+pub(crate) open spec fn shared_memory_map_from_projection_pairs(
+    pairs: Seq<(u32, memory::SharedMemoryProjectionParts)>,
+) -> Map<formal::MemoryId, formal::SharedMemoryProtocol> {
+    Map::new(
+        |key: nat| u32_pairs_have_key(pairs, key),
+        |key: nat| memory::shared_memory_protocol_from_projection_parts(u32_pairs_get(pairs, key)),
+    )
+}
+
+pub(crate) open spec fn data_segment_map_from_projection_pairs(
+    pairs: Seq<(u32, Vec<u8>)>,
+) -> Map<formal::SegmentId, Seq<u8>> {
+    Map::new(
+        |key: nat| u32_pairs_have_key(pairs, key),
+        |key: nat| u32_pairs_get(pairs, key)@,
+    )
+}
+
+pub(crate) open spec fn elem_segment_map_from_projection_pairs(
+    pairs: Seq<(u32, Vec<u32>)>,
+) -> Map<formal::SegmentId, Seq<u32>> {
+    Map::new(
+        |key: nat| u32_pairs_have_key(pairs, key),
+        |key: nat| u32_pairs_get(pairs, key)@,
+    )
+}
+
+pub(crate) open spec fn core_step_state_from_projection_parts(
+    parts: CoreStepStateProjectionParts,
+) -> formal::CoreStepState {
+    formal::core_step_state_from_parts(
+        stack::stack_view_from_projection_parts(parts.stack),
+        exec_context_token_from_projection_parts(parts.context),
+        table_map_from_projection_pairs(parts.tables@),
+        global_map_from_projection_pairs(parts.globals@),
+        function_map_from_projection_pairs(parts.functions@),
+        local_memory_map_from_projection_pairs(parts.local_memories@),
+        shared_memory_map_from_projection_pairs(parts.shared_memories@),
+        data_segment_map_from_projection_pairs(parts.data_segments@),
+        elem_segment_map_from_projection_pairs(parts.elem_segments@),
+        parts.frame_metadata_len as nat,
+    )
+}
+
+pub(crate) open spec fn runtime_observation_refines_instr(
+    before: CoreStepStateProjectionParts,
+    instr: formal::CoreStepInstr,
+    after: CoreStepStateProjectionParts,
+    outcome: formal::CoreOutcome,
+) -> bool {
+    formal::spec_step(core_step_state_from_projection_parts(before), instr)
+        == (core_step_state_from_projection_parts(after), outcome)
+}
+
+pub(crate) open spec fn observation_task_id_preserved(
+    before: CoreStepStateProjectionParts,
+    after: CoreStepStateProjectionParts,
+) -> bool {
+    formal::task_id_preserved(
+        core_step_state_from_projection_parts(before),
+        core_step_state_from_projection_parts(after),
+    )
+}
+
+pub(crate) open spec fn observation_current_default_memory_preserved(
+    before: CoreStepStateProjectionParts,
+    after: CoreStepStateProjectionParts,
+) -> bool {
+    formal::current_default_memory_of(core_step_state_from_projection_parts(after))
+        == formal::current_default_memory_of(core_step_state_from_projection_parts(before))
+}
+
+pub(crate) open spec fn observation_caller_default_memory_preserved(
+    before: CoreStepStateProjectionParts,
+    after: CoreStepStateProjectionParts,
+) -> bool {
+    formal::caller_default_memory_of(core_step_state_from_projection_parts(after))
+        == formal::caller_default_memory_of(core_step_state_from_projection_parts(before))
+}
+
+} // verus!
+
+#[allow(dead_code)]
+fn strictly_sorted_unique_u32_pairs<T>(pairs: &[(u32, T)]) -> bool {
+    pairs.windows(2).all(|window| window[0].0 < window[1].0)
+}
+
+#[allow(dead_code)]
+fn linear_memory_projection_parts_proof_ready(parts: &memory::LinearMemoryProjectionParts) -> bool {
+    parts.current_pages <= parts.max_pages
+        && (parts.current_pages as usize)
+            .checked_mul(PAGE_SIZE)
+            .is_some_and(|len| len == parts.bytes.len())
+}
+
+#[allow(dead_code)]
+fn table_projection_parts_proof_ready(parts: &store::TableProjectionParts) -> bool {
+    parts
+        .max_len
+        .is_none_or(|max_len| parts.elements.len() <= max_len as usize)
+}
+
+#[allow(dead_code)]
+fn shared_memory_projection_parts_proof_ready(parts: &memory::SharedMemoryProjectionParts) -> bool {
+    if !linear_memory_projection_parts_proof_ready(&parts.memory)
+        || !parts.memory.shared
+        || parts.next_waiter_id == 0
+    {
+        return false;
+    }
+
+    let mut waiter_states = std::collections::HashMap::new();
+    for waiter in &parts.waiters {
+        if waiter.waiter_id >= parts.next_waiter_id {
+            return false;
+        }
+        if waiter_states
+            .insert(waiter.waiter_id, waiter.state)
+            .is_some()
+        {
+            return false;
+        }
+    }
+
+    let mut queue_addresses = std::collections::HashSet::new();
+    let mut queued_waiters = std::collections::HashSet::new();
+    for queue in &parts.wait_queues {
+        if !queue_addresses.insert(queue.address) {
+            return false;
+        }
+        for waiter_id in &queue.waiter_ids {
+            if !queued_waiters.insert(*waiter_id) {
+                return false;
+            }
+            if waiter_states.get(waiter_id) != Some(&memory::SharedWaitStateProjection::Waiting) {
+                return false;
+            }
+        }
+    }
+
+    parts.waiters.iter().all(|waiter| match waiter.state {
+        memory::SharedWaitStateProjection::Waiting => queued_waiters.contains(&waiter.waiter_id),
+        memory::SharedWaitStateProjection::Notified
+        | memory::SharedWaitStateProjection::TimedOut => {
+            !queued_waiters.contains(&waiter.waiter_id)
+        }
+    })
+}
+
+impl CoreStepStateProjectionParts {
+    #[allow(dead_code)]
+    pub(crate) fn proof_ready(&self) -> bool {
+        self.stack.top <= self.stack.bytes.len()
+            && (if self.stack.frame_stack.is_empty() {
+                self.stack.active_local_size == 0
+            } else {
+                true
+            })
+            && strictly_sorted_unique_u32_pairs(&self.tables)
+            && self
+                .tables
+                .iter()
+                .all(|(_, parts)| table_projection_parts_proof_ready(parts))
+            && strictly_sorted_unique_u32_pairs(&self.globals)
+            && strictly_sorted_unique_u32_pairs(&self.functions)
+            && strictly_sorted_unique_u32_pairs(&self.local_memories)
+            && self.local_memories.iter().all(|(_, parts)| {
+                !parts.shared && linear_memory_projection_parts_proof_ready(parts)
+            })
+            && strictly_sorted_unique_u32_pairs(&self.shared_memories)
+            && self
+                .shared_memories
+                .iter()
+                .all(|(_, parts)| shared_memory_projection_parts_proof_ready(parts))
+            && strictly_sorted_unique_u32_pairs(&self.data_segments)
+            && strictly_sorted_unique_u32_pairs(&self.elem_segments)
+    }
 }
 
 pub(crate) struct ExecuteContextFacade<'ctx, 'store> {
@@ -1125,6 +1424,39 @@ impl<'ctx, 'store> ExecuteContextFacade<'ctx, 'store> {
     #[inline(always)]
     pub(crate) fn pending_mut(&mut self) -> &mut PendingOpEmitter<'store> {
         self.as_ctx_mut().pending_mut()
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[inline(always)]
+    pub(crate) fn start_core_step_observation(&mut self) -> Option<CoreStepObservationStart> {
+        Some(CoreStepObservationStart {
+            before: self.core_step_state_projection_parts()?,
+            pending_len: self.as_ctx().pending_len(),
+        })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn finish_core_step_observation(
+        &mut self,
+        start: CoreStepObservationStart,
+        result: &VMResult<()>,
+    ) -> Option<CoreStepRuntimeObservation> {
+        let pending_len_after = self.as_ctx().pending_len();
+        let appended_pending_code = self.as_ctx().pending_code_delta(start.pending_len)?;
+        let outcome = formal::core_outcome_from_vm_result_with_pending(
+            result,
+            start.pending_len,
+            pending_len_after,
+            appended_pending_code,
+        )?;
+        Some(CoreStepRuntimeObservation {
+            before: start.before,
+            after: self.core_step_state_projection_parts()?,
+            outcome,
+            pending_code_delta: appended_pending_code,
+            pending_len_before: start.pending_len,
+            pending_len_after,
+        })
     }
 
     #[inline(always)]
@@ -3241,6 +3573,17 @@ impl<'a> ExecuteContext<'a> {
         &mut self.pending
     }
 
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub(crate) fn pending_code_delta(
+        &self,
+        before_len: usize,
+    ) -> Option<Option<formal::PendingCode>> {
+        self.pending.appended_pending_code(before_len)
+    }
+
     pub(crate) fn cont(&self) -> *const Instr {
         self.cont
     }
@@ -5027,5 +5370,156 @@ mod tests {
         assert_eq!(parts.data_segments, vec![(0, vec![9, 8, 7])]);
         assert_eq!(parts.elem_segments, vec![(0, vec![func.get()])]);
         assert_eq!(parts.frame_metadata_len, stack::call_stack_metadata_len());
+    }
+
+    #[test]
+    fn core_outcome_classifier_tracks_continue_trap_and_pending() {
+        assert_eq!(
+            formal::core_outcome_from_vm_result_with_pending(
+                &VMResult::<()>::Success(()),
+                0,
+                0,
+                None,
+            ),
+            Some(formal::CoreOutcome::Continue)
+        );
+        assert_eq!(
+            formal::core_outcome_from_vm_result_with_pending(
+                &VMResult::<()>::MemoryIndexOutOfRange,
+                0,
+                0,
+                None,
+            ),
+            Some(formal::CoreOutcome::Trap(
+                formal::TrapCode::MemoryIndexOutOfRange,
+            ))
+        );
+        assert_eq!(
+            formal::core_outcome_from_vm_result_with_pending(
+                &VMResult::<()>::Success(()),
+                0,
+                1,
+                Some(formal::PendingCode::HostCall),
+            ),
+            Some(formal::CoreOutcome::Pending(formal::PendingCode::HostCall))
+        );
+        assert_eq!(
+            formal::core_outcome_from_vm_result_with_pending(
+                &VMResult::<()>::Success(()),
+                1,
+                2,
+                Some(formal::PendingCode::Wait),
+            ),
+            Some(formal::CoreOutcome::Pending(formal::PendingCode::Wait))
+        );
+        assert_eq!(
+            formal::core_outcome_from_vm_result_with_pending(
+                &VMResult::<()>::Success(()),
+                0,
+                2,
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn core_step_observation_captures_before_after_and_continue() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops: VecDeque<PendingOp> = VecDeque::new();
+        let module = gc.new_module(ModuleInstance {
+            exports: ExportSection(Vec::new()),
+            tables: Vec::new(),
+            globals: Vec::new(),
+            functions: vec![TypeIdx(0)],
+            function_types: vec![FuncType(ResultType(Vec::new()), ResultType(Vec::new()))],
+            mems: Vec::new(),
+        });
+        let instance = store::InstanceId::from_index(0);
+        let func = gc.new_func(&store::FunctionInstanceData {
+            instance,
+            funcidx: 0,
+            typeidx: TypeIdx(0),
+            param_size: 0,
+            local_size: 0,
+            body: store::FunctionBody::Wasm {
+                locals: LocalsData::default(),
+                code: Arc::<[Instr]>::from(vec![crate::runtime::vm::VM_END]),
+            },
+        });
+        let _instance_id = gc.new_instance(&InstanceData {
+            instance_id: 29,
+            module_addr: module,
+            globals: Vec::new(),
+            funcs: vec![func],
+            tables: Vec::new(),
+            mems: Vec::new(),
+            memory_slots: Vec::new(),
+        });
+        let mut stack = Stack::new(128);
+        let local_reference = stack
+            .function_call(
+                0,
+                0,
+                CallFrameCache {
+                    code_addr: func,
+                    code_base: std::ptr::null(),
+                    instance,
+                    memory0_kind: CachedMemoryKind::None,
+                    memory0_raw: 0,
+                },
+                LocalReference {
+                    local_top: 0,
+                    local_size: 0,
+                },
+                std::ptr::null(),
+                &gc,
+            )
+            .unwrap();
+
+        let mut ctx = ExecuteContext::new(
+            &mut stack,
+            local_reference,
+            CallFrameCache {
+                code_addr: func,
+                code_base: std::ptr::null(),
+                instance,
+                memory0_kind: CachedMemoryKind::None,
+                memory0_raw: 0,
+            },
+            &store,
+            &mut gc,
+            PendingOpEmitter::from_parts(29, &mut pending_effects, &mut pending_ops),
+            std::ptr::null(),
+            29,
+        );
+        assert_eq!(ctx.instance_id(), 29);
+        assert_eq!(ctx.instance().instance_id, 29);
+        assert_eq!(ctx.instance().instance_id, 29);
+
+        let start = {
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            facade.start_core_step_observation().unwrap()
+        };
+        let result = {
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            facade.push_u32(77)
+        };
+        let observation = {
+            let mut facade = ExecuteContextFacade::new(&mut ctx);
+            facade.finish_core_step_observation(start, &result).unwrap()
+        };
+
+        assert_eq!(observation.outcome, formal::CoreOutcome::Continue);
+        assert_eq!(observation.pending_len_before, 0);
+        assert_eq!(observation.pending_len_after, 0);
+        assert_eq!(observation.before.context.task_id, 29);
+        assert_eq!(observation.after.context.task_id, 29);
+        assert_eq!(
+            observation.after.stack.top,
+            observation.before.stack.top + 4
+        );
     }
 }

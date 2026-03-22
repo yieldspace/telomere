@@ -3,6 +3,187 @@ use vstd::prelude::*;
 
 verus! {
 
+#[allow(dead_code)]
+pub(crate) enum MemoryLoadKindWitness {
+    Raw { load_width: nat },
+    ZeroExtend { load_width: nat, result_width: nat },
+    SignExtend { load_width: nat, result_width: nat },
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn raw_memory_load_kind_witness_for_handler(
+    load_width: nat,
+) -> MemoryLoadKindWitness {
+    MemoryLoadKindWitness::Raw { load_width }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn zero_extend_memory_load_kind_witness_for_handler(
+    load_width: nat,
+    result_width: nat,
+) -> MemoryLoadKindWitness {
+    MemoryLoadKindWitness::ZeroExtend {
+        load_width,
+        result_width,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn sign_extend_memory_load_kind_witness_for_handler(
+    load_width: nat,
+    result_width: nat,
+) -> MemoryLoadKindWitness {
+    MemoryLoadKindWitness::SignExtend {
+        load_width,
+        result_width,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) enum MemoryStepWitnessParts {
+    Load {
+        selector: MemorySelectorWitness,
+        start: nat,
+        kind: MemoryLoadKindWitness,
+        next_cont: nat,
+    },
+    Store {
+        selector: MemorySelectorWitness,
+        start: nat,
+        len: nat,
+        next_cont: nat,
+    },
+    Size {
+        selector: MemorySelectorWitness,
+        next_cont: nat,
+    },
+    Grow {
+        selector: MemorySelectorWitness,
+        page_delta: nat,
+        next_cont: nat,
+    },
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn memory_load_witness_for_handler(
+    selector: MemorySelectorWitness,
+    start: nat,
+    kind: MemoryLoadKindWitness,
+    next_cont: nat,
+) -> MemoryStepWitnessParts {
+    MemoryStepWitnessParts::Load {
+        selector,
+        start,
+        kind,
+        next_cont,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn memory_store_witness_for_handler(
+    selector: MemorySelectorWitness,
+    start: nat,
+    len: nat,
+    next_cont: nat,
+) -> MemoryStepWitnessParts {
+    MemoryStepWitnessParts::Store {
+        selector,
+        start,
+        len,
+        next_cont,
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn memory_size_witness_for_handler(
+    selector: MemorySelectorWitness,
+    next_cont: nat,
+) -> MemoryStepWitnessParts {
+    MemoryStepWitnessParts::Size { selector, next_cont }
+}
+
+#[allow(dead_code)]
+pub(crate) open spec fn memory_grow_witness_for_handler(
+    selector: MemorySelectorWitness,
+    page_delta: nat,
+    next_cont: nat,
+) -> MemoryStepWitnessParts {
+    MemoryStepWitnessParts::Grow {
+        selector,
+        page_delta,
+        next_cont,
+    }
+}
+
+pub(crate) open spec fn memory_load_kind_from_witness(
+    witness: MemoryLoadKindWitness,
+) -> crate::common::formal::MemoryLoadKind {
+    match witness {
+        MemoryLoadKindWitness::Raw { load_width } => {
+            crate::common::formal::MemoryLoadKind::Raw { load_width }
+        }
+        MemoryLoadKindWitness::ZeroExtend {
+            load_width,
+            result_width,
+        } => crate::common::formal::MemoryLoadKind::ZeroExtend {
+            load_width,
+            result_width,
+        },
+        MemoryLoadKindWitness::SignExtend {
+            load_width,
+            result_width,
+        } => crate::common::formal::MemoryLoadKind::SignExtend {
+            load_width,
+            result_width,
+        },
+    }
+}
+
+pub(crate) open spec fn memory_step_from_witness_parts(
+    witness: MemoryStepWitnessParts,
+) -> crate::common::formal::MemoryStep {
+    match witness {
+        MemoryStepWitnessParts::Load {
+            selector,
+            start,
+            kind,
+            next_cont,
+        } => crate::common::formal::MemoryStep::Load {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            kind: memory_load_kind_from_witness(kind),
+            next_cont,
+        },
+        MemoryStepWitnessParts::Store {
+            selector,
+            start,
+            len,
+            next_cont,
+        } => crate::common::formal::MemoryStep::Store {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            start,
+            len,
+            next_cont,
+        },
+        MemoryStepWitnessParts::Size {
+            selector,
+            next_cont,
+        } => crate::common::formal::MemoryStep::Size {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            next_cont,
+        },
+        MemoryStepWitnessParts::Grow {
+            selector,
+            page_delta,
+            next_cont,
+        } => crate::common::formal::MemoryStep::Grow {
+            selector: crate::runtime::vm::memory_selector_from_witness(selector),
+            page_delta,
+            next_cont,
+        },
+    }
+}
+
 #[inline(always)]
 fn widen_u8_to_u32(value: u8) -> (result: u32)
     ensures
@@ -159,7 +340,32 @@ pub open spec fn memory_continue_cont(step: crate::common::formal::MemoryStep) -
     }
 }
 
-pub proof fn lemma_memory_family_refines_spec_step(
+pub(crate) open spec fn memory_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::MemoryStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    crate::common::runtime_observation_refines_instr(
+        before,
+        crate::common::formal::CoreStepInstr::Memory(step),
+        after,
+        outcome,
+    ) && crate::common::observation_task_id_preserved(before, after)
+        && crate::common::observation_current_default_memory_preserved(before, after)
+        && crate::common::observation_caller_default_memory_preserved(before, after)
+        && if crate::common::formal::outcome_is_trap(outcome) {
+            crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+                == crate::common::core_step_state_from_projection_parts(before)
+                    .context
+                    .cont_addr
+        } else {
+            crate::common::core_step_state_from_projection_parts(after).context.cont_addr
+                == memory_continue_cont(step)
+        }
+}
+
+proof fn lemma_memory_family_state_refines_spec_step(
     before: crate::common::formal::CoreStepState,
     step: crate::common::formal::MemoryStep,
 )
@@ -190,7 +396,160 @@ pub proof fn lemma_memory_family_refines_spec_step(
 {
 }
 
+pub(crate) proof fn lemma_memory_family_refines_spec_step(
+    before: crate::common::formal::CoreStepState,
+    step: crate::common::formal::MemoryStep,
+)
+    ensures
+        crate::common::formal::spec_step(
+            before,
+            crate::common::formal::CoreStepInstr::Memory(step),
+        ) == crate::common::formal::spec_step_memory(before, step),
+        crate::common::formal::task_id_preserved(
+            before,
+            crate::common::formal::spec_step_memory(before, step).0,
+        ),
+        crate::common::formal::current_default_memory_of(
+            crate::common::formal::spec_step_memory(before, step).0,
+        ) == crate::common::formal::current_default_memory_of(before),
+        crate::common::formal::caller_default_memory_of(
+            crate::common::formal::spec_step_memory(before, step).0,
+        ) == crate::common::formal::caller_default_memory_of(before),
+        if crate::common::formal::outcome_is_trap(
+            crate::common::formal::spec_step_memory(before, step).1,
+        ) {
+            crate::common::formal::spec_step_memory(before, step).0.context.cont_addr
+                == before.context.cont_addr
+        } else {
+            crate::common::formal::spec_step_memory(before, step).0.context.cont_addr
+                == memory_continue_cont(step)
+        },
+{
+}
+
+pub(crate) proof fn lemma_memory_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    step: crate::common::formal::MemoryStep,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Memory(step),
+            after,
+            outcome,
+        ),
+    ensures
+        memory_observation_refines_spec_step(before, step, after, outcome),
+{
+    lemma_memory_family_refines_spec_step(
+        crate::common::core_step_state_from_projection_parts(before),
+        step,
+    );
+}
+
+pub(crate) open spec fn memory_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: MemoryStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+) -> bool {
+    memory_observation_refines_spec_step(
+        before,
+        memory_step_from_witness_parts(witness),
+        after,
+        outcome,
+    )
+}
+
+pub(crate) proof fn lemma_memory_witness_observation_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: MemoryStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Memory(memory_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        memory_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_memory_observation_refines_spec_step(
+        before,
+        memory_step_from_witness_parts(witness),
+        after,
+        outcome,
+    );
+}
+
+pub(crate) proof fn lemma_memory_handler_refines_spec_step(
+    before: crate::common::CoreStepStateProjectionParts,
+    witness: MemoryStepWitnessParts,
+    after: crate::common::CoreStepStateProjectionParts,
+    outcome: crate::common::formal::CoreOutcome,
+)
+    requires
+        crate::common::runtime_observation_refines_instr(
+            before,
+            crate::common::formal::CoreStepInstr::Memory(memory_step_from_witness_parts(witness)),
+            after,
+            outcome,
+        ),
+    ensures
+        memory_witness_observation_refines_spec_step(before, witness, after, outcome),
+{
+    lemma_memory_witness_observation_refines_spec_step(before, witness, after, outcome);
+}
+
 } // verus!
+
+#[inline(always)]
+fn compute_default_start(memarg: MemArg, offset: u32) -> VMResult<usize> {
+    match checked_compute_memory_offset(memarg.offset, offset) {
+        Some(start) => VMResult::Success(start),
+        None => VMResult::MemoryIndexOutOfRange,
+    }
+}
+
+#[inline(always)]
+fn compute_indexed_start(memarg: MemArg, memidx: u32, offset: u32) -> VMResult<(usize, u32)> {
+    match checked_compute_memory_offset(memarg.offset, offset) {
+        Some(start) => VMResult::Success((start, memidx)),
+        None => VMResult::MemoryIndexOutOfRange,
+    }
+}
+
+#[inline(always)]
+/// Decode the single `memarg` immediate for the active memory instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_memarg(tail_code: *const Instr) -> MemArg {
+    (*tail_code).operand.memarg
+}
+
+#[inline(always)]
+/// Decode the `memarg + memidx` immediates for the active indexed memory instruction.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_indexed_memarg(tail_code: *const Instr) -> (MemArg, u32) {
+    ((*tail_code).operand.memarg, (*tail_code.add(1)).operand.u32)
+}
+
+#[inline(always)]
+/// Decode the single indexed-memory operand used by `memory.size` and `memory.grow`.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for the current handler.
+unsafe fn decode_memory_index_operand(tail_code: *const Instr) -> u32 {
+    (*tail_code).operand.u32
+}
 
 #[inline(always)]
 /// WebAssembly linear-memory access helper.
@@ -211,10 +570,10 @@ unsafe fn load_start(
     facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<usize> {
     debug_assert!(facade.has_default_memory());
-    let memarg = (*tail_code).operand.memarg;
+    let memarg = decode_memarg(tail_code);
     let offset = facade.pop_u32();
     trace!("memory access: {:?} {}", memarg, offset);
-    compute_memory_offset(memarg, offset)
+    compute_default_start(memarg, offset)
 }
 
 #[inline(always)]
@@ -222,8 +581,7 @@ unsafe fn load_start_indexed(
     tail_code: *const Instr,
     facade: &mut ExecuteContextFacade<'_, '_>,
 ) -> VMResult<(usize, u32)> {
-    let memarg = (*tail_code).operand.memarg;
-    let memidx = (*tail_code.add(1)).operand.u32;
+    let (memarg, memidx) = decode_indexed_memarg(tail_code);
     let offset = facade.pop_u32();
     trace!(
         "indexed memory access: {:?} {} memidx={}",
@@ -231,8 +589,7 @@ unsafe fn load_start_indexed(
         offset,
         memidx
     );
-    let start = vm_try!(compute_memory_offset(memarg, offset));
-    VMResult::Success((start, memidx))
+    compute_indexed_start(memarg, memidx, offset)
 }
 
 macro_rules! define_indexed_push_load {
@@ -1410,7 +1767,7 @@ pub unsafe fn op_mem_size_indexed_local(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let memidx = (*tail_code).operand.u32;
+    let memidx = decode_memory_index_operand(tail_code);
     let page_size = facade.memory_page_size_local_indexed(memidx);
     vm_try!(facade.push_u32(page_size));
     facade_call_next(tail_code, 1, &mut facade)
@@ -1435,7 +1792,7 @@ pub unsafe fn op_mem_size_indexed_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let memidx = (*tail_code).operand.u32;
+    let memidx = decode_memory_index_operand(tail_code);
     let page_size = facade.memory_page_size_shared_indexed(memidx);
     vm_try!(facade.push_u32(page_size));
     facade_call_next(tail_code, 1, &mut facade)
@@ -1460,7 +1817,7 @@ pub unsafe fn op_mem_grow_indexed_local(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let memidx = (*tail_code).operand.u32;
+    let memidx = decode_memory_index_operand(tail_code);
     let page_size_delta = facade.pop_u32();
     let result = vm_try!(facade.grow_memory_local_indexed(memidx, page_size_delta));
     vm_try!(facade.push_i32(result));
@@ -1486,7 +1843,7 @@ pub unsafe fn op_mem_grow_indexed_shared(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let mut facade = ExecuteContextFacade::new(ctx);
-    let memidx = (*tail_code).operand.u32;
+    let memidx = decode_memory_index_operand(tail_code);
     let page_size_delta = facade.pop_u32();
     let result = vm_try!(facade.grow_memory_shared_indexed(memidx, page_size_delta));
     vm_try!(facade.push_i32(result));
@@ -1526,7 +1883,8 @@ mod tests {
         common::{
             stack::{CachedMemoryKind, CallFrameCache},
             store::InstanceId,
-            ExecuteContext, GcRef, LocalReference, Operand, Store, StoreInner,
+            ExecuteContext, GcRef, LocalMemoryObject, LocalReference, MemoryHandle, Operand, Store,
+            StoreInner,
         },
         runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter},
     };
@@ -1562,6 +1920,10 @@ mod tests {
             std::ptr::null(),
             1,
         )
+    }
+
+    unsafe fn stop_op(_tail_code: *const Instr, _ctx: &mut ExecuteContext) -> VMResult<()> {
+        VMResult::Success(())
     }
 
     #[test]
@@ -1635,5 +1997,105 @@ mod tests {
             unsafe { load_start(program.as_ptr(), &mut facade) },
             VMResult::MemoryIndexOutOfRange
         ));
+    }
+
+    #[test]
+    fn memory_observation_classifies_continue_and_trap() {
+        let store = Store::new();
+        let mut gc = StoreInner::new();
+        let mut pending_effects = 0;
+        let mut pending_ops = VecDeque::new();
+        let local = match gc.alloc_local_memory(LocalMemoryObject::new(1, 1)) {
+            MemoryHandle::Local(id) => id,
+            MemoryHandle::Shared(_) => panic!("expected local memory"),
+        };
+        gc.local_write_bytes(local, 0, &42u32.to_le_bytes())
+            .unwrap();
+
+        let mut continue_stack = Stack::new(32);
+        continue_stack.push_u32(0).unwrap();
+        let mut continue_ctx = ExecuteContext::new(
+            &mut continue_stack,
+            LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            frame(CachedMemoryKind::Local, local.raw()),
+            &store,
+            &mut gc,
+            PendingOpEmitter::from_parts(1, &mut pending_effects, &mut pending_ops),
+            std::ptr::null(),
+            1,
+        );
+        let continue_program = [
+            Instr {
+                operand: Operand {
+                    memarg: MemArg {
+                        align: 2,
+                        offset: 0,
+                    },
+                },
+            },
+            Instr { op: stop_op },
+        ];
+        let continue_pending_before = continue_ctx.pending_len();
+        let continue_result = unsafe { op_i32_load(continue_program.as_ptr(), &mut continue_ctx) };
+        let continue_outcome = crate::common::formal::core_outcome_from_vm_result_with_pending(
+            &continue_result,
+            continue_pending_before,
+            continue_ctx.pending_len(),
+            continue_ctx
+                .pending_code_delta(continue_pending_before)
+                .unwrap_or(None),
+        )
+        .unwrap();
+        continue_result.unwrap();
+        assert_eq!(
+            continue_outcome,
+            crate::common::formal::CoreOutcome::Continue
+        );
+        assert_eq!(ExecuteContextFacade::new(&mut continue_ctx).pop_u32(), 42);
+
+        let mut trap_stack = Stack::new(16);
+        trap_stack.push_u32(1).unwrap();
+        let mut trap_ctx = ExecuteContext::new(
+            &mut trap_stack,
+            LocalReference {
+                local_top: 0,
+                local_size: 0,
+            },
+            frame(CachedMemoryKind::Local, local.raw()),
+            &store,
+            &mut gc,
+            PendingOpEmitter::from_parts(1, &mut pending_effects, &mut pending_ops),
+            std::ptr::null(),
+            1,
+        );
+        let trap_program = [Instr {
+            operand: Operand {
+                memarg: MemArg {
+                    align: 0,
+                    offset: u32::MAX,
+                },
+            },
+        }];
+        let trap_pending_before = trap_ctx.pending_len();
+        let trap_result = unsafe { op_i32_load(trap_program.as_ptr(), &mut trap_ctx) };
+        let trap_outcome = crate::common::formal::core_outcome_from_vm_result_with_pending(
+            &trap_result,
+            trap_pending_before,
+            trap_ctx.pending_len(),
+            trap_ctx
+                .pending_code_delta(trap_pending_before)
+                .unwrap_or(None),
+        )
+        .unwrap();
+        assert!(matches!(trap_result, VMResult::MemoryIndexOutOfRange));
+        assert_eq!(
+            trap_outcome,
+            crate::common::formal::CoreOutcome::Trap(
+                crate::common::formal::TrapCode::MemoryIndexOutOfRange,
+            )
+        );
     }
 }
