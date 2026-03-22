@@ -1,277 +1,4 @@
 use super::*;
-use vstd::prelude::*;
-
-verus! {
-
-#[allow(dead_code)]
-pub(crate) enum CallStepWitnessParts {
-    Call { function_id: u32, return_addr: nat, is_return_call: bool },
-    CallIndirect {
-        table_id: u32,
-        elem_index: nat,
-        expected_type_id: u32,
-        return_addr: nat,
-        is_return_call: bool,
-    },
-}
-
-#[allow(dead_code)]
-pub(crate) open spec fn call_witness_for_handler(
-    function_id: u32,
-    return_addr: nat,
-    is_return_call: bool,
-) -> CallStepWitnessParts {
-    CallStepWitnessParts::Call {
-        function_id,
-        return_addr,
-        is_return_call,
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) open spec fn call_indirect_witness_for_handler(
-    table_id: u32,
-    elem_index: nat,
-    expected_type_id: u32,
-    return_addr: nat,
-    is_return_call: bool,
-) -> CallStepWitnessParts {
-    CallStepWitnessParts::CallIndirect {
-        table_id,
-        elem_index,
-        expected_type_id,
-        return_addr,
-        is_return_call,
-    }
-}
-
-pub(crate) open spec fn call_step_from_witness_parts(
-    witness: CallStepWitnessParts,
-) -> crate::common::formal::CallStep {
-    match witness {
-        CallStepWitnessParts::Call {
-            function_id,
-            return_addr,
-            is_return_call,
-        } => crate::common::formal::CallStep::Call {
-            function_id: function_id as nat,
-            return_addr,
-            is_return_call,
-        },
-        CallStepWitnessParts::CallIndirect {
-            table_id,
-            elem_index,
-            expected_type_id,
-            return_addr,
-            is_return_call,
-        } => crate::common::formal::CallStep::CallIndirect {
-            table_id: table_id as nat,
-            elem_index,
-            expected_type_id: expected_type_id as nat,
-            return_addr,
-            is_return_call,
-        },
-    }
-}
-
-pub open spec fn call_continue_cont(
-    before: crate::common::formal::CoreStepState,
-    step: crate::common::formal::CallStep,
-) -> nat {
-    crate::common::formal::spec_step_call(before, step).0.context.cont_addr
-}
-
-pub(crate) open spec fn call_observation_refines_spec_step(
-    before: crate::common::CoreStepStateProjectionParts,
-    step: crate::common::formal::CallStep,
-    after: crate::common::CoreStepStateProjectionParts,
-    outcome: crate::common::formal::CoreOutcome,
-) -> bool {
-    crate::common::runtime_observation_refines_instr(
-        before,
-        crate::common::formal::CoreStepInstr::Call(step),
-        after,
-        outcome,
-    ) && crate::common::observation_task_id_preserved(before, after)
-        && crate::common::core_step_state_from_projection_parts(after).context.cont_addr
-            == call_continue_cont(
-                crate::common::core_step_state_from_projection_parts(before),
-                step,
-            )
-}
-
-proof fn lemma_call_family_state_refines_spec_step(
-    before: crate::common::formal::CoreStepState,
-    step: crate::common::formal::CallStep,
-)
-    ensures
-        crate::common::formal::spec_step(
-            before,
-            crate::common::formal::CoreStepInstr::Call(step),
-        ) == crate::common::formal::spec_step_call(before, step),
-        crate::common::formal::task_id_preserved(
-            before,
-            crate::common::formal::spec_step_call(before, step).0,
-        ),
-        crate::common::formal::spec_step_call(before, step).0.context.cont_addr
-            == call_continue_cont(before, step),
-{
-    assert(
-        crate::common::formal::spec_step(
-            before,
-            crate::common::formal::CoreStepInstr::Call(step),
-        ) == crate::common::formal::spec_step_call(before, step)
-    );
-    assert(crate::common::formal::task_id_preserved(
-        before,
-        crate::common::formal::spec_step_call(before, step).0,
-    ));
-}
-
-pub(crate) proof fn lemma_call_family_refines_spec_step(
-    before: crate::common::formal::CoreStepState,
-    step: crate::common::formal::CallStep,
-)
-    ensures
-        crate::common::formal::spec_step(
-            before,
-            crate::common::formal::CoreStepInstr::Call(step),
-        ) == crate::common::formal::spec_step_call(before, step),
-        crate::common::formal::task_id_preserved(
-            before,
-            crate::common::formal::spec_step_call(before, step).0,
-        ),
-        crate::common::formal::spec_step_call(before, step).0.context.cont_addr
-            == call_continue_cont(before, step),
-{
-    lemma_call_family_state_refines_spec_step(before, step);
-}
-
-pub(crate) proof fn lemma_call_observation_refines_spec_step(
-    before: crate::common::CoreStepStateProjectionParts,
-    step: crate::common::formal::CallStep,
-    after: crate::common::CoreStepStateProjectionParts,
-    outcome: crate::common::formal::CoreOutcome,
-)
-    requires
-        crate::common::runtime_observation_refines_instr(
-            before,
-            crate::common::formal::CoreStepInstr::Call(step),
-            after,
-            outcome,
-        ),
-    ensures
-        call_observation_refines_spec_step(before, step, after, outcome),
-{
-    lemma_call_family_refines_spec_step(
-        crate::common::core_step_state_from_projection_parts(before),
-        step,
-    );
-}
-
-pub(crate) open spec fn call_witness_observation_refines_spec_step(
-    before: crate::common::CoreStepStateProjectionParts,
-    witness: CallStepWitnessParts,
-    after: crate::common::CoreStepStateProjectionParts,
-    outcome: crate::common::formal::CoreOutcome,
-) -> bool {
-    call_observation_refines_spec_step(
-        before,
-        call_step_from_witness_parts(witness),
-        after,
-        outcome,
-    )
-}
-
-pub(crate) proof fn lemma_call_witness_observation_refines_spec_step(
-    before: crate::common::CoreStepStateProjectionParts,
-    witness: CallStepWitnessParts,
-    after: crate::common::CoreStepStateProjectionParts,
-    outcome: crate::common::formal::CoreOutcome,
-)
-    requires
-        crate::common::runtime_observation_refines_instr(
-            before,
-            crate::common::formal::CoreStepInstr::Call(call_step_from_witness_parts(witness)),
-            after,
-            outcome,
-        ),
-    ensures
-        call_witness_observation_refines_spec_step(before, witness, after, outcome),
-{
-    lemma_call_observation_refines_spec_step(
-        before,
-        call_step_from_witness_parts(witness),
-        after,
-        outcome,
-    );
-}
-
-pub(crate) proof fn lemma_call_handler_refines_spec_step(
-    before: crate::common::CoreStepStateProjectionParts,
-    witness: CallStepWitnessParts,
-    after: crate::common::CoreStepStateProjectionParts,
-    outcome: crate::common::formal::CoreOutcome,
-)
-    requires
-        crate::common::runtime_observation_refines_instr(
-            before,
-            crate::common::formal::CoreStepInstr::Call(call_step_from_witness_parts(witness)),
-            after,
-            outcome,
-        ),
-    ensures
-        call_witness_observation_refines_spec_step(before, witness, after, outcome),
-{
-    lemma_call_witness_observation_refines_spec_step(before, witness, after, outcome);
-}
-
-} // verus!
-
-#[inline(always)]
-/// Decode the direct callee function index immediate.
-///
-/// # Safety
-/// - `tail_code` must point to the decoded instruction for the current handler.
-unsafe fn decode_direct_call_funcidx(tail_code: *const Instr) -> u32 {
-    (*tail_code).operand.u32
-}
-
-#[inline(always)]
-/// Decode the table index immediate for `call_indirect`.
-///
-/// # Safety
-/// - `tail_code` must point to the decoded instruction for the current handler.
-unsafe fn decode_indirect_call_tableidx(tail_code: *const Instr) -> usize {
-    (*tail_code).operand.u32 as usize
-}
-
-#[inline(always)]
-/// Decode the expected function-type index immediate for `call_indirect`.
-///
-/// # Safety
-/// - `tail_code` must point to the decoded instruction for the current handler.
-unsafe fn decode_indirect_call_expected_typeidx(tail_code: *const Instr) -> u32 {
-    (*tail_code.offset(1)).operand.u32
-}
-
-#[inline(always)]
-/// Compute the return address for direct-call handlers.
-///
-/// # Safety
-/// - `tail_code` must point to the decoded instruction for the current handler.
-unsafe fn direct_call_return_addr(tail_code: *const Instr) -> *const Instr {
-    tail_code.offset(1)
-}
-
-#[inline(always)]
-/// Compute the return address for indirect-call handlers.
-///
-/// # Safety
-/// - `tail_code` must point to the decoded instruction for the current handler.
-unsafe fn indirect_call_return_addr(tail_code: *const Instr) -> *const Instr {
-    tail_code.offset(2)
-}
 
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
@@ -283,68 +10,89 @@ unsafe fn indirect_call_return_addr(tail_code: *const Instr) -> *const Instr {
 ///
 /// Stack effect: internal runtime call dispatch.
 /// Traps: propagates the trap behavior of the target instruction.
-/// Notes: Resolves the callee, prepares the frame cache, and returns either a concrete instruction pointer or a suspended async host call.
+/// Notes: Resolves the callee, prepares the frame cache, and returns either a concrete instruction pointer or a pending async host call.
 ///
 /// # Safety
 /// - `return_addr` must remain valid for the duration of the helper and must point back into the active decoded instruction stream.
 /// - `ctx` must reference a live execution context for the same store and validated frame layout.
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
-pub(crate) unsafe fn internal_op_call(
+unsafe fn internal_op_call(
     return_addr: *const Instr,
     funcaddr: GcRef,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
-) -> VMResult<*const Instr> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let funcinst = facade.func_by_addr(funcaddr);
-    let (frame, param_types, result_types) = {
-        let gc = facade.gc_ref();
-        let instance = gc.instance(funcinst.instance);
-        let memory0 = instance
-            .memory_slots
-            .first()
-            .copied()
-            .and_then(|slot| slot.handle());
-        let frame = CallFrameCache::from_parts(funcaddr, funcinst, memory0);
-        let module_addr = instance.module_addr;
-        let module = gc.get_module(module_addr);
-        let ft = module
-            .function_types
-            .get_unchecked(funcinst.typeidx.0 as usize);
-        (
-            frame,
-            &ft.0 as *const ResultType,
-            &ft.1 as *const ResultType,
-        )
-    };
+) -> VMResult<CallOutcome> {
+    let funcinst = ctx.func_by_addr(funcaddr).clone();
+    let instance = ctx.gc.instance(funcinst.instance);
+    let memory0 = instance
+        .memory_slots
+        .first()
+        .copied()
+        .and_then(|slot| slot.handle());
+    let frame = CallFrameCache::from_parts(funcaddr, &funcinst, memory0);
+    let module_addr = instance.module_addr;
+    let module = ctx.gc.get_module(module_addr);
+    let typeidx = module
+        .functions
+        .get(funcinst.funcidx as usize)
+        .unwrap_unchecked();
+    let ft = &module.function_types[typeidx.0 as usize];
     trace!(
-        "op_call_internal: {:?}({:?}) {funcaddr:?}",
-        funcinst.funcidx,
-        facade.gc_ref_for_instance(funcinst.instance)
+        "op_call_internal: {:?}({module_addr:?})  {funcaddr:?}",
+        ctx.gc.gc_ref_for_instance(funcinst.instance)
     );
-    let param_size = funcinst.param_size();
+    let mut param_size = 0usize;
+    for param in ft.0.iter() {
+        param_size += param.stack_size().usize();
+    }
+    let is_host_func = funcinst.is_host_func();
     if funcinst.is_host_func() {
         if is_return_call {
-            vm_try!(facade.enter_function_return_call(param_size, 0, frame));
+            let local_reference =
+                vm_try!(ctx
+                    .stack
+                    .function_return_call(&ctx.local_reference, param_size, 0, frame));
+            ctx.set_local_reference(local_reference);
         } else {
-            vm_try!(facade.enter_function_call(param_size, 0, frame, return_addr));
+            let local_reference = vm_try!(ctx.stack.function_call(
+                param_size,
+                0,
+                frame,
+                ctx.local_reference,
+                return_addr,
+                ctx.gc,
+            ));
+            ctx.set_local_reference(local_reference);
         }
-        vm_try!(unsafe {
-            invoke_host_function(return_addr, &mut facade, param_types, result_types)
-        });
-        VMResult::Success(std::ptr::null())
+        invoke_host_function(return_addr, ctx)
     } else {
-        let code_ptr = funcinst
-            .code_pointer()
-            .expect("wasm function must expose a code pointer");
-        let local_size = funcinst.local_size();
+        let (locals, code_offset) = funcinst.locals_and_code_offset(ctx.gc);
         if is_return_call {
-            vm_try!(facade.enter_function_return_call(param_size, local_size, frame,));
+            let local_reference = vm_try!(ctx.stack.function_return_call(
+                &ctx.local_reference,
+                param_size,
+                locals.byte_size(),
+                frame
+            ));
+            ctx.set_local_reference(local_reference);
         } else {
-            vm_try!(facade.enter_function_call(param_size, local_size, frame, return_addr,));
+            let local_reference = vm_try!(ctx.stack.function_call(
+                param_size,
+                locals.byte_size(),
+                frame,
+                ctx.local_reference,
+                return_addr,
+                ctx.gc,
+            ));
+            ctx.set_local_reference(local_reference);
         }
 
-        VMResult::Success(code_ptr)
+        let ptr = funcinst
+            .code_pointer()
+            .expect("wasm function must expose a code pointer")
+            .wrapping_add(code_offset);
+        debug_assert!(!is_host_func);
+        VMResult::Success(CallOutcome::Immediate(ptr))
     }
 }
 
@@ -364,18 +112,15 @@ pub(crate) unsafe fn internal_op_call(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let funcidx = decode_direct_call_funcidx(tail_code);
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let funcidx = (*tail_code).operand.u32;
     let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(
-        direct_call_return_addr(tail_code),
-        funcaddr,
-        ctx,
-        false,
-    ));
-    if ptr.is_null() {
-        VMResult::Success(())
-    } else {
-        call_next(ptr, 0, ctx)
+    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
     }
 }
 
@@ -412,18 +157,15 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let funcidx = decode_direct_call_funcidx(tail_code);
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let funcidx = (*tail_code).operand.u32;
     let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    let ptr = vm_try!(internal_op_call(
-        direct_call_return_addr(tail_code),
-        funcaddr,
-        ctx,
-        true,
-    ));
-    if ptr.is_null() {
-        VMResult::Success(())
-    } else {
-        call_next(ptr, 0, ctx)
+    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
     }
 }
 
@@ -461,39 +203,48 @@ pub unsafe fn op_return_call_import(
 /// - `tail_code` must point to the decoded instruction stream for the current active frame.
 /// - `ctx` must reference a live execution context for the same store and validated frame layout.
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
-unsafe fn resolve_indirect_call_target(
+unsafe fn internal_op_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-) -> VMResult<GcRef> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let i = facade.pop_u32();
-    let tableidx = decode_indirect_call_tableidx(tail_code);
+    is_return_call: bool,
+) -> VMResult<CallOutcome> {
+    let i = ctx.stack.pop_u32();
+    let tableidx = (*tail_code).operand.u32 as usize;
     let table_addr = *vm_try!(VMResult::from_option(
-        facade.instance().tables.as_slice().get(tableidx),
+        ctx.instance().tables.as_slice().get(tableidx),
         || { VMResult::TableIndexOutOfRange }
     ));
-    let func_addr = vm_try!(VMResult::from_option(
-        facade.table_get_value(table_addr, i as usize),
-        || { VMResult::TableIndexOutOfRange }
-    ));
-    trace!("internal_op_call_indirect: {tableidx} {table_addr:?} {func_addr}");
+    let table = ctx.gc.get_table(table_addr);
+    let func_addr = *vm_try!(VMResult::from_option(table.1.get(i as usize), || {
+        VMResult::TableIndexOutOfRange
+    }));
+    trace!("internal_op_call_indirect: {tableidx} {table_addr:?} {func_addr} {table:?}");
     if func_addr == TABLE_UNINITIALIZED {
         return VMResult::TableUninitialized;
     }
     let func_addr = GcRef(func_addr);
-    let actual_ft = facade.function_type_by_addr(func_addr) as *const FuncType;
-    let expected_typeidx = decode_indirect_call_expected_typeidx(tail_code);
-    let expected_ft = facade
-        .module_function_type(expected_typeidx)
-        .expect("validated call_indirect type index must exist")
-        as *const FuncType;
-    trace!("{:?} {:?}", unsafe { &*actual_ft }, unsafe {
-        &*expected_ft
-    });
-    if unsafe { &*actual_ft } != unsafe { &*expected_ft } {
+    let funcinst = ctx.gc.get_func(func_addr);
+    let instance = ctx.gc.instance(funcinst.instance);
+    let module = ctx.gc.get_module(instance.module_addr);
+    let actual_typeidx = module.functions.get(funcinst.funcidx as usize).unwrap();
+    let actual_ft = &module.function_types[actual_typeidx.0 as usize];
+    let expected_typeidx = (*tail_code.offset(1)).operand.u32;
+    let expected_ft = ctx
+        .module()
+        .function_types
+        .get(expected_typeidx as usize)
+        .unwrap();
+    trace!("{:?} {:?}", actual_ft, expected_ft);
+    if actual_ft != expected_ft {
         return VMResult::CallIndirectInvalidType;
     }
-    VMResult::Success(func_addr)
+    let outcome = vm_try!(internal_op_call(
+        tail_code.offset(2),
+        func_addr,
+        ctx,
+        is_return_call
+    ));
+    VMResult::Success(outcome)
 }
 
 /// WebAssembly `call_indirect`.
@@ -512,17 +263,13 @@ unsafe fn resolve_indirect_call_target(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, ctx));
-    let ptr = vm_try!(internal_op_call(
-        indirect_call_return_addr(tail_code),
-        func_addr,
-        ctx,
-        false,
-    ));
-    if ptr.is_null() {
-        VMResult::Success(())
-    } else {
-        call_next(ptr, 0, ctx)
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    match vm_try!(internal_op_call_indirect(tail_code, ctx, false)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
     }
 }
 
@@ -543,17 +290,13 @@ pub unsafe fn op_return_call_indirect(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let func_addr = vm_try!(resolve_indirect_call_target(tail_code, ctx));
-    let ptr = vm_try!(internal_op_call(
-        indirect_call_return_addr(tail_code),
-        func_addr,
-        ctx,
-        true,
-    ));
-    if ptr.is_null() {
-        VMResult::Success(())
-    } else {
-        call_next(ptr, 0, ctx)
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    match vm_try!(internal_op_call_indirect(tail_code, ctx, true)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
     }
 }
 
@@ -576,14 +319,8 @@ pub unsafe fn special_start_function_call(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let function_type = unsafe { &*current_function_type_ptr(&facade) };
-    unsafe {
-        invoke_host_function(
-            &VM_END as *const Instr,
-            &mut facade,
-            &function_type.0,
-            &function_type.1,
-        )
+    match vm_try!(invoke_host_function(&VM_END as *const Instr, ctx)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
     }
 }

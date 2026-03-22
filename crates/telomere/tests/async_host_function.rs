@@ -5,31 +5,101 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Mutex,
 };
+use std::{collections::VecDeque, future::Future, pin::Pin};
 use telomere::{
     common::{
-        AsyncHostCallContext, AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule,
-        FuncType, HostCallContext, HostCallControl, ValType,
+        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, FuncType,
+        ValType,
     },
     get_global, instantiate_native_async_module, link_async_host_function_with_export_name,
-    link_async_host_function_with_function_idx, link_host_function_with_function_idx, Registry,
+    link_async_host_function_with_function_idx, link_host_function_with_function_idx, Completion,
+    CompletionPayload, ExecutionDriver, HostCallPending, MemoryWaitPending, PendingOp, Registry,
     ResultValue, Store, StoreState, VMResult, WasmValue,
 };
+
+struct MockDriver {
+    submitted: usize,
+    inflight: VecDeque<Pin<Box<dyn Future<Output = Completion>>>>,
+}
+
+impl MockDriver {
+    fn new() -> Self {
+        Self {
+            submitted: 0,
+            inflight: VecDeque::new(),
+        }
+    }
+}
+
+impl ExecutionDriver for MockDriver {
+    fn submit(&mut self, op: PendingOp) {
+        self.submitted += 1;
+        match op {
+            PendingOp::HostCall(HostCallPending { task_id, future }) => {
+                self.inflight.push_back(Box::pin(async move {
+                    Completion {
+                        task_id,
+                        payload: CompletionPayload::HostCall {
+                            result: future.await,
+                        },
+                    }
+                }));
+            }
+            PendingOp::MemoryWait(MemoryWaitPending {
+                task_id,
+                shared,
+                wait,
+                timeout_ns,
+                fp,
+            }) => {
+                self.inflight.push_back(Box::pin(async move {
+                    let value = wait.wait_result(shared, timeout_ns).await;
+                    Completion {
+                        task_id,
+                        payload: CompletionPayload::ResumeWithI32 { fp, value },
+                    }
+                }));
+            }
+            PendingOp::WasmAsync(op) => {
+                panic!(
+                    "unexpected wasm async pending op for task {} in mock driver",
+                    op.task_id
+                );
+            }
+        }
+    }
+
+    fn next_completion<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<Completion>> + 'a>> {
+        Box::pin(async move {
+            let future = self.inflight.pop_front()?;
+            Some(future.await)
+        })
+    }
+}
 
 struct ScalarState {
     calls: AtomicUsize,
 }
 
-fn async_add_one(ctx: AsyncHostCallContext) -> AsyncHostFuture {
-    let state = ctx.store_state;
-    let value = match ctx.params.iter().next() {
-        Some(WasmValue::I32(value)) => *value,
-        other => panic!("expected i32 param, got {other:?}"),
-    };
+fn async_add_one(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let state = ctx.store.state;
+    let value = i32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), 0, 4)
+            .try_into()
+            .unwrap(),
+    );
+    let slot = ctx.return_slot();
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<ScalarState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
-        VMResult::Success(ResultValue::new(vec![WasmValue::I32(value + 1)]))
+        slot.write(&(value + 1).to_le_bytes());
+        VMResult::Success(return_addr)
     })
 }
 
@@ -38,25 +108,26 @@ struct RoundTripState {
     seen: Mutex<Vec<(i32, i64)>>,
 }
 
-fn async_swap_results(ctx: AsyncHostCallContext) -> AsyncHostFuture {
-    let state = ctx.store_state;
-    let lhs = match ctx.params.iter().next() {
-        Some(WasmValue::I32(value)) => *value,
-        other => panic!("expected i32 lhs, got {other:?}"),
-    };
-    let rhs = match ctx.params.iter().nth(1) {
-        Some(WasmValue::I64(value)) => *value,
-        other => panic!("expected i64 rhs, got {other:?}"),
-    };
+fn async_swap_results(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let state = ctx.store.state;
+    let local_ref = ctx.local_reference();
+    let lhs = i32::from_le_bytes(ctx.stack.local_bytes(&local_ref, 0, 4).try_into().unwrap());
+    let rhs = i64::from_le_bytes(ctx.stack.local_bytes(&local_ref, 4, 8).try_into().unwrap());
+    let slot = ctx.return_slot();
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 12, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<RoundTripState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
         state.seen.lock().unwrap().push((lhs, rhs));
-        VMResult::Success(ResultValue::new(vec![
-            WasmValue::I64(rhs),
-            WasmValue::I32(lhs),
-        ]))
+        let mut result = [0u8; 12];
+        result[0..8].copy_from_slice(&rhs.to_le_bytes());
+        result[8..12].copy_from_slice(&lhs.to_le_bytes());
+        slot.write(&result);
+        VMResult::Success(return_addr)
     })
 }
 
@@ -64,15 +135,19 @@ struct StartState {
     calls: AtomicUsize,
 }
 
-fn async_init(ctx: AsyncHostCallContext) -> AsyncHostFuture {
-    let state = ctx.store_state;
+fn async_init(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let state = ctx.store.state;
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         unsafe { state.get::<StartState>() }
             .unwrap()
             .calls
             .fetch_add(1, Ordering::SeqCst);
-        VMResult::Success(ResultValue::new(vec![]))
+        VMResult::Success(return_addr)
     })
 }
 
@@ -80,35 +155,53 @@ struct CallIndirectState {
     calls: AtomicUsize,
 }
 
-fn async_double(ctx: AsyncHostCallContext) -> AsyncHostFuture {
-    let state = ctx.store_state;
-    let value = match ctx.params.iter().next() {
-        Some(WasmValue::I32(value)) => *value,
-        other => panic!("expected i32 param, got {other:?}"),
-    };
+fn async_double(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let state = ctx.store.state;
+    let value = i32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), 0, 4)
+            .try_into()
+            .unwrap(),
+    );
+    let slot = ctx.return_slot();
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         let state = unsafe { state.get::<CallIndirectState>() }.unwrap();
         state.calls.fetch_add(1, Ordering::SeqCst);
-        VMResult::Success(ResultValue::new(vec![WasmValue::I32(value * 2)]))
+        slot.write(&(value * 2).to_le_bytes());
+        VMResult::Success(return_addr)
     })
 }
 
-fn async_fail(_ctx: AsyncHostCallContext) -> AsyncHostFuture {
+fn async_fail(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let (_prev_local_ref, _return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
+    ctx.set_local_reference(_prev_local_ref);
     Box::pin(async move {
         tokio::task::yield_now().await;
         VMResult::InvalidOperand
     })
 }
 
-fn sync_add_two(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let value = match ctx.param_i32(0) {
-        Some(value) => value,
-        other => panic!("expected i32 param, got {other:?}"),
-    };
-    VMResult::Success(HostCallControl::Return(ResultValue::new(vec![
-        WasmValue::I32(value + 2),
-    ])))
+fn sync_add_two(ctx: &mut ExecuteContext) -> VMResult<*const telomere::common::Instr> {
+    let value = i32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), 0, 4)
+            .try_into()
+            .unwrap(),
+    );
+    let slot = ctx.return_slot();
+    slot.write(&(value + 2).to_le_bytes());
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
 }
 
 #[tokio::test]
@@ -398,4 +491,56 @@ async fn async_import_error_propagates_to_caller() {
     let result =
         telomere::run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
     assert!(matches!(result, VMResult::InvalidOperand));
+}
+
+#[tokio::test]
+async fn async_import_can_run_with_custom_driver() {
+    let state = Box::leak(Box::new(ScalarState {
+        calls: AtomicUsize::new(0),
+    }));
+    let store = Store::new_with_state(StoreState::from_static(state));
+    let mut registry = Registry::new();
+    let host = instantiate_native_async_module(
+        AsyncNativeModule {
+            functions: vec![AsyncHostFunctionDefinition {
+                name: Some("add-one".to_owned()),
+                signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                fp: async_add_one,
+            }],
+        },
+        &store,
+        &registry,
+    )
+    .await
+    .unwrap();
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "add-one" (func $add-one (param i32) (result i32)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $add-one))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let mut driver = MockDriver::new();
+    let result = telomere::run_module_function_with_driver(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(41)]),
+        &mut driver,
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I32(42)])
+    ));
+    assert_eq!(driver.submitted, 1);
+    assert_eq!(state.calls.load(Ordering::SeqCst), 1);
 }

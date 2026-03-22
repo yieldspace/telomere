@@ -2,9 +2,9 @@
 
 use super::{
     gc::GcRef,
-    memory::{AtomicRmwOp, LinearMemoryProjection, LocalMemoryObject, SharedMemoryObject},
+    memory::{AtomicRmwOp, LocalMemoryObject, SharedMemoryObject},
     AsyncHostFunction, Data, Elem, ExportSection, FuncType, GlobalType, HostFunction, Instr,
-    LocalsData, MemType, RefType, Stack, TableType, TypeIdx, VMResult,
+    LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -18,7 +18,6 @@ use std::{
         Arc, Weak,
     },
 };
-use vstd::prelude::*;
 
 thread_local! {
     static ACTIVE_STORE_RUNTIME: RefCell<Vec<(*const (), *mut StoreInner)>> = const { RefCell::new(Vec::new()) };
@@ -157,9 +156,6 @@ impl fmt::Debug for FunctionBody {
 pub struct FunctionInstanceData {
     pub instance: InstanceId,
     pub funcidx: u32,
-    pub typeidx: TypeIdx,
-    pub param_size: u32,
-    pub local_size: u32,
     pub body: FunctionBody,
 }
 
@@ -180,16 +176,6 @@ impl FunctionInstanceData {
             FunctionBody::Wasm { locals, .. } => locals.clone(),
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => LocalsData::default(),
         }
-    }
-
-    #[inline(always)]
-    pub fn param_size(&self) -> usize {
-        self.param_size as usize
-    }
-
-    #[inline(always)]
-    pub fn local_size(&self) -> usize {
-        self.local_size as usize
     }
 
     pub(crate) fn code(&self) -> Option<&[Instr]> {
@@ -262,54 +248,6 @@ impl GlobalValue {
             Self::Ref(raw) => unsafe {
                 std::slice::from_raw_parts_mut(raw as *mut u32 as *mut u8, 4)
             },
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GlobalProjection {
-    pub(crate) bytes: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TableProjection {
-    pub(crate) reftype: RefType,
-    pub(crate) elements: Vec<u32>,
-    pub(crate) max_len: Option<u32>,
-}
-
-verus! {
-
-#[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) struct TableProjectionParts {
-    pub(crate) elements: Vec<u32>,
-    pub(crate) max_len: Option<u32>,
-}
-
-pub(crate) open spec fn table_view_from_projection_parts(
-    parts: TableProjectionParts,
-) -> crate::common::formal::TableView {
-    crate::common::formal::TableView {
-        entries: parts.elements@,
-        max_len: crate::common::formal::option_u32_to_nat(parts.max_len),
-    }
-}
-
-} // verus!
-
-impl TableProjection {
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn proof_ready(&self) -> bool {
-        self.max_len
-            .is_none_or(|max_len| self.elements.len() <= max_len as usize)
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn formal_builder_parts(&self) -> TableProjectionParts {
-        TableProjectionParts {
-            elements: self.elements.clone(),
-            max_len: self.max_len,
         }
     }
 }
@@ -708,21 +646,6 @@ impl StoreInner {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Global);
         self.globals[index].as_bytes_mut()
-    }
-
-    pub(crate) fn global_projection(&self, addr: GcRef) -> GlobalProjection {
-        GlobalProjection {
-            bytes: self.get_global(addr).to_vec(),
-        }
-    }
-
-    pub(crate) fn table_projection(&mut self, addr: GcRef) -> TableProjection {
-        let table = self.get_table(addr);
-        TableProjection {
-            reftype: table.0.reftype,
-            elements: table.1.clone(),
-            max_len: table.0.limits.max,
-        }
     }
 
     pub(crate) fn copy_object(&mut self, item: GcRef) -> GcRef {
@@ -1397,14 +1320,6 @@ impl StoreInner {
     }
 
     #[inline(always)]
-    pub(crate) fn memory_projection(&self, handle: MemoryHandle) -> LinearMemoryProjection {
-        match handle {
-            MemoryHandle::Local(id) => self.local_memory(id).projection(),
-            MemoryHandle::Shared(id) => self.shared_memory(id).projection().memory,
-        }
-    }
-
-    #[inline(always)]
     pub(crate) fn grow_memory(
         &mut self,
         handle: MemoryHandle,
@@ -1734,7 +1649,7 @@ pub(crate) fn clear_active_root_slot_for_identity(_identity: &Weak<()>, _slot: u
     false
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 pub struct StoreState(usize);
 
 impl StoreState {
@@ -1777,7 +1692,7 @@ mod tests {
         LocalMemoryObject, MemoryHandle, SharedMemoryId, SharedMemoryObject, Stack, Store,
         StoreInner, StoreState, VMResult,
     };
-    use crate::common::{Limits, RefType, TableType, PAGE_SIZE, TABLE_UNINITIALIZED};
+    use crate::common::PAGE_SIZE;
 
     fn local_id(handle: MemoryHandle) -> super::LocalMemoryId {
         match handle {
@@ -1869,25 +1784,6 @@ mod tests {
             1
         );
 
-        let local_projection = store.memory_projection(MemoryHandle::Local(local));
-        let shared_projection = store.memory_projection(MemoryHandle::Shared(shared));
-        assert!(local_projection.proof_ready());
-        assert!(shared_projection.proof_ready());
-        assert_eq!(local_projection.current_pages, 2);
-        assert_eq!(local_projection.max_pages, 3);
-        assert!(!local_projection.shared);
-        assert_eq!(shared_projection.current_pages, 2);
-        assert_eq!(shared_projection.max_pages, 3);
-        assert!(shared_projection.shared);
-        assert_eq!(
-            &local_projection.bytes[0..16],
-            &[1, 2, 3, 4, 0, 0, 0, 0, 1, 2, 3, 4, 0xaa, 0xaa, 0xaa, 0xaa]
-        );
-        assert_eq!(
-            &shared_projection.bytes[0..20],
-            &[9, 8, 7, 6, 0, 0, 0, 0, 9, 8, 7, 6, 0xbb, 0xbb, 0xbb, 0xbb, 1, 2, 3, 4]
-        );
-
         assert_eq!(
             store
                 .local_memory(local)
@@ -1930,35 +1826,6 @@ mod tests {
                 .with_memory(|memory| memory.read_u8_array::<8>(PAGE_SIZE).unwrap()),
             [0; 8]
         );
-    }
-
-    #[test]
-    fn table_projection_tracks_max_len_and_validator() {
-        let mut store = StoreInner::new();
-        let table_addr = store.new_table(TableType {
-            reftype: RefType::FuncRef,
-            limits: Limits {
-                min: 2,
-                max: Some(3),
-            },
-        });
-        let projection = store.table_projection(table_addr);
-        assert_eq!(projection.reftype, RefType::FuncRef);
-        assert_eq!(
-            projection.elements,
-            vec![TABLE_UNINITIALIZED, TABLE_UNINITIALIZED]
-        );
-        assert_eq!(projection.max_len, Some(3));
-        assert!(projection.proof_ready());
-
-        let parts = projection.formal_builder_parts();
-        assert_eq!(parts.elements, projection.elements);
-        assert_eq!(parts.max_len, Some(3));
-
-        let mut broken = projection.clone();
-        broken.elements.push(TABLE_UNINITIALIZED);
-        broken.elements.push(TABLE_UNINITIALIZED);
-        assert!(!broken.proof_ready());
     }
 
     #[test]

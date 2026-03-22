@@ -12,8 +12,8 @@ use std::{
 };
 use telomere::{
     common::{
-        ExportDesc, FuncType, HostCallContext, HostCallControl, HostFunctionDefinition, ImportDesc,
-        MemArg, Memory, NativeModule, StoreState, VMResult, ValType,
+        ExecuteContext, ExportDesc, FuncType, HostFunctionDefinition, ImportDesc, Instr, MemArg,
+        Memory, NativeModule, StoreState, VMResult, ValType,
     },
     runtime::instantiate_native_module,
     Module, Registry, ResultValue, Store,
@@ -119,6 +119,22 @@ struct CoreWasiPreview1State {
     monotonic_origin: Instant,
     exit_code: AtomicU32,
 }
+
+unsafe fn proc_exit_wait_for_effects(
+    _tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    if ctx.effect.get_pending_count() != 0 {
+        ctx.cont = PROC_EXIT_PROGRAM.as_ptr();
+        return VMResult::Success(());
+    }
+    ctx.cont = std::ptr::null();
+    VMResult::Success(())
+}
+
+const PROC_EXIT_PROGRAM: [Instr; 1] = [Instr {
+    op: proc_exit_wait_for_effects,
+}];
 
 impl CoreWasiPreview1State {
     fn new(path: &Path, args: &[String], stdio: StdioMode) -> Self {
@@ -397,24 +413,33 @@ fn preview1_state(store: &Store) -> &CoreWasiPreview1State {
         .expect("core preview1 host functions require CoreWasiPreview1State in StoreState")
 }
 
-fn param_u32(ctx: &HostCallContext<'_, '_>, index: usize) -> u32 {
-    match ctx.param_i32(index) {
-        Some(value) => value as u32,
-        other => panic!("expected i32 param at {index}, got {other:?}"),
-    }
+fn local_u32(ctx: &ExecuteContext, local_addr: usize) -> u32 {
+    u32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), local_addr, 4)
+            .try_into()
+            .expect("u32 arguments must occupy 4 bytes"),
+    )
 }
 
-fn param_i64(ctx: &HostCallContext<'_, '_>, index: usize) -> i64 {
-    match ctx.param_i64(index) {
-        Some(value) => value,
-        other => panic!("expected i64 param at {index}, got {other:?}"),
-    }
+fn local_i64(ctx: &ExecuteContext, local_addr: usize) -> i64 {
+    i64::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), local_addr, 8)
+            .try_into()
+            .expect("i64 arguments must occupy 8 bytes"),
+    )
 }
 
-fn return_errno(errno: u32) -> VMResult<HostCallControl> {
-    VMResult::Success(HostCallControl::Return(ResultValue::new(vec![
-        telomere::WasmValue::I32(errno as i32),
-    ])))
+fn return_errno(ctx: &mut ExecuteContext, errno: u32) -> VMResult<*const Instr> {
+    ctx.return_slot().write(&errno.to_le_bytes());
+    let (prev_local_ref, return_addr) = ctx.stack.function_return_in_place(
+        &ctx.local_reference,
+        std::mem::size_of::<u32>(),
+        ctx.gc,
+    );
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
 }
 
 fn write_guest_u32(memory: &mut Memory, ptr: u32, value: u32) -> Result<(), u32> {
@@ -499,80 +524,86 @@ fn write_guest_fdstat(memory: &mut Memory, ptr: u32, rights_base: u64) -> Result
     Ok(())
 }
 
-fn host_clock_time_get(mut ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let clock_id = param_u32(&ctx, 0);
-    let _precision = param_i64(&ctx, 1);
-    let time_ptr = param_u32(&ctx, 2);
-    let errno = match preview1_state(ctx.store()).clock_time_ns(clock_id) {
+fn host_clock_time_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let clock_id = local_u32(ctx, 0);
+    let _precision = local_i64(ctx, 4);
+    let time_ptr = local_u32(ctx, 12);
+    let errno = match preview1_state(ctx.store).clock_time_ns(clock_id) {
         Ok(value) => {
-            match ctx.with_caller_memory(|memory| write_guest_u64(memory, time_ptr, value)) {
-                Some(Ok(())) => ERRNO_SUCCESS,
-                Some(Err(errno)) => errno,
-                None => ERRNO_FAULT,
+            if let Some(memory) = ctx.caller_memory() {
+                write_guest_u64(memory, time_ptr, value)
+                    .map(|_| ERRNO_SUCCESS)
+                    .unwrap_or_else(|errno| errno)
+            } else {
+                ERRNO_FAULT
             }
         }
         Err(errno) => errno,
     };
-    return_errno(errno)
+    return_errno(ctx, errno)
 }
 
-fn host_args_sizes_get(mut ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let args = preview1_state(ctx.store()).args.clone();
-    let argc_ptr = param_u32(&ctx, 0);
-    let argv_buf_size_ptr = param_u32(&ctx, 1);
+fn host_args_sizes_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let state = preview1_state(ctx.store);
+    let argc_ptr = local_u32(ctx, 0);
+    let argv_buf_size_ptr = local_u32(ctx, 4);
 
-    let errno = match ctx.with_caller_memory(|memory| {
-        let argc = args.len() as u32;
-        let argv_buf_size = args.iter().map(|arg| arg.len() as u32).sum::<u32>();
+    let errno = if let Some(memory) = ctx.caller_memory() {
+        let argc = state.args.len() as u32;
+        let argv_buf_size = state.args.iter().map(|arg| arg.len() as u32).sum::<u32>();
         write_guest_u32(memory, argc_ptr, argc)
             .and_then(|_| write_guest_u32(memory, argv_buf_size_ptr, argv_buf_size))
-    }) {
-        Some(Ok(())) => ERRNO_SUCCESS,
-        Some(Err(errno)) => errno,
-        None => ERRNO_FAULT,
+            .map(|_| ERRNO_SUCCESS)
+            .unwrap_or_else(|errno| errno)
+    } else {
+        ERRNO_FAULT
     };
 
-    return_errno(errno)
+    return_errno(ctx, errno)
 }
 
-fn host_args_get(mut ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let args = preview1_state(ctx.store()).args.clone();
-    let argv_ptr = param_u32(&ctx, 0);
-    let argv_buf_ptr = param_u32(&ctx, 1);
+fn host_args_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let state = preview1_state(ctx.store);
+    let argv_ptr = local_u32(ctx, 0);
+    let argv_buf_ptr = local_u32(ctx, 4);
 
-    let errno = match ctx.with_caller_memory(|memory| {
+    let errno = if let Some(memory) = ctx.caller_memory() {
         let mut cursor = argv_buf_ptr;
-        args.iter().enumerate().try_for_each(|(index, arg)| {
-            let entry_ptr = argv_ptr
-                .checked_add((index as u32) * 4)
-                .ok_or(ERRNO_FAULT)?;
-            write_guest_u32(memory, entry_ptr, cursor)?;
-            write_guest_bytes(memory, cursor, arg)?;
-            cursor = cursor.checked_add(arg.len() as u32).ok_or(ERRNO_FAULT)?;
-            Ok(())
-        })
-    }) {
-        Some(Ok(())) => ERRNO_SUCCESS,
-        Some(Err(errno)) => errno,
-        None => ERRNO_FAULT,
+        state
+            .args
+            .iter()
+            .enumerate()
+            .try_for_each(|(index, arg)| {
+                let entry_ptr = argv_ptr
+                    .checked_add((index as u32) * 4)
+                    .ok_or(ERRNO_FAULT)?;
+                write_guest_u32(memory, entry_ptr, cursor)?;
+                write_guest_bytes(memory, cursor, arg)?;
+                cursor = cursor.checked_add(arg.len() as u32).ok_or(ERRNO_FAULT)?;
+                Ok(())
+            })
+            .map(|_| ERRNO_SUCCESS)
+            .unwrap_or_else(|errno| errno)
+    } else {
+        ERRNO_FAULT
     };
 
-    return_errno(errno)
+    return_errno(ctx, errno)
 }
 
-fn host_fd_write(mut ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let state = preview1_state(ctx.store());
-    let fd = param_u32(&ctx, 0);
-    let iovs_ptr = param_u32(&ctx, 1);
-    let iovs_len = param_u32(&ctx, 2);
-    let nwritten_ptr = param_u32(&ctx, 3);
+fn host_fd_write(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let state = preview1_state(ctx.store);
+    let fd = local_u32(ctx, 0);
+    let iovs_ptr = local_u32(ctx, 4);
+    let iovs_len = local_u32(ctx, 8);
+    let nwritten_ptr = local_u32(ctx, 12);
 
     let output = match state.descriptor_for_fd(fd) {
         Ok(StdioDescriptor {
             output: Some(output),
             ..
         }) => output,
-        _ => return return_errno(ERRNO_BADF),
+        _ => return return_errno(ctx, ERRNO_BADF),
     };
 
     let mut total = 0u32;
@@ -581,82 +612,86 @@ fn host_fd_write(mut ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> 
             let base = iovs_ptr
                 .checked_add(index.checked_mul(8).ok_or(ERRNO_FAULT)?)
                 .ok_or(ERRNO_FAULT)?;
-            let (ptr, len) = match ctx.with_caller_memory(|memory| {
-                Ok::<_, u32>((
+            let (ptr, len) = {
+                let memory = ctx.caller_memory().ok_or(ERRNO_FAULT)?;
+                (
                     read_guest_u32(memory, base)?,
                     read_guest_u32(memory, base + 4)?,
-                ))
-            }) {
-                Some(Ok(pair)) => pair,
-                Some(Err(errno)) => return Err(errno),
-                None => return Err(ERRNO_FAULT),
+                )
             };
-            match ctx.with_caller_memory(|memory| {
+            {
+                let memory = ctx.caller_memory().ok_or(ERRNO_FAULT)?;
                 let bytes = read_guest_bytes(memory, ptr, len)?;
-                output.write_all(bytes).map_err(|_| ERRNO_IO)
-            }) {
-                Some(Ok(())) => {}
-                Some(Err(errno)) => return Err(errno),
-                None => return Err(ERRNO_FAULT),
+                output.write_all(bytes).map_err(|_| ERRNO_IO)?;
             }
             total = total.checked_add(len).ok_or(ERRNO_FAULT)?;
         }
         output.flush().map_err(|_| ERRNO_IO)?;
-        match ctx.with_caller_memory(|memory| write_guest_u32(memory, nwritten_ptr, total)) {
-            Some(Ok(())) => Ok(ERRNO_SUCCESS),
-            Some(Err(errno)) => Err(errno),
-            None => Err(ERRNO_FAULT),
-        }
+        let memory = ctx.caller_memory().ok_or(ERRNO_FAULT)?;
+        write_guest_u32(memory, nwritten_ptr, total)?;
+        Ok(ERRNO_SUCCESS)
     })()
     .unwrap_or_else(|errno| errno);
 
-    return_errno(errno)
+    return_errno(ctx, errno)
 }
 
-fn host_fd_close(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let fd = param_u32(&ctx, 0);
-    let errno = preview1_state(ctx.store())
+fn host_fd_close(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let fd = local_u32(ctx, 0);
+    let errno = preview1_state(ctx.store)
         .close_fd(fd)
         .map(|_| ERRNO_SUCCESS)
         .unwrap_or_else(|errno| errno);
-    return_errno(errno)
+    return_errno(ctx, errno)
 }
 
-fn host_fd_fdstat_get(mut ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let fd = param_u32(&ctx, 0);
-    let stat_ptr = param_u32(&ctx, 1);
-    let errno = match preview1_state(ctx.store()).descriptor_for_fd(fd) {
-        Ok(descriptor) => match ctx.with_caller_memory(|memory| {
-            write_guest_fdstat(memory, stat_ptr, descriptor.rights_base)
-        }) {
-            Some(Ok(())) => ERRNO_SUCCESS,
-            Some(Err(errno)) => errno,
-            None => ERRNO_FAULT,
-        },
+fn host_fd_fdstat_get(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let fd = local_u32(ctx, 0);
+    let stat_ptr = local_u32(ctx, 4);
+    let errno = match preview1_state(ctx.store).descriptor_for_fd(fd) {
+        Ok(descriptor) => {
+            if let Some(memory) = ctx.caller_memory() {
+                write_guest_fdstat(memory, stat_ptr, descriptor.rights_base)
+                    .map(|_| ERRNO_SUCCESS)
+                    .unwrap_or_else(|errno| errno)
+            } else {
+                ERRNO_FAULT
+            }
+        }
         Err(errno) => errno,
     };
-    return_errno(errno)
+    return_errno(ctx, errno)
 }
 
-fn host_fd_seek(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let fd = param_u32(&ctx, 0);
-    let _offset = param_i64(&ctx, 1);
-    let whence = param_u32(&ctx, 2);
-    let _new_offset_ptr = param_u32(&ctx, 3);
+fn host_fd_seek(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let fd = local_u32(ctx, 0);
+    let _offset = local_i64(ctx, 4);
+    let whence = local_u32(ctx, 12);
+    let _new_offset_ptr = local_u32(ctx, 16);
     let errno = match whence {
-        0..=2 => preview1_state(ctx.store())
+        0..=2 => preview1_state(ctx.store)
             .descriptor_for_fd(fd)
             .map(|_| ERRNO_SPIPE)
             .unwrap_or_else(|errno| errno),
         _ => ERRNO_INVAL,
     };
-    return_errno(errno)
+    return_errno(ctx, errno)
 }
 
-fn host_proc_exit(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let exit_code = param_u32(&ctx, 0);
-    preview1_state(ctx.store()).set_exit_code(exit_code);
-    VMResult::Success(HostCallControl::EndProgram)
+fn host_proc_exit(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let exit_code = local_u32(ctx, 0);
+    preview1_state(ctx.store).set_exit_code(exit_code);
+
+    let mut local_reference = ctx.local_reference;
+    while local_reference.local_size != 0 {
+        let (prev_local_ref, _return_addr) =
+            ctx.stack
+                .function_return_in_place(&local_reference, 0, ctx.gc);
+        local_reference = prev_local_ref;
+    }
+    ctx.set_local_reference(local_reference);
+
+    VMResult::Success(PROC_EXIT_PROGRAM.as_ptr())
 }
 
 #[cfg(test)]

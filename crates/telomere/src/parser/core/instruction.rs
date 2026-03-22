@@ -27,19 +27,6 @@ use crate::{
     WasmParserError,
 };
 use tracing::trace;
-use vstd::prelude::*;
-
-verus! {
-
-#[inline(always)]
-fn select_default_memory_family(shared: bool) -> (result: bool)
-    ensures
-        result == shared,
-{
-    shared
-}
-
-} // verus!
 
 macro_rules! simd_instruction {
     ($code: expr,$ctx: expr, $($name: ident),*) => {
@@ -190,14 +177,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         indexed_shared: Op,
     ) -> Result<Op> {
         let memory = self.memory_type(memidx)?;
-        Ok(
-            match (memidx == 0, select_default_memory_family(memory.shared)) {
-                (true, false) => local,
-                (true, true) => shared,
-                (false, false) => indexed_local,
-                (false, true) => indexed_shared,
-            },
-        )
+        Ok(match (memidx == 0, memory.shared) {
+            (true, false) => local,
+            (true, true) => shared,
+            (false, false) => indexed_local,
+            (false, true) => indexed_shared,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4101,19 +4086,15 @@ mod tests {
         op_at_in_func(wat, 0, index)
     }
 
-    fn operand_at_in_func(wat: &str, func_index: usize, index: usize) -> Operand {
+    fn operand_at(wat: &str, index: usize) -> Operand {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
         let mut parser = WasmParser::new(&mut reader);
         let module = parser.parse_module().expect("module must parse");
-        let FunctionBody::Wasm(func) = &module.codes.0[func_index] else {
+        let FunctionBody::Wasm(func) = &module.codes.0[0] else {
             panic!("expected wasm function body");
         };
         unsafe { func.expr[index].operand }
-    }
-
-    fn operand_at(wat: &str, index: usize) -> Operand {
-        operand_at_in_func(wat, 0, index)
     }
 
     #[test]

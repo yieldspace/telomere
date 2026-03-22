@@ -6,9 +6,6 @@ rust-version.workspace = true
 authors.workspace = true
 keywords.workspace = true
 
-[package.metadata.verus]
-verify = true
-
 [dependencies]
 wide = { version = "0.7.32", optional = true }
 thiserror = "2.0.11"
@@ -23,8 +20,6 @@ futures = "0.3.31"
 tokio.workspace = true
 parking_lot = "0.12.5"
 libc.workspace = true
-vstd = "0.0.0-2026-03-17-2326"
-verus_state_machines_macros = "0.0.0-2026-03-15-0111"
 
 [dev-dependencies]
 futures = "0.3.31"

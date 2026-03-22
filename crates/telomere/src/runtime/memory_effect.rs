@@ -1,19 +1,13 @@
 use std::{fmt, sync::Arc};
 
 use crate::{
-    common::{
-        AsyncHostFuture, ResultType, ResultValue, SharedMemoryObject, SharedWaitRegistration,
-        StablePc,
-    },
+    common::{AsyncHostFuture, SharedMemoryObject, SharedWaitRegistration},
     VMResult,
 };
 
 pub struct HostCallPending {
     pub task_id: u32,
     pub future: AsyncHostFuture,
-    pub fp: StablePc,
-    pub result_types: ResultType,
-    pub result_slot: usize,
 }
 
 pub struct MemoryWaitPending {
@@ -21,7 +15,7 @@ pub struct MemoryWaitPending {
     pub shared: Arc<SharedMemoryObject>,
     pub wait: SharedWaitRegistration,
     pub timeout_ns: i64,
-    pub fp: StablePc,
+    pub fp: usize,
 }
 
 #[derive(Debug)]
@@ -44,14 +38,6 @@ impl PendingOp {
             Self::WasmAsync(op) => op.task_id,
         }
     }
-
-    pub(crate) fn pending_code(&self) -> Option<crate::common::formal::PendingCode> {
-        match self {
-            Self::HostCall(_) => Some(crate::common::formal::PendingCode::HostCall),
-            Self::MemoryWait(_) => Some(crate::common::formal::PendingCode::Wait),
-            Self::WasmAsync(_) => None,
-        }
-    }
 }
 
 impl fmt::Debug for PendingOp {
@@ -60,9 +46,6 @@ impl fmt::Debug for PendingOp {
             Self::HostCall(op) => f
                 .debug_struct("PendingOp::HostCall")
                 .field("task_id", &op.task_id)
-                .field("fp", &op.fp)
-                .field("result_types", &op.result_types)
-                .field("result_slot", &op.result_slot)
                 .finish(),
             Self::MemoryWait(op) => f
                 .debug_struct("PendingOp::MemoryWait")
@@ -85,17 +68,14 @@ pub struct Completion {
 pub enum CompletionPayload {
     #[allow(dead_code)]
     Resume {
-        fp: StablePc,
+        fp: usize,
     },
     ResumeWithI32 {
-        fp: StablePc,
+        fp: usize,
         value: i32,
     },
     HostCall {
-        fp: StablePc,
-        result_types: ResultType,
-        result_slot: usize,
-        result: VMResult<ResultValue>,
+        result: VMResult<*const crate::common::Instr>,
     },
     #[allow(dead_code)]
     WasmAsync,

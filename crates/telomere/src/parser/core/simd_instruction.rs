@@ -1,21 +1,8 @@
 use crate::binary::BinaryReader;
 use crate::common::{MemArg, MemType, Op, Operand};
 use crate::WasmParserError;
-use vstd::prelude::*;
 
 use super::{instruction_generator::InstructionGenerator, type_checker::TypeChecker};
-
-verus! {
-
-#[inline(always)]
-fn select_default_memory_family(shared: bool) -> (result: bool)
-    ensures
-        result == shared,
-{
-    shared
-}
-
-} // verus!
 
 pub(crate) struct SimdParserContext<'a, R: BinaryReader> {
     pub(crate) mems: &'a [MemType],
@@ -50,17 +37,12 @@ fn select_memory_op<R: BinaryReader>(
     indexed_local: Op,
     indexed_shared: Op,
 ) -> Result<Op, WasmParserError> {
-    Ok(
-        match (
-            memidx == 0,
-            select_default_memory_family(memory_shared(ctx, memidx)?),
-        ) {
-            (true, false) => local,
-            (true, true) => shared,
-            (false, false) => indexed_local,
-            (false, true) => indexed_shared,
-        },
-    )
+    Ok(match (memidx == 0, memory_shared(ctx, memidx)?) {
+        (true, false) => local,
+        (true, true) => shared,
+        (false, false) => indexed_local,
+        (false, true) => indexed_shared,
+    })
 }
 
 fn push_memarg_instruction<R: BinaryReader>(

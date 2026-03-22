@@ -3,20 +3,26 @@ use common::run_wast_with;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
     common::{
-        FuncType, GcRef, HostCallContext, HostCallControl, HostFunctionDefinition,
-        HostTailCallTarget, NativeModule, StoreState, ValType,
+        ExecuteContext, FuncType, GcRef, HostFunctionDefinition, Instr, NativeModule, StoreState,
+        ValType,
     },
     link_host_function_with_function_idx,
     runtime::instantiate_native_module,
-    Registry, ResultValue, Store, VMResult, WasmValue,
+    vm_try, Registry, Store, VMResult,
 };
 
-fn print(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let state = ctx.store_state();
-    unsafe { state.get::<AtomicUsize>() }
+fn print_counter<'a>(ctx: &'a ExecuteContext<'a>) -> &'a AtomicUsize {
+    unsafe { ctx.store.state.get::<AtomicUsize>() }
         .expect("host function tests require an AtomicUsize in StoreState")
-        .fetch_add(1, Ordering::SeqCst);
-    VMResult::Success(HostCallControl::Return(ResultValue::new(vec![])))
+}
+
+fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    print_counter(ctx).fetch_add(1, Ordering::SeqCst);
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 0, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
 }
 
 #[tokio::test]
@@ -52,19 +58,56 @@ async fn test_print() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
-fn tail_call(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let func_ref = match ctx.param_funcref(0) {
-        Some(value) => value,
-        other => panic!("expected funcref param, got {other:?}"),
+const TAIL_CALL_FUNCTION_RETURN: [Instr; 2] = [
+    Instr {
+        op: telomere::special_function_return,
+    },
+    Instr {
+        operand: telomere::common::Operand { u32: 4 },
+    },
+];
+
+fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    vm_try!(ctx.stack.local_get(&ctx.local_reference(), 0, 4));
+    let arg0 = ctx.stack.pop_u32();
+    vm_try!(ctx.stack.local_get(&ctx.local_reference(), 4, 4));
+    let arg1 = ctx.stack.pop_i32();
+    vm_try!(ctx.stack.push_i32(arg1 + 40));
+    let func_addr = GcRef(arg0);
+    let (is_host, host_fp, locals_size, ptr) = {
+        let func = ctx.func_by_addr(func_addr);
+        (
+            func.is_host_func(),
+            func.is_host_func().then(|| func.host_code_pointer()),
+            func.locals().byte_size(),
+            func.code_pointer(),
+        )
     };
-    let arg = match ctx.param_i32(1) {
-        Some(value) => value,
-        other => panic!("expected i32 param, got {other:?}"),
-    };
-    VMResult::Success(HostCallControl::TailCall {
-        target: HostTailCallTarget::FuncRef(GcRef(func_ref)),
-        params: ResultValue::new(vec![WasmValue::I32(arg + 40)]),
-    })
+    if is_host {
+        let f = host_fp.expect("host function must expose a host code pointer");
+        let local_reference = vm_try!(ctx.stack.function_call(
+            4,
+            0,
+            func_addr,
+            ctx.local_reference,
+            TAIL_CALL_FUNCTION_RETURN.as_ptr(),
+            ctx.gc,
+        ));
+        ctx.set_local_reference(local_reference);
+        f(ctx)
+    } else {
+        let local_reference = vm_try!(ctx.stack.function_call(
+            4,
+            locals_size,
+            func_addr,
+            ctx.local_reference,
+            TAIL_CALL_FUNCTION_RETURN.as_ptr(),
+            ctx.gc,
+        ));
+        ctx.set_local_reference(local_reference);
+        let ptr = ptr.expect("wasm function must expose a code pointer");
+        VMResult::Success(ptr)
+    }
 }
 
 #[tokio::test]
@@ -98,16 +141,22 @@ async fn test_tail_call_wasm() {
     run_wast_with(wast, &store, &mut registry).await;
 }
 
-fn plus60(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let value = match ctx.param_i32(0) {
-        Some(value) => value,
-        other => panic!("expected i32 param, got {other:?}"),
-    };
-    VMResult::Success(HostCallControl::Return(ResultValue::new(vec![
-        WasmValue::I32(value + 60),
-    ])))
+fn plus60(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let value = i32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), 0, 4)
+            .try_into()
+            .unwrap(),
+    );
+    tracing::trace!("{value}");
+    let slot = ctx.return_slot();
+    slot.write(&(value + 60).to_le_bytes());
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
 }
-
 #[tokio::test]
 pub async fn test_tail_call_native() {
     let store = Store::new();

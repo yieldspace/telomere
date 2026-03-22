@@ -7,7 +7,7 @@ use telomere::{
     ResultValue, Store, VMResult, WasmParser, WasmValue,
 };
 use telomere::{
-    common::{FuncType, HostCallContext, HostCallControl, HostFunctionDefinition, NativeModule},
+    common::{ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule},
     runtime::instantiate_native_module,
 };
 
@@ -30,8 +30,10 @@ async fn instantiate_wat(
         .unwrap()
 }
 
-fn noop_host(_ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    VMResult::Success(HostCallControl::Return(ResultValue::new(vec![])))
+fn noop_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 0, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
 }
 
 #[test]

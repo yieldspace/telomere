@@ -16,119 +16,16 @@ mod tables;
 
 use crate::{
     common::{
-        AsyncHostCallContext, CallFrameCache, ElemInit, ExecuteContext, ExportDesc, FuncType,
-        GcRef, HostCallControl, HostTailCallTarget, InstanceHandle, Instr, LocalReference, MemArg,
-        ResultType, ResultValue, StablePc, Stack, VMResult, ValType, WasmValue,
-        TABLE_UNINITIALIZED,
+        execute_elem_init_const_expr, CallFrameCache, ElemInit, ExecuteContext, ExportDesc, GcRef,
+        InstanceHandle, Instr, LocalReference, MemArg, ResultType, ResultValue, StablePc, Stack,
+        VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::{
         memory_effect::{HostCallPending, PendingOp},
-        scheduler::{ExecutionDriver, ExecutionKernel, ReadyFlag, SyncRunError, Task, TokioDriver},
+        scheduler::{ExecutionDriver, ReadyFlag, Scheduler, SyncRunError, Task, TokioDriver},
     },
     Store,
 };
-use vstd::prelude::*;
-
-verus! {
-
-#[allow(dead_code)]
-pub(crate) enum MemorySelectorWitness {
-    CurrentDefault,
-    Explicit { shared: bool, raw: u32 },
-}
-
-#[allow(dead_code)]
-pub(crate) open spec fn current_default_memory_selector_witness() -> MemorySelectorWitness {
-    MemorySelectorWitness::CurrentDefault
-}
-
-#[allow(dead_code)]
-pub(crate) open spec fn explicit_local_memory_selector_witness(raw: u32) -> MemorySelectorWitness {
-    MemorySelectorWitness::Explicit { shared: false, raw }
-}
-
-#[allow(dead_code)]
-pub(crate) open spec fn explicit_shared_memory_selector_witness(
-    raw: u32,
-) -> MemorySelectorWitness {
-    MemorySelectorWitness::Explicit { shared: true, raw }
-}
-
-pub(crate) open spec fn memory_selector_from_witness(
-    witness: MemorySelectorWitness,
-) -> crate::common::formal::MemorySelector {
-    match witness {
-        MemorySelectorWitness::CurrentDefault => {
-            crate::common::formal::MemorySelector::CurrentDefault
-        }
-        MemorySelectorWitness::Explicit { shared, raw } => {
-            crate::common::formal::MemorySelector::Explicit(if shared {
-                crate::common::formal::MemoryHandleView::Shared(raw as nat)
-            } else {
-                crate::common::formal::MemoryHandleView::Local(raw as nat)
-            })
-        }
-    }
-}
-
-pub open spec fn spec_compute_memory_offset_result(memarg_offset: u32, offset: u32) -> Option<int> {
-    if memarg_offset as int + offset as int <= u32::MAX as int {
-        Some(memarg_offset as int + offset as int)
-    } else {
-        None
-    }
-}
-
-#[inline(always)]
-fn checked_compute_memory_offset(memarg_offset: u32, offset: u32) -> (result: Option<usize>)
-    ensures
-        match spec_compute_memory_offset_result(memarg_offset, offset) {
-            Some(value) => result == Some(value as usize),
-            None => result == Option::<usize>::None,
-        },
-{
-    let sum = memarg_offset as u64 + offset as u64;
-    if sum <= u32::MAX as u64 {
-        Some(sum as usize)
-    } else {
-        None
-    }
-}
-
-pub open spec fn spec_load_start_result(
-    default_memory_present: bool,
-    memarg_offset: u32,
-    offset: u32,
-) -> Option<int> {
-    if default_memory_present {
-        spec_compute_memory_offset_result(memarg_offset, offset)
-    } else {
-        None
-    }
-}
-
-pub open spec fn spec_store_result(
-    view: crate::common::formal::LinearMemoryView,
-    start: int,
-    payload: Seq<u8>,
-) -> crate::common::formal::LinearMemoryView {
-    crate::common::formal::linear_write_bytes(view, start, payload)
-}
-
-pub proof fn lemma_store_result_preserves_page_metadata(
-    view: crate::common::formal::LinearMemoryView,
-    start: int,
-    payload: Seq<u8>,
-)
-    ensures
-        spec_store_result(view, start, payload).current_pages == view.current_pages,
-        spec_store_result(view, start, payload).max_pages == view.max_pages,
-        spec_store_result(view, start, payload).shared == view.shared,
-{
-    crate::common::formal::lemma_linear_write_preserves_page_metadata(view, start, payload);
-}
-
-} // verus!
 
 #[inline(always)]
 fn wasm_shift_mask32(rhs: u32) -> u32 {
@@ -193,27 +90,17 @@ impl StoreBytes {
 
 #[inline(always)]
 pub(crate) fn compute_memory_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
-    VMResult::from_option(checked_compute_memory_offset(memarg.offset, offset), || {
+    let sum = memarg.offset as u64 + offset as u64;
+    if sum <= u32::MAX as u64 {
+        VMResult::Success(sum as usize)
+    } else {
         VMResult::MemoryIndexOutOfRange
-    })
+    }
 }
 
-#[inline(always)]
-/// Decode the single `memarg` immediate for the active instruction.
-///
-/// # Safety
-/// - `tail_code` must point to the decoded instruction for the current handler.
-unsafe fn decode_memarg_operand(tail_code: *const Instr) -> MemArg {
-    (*tail_code).operand.memarg
-}
-
-#[inline(always)]
-/// Decode the `memarg + memidx` immediates for the active indexed memory instruction.
-///
-/// # Safety
-/// - `tail_code` must point to the decoded instruction for the current handler.
-unsafe fn decode_indexed_memarg_operand(tail_code: *const Instr) -> (MemArg, u32) {
-    ((*tail_code).operand.memarg, (*tail_code.add(1)).operand.u32)
+enum CallOutcome {
+    Immediate(*const Instr),
+    Pending,
 }
 
 #[inline(always)]
@@ -231,7 +118,7 @@ unsafe fn decode_indexed_memarg_operand(tail_code: *const Instr) -> (MemArg, u32
 /// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
 /// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
 pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    ctx.set_cont(tail_code);
+    ctx.cont = tail_code;
     ((*tail_code).op)(tail_code.offset(1), ctx)
 }
 
@@ -255,49 +142,6 @@ pub(crate) unsafe fn call_next(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     call_code(tail_code.offset(consumed), ctx)
-}
-
-#[inline(always)]
-/// Telomere runtime helper `facade_call_code`.
-///
-/// Related spec:
-/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
-///
-/// Stack effect: internal runtime continuation dispatch.
-/// Traps: propagates the trap behavior of the target instruction.
-/// Notes: Adapts `ExecuteContextFacade` callers to `call_code` without changing the continuation contract.
-///
-/// # Safety
-/// - `tail_code` must reference the active decoded instruction stream for the current frame.
-/// - `facade` must wrap a live execution context for the same store, frame, and validated locals/stack layout.
-/// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
-pub(crate) unsafe fn facade_call_code(
-    tail_code: *const Instr,
-    facade: &mut ExecuteContextFacade<'_, '_>,
-) -> VMResult<()> {
-    call_code(tail_code, facade.as_ctx_mut())
-}
-
-#[inline(always)]
-/// Telomere runtime helper `facade_call_next`.
-///
-/// Related spec:
-/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
-///
-/// Stack effect: internal runtime continuation dispatch.
-/// Traps: propagates the trap behavior of the target instruction.
-/// Notes: Adapts `ExecuteContextFacade` callers to `call_next` while preserving the current operand decode offset.
-///
-/// # Safety
-/// - `tail_code` must reference the active decoded instruction stream for the current frame.
-/// - `facade` must wrap a live execution context for the same store, frame, and validated locals/stack layout.
-/// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
-pub(crate) unsafe fn facade_call_next(
-    tail_code: *const Instr,
-    consumed: isize,
-    facade: &mut ExecuteContextFacade<'_, '_>,
-) -> VMResult<()> {
-    call_next(tail_code, consumed, facade.as_ctx_mut())
 }
 
 fn result_type_size(ty: &ResultType) -> usize {
@@ -344,175 +188,32 @@ fn pop_result_values(stack: &mut Stack, ty: &ResultType) -> ResultValue {
     ResultValue::new(result)
 }
 
-fn read_value(bytes: &[u8], ty: ValType) -> Option<WasmValue> {
-    match ty {
-        ValType::I32 => Some(WasmValue::I32(i32::from_le_bytes(bytes.try_into().ok()?))),
-        ValType::I64 => Some(WasmValue::I64(i64::from_le_bytes(bytes.try_into().ok()?))),
-        ValType::F32 => Some(WasmValue::F32(f32::from_bits(u32::from_le_bytes(
-            bytes.try_into().ok()?,
-        )))),
-        ValType::F64 => Some(WasmValue::F64(f64::from_bits(u64::from_le_bytes(
-            bytes.try_into().ok()?,
-        )))),
-        ValType::V128 => Some(WasmValue::V128(u128::from_le_bytes(bytes.try_into().ok()?))),
-        ValType::FuncRef => Some(WasmValue::FuncRef(u32::from_le_bytes(
-            bytes.try_into().ok()?,
-        ))),
-        ValType::ExternRef => Some(WasmValue::ExternRef(u32::from_le_bytes(
-            bytes.try_into().ok()?,
-        ))),
-    }
-}
-
-fn marshal_local_values(
-    stack: &Stack,
-    local_reference: &LocalReference,
-    types: &ResultType,
-) -> VMResult<ResultValue> {
-    let mut local_addr = 0usize;
-    let mut values = Vec::with_capacity(types.0.len());
-    for ty in types.iter() {
-        let size = ty.stack_size().usize();
-        let Some(value) = read_value(stack.local_bytes(local_reference, local_addr, size), *ty)
-        else {
-            return VMResult::InvalidOperand;
-        };
-        values.push(value);
-        local_addr += size;
-    }
-    VMResult::Success(ResultValue::new(values))
-}
-
-unsafe fn current_function_type_ptr(facade: &ExecuteContextFacade<'_, '_>) -> *const FuncType {
-    facade.current_function_type() as *const FuncType
-}
-
-unsafe fn function_type_ptr_by_addr(
-    facade: &ExecuteContextFacade<'_, '_>,
-    funcaddr: GcRef,
-) -> *const FuncType {
-    facade.function_type_by_addr(funcaddr) as *const FuncType
-}
-
 fn start_async_host_call(
-    facade: &mut ExecuteContextFacade<'_, '_>,
-    param_types: &ResultType,
-    result_types: &ResultType,
-) -> VMResult<()> {
-    let async_host = facade.func().async_host_code_pointer();
-    let params = vm_try!(marshal_local_values(
-        facade.stack_ref(),
-        &facade.local_reference(),
-        param_types,
-    ));
-    let result_types = result_types.clone();
-    let result_slot = facade.local_reference().local_top;
-    let return_size = result_type_size(&result_types);
-    let (resume_pc, _slot) = facade.function_return_in_place(return_size);
-    let fp = facade.stable_pc_from_raw_in_frame(resume_pc);
-    let future = async_host(AsyncHostCallContext {
-        params,
-        result_types: result_types.clone(),
-        store_state: facade.store_ref().state,
-    });
-    let task_id = facade.task_id();
-    facade
-        .pending_mut()
-        .push_pending(PendingOp::HostCall(HostCallPending {
-            task_id,
-            future,
-            fp,
-            result_types,
-            result_slot,
-        }));
-    facade.set_cont(resume_pc);
-    VMResult::Success(())
-}
-
-fn resolve_host_tail_call_target(
-    facade: &ExecuteContextFacade<'_, '_>,
-    target: HostTailCallTarget,
-) -> VMResult<GcRef> {
-    match target {
-        HostTailCallTarget::FuncIdx(funcidx) => VMResult::from_option(
-            facade
-                .instance()
-                .funcs
-                .as_slice()
-                .get(funcidx.0 as usize)
-                .copied(),
-            || VMResult::InvalidOperand,
-        ),
-        HostTailCallTarget::FuncRef(funcaddr) => {
-            if funcaddr == GcRef(0) {
-                VMResult::InvalidOperand
-            } else {
-                VMResult::Success(funcaddr)
-            }
-        }
-    }
-}
-
-fn complete_sync_host_return(
-    facade: &mut ExecuteContextFacade<'_, '_>,
-    result_types: &ResultType,
-    values: ResultValue,
-) -> VMResult<()> {
-    let return_size = result_type_size(result_types);
-    let (return_addr, result_slot) = facade.function_return_in_place(return_size);
-    vm_try!(facade.write_marshaled_results(result_slot, result_types, &values));
-    unsafe { facade_call_code(return_addr, facade) }
-}
-
-fn complete_sync_host_tail_call(
-    facade: &mut ExecuteContextFacade<'_, '_>,
-    target: HostTailCallTarget,
-    params: ResultValue,
-) -> VMResult<()> {
-    let funcaddr = vm_try!(resolve_host_tail_call_target(facade, target));
-    let function_type = unsafe { &*function_type_ptr_by_addr(facade, funcaddr) };
-    vm_try!(facade.push_result_values(&function_type.0, &params));
-    let ptr = vm_try!(unsafe {
-        call::internal_op_call(std::ptr::null(), funcaddr, facade.as_ctx_mut(), true)
-    });
-    if ptr.is_null() {
-        VMResult::Success(())
-    } else {
-        unsafe { facade_call_next(ptr, 0, facade) }
-    }
-}
-
-unsafe fn invoke_host_function(
     return_addr: *const Instr,
-    facade: &mut ExecuteContextFacade<'_, '_>,
-    param_types: *const ResultType,
-    result_types: *const ResultType,
-) -> VMResult<()> {
-    let param_types = unsafe { &*param_types };
-    let result_types = unsafe { &*result_types };
-    if facade.func().is_async_host_func() {
-        let _ = return_addr;
-        vm_try!(start_async_host_call(facade, param_types, result_types));
-        VMResult::Success(())
+    ctx: &mut ExecuteContext,
+) -> VMResult<CallOutcome> {
+    let async_host = ctx.func().async_host_code_pointer();
+    let task_id = ctx.task_id;
+    let future = async_host(ctx);
+    ctx.effect
+        .push_pending(PendingOp::HostCall(HostCallPending { task_id, future }));
+    ctx.cont = return_addr;
+    VMResult::Success(CallOutcome::Pending)
+}
+
+fn invoke_host_function(
+    return_addr: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<CallOutcome> {
+    if ctx.func().is_async_host_func() {
+        start_async_host_call(return_addr, ctx)
     } else {
-        let fp = facade.func().host_code_pointer();
-        let control = vm_try!(facade.run_sync_host_function(fp, param_types, result_types));
-        match control {
-            HostCallControl::Return(values) => {
-                complete_sync_host_return(facade, result_types, values)
-            }
-            HostCallControl::TailCall { target, params } => {
-                complete_sync_host_tail_call(facade, target, params)
-            }
-            HostCallControl::EndProgram => {
-                facade.end_program();
-                VMResult::Success(())
-            }
-        }
+        let fp = ctx.func().host_code_pointer();
+        let return_addr = vm_try!(fp(ctx));
+        VMResult::Success(CallOutcome::Immediate(return_addr))
     }
 }
 
-pub(crate) use crate::common::ExecuteContextFacade;
 #[cfg(feature = "threads")]
 pub(crate) use atomics::*;
 pub(crate) use bulk_memory::{
@@ -552,17 +253,18 @@ pub(crate) use tables::*;
 pub(crate) unsafe fn store_internal_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    make_operation: impl FnOnce(&mut ExecuteContextFacade<'_, '_>) -> StoreBytes,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let memarg = decode_memarg_operand(tail_code);
-    let operation = make_operation(&mut facade);
-    let offset = facade.pop::<u32>();
+    let memarg = (*tail_code).operand.memarg;
+    let operation = make_operation(ctx);
+    let offset = ctx.stack.pop_u32();
     trace!("op_store: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    vm_try!(facade.write_memory_bytes(start, bytes));
-    facade_call_next(tail_code, 1, &mut facade)
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, bytes,));
+    call_next(tail_code, 1, ctx)
 }
 
 /// Telomere runtime helper `store_internal_shared`.
@@ -583,17 +285,18 @@ pub(crate) unsafe fn store_internal_local(
 pub(crate) unsafe fn store_internal_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    make_operation: impl FnOnce(&mut ExecuteContextFacade<'_, '_>) -> StoreBytes,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let memarg = decode_memarg_operand(tail_code);
-    let operation = make_operation(&mut facade);
-    let offset = facade.pop::<u32>();
+    let memarg = (*tail_code).operand.memarg;
+    let operation = make_operation(ctx);
+    let offset = ctx.stack.pop_u32();
     trace!("op_store_shared: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    vm_try!(facade.write_memory_bytes(start, bytes));
-    facade_call_next(tail_code, 1, &mut facade)
+    vm_try!(ctx
+        .gc
+        .shared_write_bytes(ctx.default_shared_memory_id_unchecked(), start, bytes,));
+    call_next(tail_code, 1, ctx)
 }
 
 /// Telomere runtime helper `store_internal_local_indexed`.
@@ -613,16 +316,18 @@ pub(crate) unsafe fn store_internal_shared(
 pub(crate) unsafe fn store_internal_local_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    make_operation: impl FnOnce(&mut ExecuteContextFacade<'_, '_>) -> StoreBytes,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let (memarg, memidx) = decode_indexed_memarg_operand(tail_code);
-    let operation = make_operation(&mut facade);
-    let offset = facade.pop::<u32>();
+    let memarg = (*tail_code).operand.memarg;
+    let memidx = (*tail_code.add(1)).operand.u32;
+    let operation = make_operation(ctx);
+    let offset = ctx.stack.pop_u32();
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    vm_try!(facade.write_memory_bytes_local_indexed(memidx, start, bytes));
-    facade_call_next(tail_code, 2, &mut facade)
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.local_memory_id_at_unchecked(memidx), start, bytes));
+    call_next(tail_code, 2, ctx)
 }
 
 /// Telomere runtime helper `store_internal_shared_indexed`.
@@ -642,16 +347,18 @@ pub(crate) unsafe fn store_internal_local_indexed(
 pub(crate) unsafe fn store_internal_shared_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    make_operation: impl FnOnce(&mut ExecuteContextFacade<'_, '_>) -> StoreBytes,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    let mut facade = ExecuteContextFacade::new(ctx);
-    let (memarg, memidx) = decode_indexed_memarg_operand(tail_code);
-    let operation = make_operation(&mut facade);
-    let offset = facade.pop::<u32>();
+    let memarg = (*tail_code).operand.memarg;
+    let memidx = (*tail_code.add(1)).operand.u32;
+    let operation = make_operation(ctx);
+    let offset = ctx.stack.pop_u32();
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    vm_try!(facade.write_memory_bytes_shared_indexed(memidx, start, bytes));
-    facade_call_next(tail_code, 2, &mut facade)
+    vm_try!(ctx
+        .gc
+        .shared_write_bytes(ctx.shared_memory_id_at_unchecked(memidx), start, bytes));
+    call_next(tail_code, 2, ctx)
 }
 pub(crate) const VM_END: Instr = Instr {
     op: special_function_vm_end,
@@ -684,7 +391,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
         );
         return VMResult::Unlinkable;
     }
-    let mut kernel = ExecutionKernel::new(store);
+    let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
         let gc = store.lock_gc();
@@ -739,13 +446,13 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
                 &gc,
             ));
 
-            kernel.push(Task {
+            scheduler.push(Task {
                 fp: StablePc::from_relative_index(0),
                 task_id: 0,
                 stack,
                 local_reference,
                 ready_flag: ReadyFlag::Ready,
-                pending_ops: 0,
+                pending_effects: 0,
                 terminal_result: None,
             });
             ft
@@ -754,8 +461,8 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
         };
         ft
     };
-    kernel.run(driver).await;
-    let ct = kernel.completed_tasks.pop().unwrap();
+    scheduler.run_with_driver(driver).await;
+    let ct = scheduler.completed_tasks.pop().unwrap();
     vm_try!(ct.result);
     let mut stack = ct.stack;
     VMResult::Success(pop_result_values(&mut stack, &ft.1))
@@ -768,7 +475,7 @@ pub(crate) fn run_module_function_sync_with_gc(
     name: &str,
     args: &ResultValue,
 ) -> Result<VMResult<ResultValue>, SyncRunError> {
-    let mut kernel = ExecutionKernel::new(store);
+    let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
         let instance = gc.get_instance(match instance.get_gc_ref_with_pool(store, gc) {
@@ -827,13 +534,13 @@ pub(crate) fn run_module_function_sync_with_gc(
                 other => return Ok(vm_result_err_into_result_value(other)),
             };
 
-            kernel.push(Task {
+            scheduler.push(Task {
                 fp: StablePc::from_relative_index(0),
                 task_id: 0,
                 stack,
                 local_reference,
                 ready_flag: ReadyFlag::Ready,
-                pending_ops: 0,
+                pending_effects: 0,
                 terminal_result: None,
             });
             ft
@@ -843,8 +550,8 @@ pub(crate) fn run_module_function_sync_with_gc(
         ft
     };
 
-    kernel.run_sync_with_gc(gc)?;
-    let ct = kernel.completed_tasks.pop().unwrap();
+    scheduler.run_sync_with_gc(gc)?;
+    let ct = scheduler.completed_tasks.pop().unwrap();
     match ct.result {
         VMResult::Success(()) => {
             let mut stack = ct.stack;
@@ -877,154 +584,23 @@ fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultVal
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::*;
-    use crate::common::{
-        stack::CachedMemoryKind,
-        store::{self, FunctionBody},
-        AsyncHostFuture, ExportSection, FuncType, InstanceData, LocalsData, ModuleInstance,
-        StoreInner, TypeIdx,
-    };
-    use crate::runtime::{memory_effect::PendingOp, scheduler::PendingOpEmitter};
-    use std::{collections::VecDeque, future::ready, sync::Arc};
-
-    fn async_host_noop(_ctx: AsyncHostCallContext) -> AsyncHostFuture {
-        Box::pin(ready(VMResult::Success(ResultValue::new(Vec::new()))))
-    }
-
-    fn frame_for(funcaddr: GcRef, instance: store::InstanceId) -> CallFrameCache {
-        CallFrameCache {
-            code_addr: funcaddr,
-            code_base: std::ptr::null(),
-            instance,
-            memory0_kind: CachedMemoryKind::None,
-            memory0_raw: 0,
-        }
-    }
-
-    #[test]
-    fn start_async_host_call_observes_pending_host_call() {
-        let store = Store::new();
-        let mut gc = StoreInner::new();
-        let module = gc.new_module(ModuleInstance {
-            exports: ExportSection(Vec::new()),
-            tables: Vec::new(),
-            globals: Vec::new(),
-            functions: vec![TypeIdx(0), TypeIdx(1)],
-            function_types: vec![
-                FuncType(ResultType(Vec::new()), ResultType(Vec::new())),
-                FuncType(ResultType(Vec::new()), ResultType(Vec::new())),
-            ],
-            mems: Vec::new(),
-        });
-        let instance = store::InstanceId::from_index(0);
-        let root_func = gc.new_func(&store::FunctionInstanceData {
-            instance,
-            funcidx: 0,
-            typeidx: TypeIdx(0),
-            param_size: 0,
-            local_size: 0,
-            body: FunctionBody::Wasm {
-                locals: LocalsData::default(),
-                code: Arc::<[Instr]>::from(vec![VM_END]),
-            },
-        });
-        let async_func = gc.new_func(&store::FunctionInstanceData {
-            instance,
-            funcidx: 1,
-            typeidx: TypeIdx(1),
-            param_size: 0,
-            local_size: 0,
-            body: FunctionBody::AsyncHost(async_host_noop),
-        });
-        let _instance_addr = gc.new_instance(&InstanceData {
-            instance_id: 1,
-            module_addr: module,
-            globals: Vec::new(),
-            funcs: vec![root_func, async_func],
-            tables: Vec::new(),
-            mems: Vec::new(),
-            memory_slots: Vec::new(),
-        });
-
-        let mut stack = Stack::new(128);
-        let empty = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
-        let root = stack
-            .function_call(
-                0,
-                0,
-                frame_for(root_func, instance),
-                empty,
-                std::ptr::null(),
-                &gc,
-            )
-            .unwrap();
-        let program = [VM_END, VM_END];
-        let callee = stack
-            .function_call(
-                0,
-                0,
-                frame_for(async_func, instance),
-                root,
-                unsafe { program.as_ptr().add(1) },
-                &gc,
-            )
-            .unwrap();
-
-        let mut pending_effects = 0;
-        let mut pending_ops = VecDeque::new();
-        let cont = {
-            let mut ctx = ExecuteContext::new(
-                &mut stack,
-                callee,
-                frame_for(async_func, instance),
-                &store,
-                &mut gc,
-                PendingOpEmitter::from_parts(41, &mut pending_effects, &mut pending_ops),
-                program.as_ptr(),
-                41,
-            );
-
-            let start = {
-                let mut facade = ExecuteContextFacade::new(&mut ctx);
-                facade.start_core_step_observation().unwrap()
-            };
-            let params = ResultType(Vec::new());
-            let results = ResultType(Vec::new());
-            let result = {
-                let mut facade = ExecuteContextFacade::new(&mut ctx);
-                start_async_host_call(&mut facade, &params, &results)
-            };
-            let observation = {
-                let mut facade = ExecuteContextFacade::new(&mut ctx);
-                facade.finish_core_step_observation(start, &result).unwrap()
-            };
-
-            result.unwrap();
-            assert_eq!(
-                observation.outcome,
-                crate::common::formal::CoreOutcome::Pending(
-                    crate::common::formal::PendingCode::HostCall,
-                )
-            );
-            assert_eq!(
-                observation.pending_code_delta,
-                Some(crate::common::formal::PendingCode::HostCall)
-            );
-            ctx.cont()
-        };
-        assert_eq!(pending_effects, 1);
-        assert_eq!(pending_ops.len(), 1);
-        assert_eq!(cont, unsafe { program.as_ptr().add(1) });
-        let PendingOp::HostCall(pending) = pending_ops.pop_front().unwrap() else {
-            panic!("expected host-call pending op");
-        };
-        assert_eq!(pending.task_id, 41);
+fn read_global_value(bytes: &[u8], ty: ValType) -> Option<WasmValue> {
+    match ty {
+        ValType::I32 => Some(WasmValue::I32(i32::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::I64 => Some(WasmValue::I64(i64::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::F32 => Some(WasmValue::F32(f32::from_bits(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        )))),
+        ValType::F64 => Some(WasmValue::F64(f64::from_bits(u64::from_le_bytes(
+            bytes.try_into().ok()?,
+        )))),
+        ValType::V128 => Some(WasmValue::V128(u128::from_le_bytes(bytes.try_into().ok()?))),
+        ValType::FuncRef => Some(WasmValue::FuncRef(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        ))),
+        ValType::ExternRef => Some(WasmValue::ExternRef(u32::from_le_bytes(
+            bytes.try_into().ok()?,
+        ))),
     }
 }
 
@@ -1053,7 +629,7 @@ pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMRes
         module_inst.globals.get(idx.0 as usize),
         || { VMResult::Unlinkable }
     ));
-    let Some(value) = read_value(gc.get_global(addr), gt.0) else {
+    let Some(value) = read_global_value(gc.get_global(addr), gt.0) else {
         return VMResult::Unlinkable;
     };
     VMResult::Success(value)

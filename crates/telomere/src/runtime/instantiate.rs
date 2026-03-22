@@ -2,15 +2,15 @@ use crate::{
     common::{
         execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
-        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection, Export,
-        ExportDesc, ExportSection, FuncIdx, FunctionBody, FunctionInstanceData, GcRef, GlobalIdx,
-        HostCallContext, HostCallControl, HostFunction, HostFunctionDefinition, ImportDesc,
-        ImportSection, InstanceData, InstanceHandle, Limits, LocalReference, MemIdx,
+        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
+        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
+        FunctionInstanceData, GcRef, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
+        ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
         ModuleInstance, NativeModule, StablePc, StoreInner, TableIdx, TypeIdx, TypeSection,
         PAGE_SIZE_MAX,
     },
     runtime::{
-        scheduler::{ExecutionKernel, ReadyFlag, Task, TokioDriver},
+        scheduler::{ReadyFlag, Scheduler, Task},
         vm,
     },
     Instance, Module, Registry, Stack, Store, VMResult,
@@ -97,11 +97,6 @@ fn execute_offset_const_expr(
     }
 }
 
-#[inline(always)]
-fn result_type_stack_size(ty: &crate::common::ResultType) -> u32 {
-    ty.iter().map(|value| value.stack_size().u32()).sum()
-}
-
 fn convert_native_module_to_module(m: NativeModule) -> Module {
     let mut codes = vec![];
     let mut functions = vec![];
@@ -138,7 +133,7 @@ fn convert_native_module_to_module(m: NativeModule) -> Module {
     }
 }
 
-fn async_host_placeholder(_ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
+fn async_host_placeholder(_ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     VMResult::Unreachable
 }
 
@@ -228,7 +223,7 @@ pub async fn instantiate(
         ..
     } = m;
 
-    let mut kernel = ExecutionKernel::new(store);
+    let mut scheduler = Scheduler::new(store);
     let (addr, has_start) = {
         let mut gc = store.lock_gc();
         let instance_id = store.new_instance_id();
@@ -387,16 +382,10 @@ pub async fn instantiate(
 
         for func in codes.0.into_iter() {
             let funcidx = funcs.len() as u32;
-            let typeidx = functions[funcidx as usize];
-            let signature = &fts.0[typeidx.0 as usize];
-            let param_size = result_type_stack_size(&signature.0);
 
             let func_addr = match func {
                 FunctionBody::Wasm(code) => gc.new_func(&FunctionInstanceData {
                     instance: inst_id,
-                    typeidx,
-                    param_size,
-                    local_size: code.locals.byte_size() as u32,
                     body: RuntimeFunctionBody::Wasm {
                         locals: code.locals,
                         code: code.expr.into(),
@@ -405,9 +394,6 @@ pub async fn instantiate(
                 }),
                 FunctionBody::Host(fp) => gc.new_func(&FunctionInstanceData {
                     instance: inst_id,
-                    typeidx,
-                    param_size,
-                    local_size: 0,
                     body: RuntimeFunctionBody::Host(fp),
                     funcidx,
                 }),
@@ -514,13 +500,13 @@ pub async fn instantiate(
                     &gc,
                 ));
 
-                kernel.push(Task {
+                scheduler.push(Task {
                     task_id: 0,
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
                     fp: StablePc::from_stable_ptr(vm::START_HOST_FUNCTION_PROGRAM.as_ptr()),
-                    pending_ops: 0,
+                    pending_effects: 0,
                     terminal_result: None,
                 });
             } else {
@@ -545,13 +531,13 @@ pub async fn instantiate(
                     &gc,
                 ));
 
-                kernel.push(Task {
+                scheduler.push(Task {
                     fp: StablePc::from_relative_index(0),
                     task_id: 0,
                     stack,
                     local_reference,
                     ready_flag: ReadyFlag::Ready,
-                    pending_ops: 0,
+                    pending_effects: 0,
                     terminal_result: None,
                 });
             }
@@ -564,9 +550,8 @@ pub async fn instantiate(
     };
 
     if has_start {
-        let mut driver = TokioDriver::new();
-        kernel.run(&mut driver).await;
-        vm_try!(kernel.completed_tasks.pop().unwrap().result);
+        scheduler.run().await;
+        vm_try!(scheduler.completed_tasks.pop().unwrap().result);
     }
 
     VMResult::Success(addr)

@@ -4,9 +4,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use telomere::{
-    common::{
-        FuncType, HostCallContext, HostCallControl, HostFunctionDefinition, NativeModule, ValType,
-    },
+    common::{ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, ValType},
     instantiate, IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
 };
 use tokio::runtime::Runtime;
@@ -29,13 +27,20 @@ async fn instantiate_wat(
     }
 }
 
-fn bench_add_one(ctx: HostCallContext<'_, '_>) -> VMResult<HostCallControl> {
-    let value = ctx
-        .param_i32(0)
-        .expect("sync host roundtrip benchmark expects one i32 arg");
-    VMResult::Success(HostCallControl::Return(ResultValue::new(vec![
-        WasmValue::I32(value + 1),
-    ])))
+fn bench_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    let value = i32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), 0, 4)
+            .try_into()
+            .unwrap(),
+    );
+    let slot = ctx.return_slot();
+    slot.write(&(value + 1).to_le_bytes());
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
 }
 
 pub fn criterion_benchmark(c: &mut Criterion) {
