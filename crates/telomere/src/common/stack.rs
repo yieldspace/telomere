@@ -63,6 +63,37 @@ fn trusted_read_u128(src: &[u8]) -> u128 {
     unsafe { u128::from_le(src.as_ptr().cast::<u128>().read_unaligned()) }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CachedOperandWidth {
+    None,
+    Four,
+    Eight,
+}
+
+impl CachedOperandWidth {
+    #[inline(always)]
+    const fn bytes(self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Four => 4,
+            Self::Eight => 8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OperandCache {
+    width: CachedOperandWidth,
+    bits: u64,
+}
+
+impl OperandCache {
+    const EMPTY: Self = Self {
+        width: CachedOperandWidth::None,
+        bits: 0,
+    };
+}
+
 pub(crate) trait LaneType
 where
     Self: Sized,
@@ -101,10 +132,18 @@ impl_lane_type!(u64x2, u64);
 pub struct Stack {
     memory: Box<[u8]>,
     top: usize,
+    cache: OperandCache,
 }
 impl Debug for Stack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Stack({},{:?})", self.top, &self.memory[0..self.top])
+        write!(
+            f,
+            "Stack(top={},committed_top={},cache={:?},memory={:?})",
+            self.top,
+            self.committed_top(),
+            self.cache,
+            &self.memory[0..self.committed_top()]
+        )
     }
 }
 #[repr(C, packed)]
@@ -221,7 +260,61 @@ impl Stack {
         Stack {
             memory: vec.into_boxed_slice(),
             top: 0,
+            cache: OperandCache::EMPTY,
         }
+    }
+    #[inline(always)]
+    fn committed_top(&self) -> usize {
+        self.top - self.cache.width.bytes()
+    }
+    #[inline(always)]
+    fn flush_cached_operands(&mut self) {
+        match self.cache.width {
+            CachedOperandWidth::None => {}
+            CachedOperandWidth::Four => {
+                let start = self.top - 4;
+                trusted_write_u32(&mut self.memory[start..self.top], self.cache.bits as u32);
+            }
+            CachedOperandWidth::Eight => {
+                let start = self.top - 8;
+                trusted_write_u64(&mut self.memory[start..self.top], self.cache.bits);
+            }
+        }
+        self.cache = OperandCache::EMPTY;
+    }
+    #[inline(always)]
+    fn set_cached_operand(&mut self, width: CachedOperandWidth, bits: u64) {
+        self.cache = OperandCache { width, bits };
+    }
+    #[inline(always)]
+    fn peek_cached_operand(&self, width: CachedOperandWidth) -> Option<u64> {
+        (self.cache.width == width).then_some(self.cache.bits)
+    }
+    #[inline(always)]
+    fn checked_new_top(&self, n: usize) -> VMResult<usize> {
+        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
+            VMResult::StackOverflow
+        }));
+        if new_top > self.memory.len() {
+            return VMResult::StackOverflow;
+        }
+        VMResult::Success(new_top)
+    }
+    #[inline(always)]
+    fn push_cached_u32(&mut self, v: u32) -> VMResult<()> {
+        let new_top = vm_try!(self.checked_new_top(4));
+        self.flush_cached_operands();
+        self.top = new_top;
+        self.set_cached_operand(CachedOperandWidth::Four, u64::from(v));
+        VMResult::Success(())
+    }
+    #[inline(always)]
+    fn push_cached_u64(&mut self, v: u64) -> VMResult<()> {
+        let new_top = vm_try!(self.checked_new_top(8));
+        self.flush_cached_operands();
+        self.top = new_top;
+        self.set_cached_operand(CachedOperandWidth::Eight, v);
+        VMResult::Success(())
     }
     fn add_top(&mut self, n: usize) -> VMResult<()> {
         self.top = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
@@ -242,21 +335,25 @@ impl Stack {
         )))
     }
     pub fn push_u8_array<const N: usize>(&mut self, v: [u8; N]) -> VMResult<()> {
+        self.flush_cached_operands();
         trusted_copy_from_slice(vm_try!(self.get_memory(N)), &v);
         self.add_top(N)
     }
 
     pub fn push_slice(&mut self, v: &[u8]) -> VMResult<()> {
+        self.flush_cached_operands();
         trusted_copy_from_slice(vm_try!(self.get_memory(v.len())), v);
         self.add_top(v.len())
     }
     pub fn pop_u8_array<const N: usize>(&mut self) -> [u8; N] {
+        self.flush_cached_operands();
         self.sub_top(N);
         let mut arr = [0u8; N];
         trusted_copy_from_slice(&mut arr, &self.memory[self.top..self.top + N]);
         arr
     }
     pub fn pop_u8_array_generic<const N: usize>(&mut self, n: usize) -> [u8; N] {
+        self.flush_cached_operands();
         self.sub_top(n);
 
         let mut arr = [0u8; N];
@@ -264,34 +361,62 @@ impl Stack {
         arr
     }
     pub fn drop(&mut self, n: usize) -> &[u8] {
+        self.flush_cached_operands();
         self.sub_top(n);
 
         (&self.memory[self.top..self.top + n]) as _
     }
+    #[inline(always)]
     pub fn push_u32(&mut self, v: u32) -> VMResult<()> {
-        trusted_write_u32(vm_try!(self.get_memory(4)), v);
-        self.add_top(4)
+        self.push_cached_u32(v)
     }
+    #[inline(always)]
     pub fn pop_u32(&mut self) -> u32 {
+        if let Some(bits) = self.peek_cached_operand(CachedOperandWidth::Four) {
+            self.top -= 4;
+            self.cache = OperandCache::EMPTY;
+            return bits as u32;
+        }
         self.sub_top(4);
         trusted_read_u32(&self.memory[self.top..self.top + 4])
     }
+    #[inline(always)]
     pub fn push_u64(&mut self, v: u64) -> VMResult<()> {
-        trusted_write_u64(vm_try!(self.get_memory(8)), v);
-        self.add_top(8)
+        self.push_cached_u64(v)
     }
 
     pub fn push_u128(&mut self, v: u128) -> VMResult<()> {
+        self.flush_cached_operands();
         trusted_write_u128(vm_try!(self.get_memory(16)), v);
         self.add_top(16)
     }
     pub fn pop_u128(&mut self) -> u128 {
+        self.flush_cached_operands();
         self.sub_top(16);
         trusted_read_u128(&self.memory[self.top..self.top + 16])
     }
-    pub fn pop_u64(&mut self) -> u64 {
+    #[cold]
+    #[inline(never)]
+    fn pop_u64_slow(&mut self) -> u64 {
         self.sub_top(8);
         trusted_read_u64(&self.memory[self.top..self.top + 8])
+    }
+    #[inline(always)]
+    pub fn pop_u64(&mut self) -> u64 {
+        if let Some(bits) = self.peek_cached_operand(CachedOperandWidth::Eight) {
+            self.top -= 8;
+            self.cache = OperandCache::EMPTY;
+            return bits;
+        }
+        self.pop_u64_slow()
+    }
+    #[inline(always)]
+    pub fn pop_u32_bytes(&mut self) -> [u8; 4] {
+        self.pop_u32().to_le_bytes()
+    }
+    #[inline(always)]
+    pub fn pop_u64_bytes(&mut self) -> [u8; 8] {
+        self.pop_u64().to_le_bytes()
     }
     pub fn push_i32(&mut self, v: i32) -> VMResult<()> {
         self.push_u32(v as u32)
@@ -317,7 +442,85 @@ impl Stack {
     pub fn pop_f64(&mut self) -> f64 {
         f64::from_bits(self.pop_u64())
     }
+    #[inline(always)]
+    pub fn peek_top_u32(&self) -> u32 {
+        self.peek_cached_operand(CachedOperandWidth::Four)
+            .map(|bits| bits as u32)
+            .unwrap_or_else(|| trusted_read_u32(&self.memory[self.top - 4..self.top]))
+    }
+    #[inline(always)]
+    pub fn peek_top_u64(&self) -> u64 {
+        self.peek_cached_operand(CachedOperandWidth::Eight)
+            .unwrap_or_else(|| trusted_read_u64(&self.memory[self.top - 8..self.top]))
+    }
+    #[inline(always)]
+    pub fn replace_top_u32(&mut self, value: u32) {
+        debug_assert!(self.top >= 4);
+        debug_assert!(matches!(
+            self.cache.width,
+            CachedOperandWidth::None | CachedOperandWidth::Four
+        ));
+        self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
+    }
+    #[inline(always)]
+    pub fn replace_top_u64(&mut self, value: u64) {
+        debug_assert!(self.top >= 8);
+        debug_assert!(matches!(
+            self.cache.width,
+            CachedOperandWidth::None | CachedOperandWidth::Eight
+        ));
+        self.set_cached_operand(CachedOperandWidth::Eight, value);
+    }
+    #[inline(always)]
+    pub fn narrow_top_u64_to_u32(&mut self, value: u32) {
+        debug_assert!(self.top >= 8);
+        debug_assert!(matches!(
+            self.cache.width,
+            CachedOperandWidth::None | CachedOperandWidth::Eight
+        ));
+        self.top -= 4;
+        self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
+    }
+    #[inline(always)]
+    pub fn pop2_u32(&mut self) -> (u32, u32) {
+        match self.cache.width {
+            CachedOperandWidth::Four => {
+                let rhs = self.cache.bits as u32;
+                self.cache = OperandCache::EMPTY;
+                self.top -= 4;
+                let lhs = trusted_read_u32(&self.memory[self.top - 4..self.top]);
+                (lhs, rhs)
+            }
+            CachedOperandWidth::None => {
+                let rhs = trusted_read_u32(&self.memory[self.top - 4..self.top]);
+                let lhs = trusted_read_u32(&self.memory[self.top - 8..self.top - 4]);
+                self.top -= 4;
+                (lhs, rhs)
+            }
+            CachedOperandWidth::Eight => unreachable!("validated i32 pair expected"),
+        }
+    }
+    #[inline(always)]
+    pub fn pop2_u64(&mut self) -> (u64, u64) {
+        match self.cache.width {
+            CachedOperandWidth::Eight => {
+                let rhs = self.cache.bits;
+                self.cache = OperandCache::EMPTY;
+                self.top -= 8;
+                let lhs = trusted_read_u64(&self.memory[self.top - 8..self.top]);
+                (lhs, rhs)
+            }
+            CachedOperandWidth::None => {
+                let rhs = trusted_read_u64(&self.memory[self.top - 8..self.top]);
+                let lhs = trusted_read_u64(&self.memory[self.top - 16..self.top - 8]);
+                self.top -= 8;
+                (lhs, rhs)
+            }
+            CachedOperandWidth::Four => unreachable!("validated i64 pair expected"),
+        }
+    }
     pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
+        self.flush_cached_operands();
         &mut self.memory[reference.local_top..self.top + reference.local_size as usize]
     }
     pub fn local_get(
@@ -326,6 +529,7 @@ impl Stack {
         local_addr: usize,
         size: usize,
     ) -> VMResult<()> {
+        self.flush_cached_operands();
         let new_top = vm_try!(VMResult::from_option(self.top.checked_add(size), || {
             VMResult::StackOverflow
         }));
@@ -354,6 +558,7 @@ impl Stack {
         ))
     }
     pub fn local_set(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+        self.flush_cached_operands();
         self.top -= size;
         self.memory
             .copy_within(self.top..self.top + size, reference.local_top + local_addr);
@@ -414,21 +619,23 @@ impl Stack {
     /// # Safety
     /// Caller must ensure the returned pointer is not used after the stack is dropped or reallocated.
     pub unsafe fn local_area_mut_ptr(&mut self, reference: &LocalReference) -> *mut u8 {
+        self.flush_cached_operands();
         self.memory.as_mut_ptr().add(reference.local_top)
     }
     pub fn local_tee(&mut self, reference: &LocalReference, local_addr: usize, size: usize) {
+        self.flush_cached_operands();
         self.memory
             .copy_within(self.top - size..self.top, reference.local_top + local_addr);
     }
     #[inline(always)]
     pub fn local_tee4(&mut self, reference: &LocalReference, local_addr: usize) {
-        let value = trusted_read_u32(&self.memory[self.top - 4..self.top]);
+        let value = self.peek_top_u32();
         let start = reference.local_top + local_addr;
         trusted_write_u32(&mut self.memory[start..start + 4], value);
     }
     #[inline(always)]
     pub fn local_tee8(&mut self, reference: &LocalReference, local_addr: usize) {
-        let value = trusted_read_u64(&self.memory[self.top - 8..self.top]);
+        let value = self.peek_top_u64();
         let start = reference.local_top + local_addr;
         trusted_write_u64(&mut self.memory[start..start + 8], value);
     }
@@ -451,6 +658,7 @@ impl Stack {
         }
     }
     fn push_call_stack_info(&mut self, info: CallStackInfo) -> VMResult<()> {
+        self.flush_cached_operands();
         let size = std::mem::size_of::<CallStackInfo>();
         let bytes = unsafe {
             std::slice::from_raw_parts((&info as *const CallStackInfo).cast::<u8>(), size)
@@ -494,6 +702,7 @@ impl Stack {
         return_addr: *const Instr,
         runtime: &StoreInner,
     ) -> VMResult<LocalReference> {
+        self.flush_cached_operands();
         let frame = frame.into_call_frame_cache(runtime);
         let local_top = vm_try!(VMResult::from_option(
             self.top.checked_sub(param_size),
@@ -530,6 +739,7 @@ impl Stack {
         return_size: usize,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
+        self.flush_cached_operands();
         let CallStackInfo {
             return_pc,
             prev_local_reference_top,
@@ -556,6 +766,7 @@ impl Stack {
         return_size: usize,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
+        self.flush_cached_operands();
         let CallStackInfo {
             return_pc,
             prev_local_reference_top,
@@ -580,6 +791,7 @@ impl Stack {
         local_size: usize,
         frame: CallFrameCache,
     ) -> VMResult<LocalReference> {
+        self.flush_cached_operands();
         tracing::trace!("function_return_call: {reference:?}");
         let CallStackInfo {
             return_pc,
@@ -617,6 +829,7 @@ impl Stack {
         stack_top: usize,
         return_size: usize,
     ) {
+        self.flush_cached_operands();
         self.memory.copy_within(
             self.top - return_size..self.top,
             reference.local_top + reference.local_size as usize + stack_top,
@@ -937,5 +1150,92 @@ mod tests {
         assert_eq!(stack.top, 12);
         assert_eq!(&stack.memory[1..5], &[1, 2, 3, 4]);
         assert_eq!(&stack.memory[8..12], &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn scalar_cache_keeps_single_u64_top_slot_until_spill_boundary() {
+        let mut stack = Stack::new(64);
+        stack.push_u64(0x1122_3344_5566_7788).unwrap();
+        assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
+        assert_eq!(stack.committed_top(), 0);
+        assert_eq!(stack.peek_top_u64(), 0x1122_3344_5566_7788);
+
+        stack.push_u64(0x99aa_bbcc_ddee_ff00).unwrap();
+
+        assert_eq!(trusted_read_u64(&stack.memory[0..8]), 0x1122_3344_5566_7788);
+        assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
+        assert_eq!(stack.committed_top(), 8);
+        assert_eq!(stack.pop_u64(), 0x99aa_bbcc_ddee_ff00);
+        assert_eq!(stack.pop_u64(), 0x1122_3344_5566_7788);
+    }
+
+    #[test]
+    fn raw_stack_access_flushes_cached_scalars() {
+        let mut stack = Stack::new(64);
+        stack.push_u32(0x0102_0304).unwrap();
+        assert_eq!(stack.cache.width, CachedOperandWidth::Four);
+
+        stack.push_slice(&[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+
+        assert_eq!(stack.cache.width, CachedOperandWidth::None);
+        assert_eq!(trusted_read_u32(&stack.memory[0..4]), 0x0102_0304);
+        assert_eq!(stack.drop(4), &[0xaa, 0xbb, 0xcc, 0xdd]);
+        assert_eq!(stack.pop_u32(), 0x0102_0304);
+    }
+
+    #[test]
+    fn typed_local_ops_roundtrip_with_cached_top_slots() {
+        let mut stack = Stack::new(64);
+        let reference = LocalReference {
+            local_top: 0,
+            local_size: 16,
+        };
+
+        stack.push_slice(&[0; 16]).unwrap();
+        stack.push_u64(0x1122_3344_5566_7788).unwrap();
+        assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
+
+        stack.local_set8(&reference, 0);
+        assert_eq!(trusted_read_u64(&stack.memory[0..8]), 0x1122_3344_5566_7788);
+
+        stack.local_get8(&reference, 0).unwrap();
+        assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
+        stack.local_tee8(&reference, 8);
+
+        assert_eq!(
+            trusted_read_u64(&stack.memory[8..16]),
+            0x1122_3344_5566_7788
+        );
+        assert_eq!(stack.pop_u64(), 0x1122_3344_5566_7788);
+    }
+
+    #[test]
+    fn pop2_and_replace_top_u32_reuses_remaining_slot() {
+        let mut stack = Stack::new(64);
+        stack.push_u32(10).unwrap();
+        stack.push_u32(20).unwrap();
+
+        let (lhs, rhs) = stack.pop2_u32();
+        assert_eq!((lhs, rhs), (10, 20));
+        assert_eq!(stack.top, 4);
+        assert_eq!(stack.cache.width, CachedOperandWidth::None);
+
+        stack.replace_top_u32(lhs.wrapping_add(rhs));
+        assert_eq!(stack.cache.width, CachedOperandWidth::Four);
+        assert_eq!(stack.peek_top_u32(), 30);
+        assert_eq!(stack.pop_u32(), 30);
+    }
+
+    #[test]
+    fn replace_top_u64_can_overwrite_committed_top_without_spill() {
+        let mut stack = Stack::new(64);
+        stack.push_u64(0x1111_2222_3333_4444).unwrap();
+        stack.push_slice(&[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+        stack.drop(4);
+
+        stack.replace_top_u64(0x5555_6666_7777_8888);
+        assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
+        assert_eq!(stack.peek_top_u64(), 0x5555_6666_7777_8888);
+        assert_eq!(stack.pop_u64(), 0x5555_6666_7777_8888);
     }
 }

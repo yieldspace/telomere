@@ -416,6 +416,12 @@ impl Memory {
             self.slice().get(offset..last),
             || { VMResult::MemoryIndexOutOfRange }
         ));
+        if N == 4 {
+            return stack.push_u32(trusted_read_u32(bytes));
+        }
+        if N == 8 {
+            return stack.push_u64(trusted_read_u64(bytes));
+        }
         stack.push_slice(bytes)
     }
 

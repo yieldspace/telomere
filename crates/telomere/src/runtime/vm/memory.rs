@@ -31,6 +31,16 @@ fn truncate_u64_to_u32_bytes(value: u64) -> [u8; 4] {
 }
 
 #[inline(always)]
+fn pop_store_bytes4(ctx: &mut ExecuteContext) -> StoreBytes {
+    StoreBytes::Write4(ctx.stack.pop_u32_bytes())
+}
+
+#[inline(always)]
+fn pop_store_bytes8(ctx: &mut ExecuteContext) -> StoreBytes {
+    StoreBytes::Write8(ctx.stack.pop_u64_bytes())
+}
+
+#[inline(always)]
 /// WebAssembly linear-memory access helper.
 ///
 /// Spec:
@@ -574,9 +584,7 @@ pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
-        StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
-    })
+    store_internal_local(tail_code, ctx, pop_store_bytes4)
 }
 
 /// WebAssembly `i64.store`.
@@ -595,9 +603,7 @@ pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
-        StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
-    })
+    store_internal_local(tail_code, ctx, pop_store_bytes8)
 }
 
 /// WebAssembly `f32.store`.
@@ -616,9 +622,7 @@ pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
-        StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
-    })
+    store_internal_local(tail_code, ctx, pop_store_bytes4)
 }
 
 /// WebAssembly `f64.store`.
@@ -637,9 +641,7 @@ pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
-        StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
-    })
+    store_internal_local(tail_code, ctx, pop_store_bytes8)
 }
 
 /// WebAssembly `i32.store8`.
@@ -950,16 +952,16 @@ define_shared_scalar_load!(
     u64::from
 );
 define_shared_store_alias!(op_i32_store_shared, "i32.store", |ctx| {
-    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+    pop_store_bytes4(ctx)
 });
 define_shared_store_alias!(op_i64_store_shared, "i64.store", |ctx| {
-    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+    pop_store_bytes8(ctx)
 });
 define_shared_store_alias!(op_f32_store_shared, "f32.store", |ctx| {
-    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+    pop_store_bytes4(ctx)
 });
 define_shared_store_alias!(op_f64_store_shared, "f64.store", |ctx| {
-    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+    pop_store_bytes8(ctx)
 });
 define_shared_store_alias!(op_i32_store8_shared, "i32.store8", |ctx| {
     StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
@@ -1095,25 +1097,25 @@ define_indexed_store_alias!(
     op_i32_store_indexed_local,
     op_i32_store_indexed_shared,
     "i32.store",
-    |ctx| { StoreBytes::Write4(ctx.stack.pop_u8_array::<4>()) }
+    |ctx| { pop_store_bytes4(ctx) }
 );
 define_indexed_store_alias!(
     op_i64_store_indexed_local,
     op_i64_store_indexed_shared,
     "i64.store",
-    |ctx| { StoreBytes::Write8(ctx.stack.pop_u8_array::<8>()) }
+    |ctx| { pop_store_bytes8(ctx) }
 );
 define_indexed_store_alias!(
     op_f32_store_indexed_local,
     op_f32_store_indexed_shared,
     "f32.store",
-    |ctx| { StoreBytes::Write4(ctx.stack.pop_u8_array::<4>()) }
+    |ctx| { pop_store_bytes4(ctx) }
 );
 define_indexed_store_alias!(
     op_f64_store_indexed_local,
     op_f64_store_indexed_shared,
     "f64.store",
-    |ctx| { StoreBytes::Write8(ctx.stack.pop_u8_array::<8>()) }
+    |ctx| { pop_store_bytes8(ctx) }
 );
 define_indexed_store_alias!(
     op_i32_store8_indexed_local,

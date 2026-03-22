@@ -1820,6 +1820,13 @@ mod tests {
             .push_memory_to_stack::<4>(MemoryHandle::Shared(shared), &mut stack, 0)
             .unwrap();
         assert_eq!(stack.pop_u8_array::<4>(), [9, 8, 7, 6]);
+        store
+            .write_bytes(MemoryHandle::Local(local), 20, &[1, 2, 3, 4, 5, 6, 7, 8])
+            .unwrap();
+        store
+            .push_memory_to_stack::<8>(MemoryHandle::Local(local), &mut stack, 20)
+            .unwrap();
+        assert_eq!(stack.pop_u64(), 0x0807_0605_0403_0201);
 
         assert_eq!(store.grow_memory(MemoryHandle::Local(local), 1).unwrap(), 1);
         assert_eq!(

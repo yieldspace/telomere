@@ -1,5 +1,17 @@
 use super::*;
 
+#[inline(always)]
+fn read_global_u32(bytes: &[u8]) -> u32 {
+    debug_assert_eq!(bytes.len(), 4);
+    u32::from_le_bytes(bytes.try_into().expect("validated 4-byte global"))
+}
+
+#[inline(always)]
+fn read_global_u64(bytes: &[u8]) -> u64 {
+    debug_assert_eq!(bytes.len(), 8);
+    u64::from_le_bytes(bytes.try_into().expect("validated 8-byte global"))
+}
+
 /// WebAssembly `global.get`.
 ///
 /// Spec:
@@ -18,7 +30,7 @@ use super::*;
 pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
     let addr = ctx.instance().globals.as_slice()[idx];
-    vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
+    vm_try!(ctx.stack.push_u32(read_global_u32(ctx.gc.get_global(addr))));
     call_next(tail_code, 1, ctx)
 }
 
@@ -40,7 +52,7 @@ pub unsafe fn op_global_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 pub unsafe fn op_global_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
     let addr = ctx.instance().globals.as_slice()[idx];
-    vm_try!(ctx.stack.push_slice(ctx.gc.get_global(addr)));
+    vm_try!(ctx.stack.push_u64(read_global_u64(ctx.gc.get_global(addr))));
     call_next(tail_code, 1, ctx)
 }
 
@@ -86,7 +98,7 @@ pub unsafe fn op_global_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let addr = ctx.instance().globals.as_slice()[idx];
     ctx.gc
         .get_global_mut(addr)
-        .copy_from_slice(&ctx.stack.pop_u8_array::<4>());
+        .copy_from_slice(&ctx.stack.pop_u32_bytes());
     call_next(tail_code, 1, ctx)
 }
 
@@ -110,7 +122,7 @@ pub unsafe fn op_global_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     let addr = ctx.instance().globals.as_slice()[idx];
     ctx.gc
         .get_global_mut(addr)
-        .copy_from_slice(&ctx.stack.pop_u8_array::<8>());
+        .copy_from_slice(&ctx.stack.pop_u64_bytes());
     call_next(tail_code, 1, ctx)
 }
 

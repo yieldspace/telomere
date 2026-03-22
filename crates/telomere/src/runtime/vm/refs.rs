@@ -36,8 +36,8 @@ pub unsafe fn op_ref_null(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_ref_is_null(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let value = ctx.stack.pop_u32();
-    vm_try!(ctx.stack.push_u32(u32::from(value == 0)));
+    let value = ctx.stack.peek_top_u32();
+    ctx.stack.replace_top_u32(u32::from(value == 0));
     call_next(tail_code, 0, ctx)
 }
 
