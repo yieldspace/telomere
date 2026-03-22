@@ -17,7 +17,7 @@ use super::*;
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().tables.as_slice()[idx];
+    let addr = *ctx.instance().tables.as_slice().get_unchecked(idx);
     let inst = ctx.gc.get_table(addr);
     let i = ctx.stack.pop_u32();
     if i as usize >= inst.1.len() {
@@ -47,7 +47,7 @@ pub unsafe fn op_table_get(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_table_set(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let idx = (*tail_code).operand.u32 as usize;
-    let addr = ctx.instance().tables.as_slice()[idx];
+    let addr = *ctx.instance().tables.as_slice().get_unchecked(idx);
     let inst = &mut ctx.gc.get_table(addr);
     let val = ctx.stack.pop_u32();
     let i = ctx.stack.pop_u32();
@@ -85,7 +85,7 @@ unsafe fn table_init_impl(
     let instance_addr = ctx.instance_addr();
     let ExecuteContext { store, gc, .. } = ctx;
     let instance = unsafe { &*gc.get_instance_unchecked(instance_addr) };
-    let dst_table_addr = instance.tables.as_slice()[dst_table_idx];
+    let dst_table_addr = *instance.tables.as_slice().get_unchecked(dst_table_idx);
     let segments = store.lock_segments();
     let dst_table_len = {
         let dst_table = gc.get_table(dst_table_addr);
@@ -129,6 +129,7 @@ unsafe fn table_init_impl(
             let slice = vm_try!(VMResult::from_option(exprs.get(src..(src + len)), || {
                 VMResult::TableIndexOutOfRange
             }));
+            let mut resolved = Vec::with_capacity(slice.len());
             for (i, expr) in slice.iter().enumerate() {
                 let res = vm_try!(execute_elem_init_const_expr(
                     gc,
@@ -137,13 +138,15 @@ unsafe fn table_init_impl(
                     expr,
                     reftype,
                 ));
-                let dst_table = gc.get_table(dst_table_addr);
-                let dst = vm_try!(VMResult::from_option(
-                    dst_table.1.get_mut(dst_pos..dst_pos + len),
-                    || { VMResult::TableIndexOutOfRange }
-                ));
-                dst[i] = res.get();
+                debug_assert_eq!(i, resolved.len());
+                resolved.push(res.get());
             }
+            let dst_table = gc.get_table(dst_table_addr);
+            let dst = vm_try!(VMResult::from_option(
+                dst_table.1.get_mut(dst_pos..dst_pos + len),
+                || { VMResult::TableIndexOutOfRange }
+            ));
+            dst.copy_from_slice(&resolved);
         }
     }
     VMResult::Success(())
@@ -234,8 +237,16 @@ pub unsafe fn op_table_copy(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     let dst_table_idx = (*tail_code).operand.u32 as usize;
     let src_table_idx = (*tail_code.offset(1)).operand.u32 as usize;
 
-    let src_table_addr = ctx.instance().tables.as_slice()[src_table_idx];
-    let dst_table_addr = ctx.instance().tables.as_slice()[dst_table_idx];
+    let src_table_addr = *ctx
+        .instance()
+        .tables
+        .as_slice()
+        .get_unchecked(src_table_idx);
+    let dst_table_addr = *ctx
+        .instance()
+        .tables
+        .as_slice()
+        .get_unchecked(dst_table_idx);
     let src_table = &ctx.gc.get_table(src_table_addr).1;
     let src_ptr = vm_try!(VMResult::from_option(src_table.get(src..src + len), || {
         VMResult::TableIndexOutOfRange

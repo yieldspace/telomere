@@ -3,7 +3,7 @@ use crate::{
         execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
         CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
-        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
+        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FuncType, FunctionBody,
         FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
         ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
         ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
@@ -15,6 +15,22 @@ use crate::{
     },
     Instance, Module, Registry, Stack, Store, VMResult,
 };
+
+use crate::common::store::{FunctionExecutionMetadata, FunctionKind, WasmExecutionMetadata};
+
+fn build_execution_metadata(
+    typeidx: TypeIdx,
+    ft: &FuncType,
+    kind: FunctionKind,
+) -> FunctionExecutionMetadata {
+    FunctionExecutionMetadata {
+        kind,
+        typeidx,
+        type_identity: ft.identity(),
+        param_stack_bytes: ft.param_stack_byte_size(),
+        result_stack_bytes: ft.result_stack_byte_size(),
+    }
+}
 
 pub(crate) fn init_global(
     gc: &mut StoreInner,
@@ -327,8 +343,10 @@ pub async fn instantiate(
             }
         }
 
+        let function_type_identities = fts.0.iter().map(FuncType::identity).collect::<Vec<_>>();
         let mod_addr = gc.new_module(ModuleInstance {
             function_types: fts.0.clone(),
+            function_type_identities,
             functions: functions.clone(),
             exports: exs.clone(),
             tables: m_tables.clone(),
@@ -382,18 +400,29 @@ pub async fn instantiate(
 
         for func in codes.0.into_iter() {
             let funcidx = funcs.len() as u32;
+            let typeidx = functions[funcidx as usize];
+            let ft = &fts.0[typeidx.0 as usize];
 
             let func_addr = match func {
-                FunctionBody::Wasm(code) => gc.new_func(&FunctionInstanceData {
-                    instance: inst_id,
-                    body: RuntimeFunctionBody::Wasm {
-                        locals: code.locals,
-                        code: code.expr.into(),
-                    },
-                    funcidx,
-                }),
+                FunctionBody::Wasm(code) => {
+                    let code_expr: std::sync::Arc<[Instr]> = code.expr.into();
+                    gc.new_func(&FunctionInstanceData {
+                        instance: inst_id,
+                        execution: build_execution_metadata(typeidx, ft, FunctionKind::Wasm),
+                        body: RuntimeFunctionBody::Wasm {
+                            locals: code.locals.clone(),
+                            code: code_expr.clone(),
+                            metadata: WasmExecutionMetadata {
+                                code_base_addr: code_expr.as_ptr() as usize,
+                                locals_byte_size: code.locals.byte_size() as u32,
+                            },
+                        },
+                        funcidx,
+                    })
+                }
                 FunctionBody::Host(fp) => gc.new_func(&FunctionInstanceData {
                     instance: inst_id,
+                    execution: build_execution_metadata(typeidx, ft, FunctionKind::Host),
                     body: RuntimeFunctionBody::Host(fp),
                     funcidx,
                 }),
@@ -571,6 +600,7 @@ pub fn aliasing(
     let inst_id = store.new_instance_id();
     let mut functions = vec![];
     let mut function_types = vec![];
+    let mut function_type_identities = vec![];
     let mut globals = vec![];
     let mut memories = vec![];
     let mut tables = vec![];
@@ -602,6 +632,8 @@ pub fn aliasing(
                 let new_tidx = function_types.len();
                 let new_funcidx = functions.len();
                 function_types.push(ft.clone());
+                function_type_identities
+                    .push(ext_module.function_type_identities[tidx.0 as usize].clone());
                 functions.push(TypeIdx(new_tidx as u32));
                 let addr = ext_instance.funcs.as_slice()[idx.0 as usize];
                 function_addrs.push(addr);
@@ -650,6 +682,7 @@ pub fn aliasing(
         globals,
         functions,
         function_types,
+        function_type_identities,
         mems: memories,
     });
     let inst_id_handle = gc.alloc_instance(InstanceData {

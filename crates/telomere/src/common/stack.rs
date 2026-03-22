@@ -379,6 +379,15 @@ impl Stack {
     pub fn local_bytes(&self, reference: &LocalReference, local_addr: usize, size: usize) -> &[u8] {
         &self.memory[reference.local_top + local_addr..reference.local_top + local_addr + size]
     }
+    #[inline(always)]
+    pub fn local_read_u32(&self, reference: &LocalReference, local_addr: usize) -> u32 {
+        trusted_read_u32(self.local_bytes(reference, local_addr, 4))
+    }
+    #[inline(always)]
+    pub fn local_write_u32(&mut self, reference: &LocalReference, local_addr: usize, value: u32) {
+        let start = reference.local_top + local_addr;
+        trusted_write_u32(&mut self.memory[start..start + 4], value);
+    }
     fn zero_new_locals(&mut self, start: usize, size: usize) -> VMResult<()> {
         if size == 0 {
             return VMResult::Success(());

@@ -3,8 +3,8 @@
 use super::{
     memory::{AtomicRmwOp, LocalMemoryObject, SharedMemoryObject},
     object_ref::ObjectRef,
-    AsyncHostFunction, Data, Elem, ExportSection, FuncType, GlobalType, HostFunction, Instr,
-    LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
+    AsyncHostFunction, Data, Elem, ExportSection, FuncType, FuncTypeIdentity, GlobalType,
+    HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -114,7 +114,32 @@ pub struct ModuleInstance {
     pub globals: Vec<GlobalType>,
     pub functions: Vec<TypeIdx>,
     pub function_types: Vec<FuncType>,
+    pub function_type_identities: Vec<FuncTypeIdentity>,
     pub mems: Vec<MemType>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FunctionKind {
+    Wasm,
+    Host,
+    AsyncHost,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FunctionExecutionMetadata {
+    pub kind: FunctionKind,
+    #[allow(dead_code)]
+    pub typeidx: TypeIdx,
+    pub type_identity: FuncTypeIdentity,
+    pub param_stack_bytes: u32,
+    #[allow(dead_code)]
+    pub result_stack_bytes: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WasmExecutionMetadata {
+    pub code_base_addr: usize,
+    pub locals_byte_size: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +158,7 @@ pub(crate) enum FunctionBody {
     Wasm {
         locals: LocalsData,
         code: Arc<[Instr]>,
+        metadata: WasmExecutionMetadata,
     },
     Host(HostFunction),
     AsyncHost(AsyncHostFunction),
@@ -141,10 +167,15 @@ pub(crate) enum FunctionBody {
 impl fmt::Debug for FunctionBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Wasm { locals, code } => f
+            Self::Wasm {
+                locals,
+                code,
+                metadata,
+            } => f
                 .debug_struct("Wasm")
                 .field("locals", locals)
                 .field("code_len", &code.len())
+                .field("locals_byte_size", &metadata.locals_byte_size)
                 .finish(),
             Self::Host(_) => f.write_str("Host(..)"),
             Self::AsyncHost(_) => f.write_str("AsyncHost(..)"),
@@ -156,19 +187,20 @@ impl fmt::Debug for FunctionBody {
 pub struct FunctionInstanceData {
     pub instance: InstanceId,
     pub funcidx: u32,
+    pub execution: FunctionExecutionMetadata,
     pub body: FunctionBody,
 }
 
 impl FunctionInstanceData {
     pub fn is_host_func(&self) -> bool {
         matches!(
-            self.body,
-            FunctionBody::Host(_) | FunctionBody::AsyncHost(_)
+            self.execution.kind,
+            FunctionKind::Host | FunctionKind::AsyncHost
         )
     }
 
     pub fn is_async_host_func(&self) -> bool {
-        matches!(self.body, FunctionBody::AsyncHost(_))
+        matches!(self.execution.kind, FunctionKind::AsyncHost)
     }
 
     pub fn locals(&self) -> LocalsData {
@@ -186,11 +218,17 @@ impl FunctionInstanceData {
     }
 
     pub fn code_pointer(&self) -> Option<*const Instr> {
-        self.code().map(|code| code.as_ptr())
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => Some(metadata.code_base_addr as *const Instr),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
+        }
     }
 
-    pub(crate) fn locals_and_code_offset<R>(&self, _runtime: &R) -> (LocalsData, usize) {
-        (self.locals(), 0)
+    pub(crate) fn wasm_metadata(&self) -> Option<&WasmExecutionMetadata> {
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => Some(metadata),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
+        }
     }
 
     pub fn host_code_pointer(&self) -> HostFunction {
@@ -212,10 +250,12 @@ impl FunctionInstanceData {
     }
 
     pub(crate) fn replace_host_code_pointer(&mut self, fp: HostFunction) {
+        self.execution.kind = FunctionKind::Host;
         self.body = FunctionBody::Host(fp);
     }
 
     pub(crate) fn replace_async_host_code_pointer(&mut self, fp: AsyncHostFunction) {
+        self.execution.kind = FunctionKind::AsyncHost;
         self.body = FunctionBody::AsyncHost(fp);
     }
 }

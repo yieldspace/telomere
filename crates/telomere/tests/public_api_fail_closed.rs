@@ -162,3 +162,34 @@ fn declarative_const_expr_without_ref_func_does_not_declare_function() {
     );
     assert!(matches!(err, WasmParserError::UndeclaredFunctionReference));
 }
+
+#[tokio::test]
+async fn run_module_function_preserves_invalid_operand_for_arity_and_type_mismatch() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "echo") (param i32) (result i32)
+            local.get 0))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "echo", &ResultValue::new(vec![])).await,
+        VMResult::InvalidOperand
+    ));
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "echo",
+            &ResultValue::new(vec![WasmValue::I64(7)]),
+        )
+        .await,
+        VMResult::InvalidOperand
+    ));
+}

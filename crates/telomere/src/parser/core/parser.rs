@@ -5,6 +5,7 @@ use crate::common::custom_section::NameSubSection;
 use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, LocalsData, Operand};
 use crate::parser::core::instruction_generator::InstructionGenerator;
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
+use crate::parser::core::optimizer::optimize_core_program;
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::validate::validate_locals;
 use crate::parser::core::InstructionParser;
@@ -786,10 +787,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
             },
         });
+        instrs.seal_emitted_instruction();
         jump_resolver.evaluate(&mut instrs);
+        let program = instrs.build();
         Ok(Func {
             locals: locals_data,
-            expr: instrs.build(),
+            expr: optimize_core_program(program),
         })
     }
     #[allow(clippy::too_many_arguments)]

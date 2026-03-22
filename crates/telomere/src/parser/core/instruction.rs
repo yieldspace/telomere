@@ -4026,6 +4026,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 jump_resolver,
                 else_addr,
             )?;
+            instrs.seal_emitted_instruction();
             trace!("{checker:?}");
             read_bytes += len;
             if end {
@@ -4206,6 +4207,148 @@ mod tests {
             op,
             vm::op_return_call_import as crate::common::Op
         ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_add_imm_set4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32)
+                local.get 0
+                i32.const 7
+                i32.add
+                local.set 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_add_imm_set4 as crate::common::Op
+        ));
+        assert_eq!(
+            unsafe {
+                operand_at(r#"(module (func (export "f") (param i32) local.get 0 i32.const 7 i32.add local.set 0))"#, 2).i32
+            },
+            7
+        );
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_sub_imm_tee4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.const 7
+                i32.sub
+                local.tee 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_sub_imm_tee4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_eqz_br_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32)
+                block
+                  local.get 0
+                  i32.eqz
+                  br_if 0
+                end))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_eqz_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_ge_u_br_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32 i32)
+                block
+                  local.get 0
+                  local.get 1
+                  i32.ge_u
+                  br_if 0
+                end))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_ge_u_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_load_const_local_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (result i32)
+                i32.const 8
+                i32.load))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_load_const_local as crate::common::Op
+        ));
+        assert_eq!(
+            unsafe {
+                operand_at(
+                    r#"(module (memory 1) (func (export "f") (result i32) i32.const 8 i32.load))"#,
+                    1,
+                )
+                .u32
+            },
+            8
+        );
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_get4_store_const_local_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32)
+                i32.const 8
+                local.get 0
+                i32.store))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_get4_store_const_local as crate::common::Op
+        ));
+        assert_eq!(
+            unsafe {
+                operand_at(
+                    r#"(module (memory 1) (func (export "f") (param i32) i32.const 8 local.get 0 i32.store))"#,
+                    1,
+                )
+                .u32
+            },
+            8
+        );
     }
 
     #[test]

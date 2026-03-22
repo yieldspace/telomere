@@ -132,6 +132,131 @@ async fn load_store_follow_wasm_little_endian() {
 }
 
 #[tokio::test]
+async fn const_address_load_store_superinstructions_preserve_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "store") (param i32)
+            i32.const 8
+            local.get 0
+            i32.store)
+          (func (export "load") (result i32)
+            i32.const 8
+            i32.load)
+          (func (export "byte_at") (param i32) (result i32)
+            local.get 0
+            i32.load8_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "store",
+            &ResultValue::new(vec![WasmValue::I32(0x7856_3412)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "load", vec![]).await,
+        0x7856_3412,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(8)]).await,
+        0x12,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(11)]).await,
+        0x78,
+    );
+}
+
+#[tokio::test]
+async fn const_address_load_store_preserve_oob_and_overflow_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "const_load_oob") (result i32)
+            i32.const 65536
+            i32.load)
+          (func (export "dynamic_load_oob") (param i32) (result i32)
+            local.get 0
+            i32.load)
+          (func (export "const_store_oob") (param i32)
+            i32.const 65536
+            local.get 0
+            i32.store)
+          (func (export "dynamic_store_oob") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store)
+          (func (export "const_load_overflow") (result i32)
+            i32.const -1
+            i32.load offset=1)
+          (func (export "dynamic_load_overflow") (param i32) (result i32)
+            local.get 0
+            i32.load offset=1)
+          (func (export "const_store_overflow") (param i32)
+            i32.const -1
+            local.get 0
+            i32.store offset=1)
+          (func (export "dynamic_store_overflow") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store offset=1))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args) in [
+        ("const_load_oob", ResultValue::new(vec![])),
+        (
+            "dynamic_load_oob",
+            ResultValue::new(vec![WasmValue::I32(65536)]),
+        ),
+        ("const_store_oob", ResultValue::new(vec![WasmValue::I32(1)])),
+        (
+            "dynamic_store_oob",
+            ResultValue::new(vec![WasmValue::I32(65536), WasmValue::I32(1)]),
+        ),
+        ("const_load_overflow", ResultValue::new(vec![])),
+        (
+            "dynamic_load_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1)]),
+        ),
+        (
+            "const_store_overflow",
+            ResultValue::new(vec![WasmValue::I32(1)]),
+        ),
+        (
+            "dynamic_store_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1), WasmValue::I32(1)]),
+        ),
+    ] {
+        assert!(
+            matches!(
+                run_module_function(&instance, &store, name, &args).await,
+                VMResult::MemoryIndexOutOfRange
+            ),
+            "{name} must trap with MemoryIndexOutOfRange"
+        );
+    }
+}
+
+#[tokio::test]
 async fn mem_fill_trap_leaves_memory_unchanged() {
     let store = Store::new();
     let registry = Registry::new();

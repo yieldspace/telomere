@@ -2,15 +2,24 @@ use std::ops::{Deref, DerefMut};
 
 use crate::common::{Instr, Op, Operand};
 
+pub(crate) struct InstructionProgram {
+    pub(crate) instr: Vec<Instr>,
+    pub(crate) instruction_starts: Vec<usize>,
+}
+
 pub(crate) struct InstructionGenerator {
     instr: Vec<Instr>,
     unreachable: Vec<bool>,
+    instruction_starts: Vec<usize>,
+    last_sealed_len: usize,
 }
 impl InstructionGenerator {
     pub(crate) fn new() -> Self {
         Self {
             instr: vec![],
             unreachable: vec![false],
+            instruction_starts: vec![],
+            last_sealed_len: 0,
         }
     }
     #[allow(dead_code)]
@@ -54,8 +63,20 @@ impl InstructionGenerator {
     pub(crate) fn leave_block(&mut self) {
         self.unreachable.pop();
     }
-    pub(crate) fn build(self) -> Vec<Instr> {
-        self.instr
+
+    pub(crate) fn seal_emitted_instruction(&mut self) {
+        let len = self.instr.len();
+        if len > self.last_sealed_len {
+            self.instruction_starts.push(self.last_sealed_len);
+            self.last_sealed_len = len;
+        }
+    }
+
+    pub(crate) fn build(self) -> InstructionProgram {
+        InstructionProgram {
+            instr: self.instr,
+            instruction_starts: self.instruction_starts,
+        }
     }
 }
 impl Deref for InstructionGenerator {

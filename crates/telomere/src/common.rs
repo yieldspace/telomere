@@ -2,7 +2,7 @@
 
 #[macro_use]
 mod vm_result;
-use std::{fmt::Display, future::Future, pin::Pin};
+use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
 
@@ -100,6 +100,10 @@ impl ResultType {
     pub fn iter(&self) -> impl Iterator<Item = &ValType> + use<'_> {
         self.0.iter()
     }
+
+    pub fn stack_byte_size(&self) -> u32 {
+        self.iter().map(|value| value.stack_size().u32()).sum()
+    }
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultValue(Vec<WasmValue>);
@@ -135,6 +139,66 @@ pub struct FuncType(pub ResultType, pub ResultType);
 impl FuncType {
     pub fn new(param: Vec<ValType>, result: Vec<ValType>) -> Self {
         Self(ResultType(param), ResultType(result))
+    }
+
+    pub fn param_stack_byte_size(&self) -> u32 {
+        self.0.stack_byte_size()
+    }
+
+    pub fn result_stack_byte_size(&self) -> u32 {
+        self.1.stack_byte_size()
+    }
+
+    pub(crate) fn identity(&self) -> FuncTypeIdentity {
+        FuncTypeIdentity::from_func_type(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FuncTypeIdentity {
+    Packed(u128),
+    Heap {
+        params: Arc<[ValType]>,
+        results: Arc<[ValType]>,
+    },
+}
+
+impl FuncTypeIdentity {
+    const LEN_BITS: u32 = 6;
+    const TYPE_BITS: u32 = 4;
+    const HEADER_BITS: u32 = Self::LEN_BITS * 2;
+    const MAX_PACKED_ARITY: usize = ((u128::BITS - Self::HEADER_BITS) / Self::TYPE_BITS) as usize;
+
+    fn from_func_type(ty: &FuncType) -> Self {
+        let total_arity = ty.0 .0.len() + ty.1 .0.len();
+        if total_arity > Self::MAX_PACKED_ARITY {
+            return Self::Heap {
+                params: Arc::from(ty.0 .0.as_slice()),
+                results: Arc::from(ty.1 .0.as_slice()),
+            };
+        }
+
+        let mut encoded = ty.0 .0.len() as u128;
+        encoded |= (ty.1 .0.len() as u128) << Self::LEN_BITS;
+
+        let mut shift = Self::HEADER_BITS;
+        for value in ty.0.iter().chain(ty.1.iter()) {
+            encoded |= (Self::encode_valtype(*value) as u128) << shift;
+            shift += Self::TYPE_BITS;
+        }
+        Self::Packed(encoded)
+    }
+
+    const fn encode_valtype(value: ValType) -> u8 {
+        match value {
+            ValType::I32 => 0,
+            ValType::I64 => 1,
+            ValType::F32 => 2,
+            ValType::F64 => 3,
+            ValType::V128 => 4,
+            ValType::FuncRef => 5,
+            ValType::ExternRef => 6,
+        }
     }
 }
 #[derive(Debug, Clone)]

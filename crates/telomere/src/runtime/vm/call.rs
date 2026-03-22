@@ -30,23 +30,14 @@ unsafe fn internal_op_call(
         .copied()
         .and_then(|slot| slot.handle());
     let frame = CallFrameCache::from_parts(funcaddr, &funcinst, memory0);
-    let module_addr = instance.module_addr;
-    let module = ctx.gc.get_module(module_addr);
-    let typeidx = module
-        .functions
-        .get(funcinst.funcidx as usize)
-        .unwrap_unchecked();
-    let ft = &module.function_types[typeidx.0 as usize];
     trace!(
-        "op_call_internal: {:?}({module_addr:?})  {funcaddr:?}",
-        ctx.gc.object_ref_for_instance(funcinst.instance)
+        "op_call_internal: {:?}({:?})  {funcaddr:?}",
+        ctx.gc.object_ref_for_instance(funcinst.instance),
+        instance.module_addr
     );
-    let mut param_size = 0usize;
-    for param in ft.0.iter() {
-        param_size += param.stack_size().usize();
-    }
+    let param_size = funcinst.execution.param_stack_bytes as usize;
     let is_host_func = funcinst.is_host_func();
-    if funcinst.is_host_func() {
+    if is_host_func {
         if is_return_call {
             let local_reference =
                 vm_try!(ctx
@@ -66,19 +57,22 @@ unsafe fn internal_op_call(
         }
         invoke_host_function(return_addr, ctx)
     } else {
-        let (locals, code_offset) = funcinst.locals_and_code_offset(ctx.gc);
+        let wasm_metadata = funcinst
+            .wasm_metadata()
+            .expect("wasm function must expose execution metadata");
+        let locals_size = wasm_metadata.locals_byte_size as usize;
         if is_return_call {
             let local_reference = vm_try!(ctx.stack.function_return_call(
                 &ctx.local_reference,
                 param_size,
-                locals.byte_size(),
-                frame
+                locals_size,
+                frame,
             ));
             ctx.set_local_reference(local_reference);
         } else {
             let local_reference = vm_try!(ctx.stack.function_call(
                 param_size,
-                locals.byte_size(),
+                locals_size,
                 frame,
                 ctx.local_reference,
                 return_addr,
@@ -89,10 +83,40 @@ unsafe fn internal_op_call(
 
         let ptr = funcinst
             .code_pointer()
-            .expect("wasm function must expose a code pointer")
-            .wrapping_add(code_offset);
+            .expect("wasm function must expose a code pointer");
         debug_assert!(!is_host_func);
         VMResult::Success(CallOutcome::Immediate(ptr))
+    }
+}
+
+#[inline(always)]
+unsafe fn direct_funcaddr_unchecked(ctx: &ExecuteContext, funcidx: u32) -> ObjectRef {
+    *ctx.instance()
+        .funcs
+        .as_slice()
+        .get_unchecked(funcidx as usize)
+}
+
+#[inline(always)]
+unsafe fn op_direct_call(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<()> {
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let funcidx = (*tail_code).operand.u32;
+    let funcaddr = direct_funcaddr_unchecked(ctx, funcidx);
+    match vm_try!(internal_op_call(
+        tail_code.offset(1),
+        funcaddr,
+        ctx,
+        is_return_call
+    )) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
     }
 }
 
@@ -112,16 +136,7 @@ unsafe fn internal_op_call(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    if ctx.effect.get_pending_count() != 0 {
-        trace!("waiting effect: {:?}", ctx.cont);
-        return VMResult::Success(());
-    }
-    let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false)) {
-        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
-        CallOutcome::Pending => VMResult::Success(()),
-    }
+    op_direct_call(tail_code, ctx, false)
 }
 
 /// WebAssembly `call` for imported or otherwise generic direct callees.
@@ -140,7 +155,7 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    unsafe { op_call(tail_code, ctx) }
+    op_direct_call(tail_code, ctx, false)
 }
 
 /// WebAssembly `return_call`.
@@ -157,16 +172,7 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    if ctx.effect.get_pending_count() != 0 {
-        trace!("waiting effect: {:?}", ctx.cont);
-        return VMResult::Success(());
-    }
-    let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true)) {
-        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
-        CallOutcome::Pending => VMResult::Success(()),
-    }
+    op_direct_call(tail_code, ctx, true)
 }
 
 /// WebAssembly `return_call` for imported or otherwise generic direct callees.
@@ -186,7 +192,7 @@ pub unsafe fn op_return_call_import(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    unsafe { op_return_call(tail_code, ctx) }
+    op_direct_call(tail_code, ctx, true)
 }
 
 #[inline(never)]
@@ -210,10 +216,7 @@ unsafe fn internal_op_call_indirect(
 ) -> VMResult<CallOutcome> {
     let i = ctx.stack.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
-    let table_addr = *vm_try!(VMResult::from_option(
-        ctx.instance().tables.as_slice().get(tableidx),
-        || { VMResult::TableIndexOutOfRange }
-    ));
+    let table_addr = *ctx.instance().tables.as_slice().get_unchecked(tableidx);
     let table = ctx.gc.get_table(table_addr);
     let func_addr = *vm_try!(VMResult::from_option(table.1.get(i as usize), || {
         VMResult::TableIndexOutOfRange
@@ -224,18 +227,17 @@ unsafe fn internal_op_call_indirect(
     }
     let func_addr = ObjectRef(func_addr);
     let funcinst = ctx.gc.get_func(func_addr);
-    let instance = ctx.gc.instance(funcinst.instance);
-    let module = ctx.gc.get_module(instance.module_addr);
-    let actual_typeidx = module.functions.get(funcinst.funcidx as usize).unwrap();
-    let actual_ft = &module.function_types[actual_typeidx.0 as usize];
     let expected_typeidx = (*tail_code.offset(1)).operand.u32;
-    let expected_ft = ctx
+    let expected_type_identity = ctx
         .module()
-        .function_types
-        .get(expected_typeidx as usize)
-        .unwrap();
-    trace!("{:?} {:?}", actual_ft, expected_ft);
-    if actual_ft != expected_ft {
+        .function_type_identities
+        .get_unchecked(expected_typeidx as usize);
+    trace!(
+        "{:?} {:?}",
+        funcinst.execution.type_identity,
+        expected_type_identity
+    );
+    if &funcinst.execution.type_identity != expected_type_identity {
         return VMResult::CallIndirectInvalidType;
     }
     let outcome = vm_try!(internal_op_call(
