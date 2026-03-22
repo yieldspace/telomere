@@ -4087,6 +4087,17 @@ mod tests {
         op_at_in_func(wat, 0, index)
     }
 
+    fn ops_in_func(wat: &str, func_index: usize) -> Vec<crate::common::Op> {
+        let bytes = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        let module = parser.parse_module().expect("module must parse");
+        let FunctionBody::Wasm(func) = &module.codes.0[func_index] else {
+            panic!("expected wasm function body");
+        };
+        func.expr.iter().map(|instr| unsafe { instr.op }).collect()
+    }
+
     fn operand_at(wat: &str, index: usize) -> Operand {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
@@ -4101,8 +4112,8 @@ mod tests {
     #[test]
     fn parser_specializes_default_memory_load_handler() {
         let local = op_at(
-            r#"(module (memory 1) (func (export "f") (param i32) (result i32) local.get 0 i32.load))"#,
-            2,
+            r#"(module (memory 1) (func (export "f") (param i32) (result i32) local.get 0 i32.const 0 i32.add i32.load))"#,
+            5,
         );
         assert!(std::ptr::fn_addr_eq(
             local,
@@ -4349,6 +4360,269 @@ mod tests {
             },
             8
         );
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_add_set4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32 i32)
+                local.get 0
+                local.get 1
+                i32.add
+                local.set 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_add_set4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_add_tee4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32 i32) (result i32)
+                local.get 0
+                local.get 1
+                i32.add
+                local.tee 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_add_tee4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_and_imm_set4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32)
+                local.get 0
+                i32.const 255
+                i32.and
+                local.set 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_and_imm_set4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_shl_imm_tee4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.const 3
+                i32.shl
+                local.tee 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_shl_imm_tee4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_shr_u_imm_set4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32)
+                local.get 0
+                i32.const 5
+                i32.shr_u
+                local.set 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_shr_u_imm_set4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_addr_load_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.load))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_addr_load as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_addr_load8_u_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.load8_u))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_addr_load8_u as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_addr_load16_s_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.load16_s))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_addr_load16_s as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_addr_load16_u_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.load16_u))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_addr_load16_u as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_f32_local_addr_load_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result f32)
+                local.get 0
+                f32.load))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_f32_local_addr_load as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_store_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i32)
+                local.get 0
+                local.get 1
+                i32.store))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_store as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_store8_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i32)
+                local.get 0
+                local.get 1
+                i32.store8))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_store8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_store16_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i32)
+                local.get 0
+                local.get 1
+                i32.store16))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_store16 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_does_not_apply_second_wave_superinstructions_to_i64_locals() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (func (export "f") (param i64 i64)
+                local.get 0
+                local.get 1
+                i64.add
+                local.set 0))
+            "#,
+            0,
+        );
+        for op in ops {
+            assert!(!std::ptr::fn_addr_eq(
+                op,
+                vm::op_i32_local_local_add_set4 as crate::common::Op
+            ));
+        }
     }
 
     #[test]

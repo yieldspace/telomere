@@ -18,6 +18,32 @@ async fn call_i32(
     }
 }
 
+async fn call_f32_bits(
+    instance: &telomere::common::InstanceHandle,
+    store: &Store,
+    name: &str,
+    args: Vec<WasmValue>,
+) -> VMResult<u32> {
+    match run_module_function(instance, store, name, &ResultValue::new(args)).await {
+        VMResult::Success(values) => match values.iter().next() {
+            Some(WasmValue::F32(value)) => VMResult::Success(value.to_bits()),
+            other => panic!("expected f32 result from {name}, got {other:?}"),
+        },
+        other => match other {
+            VMResult::Success(_) => unreachable!(),
+            VMResult::Unreachable => VMResult::Unreachable,
+            VMResult::StackOverflow => VMResult::StackOverflow,
+            VMResult::MemoryIndexOutOfRange => VMResult::MemoryIndexOutOfRange,
+            VMResult::TableIndexOutOfRange => VMResult::TableIndexOutOfRange,
+            VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
+            VMResult::TableUninitialized => VMResult::TableUninitialized,
+            VMResult::Unlinkable => VMResult::Unlinkable,
+            VMResult::InvalidOperand => VMResult::InvalidOperand,
+            VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+        },
+    }
+}
+
 #[cfg(feature = "simd")]
 async fn call_v128(
     instance: &telomere::common::InstanceHandle,
@@ -243,6 +269,455 @@ async fn const_address_load_store_preserve_oob_and_overflow_traps() {
         ),
         (
             "dynamic_store_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1), WasmValue::I32(1)]),
+        ),
+    ] {
+        assert!(
+            matches!(
+                run_module_function(&instance, &store, name, &args).await,
+                VMResult::MemoryIndexOutOfRange
+            ),
+            "{name} must trap with MemoryIndexOutOfRange"
+        );
+    }
+}
+
+#[tokio::test]
+async fn local_address_load_superinstructions_match_unfused_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 0) "\78\56\34\12\34\12\ff\ff\00\00\80\3f")
+          (func (export "fused_i32_load") (param i32) (result i32)
+            local.get 0
+            i32.load)
+          (func (export "baseline_i32_load") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load)
+          (func (export "fused_i32_load8_u") (param i32) (result i32)
+            local.get 0
+            i32.load8_u)
+          (func (export "baseline_i32_load8_u") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load8_u)
+          (func (export "fused_i32_load16_s") (param i32) (result i32)
+            local.get 0
+            i32.load16_s)
+          (func (export "baseline_i32_load16_s") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load16_s)
+          (func (export "fused_i32_load16_u") (param i32) (result i32)
+            local.get 0
+            i32.load16_u)
+          (func (export "baseline_i32_load16_u") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load16_u)
+          (func (export "fused_f32_load") (param i32) (result f32)
+            local.get 0
+            f32.load)
+          (func (export "baseline_f32_load") (param i32) (result f32)
+            local.get 0
+            i32.const 0
+            i32.add
+            f32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (fused, baseline, addr, expected) in [
+        ("fused_i32_load", "baseline_i32_load", 0, 0x1234_5678_i32),
+        ("fused_i32_load8_u", "baseline_i32_load8_u", 0, 0x78),
+        ("fused_i32_load16_s", "baseline_i32_load16_s", 6, -1),
+        ("fused_i32_load16_u", "baseline_i32_load16_u", 4, 0x1234),
+    ] {
+        assert_success_i32(
+            call_i32(&instance, &store, fused, vec![WasmValue::I32(addr)]).await,
+            expected,
+        );
+        assert_success_i32(
+            call_i32(&instance, &store, baseline, vec![WasmValue::I32(addr)]).await,
+            expected,
+        );
+    }
+
+    let fused_bits =
+        call_f32_bits(&instance, &store, "fused_f32_load", vec![WasmValue::I32(8)]).await;
+    let baseline_bits = call_f32_bits(
+        &instance,
+        &store,
+        "baseline_f32_load",
+        vec![WasmValue::I32(8)],
+    )
+    .await;
+    match (fused_bits, baseline_bits) {
+        (VMResult::Success(fused), VMResult::Success(baseline)) => {
+            assert_eq!(fused, 1.0f32.to_bits());
+            assert_eq!(baseline, 1.0f32.to_bits());
+        }
+        other => panic!("expected fused/baseline f32 loads to succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn local_local_store_superinstructions_match_unfused_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "fused_store32") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store)
+          (func (export "baseline_store32") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store)
+          (func (export "fused_store8") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store8)
+          (func (export "baseline_store8") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store8)
+          (func (export "fused_store16") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store16)
+          (func (export "baseline_store16") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store16)
+          (func (export "load32") (param i32) (result i32)
+            local.get 0
+            i32.load)
+          (func (export "load8") (param i32) (result i32)
+            local.get 0
+            i32.load8_u)
+          (func (export "load16") (param i32) (result i32)
+            local.get 0
+            i32.load16_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args) in [
+        (
+            "fused_store32",
+            ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0x7856_3412)]),
+        ),
+        (
+            "baseline_store32",
+            ResultValue::new(vec![WasmValue::I32(4), WasmValue::I32(0x7856_3412)]),
+        ),
+        (
+            "fused_store8",
+            ResultValue::new(vec![WasmValue::I32(8), WasmValue::I32(0x12ab)]),
+        ),
+        (
+            "baseline_store8",
+            ResultValue::new(vec![WasmValue::I32(9), WasmValue::I32(0x12ab)]),
+        ),
+        (
+            "fused_store16",
+            ResultValue::new(vec![WasmValue::I32(10), WasmValue::I32(0xcdef)]),
+        ),
+        (
+            "baseline_store16",
+            ResultValue::new(vec![WasmValue::I32(12), WasmValue::I32(0xcdef)]),
+        ),
+    ] {
+        assert!(
+            matches!(
+                run_module_function(&instance, &store, name, &args).await,
+                VMResult::Success(_)
+            ),
+            "{name} must succeed"
+        );
+    }
+
+    assert_success_i32(
+        call_i32(&instance, &store, "load32", vec![WasmValue::I32(0)]).await,
+        0x7856_3412,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "load32", vec![WasmValue::I32(4)]).await,
+        0x7856_3412,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "load8", vec![WasmValue::I32(8)]).await,
+        0xab,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "load8", vec![WasmValue::I32(9)]).await,
+        0xab,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "load16", vec![WasmValue::I32(10)]).await,
+        0xcdef,
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "load16", vec![WasmValue::I32(12)]).await,
+        0xcdef,
+    );
+}
+
+#[tokio::test]
+async fn local_address_load_store_superinstructions_preserve_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "fused_i32_load_oob") (param i32) (result i32)
+            local.get 0
+            i32.load)
+          (func (export "baseline_i32_load_oob") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load)
+          (func (export "fused_i32_load8_u_oob") (param i32) (result i32)
+            local.get 0
+            i32.load8_u)
+          (func (export "baseline_i32_load8_u_oob") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load8_u)
+          (func (export "fused_i32_load16_s_oob") (param i32) (result i32)
+            local.get 0
+            i32.load16_s)
+          (func (export "baseline_i32_load16_s_oob") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load16_s)
+          (func (export "fused_i32_load16_u_oob") (param i32) (result i32)
+            local.get 0
+            i32.load16_u)
+          (func (export "baseline_i32_load16_u_oob") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load16_u)
+          (func (export "fused_f32_load_oob") (param i32) (result f32)
+            local.get 0
+            f32.load)
+          (func (export "baseline_f32_load_oob") (param i32) (result f32)
+            local.get 0
+            i32.const 0
+            i32.add
+            f32.load)
+          (func (export "fused_i32_load_overflow") (param i32) (result i32)
+            local.get 0
+            i32.load offset=1)
+          (func (export "baseline_i32_load_overflow") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            i32.load offset=1)
+          (func (export "fused_f32_load_overflow") (param i32) (result f32)
+            local.get 0
+            f32.load offset=1)
+          (func (export "baseline_f32_load_overflow") (param i32) (result f32)
+            local.get 0
+            i32.const 0
+            i32.add
+            f32.load offset=1)
+          (func (export "fused_store_oob") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store)
+          (func (export "baseline_store_oob") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store)
+          (func (export "fused_store8_oob") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store8)
+          (func (export "baseline_store8_oob") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store8)
+          (func (export "fused_store16_oob") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store16)
+          (func (export "baseline_store16_oob") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store16)
+          (func (export "fused_store_overflow") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store offset=1)
+          (func (export "baseline_store_overflow") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store offset=1)
+          (func (export "fused_store8_overflow") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store8 offset=1)
+          (func (export "baseline_store8_overflow") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store8 offset=1)
+          (func (export "fused_store16_overflow") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store16 offset=1)
+          (func (export "baseline_store16_overflow") (param i32 i32)
+            local.get 0
+            i32.const 0
+            i32.add
+            local.get 1
+            i32.store16 offset=1))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args) in [
+        (
+            "fused_i32_load_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "baseline_i32_load_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "fused_i32_load8_u_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "baseline_i32_load8_u_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "fused_i32_load16_s_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "baseline_i32_load16_s_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "fused_i32_load16_u_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "baseline_i32_load16_u_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "fused_f32_load_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "baseline_f32_load_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536)]),
+        ),
+        (
+            "fused_i32_load_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1)]),
+        ),
+        (
+            "baseline_i32_load_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1)]),
+        ),
+        (
+            "fused_f32_load_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1)]),
+        ),
+        (
+            "baseline_f32_load_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1)]),
+        ),
+        (
+            "fused_store_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536), WasmValue::I32(1)]),
+        ),
+        (
+            "baseline_store_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536), WasmValue::I32(1)]),
+        ),
+        (
+            "fused_store8_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536), WasmValue::I32(1)]),
+        ),
+        (
+            "baseline_store8_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536), WasmValue::I32(1)]),
+        ),
+        (
+            "fused_store16_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536), WasmValue::I32(1)]),
+        ),
+        (
+            "baseline_store16_oob",
+            ResultValue::new(vec![WasmValue::I32(65_536), WasmValue::I32(1)]),
+        ),
+        (
+            "fused_store_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1), WasmValue::I32(1)]),
+        ),
+        (
+            "baseline_store_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1), WasmValue::I32(1)]),
+        ),
+        (
+            "fused_store8_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1), WasmValue::I32(1)]),
+        ),
+        (
+            "baseline_store8_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1), WasmValue::I32(1)]),
+        ),
+        (
+            "fused_store16_overflow",
+            ResultValue::new(vec![WasmValue::I32(-1), WasmValue::I32(1)]),
+        ),
+        (
+            "baseline_store16_overflow",
             ResultValue::new(vec![WasmValue::I32(-1), WasmValue::I32(1)]),
         ),
     ] {
