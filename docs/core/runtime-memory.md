@@ -18,7 +18,7 @@ issue #106 以降の core runtime は、旧 `MemoryPool` / compacting GC を前�
 
 - `instantiate` / `run_module_function` / `get_global` / host link / aliasing は同じ execution lease の下で直列化される
 - nested sync reentry は component host trampoline から渡す reentry token 経由だけを許可する
-- component support は `MemoryPool` / `GcRef` を直接露出せず、memory handle と sync reentry helper を使う
+- component support は `MemoryPool` / `ObjectRef` を直接露出せず、memory handle と sync reentry helper を使う
 
 ## Effects
 

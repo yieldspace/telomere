@@ -1,8 +1,8 @@
 #![allow(dead_code, private_interfaces)]
 
 use super::{
-    gc::GcRef,
     memory::{AtomicRmwOp, LocalMemoryObject, SharedMemoryObject},
+    object_ref::ObjectRef,
     AsyncHostFunction, Data, Elem, ExportSection, FuncType, GlobalType, HostFunction, Instr,
     LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
 };
@@ -90,7 +90,7 @@ impl InstanceMemorySlot {
         }
     }
 
-    pub(crate) fn from_gc_ref(store: &StoreInner, addr: GcRef) -> Self {
+    pub(crate) fn from_object_ref(store: &StoreInner, addr: ObjectRef) -> Self {
         if addr.is_null() {
             Self::None
         } else {
@@ -120,11 +120,11 @@ pub struct ModuleInstance {
 #[derive(Debug, Clone)]
 pub struct InstanceData {
     pub instance_id: u32,
-    pub module_addr: GcRef,
-    pub globals: Vec<GcRef>,
-    pub funcs: Vec<GcRef>,
-    pub tables: Vec<GcRef>,
-    pub mems: Vec<GcRef>,
+    pub module_addr: ObjectRef,
+    pub globals: Vec<ObjectRef>,
+    pub funcs: Vec<ObjectRef>,
+    pub tables: Vec<ObjectRef>,
+    pub mems: Vec<ObjectRef>,
     pub memory_slots: Vec<InstanceMemorySlot>,
 }
 
@@ -275,11 +275,11 @@ enum ObjectKind {
 const OBJECT_KIND_SHIFT: u32 = 29;
 const OBJECT_INDEX_MASK: u32 = (1 << OBJECT_KIND_SHIFT) - 1;
 
-fn encode_object_ref(kind: ObjectKind, raw: u32) -> GcRef {
-    GcRef(((kind as u32) << OBJECT_KIND_SHIFT) | raw)
+fn encode_object_ref(kind: ObjectKind, raw: u32) -> ObjectRef {
+    ObjectRef(((kind as u32) << OBJECT_KIND_SHIFT) | raw)
 }
 
-fn decode_object_ref(addr: GcRef) -> (ObjectKind, usize) {
+fn decode_object_ref(addr: ObjectRef) -> (ObjectKind, usize) {
     let raw = addr.get();
     let kind = match raw >> OBJECT_KIND_SHIFT {
         1 => ObjectKind::Module,
@@ -479,12 +479,12 @@ impl StoreInner {
         &self.modules[id.index()]
     }
 
-    pub(crate) fn new_module(&mut self, module: ModuleInstance) -> GcRef {
+    pub(crate) fn new_module(&mut self, module: ModuleInstance) -> ObjectRef {
         let id = self.alloc_module(module);
         encode_object_ref(ObjectKind::Module, id.raw())
     }
 
-    pub(crate) fn get_module(&self, addr: GcRef) -> &ModuleInstance {
+    pub(crate) fn get_module(&self, addr: ObjectRef) -> &ModuleInstance {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Module);
         &self.modules[index]
@@ -500,23 +500,23 @@ impl StoreInner {
         &self.instances[id.index()]
     }
 
-    pub(crate) fn new_instance(&mut self, instance: &InstanceData) -> GcRef {
+    pub(crate) fn new_instance(&mut self, instance: &InstanceData) -> ObjectRef {
         let id = InstanceId::from_index(self.instances.len());
         self.instances.push(instance.clone());
         encode_object_ref(ObjectKind::Instance, id.raw())
     }
 
-    pub(crate) fn gc_ref_for_instance(&self, id: InstanceId) -> GcRef {
+    pub(crate) fn object_ref_for_instance(&self, id: InstanceId) -> ObjectRef {
         encode_object_ref(ObjectKind::Instance, id.raw())
     }
 
-    pub(crate) unsafe fn get_instance_unchecked(&self, addr: GcRef) -> *const InstanceData {
+    pub(crate) unsafe fn get_instance_unchecked(&self, addr: ObjectRef) -> *const InstanceData {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Instance);
         &self.instances[index] as *const InstanceData
     }
 
-    pub(crate) fn get_instance(&self, addr: GcRef) -> &InstanceData {
+    pub(crate) fn get_instance(&self, addr: ObjectRef) -> &InstanceData {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Instance);
         &self.instances[index]
@@ -524,7 +524,7 @@ impl StoreInner {
 
     pub(crate) unsafe fn place_instance_unchecked(
         &mut self,
-        addr: GcRef,
+        addr: ObjectRef,
         instance: &super::Instance,
     ) {
         let (kind, index) = decode_object_ref(addr);
@@ -533,7 +533,7 @@ impl StoreInner {
             .memory
             .iter()
             .copied()
-            .map(|addr| InstanceMemorySlot::from_gc_ref(self, addr))
+            .map(|addr| InstanceMemorySlot::from_object_ref(self, addr))
             .collect();
         self.instances[index] = InstanceData {
             instance_id: instance.instance_id,
@@ -556,7 +556,7 @@ impl StoreInner {
         &self.funcs[id.index()]
     }
 
-    pub(crate) fn get_func(&self, addr: GcRef) -> &FunctionInstanceData {
+    pub(crate) fn get_func(&self, addr: ObjectRef) -> &FunctionInstanceData {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Function);
         &self.funcs[index]
@@ -566,13 +566,13 @@ impl StoreInner {
         &mut self.funcs[id.index()]
     }
 
-    pub(crate) fn get_func_mut(&mut self, addr: GcRef) -> &mut FunctionInstanceData {
+    pub(crate) fn get_func_mut(&mut self, addr: ObjectRef) -> &mut FunctionInstanceData {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Function);
         &mut self.funcs[index]
     }
 
-    pub(crate) fn new_func(&mut self, func: &FunctionInstanceData) -> GcRef {
+    pub(crate) fn new_func(&mut self, func: &FunctionInstanceData) -> ObjectRef {
         let id = self.alloc_func(func.clone());
         encode_object_ref(ObjectKind::Function, id.raw())
     }
@@ -587,12 +587,12 @@ impl StoreInner {
         &self.tables[id.index()]
     }
 
-    pub(crate) fn new_table(&mut self, table_type: TableType) -> GcRef {
+    pub(crate) fn new_table(&mut self, table_type: TableType) -> ObjectRef {
         let id = self.alloc_table(super::TableInstance::new(table_type));
         encode_object_ref(ObjectKind::Table, id.raw())
     }
 
-    pub(crate) fn get_table(&mut self, addr: GcRef) -> &mut super::TableInstance {
+    pub(crate) fn get_table(&mut self, addr: ObjectRef) -> &mut super::TableInstance {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Table);
         &mut self.tables[index]
@@ -612,27 +612,27 @@ impl StoreInner {
         &self.globals[id.index()]
     }
 
-    pub(crate) fn new_global_ref(&mut self, global_ref: GcRef) -> GcRef {
+    pub(crate) fn new_global_ref(&mut self, global_ref: ObjectRef) -> ObjectRef {
         let id = self.alloc_global(GlobalValue::Ref(global_ref.get()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
-    pub(crate) fn new_global_data4(&mut self, data: u32) -> GcRef {
+    pub(crate) fn new_global_data4(&mut self, data: u32) -> ObjectRef {
         let id = self.alloc_global(GlobalValue::Bytes4(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
-    pub(crate) fn new_global_data8(&mut self, data: u64) -> GcRef {
+    pub(crate) fn new_global_data8(&mut self, data: u64) -> ObjectRef {
         let id = self.alloc_global(GlobalValue::Bytes8(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
-    pub(crate) fn new_global_data16(&mut self, data: u128) -> GcRef {
+    pub(crate) fn new_global_data16(&mut self, data: u128) -> ObjectRef {
         let id = self.alloc_global(GlobalValue::Bytes16(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
-    pub(crate) fn get_global(&self, addr: GcRef) -> &[u8] {
+    pub(crate) fn get_global(&self, addr: ObjectRef) -> &[u8] {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Global);
         self.globals[index].as_bytes()
@@ -642,13 +642,13 @@ impl StoreInner {
         &mut self.globals[id.index()]
     }
 
-    pub(crate) fn get_global_mut(&mut self, addr: GcRef) -> &mut [u8] {
+    pub(crate) fn get_global_mut(&mut self, addr: ObjectRef) -> &mut [u8] {
         let (kind, index) = decode_object_ref(addr);
         assert_eq!(kind, ObjectKind::Global);
         self.globals[index].as_bytes_mut()
     }
 
-    pub(crate) fn copy_object(&mut self, item: GcRef) -> GcRef {
+    pub(crate) fn copy_object(&mut self, item: ObjectRef) -> ObjectRef {
         let (kind, index) = decode_object_ref(item);
         assert_eq!(kind, ObjectKind::Global);
         let copied = self.globals[index].clone();
@@ -662,9 +662,9 @@ impl StoreInner {
         MemoryHandle::Local(id)
     }
 
-    pub(crate) fn new_memory(&mut self, page_count: u32, max_page_size: u32) -> GcRef {
+    pub(crate) fn new_memory(&mut self, page_count: u32, max_page_size: u32) -> ObjectRef {
         let handle = self.alloc_local_memory(LocalMemoryObject::new(page_count, max_page_size));
-        self.gc_ref_for_memory_handle(handle)
+        self.object_ref_for_memory_handle(handle)
     }
 
     pub(crate) fn alloc_shared_memory(&mut self, memory: Arc<SharedMemoryObject>) -> MemoryHandle {
@@ -673,9 +673,9 @@ impl StoreInner {
         MemoryHandle::Shared(id)
     }
 
-    pub(crate) fn new_shared_memory(&mut self, page_count: u32, max_page_size: u32) -> GcRef {
+    pub(crate) fn new_shared_memory(&mut self, page_count: u32, max_page_size: u32) -> ObjectRef {
         let handle = self.alloc_shared_memory(SharedMemoryObject::new(page_count, max_page_size));
-        self.gc_ref_for_memory_handle(handle)
+        self.object_ref_for_memory_handle(handle)
     }
 
     pub(crate) fn memory_page_size(&self, handle: MemoryHandle) -> u32 {
@@ -1359,7 +1359,7 @@ impl StoreInner {
         }
     }
 
-    pub(crate) fn memory_handle(&self, addr: GcRef) -> MemoryHandle {
+    pub(crate) fn memory_handle(&self, addr: ObjectRef) -> MemoryHandle {
         let (kind, index) = decode_object_ref(addr);
         match kind {
             ObjectKind::LocalMemory => MemoryHandle::Local(LocalMemoryId::from_index(index)),
@@ -1368,7 +1368,7 @@ impl StoreInner {
         }
     }
 
-    pub(crate) fn gc_ref_for_memory_handle(&self, handle: MemoryHandle) -> GcRef {
+    pub(crate) fn object_ref_for_memory_handle(&self, handle: MemoryHandle) -> ObjectRef {
         match handle {
             MemoryHandle::Local(id) => encode_object_ref(ObjectKind::LocalMemory, id.raw()),
             MemoryHandle::Shared(id) => encode_object_ref(ObjectKind::SharedMemory, id.raw()),
@@ -1383,7 +1383,7 @@ impl StoreInner {
         &mut self.local_memories[id.index()]
     }
 
-    pub(crate) fn get_memory(&mut self, addr: GcRef) -> &mut super::Memory {
+    pub(crate) fn get_memory(&mut self, addr: ObjectRef) -> &mut super::Memory {
         match self.memory_handle(addr) {
             MemoryHandle::Local(id) => self.local_memory_mut(id).memory_mut(),
             MemoryHandle::Shared(_) => panic!("shared memory requires shared memory APIs"),
@@ -1392,7 +1392,7 @@ impl StoreInner {
 
     pub(crate) fn with_memory_by_addr<T>(
         &mut self,
-        addr: GcRef,
+        addr: ObjectRef,
         f: impl FnOnce(&mut super::Memory) -> T,
     ) -> T {
         match self.memory_handle(addr) {
@@ -1415,7 +1415,7 @@ pub struct InstanceHandle {
     pub(crate) store_identity: Weak<()>,
     pub(crate) instance: InstanceId,
     pub(crate) instance_id: u32,
-    pub(crate) gc_ref: GcRef,
+    pub(crate) object_ref: ObjectRef,
 }
 
 impl InstanceHandle {
@@ -1424,7 +1424,7 @@ impl InstanceHandle {
             store_identity: store.identity_weak(),
             instance,
             instance_id,
-            gc_ref: encode_object_ref(ObjectKind::Instance, instance.raw()),
+            object_ref: encode_object_ref(ObjectKind::Instance, instance.raw()),
         }
     }
 
@@ -1436,8 +1436,8 @@ impl InstanceHandle {
         self.instance_id
     }
 
-    pub(crate) fn get_gc_ref_with_pool<R>(&self, store: &Store, _runtime: &R) -> Option<GcRef> {
-        self.matches_store(store).then_some(self.gc_ref)
+    pub(crate) fn object_ref_for_store(&self, store: &Store) -> Option<ObjectRef> {
+        self.matches_store(store).then_some(self.object_ref)
     }
 }
 
@@ -1643,10 +1643,6 @@ impl Store {
                 .any(|(identity, _)| *identity == identity_ptr)
         })
     }
-}
-
-pub(crate) fn clear_active_root_slot_for_identity(_identity: &Weak<()>, _slot: u32) -> bool {
-    false
 }
 
 #[derive(Default, Clone, Copy)]

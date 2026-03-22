@@ -16,9 +16,9 @@ mod tables;
 
 use crate::{
     common::{
-        execute_elem_init_const_expr, CallFrameCache, ElemInit, ExecuteContext, ExportDesc, GcRef,
-        InstanceHandle, Instr, LocalReference, MemArg, ResultType, ResultValue, StablePc, Stack,
-        VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
+        execute_elem_init_const_expr, CallFrameCache, ElemInit, ExecuteContext, ExportDesc,
+        InstanceHandle, Instr, LocalReference, MemArg, ObjectRef, ResultType, ResultValue,
+        StablePc, Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::{
         memory_effect::{HostCallPending, PendingOp},
@@ -396,7 +396,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     let ft = {
         let gc = store.lock_gc();
         let instance = gc.get_instance(vm_try!(VMResult::from_option(
-            instance.get_gc_ref_with_pool(store, &gc),
+            instance.object_ref_for_store(store),
             || { VMResult::Unlinkable }
         )));
         let module_inst = gc.get_module(instance.module_addr);
@@ -478,8 +478,8 @@ pub(crate) fn run_module_function_sync_with_gc(
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {
-        let instance = gc.get_instance(match instance.get_gc_ref_with_pool(store, gc) {
-            Some(gc_ref) => gc_ref,
+        let instance = gc.get_instance(match instance.object_ref_for_store(store) {
+            Some(object_ref) => object_ref,
             None => return Ok(VMResult::Unlinkable),
         });
         let module_inst = gc.get_module(instance.module_addr);
@@ -613,7 +613,7 @@ pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMRes
 
     let instance = unsafe {
         &*gc.get_instance_unchecked(vm_try!(VMResult::from_option(
-            instance.get_gc_ref_with_pool(store, &gc),
+            instance.object_ref_for_store(store),
             || { VMResult::Unlinkable }
         )))
     };

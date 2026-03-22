@@ -7,8 +7,8 @@ use crate::VMResult;
 use std::fmt::Debug;
 
 use super::{
-    gc::GcRef,
     memory::trusted_copy_from_slice,
+    object_ref::ObjectRef,
     store::{
         FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId, MemoryHandle,
         SharedMemoryId,
@@ -113,7 +113,7 @@ pub(crate) struct CallStackInfo {
     return_pc: StablePc,
     prev_local_reference_top: usize,
     prev_local_reference_size: u32,
-    code_addr: GcRef,
+    code_addr: ObjectRef,
     code_base: *const Instr,
     instance: InstanceId,
     memory0_kind: CachedMemoryKind,
@@ -130,7 +130,7 @@ pub(crate) enum CachedMemoryKind {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallFrameCache {
-    pub(crate) code_addr: GcRef,
+    pub(crate) code_addr: ObjectRef,
     pub(crate) code_base: *const Instr,
     pub(crate) instance: InstanceId,
     pub(crate) memory0_kind: CachedMemoryKind,
@@ -150,7 +150,7 @@ impl CachedMemoryKind {
 impl CallFrameCache {
     pub(crate) fn dummy() -> Self {
         Self {
-            code_addr: GcRef(0),
+            code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
             instance: InstanceId::from_index(0),
             memory0_kind: CachedMemoryKind::None,
@@ -159,7 +159,7 @@ impl CallFrameCache {
     }
 
     pub(crate) fn from_parts(
-        code_addr: GcRef,
+        code_addr: ObjectRef,
         func: &FunctionInstanceData,
         memory0: Option<MemoryHandle>,
     ) -> Self {
@@ -196,7 +196,7 @@ impl IntoCallFrameCache for CallFrameCache {
     }
 }
 
-impl IntoCallFrameCache for GcRef {
+impl IntoCallFrameCache for ObjectRef {
     fn into_call_frame_cache(self, runtime: &StoreInner) -> CallFrameCache {
         let func = runtime.get_func(self);
         let instance = runtime.instance(func.instance);
@@ -451,7 +451,7 @@ impl Stack {
             local_size: prev_local_reference_size,
         }
     }
-    pub fn code_addr(&self, reference: &LocalReference) -> GcRef {
+    pub fn code_addr(&self, reference: &LocalReference) -> ObjectRef {
         self.call_stack_info(reference).code_addr
     }
     pub fn code_base(&self, reference: &LocalReference) -> *const Instr {
@@ -686,7 +686,7 @@ mod tests {
 
     fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
         CallFrameCache {
-            code_addr: GcRef(0),
+            code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
             instance: InstanceId::from_index(0),
             memory0_kind: kind,

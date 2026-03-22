@@ -3,8 +3,8 @@ use common::run_wast_with;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use telomere::{
     common::{
-        ExecuteContext, FuncType, GcRef, HostFunctionDefinition, Instr, NativeModule, StoreState,
-        ValType,
+        ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, ObjectRef,
+        StoreState, ValType,
     },
     link_host_function_with_function_idx,
     runtime::instantiate_native_module,
@@ -73,7 +73,7 @@ fn tail_call(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     vm_try!(ctx.stack.local_get(&ctx.local_reference(), 4, 4));
     let arg1 = ctx.stack.pop_i32();
     vm_try!(ctx.stack.push_i32(arg1 + 40));
-    let func_addr = GcRef(arg0);
+    let func_addr = ObjectRef(arg0);
     let (is_host, host_fp, locals_size, ptr) = {
         let func = ctx.func_by_addr(func_addr);
         (

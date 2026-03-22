@@ -16,12 +16,12 @@ pub(crate) use stack::CallFrameCache;
 pub use stack::{LocalReference, Stack};
 mod registry;
 pub use registry::Registry;
+mod object_ref;
 pub(crate) mod store;
+pub use object_ref::ObjectRef;
 pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
 pub use store::{InstanceHandle, MemoryHandle, Store, StoreState};
 use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};
-pub(crate) mod gc;
-pub use gc::GcRef;
 
 use crate::runtime::scheduler::EffectSupplier;
 use crate::WasmParserError;
@@ -297,16 +297,16 @@ impl TableInstance {
 }
 #[derive(Clone)]
 pub struct Instance {
-    pub module_addr: GcRef,
+    pub module_addr: ObjectRef,
     pub instance_id: u32,
     //  -> addr
-    pub memory: Vec<GcRef>,
+    pub memory: Vec<ObjectRef>,
     // idx -> addr
-    pub globals: Vec<GcRef>,
+    pub globals: Vec<ObjectRef>,
     // idx -> addr
-    pub funcs: Vec<GcRef>,
+    pub funcs: Vec<ObjectRef>,
     // idx -> addr
-    pub tables: Vec<GcRef>,
+    pub tables: Vec<ObjectRef>,
 }
 #[derive(Debug, Clone)]
 pub struct Locals {
@@ -617,7 +617,7 @@ impl ExecuteContext<'_> {
     pub fn func(&self) -> &FunctionInstanceData {
         self.gc.get_func(self.current_frame.code_addr)
     }
-    pub fn func_by_addr(&self, addr: GcRef) -> &FunctionInstanceData {
+    pub fn func_by_addr(&self, addr: ObjectRef) -> &FunctionInstanceData {
         self.gc.get_func(addr)
     }
     pub(crate) fn code(&self) -> *const Instr {
@@ -628,8 +628,8 @@ impl ExecuteContext<'_> {
     pub fn module(&self) -> &ModuleInstance {
         self.gc.get_module(self.instance().module_addr)
     }
-    pub fn instance_addr(&self) -> GcRef {
-        self.gc.gc_ref_for_instance(self.current_frame.instance)
+    pub fn instance_addr(&self) -> ObjectRef {
+        self.gc.object_ref_for_instance(self.current_frame.instance)
     }
     pub fn instance_id(&self) -> u32 {
         self.instance().instance_id
@@ -840,7 +840,7 @@ impl ExecuteContext<'_> {
 
     pub fn with_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
         let handle = self.current_frame.memory0_handle()?;
-        let addr = self.gc.gc_ref_for_memory_handle(handle);
+        let addr = self.gc.object_ref_for_memory_handle(handle);
         Some(self.gc.with_memory_by_addr(addr, f))
     }
     pub fn memory_page_size(&self) -> Option<u32> {
@@ -882,7 +882,7 @@ impl ExecuteContext<'_> {
     }
     pub fn with_caller_memory<T>(&mut self, f: impl FnOnce(&mut Memory) -> T) -> Option<T> {
         let handle = self.caller_memory_addr()?;
-        let addr = self.gc.gc_ref_for_memory_handle(handle);
+        let addr = self.gc.object_ref_for_memory_handle(handle);
         Some(self.gc.with_memory_by_addr(addr, f))
     }
     pub fn return_slot(&mut self) -> ReturnSlot {
@@ -893,11 +893,11 @@ impl ExecuteContext<'_> {
 
 pub fn execute_elem_init_const_expr(
     runtime: &mut StoreInner,
-    globals: &[GcRef],
-    funcs: &[GcRef],
+    globals: &[ObjectRef],
+    funcs: &[ObjectRef],
     exprs: &[ConstExpr],
     expected: RefType,
-) -> VMResult<GcRef> {
+) -> VMResult<ObjectRef> {
     if exprs.len() != 1 {
         return VMResult::Unlinkable;
     }
@@ -920,13 +920,13 @@ pub fn execute_elem_init_const_expr(
             if expected != RefType::FuncRef {
                 return VMResult::Unlinkable;
             }
-            VMResult::Success(GcRef(0))
+            VMResult::Success(ObjectRef(0))
         }
         ConstExpr::RefNull(RefType::ExternRef) => {
             if expected != RefType::ExternRef {
                 return VMResult::Unlinkable;
             }
-            VMResult::Success(GcRef(0))
+            VMResult::Success(ObjectRef(0))
         }
         ConstExpr::GlobalGet(idx) => {
             let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
@@ -935,7 +935,7 @@ pub fn execute_elem_init_const_expr(
             let Ok(buf): Result<[u8; 4], _> = runtime.get_global(addr).try_into() else {
                 return VMResult::Unlinkable;
             };
-            VMResult::Success(GcRef(u32::from_le_bytes(buf)))
+            VMResult::Success(ObjectRef(u32::from_le_bytes(buf)))
         }
         _ => VMResult::Unlinkable,
     }

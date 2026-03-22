@@ -59,12 +59,12 @@ pub mod common {
         store: &crate::common::Store,
         export_name: &str,
     ) -> Result<CoreMemoryHandle, String> {
-        let gc_ref = instance
-            .get_gc_ref_with_pool(store, &())
+        let object_ref = instance
+            .object_ref_for_store(store)
             .ok_or_else(|| "instance handle belongs to another store".to_owned())?;
         store
             .with_active_runtime(|gc| {
-                let instance = gc.get_instance(gc_ref);
+                let instance = gc.get_instance(object_ref);
                 let module = gc.get_module(instance.module_addr);
                 let crate::common::ExportDesc::Mem(idx) = module
                     .exports
@@ -82,7 +82,7 @@ pub mod common {
             })
             .unwrap_or_else(|| {
                 let gc = store.lock_gc();
-                let instance = gc.get_instance(gc_ref);
+                let instance = gc.get_instance(object_ref);
                 let module = gc.get_module(instance.module_addr);
                 let crate::common::ExportDesc::Mem(idx) = module
                     .exports

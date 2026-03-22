@@ -1341,7 +1341,7 @@ mod tests {
         common::{
             stack::{CachedMemoryKind, CallFrameCache},
             store::InstanceId,
-            ExecuteContext, GcRef, LocalReference, Operand, Store, StoreInner,
+            ExecuteContext, LocalReference, ObjectRef, Operand, Store, StoreInner,
         },
         runtime::{memory_effect::PendingOp, scheduler::EffectSupplier},
     };
@@ -1349,7 +1349,7 @@ mod tests {
 
     fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
         CallFrameCache {
-            code_addr: GcRef(0),
+            code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
             instance: InstanceId::from_index(0),
             memory0_kind: kind,

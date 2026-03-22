@@ -18,7 +18,7 @@ use super::*;
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
 unsafe fn internal_op_call(
     return_addr: *const Instr,
-    funcaddr: GcRef,
+    funcaddr: ObjectRef,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
@@ -39,7 +39,7 @@ unsafe fn internal_op_call(
     let ft = &module.function_types[typeidx.0 as usize];
     trace!(
         "op_call_internal: {:?}({module_addr:?})  {funcaddr:?}",
-        ctx.gc.gc_ref_for_instance(funcinst.instance)
+        ctx.gc.object_ref_for_instance(funcinst.instance)
     );
     let mut param_size = 0usize;
     for param in ft.0.iter() {
@@ -222,7 +222,7 @@ unsafe fn internal_op_call_indirect(
     if func_addr == TABLE_UNINITIALIZED {
         return VMResult::TableUninitialized;
     }
-    let func_addr = GcRef(func_addr);
+    let func_addr = ObjectRef(func_addr);
     let funcinst = ctx.gc.get_func(func_addr);
     let instance = ctx.gc.instance(funcinst.instance);
     let module = ctx.gc.get_module(instance.module_addr);
