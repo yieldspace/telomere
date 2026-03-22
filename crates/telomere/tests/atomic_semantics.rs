@@ -111,7 +111,7 @@ async fn unshared_wait_traps_and_notify_returns_zero() {
 
 #[tokio::test]
 async fn shared_wait_notify_is_fifo_and_timeout_removes_waiter() {
-    let shared = SharedMemoryObject::new(1, 1);
+    let shared = SharedMemoryObject::new(1, 1).unwrap();
     unwrap_success(shared.atomic_store_u32(0, 7));
 
     assert!(matches!(
@@ -136,7 +136,7 @@ async fn shared_wait_notify_is_fifo_and_timeout_removes_waiter() {
 
 #[test]
 fn shared_atomic_rmw_cmpxchg_and_alignment_follow_contracts() {
-    let shared = SharedMemoryObject::new(1, 1);
+    let shared = SharedMemoryObject::new(1, 1).unwrap();
     unwrap_success(shared.atomic_store_u32(0, 0x1111_1111));
 
     assert_eq!(
@@ -251,6 +251,107 @@ async fn indexed_shared_atomic_ops_use_nonzero_memidx() {
     assert_eq!(
         unwrap_success(call_i32(&instance, &store, "wait_not_equal", vec![]).await),
         1
+    );
+}
+
+#[tokio::test]
+async fn shared_wait32_timeout_resumes_into_following_ops() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1 1 shared)
+          (func (export "seed")
+            i32.const 0
+            i32.const 7
+            i32.atomic.store)
+          (func (export "wait_then_add") (result i32)
+            i32.const 0
+            i32.const 7
+            i64.const 0
+            memory.atomic.wait32
+            i32.const 41
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_eq!(
+        unwrap_success(call_i32(&instance, &store, "wait_then_add", vec![]).await),
+        43
+    );
+}
+
+#[tokio::test]
+async fn indexed_shared_wait32_timeout_resumes_into_following_ops() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (memory $m 1 1 shared)
+          (func (export "seed")
+            (i32.atomic.store $m (i32.const 0) (i32.const 7)))
+          (func (export "wait_then_add") (result i32)
+            (memory.atomic.wait32 $m (i32.const 0) (i32.const 7) (i64.const 0))
+            i32.const 41
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_eq!(
+        unwrap_success(call_i32(&instance, &store, "wait_then_add", vec![]).await),
+        43
+    );
+}
+
+#[tokio::test]
+async fn shared_wait64_timeout_resumes_into_following_ops() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1 1 shared)
+          (func (export "seed")
+            i32.const 0
+            i64.const 7
+            i64.atomic.store)
+          (func (export "wait_then_add") (result i32)
+            i32.const 0
+            i64.const 7
+            i64.const 0
+            memory.atomic.wait64
+            i32.const 41
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert_eq!(
+        unwrap_success(call_i32(&instance, &store, "wait_then_add", vec![]).await),
+        43
     );
 }
 

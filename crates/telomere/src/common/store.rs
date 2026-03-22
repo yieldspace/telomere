@@ -663,7 +663,10 @@ impl StoreInner {
     }
 
     pub(crate) fn new_memory(&mut self, page_count: u32, max_page_size: u32) -> ObjectRef {
-        let handle = self.alloc_local_memory(LocalMemoryObject::new(page_count, max_page_size));
+        let handle = self.alloc_local_memory(
+            LocalMemoryObject::new(page_count, max_page_size)
+                .expect("validated local memory bounds must satisfy page_count <= max_page_size"),
+        );
         self.object_ref_for_memory_handle(handle)
     }
 
@@ -674,7 +677,10 @@ impl StoreInner {
     }
 
     pub(crate) fn new_shared_memory(&mut self, page_count: u32, max_page_size: u32) -> ObjectRef {
-        let handle = self.alloc_shared_memory(SharedMemoryObject::new(page_count, max_page_size));
+        let handle = self.alloc_shared_memory(
+            SharedMemoryObject::new(page_count, max_page_size)
+                .expect("validated shared memory bounds must satisfy page_count <= max_page_size"),
+        );
         self.object_ref_for_memory_handle(handle)
     }
 
@@ -1729,10 +1735,11 @@ mod tests {
     #[test]
     fn store_memory_dispatch_matches_handle_kind_and_cross_copy_paths() {
         let mut store = StoreInner::new();
-        let local = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 3)));
-        let shared = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 3)));
-        let local_dst = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 3)));
-        let shared_dst = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 3)));
+        let local = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 3).unwrap()));
+        let shared = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 3).unwrap()));
+        let local_dst = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 3).unwrap()));
+        let shared_dst =
+            shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 3).unwrap()));
 
         store
             .write_bytes(MemoryHandle::Local(local), 0, &[1, 2, 3, 4])
@@ -1827,8 +1834,8 @@ mod tests {
     #[test]
     fn store_atomic_cmpxchg_dispatch_preserves_old_value_and_alignment_errors() {
         let mut store = StoreInner::new();
-        let local = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 1)));
-        let shared = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 1)));
+        let local = local_id(store.alloc_local_memory(LocalMemoryObject::new(1, 1).unwrap()));
+        let shared = shared_id(store.alloc_shared_memory(SharedMemoryObject::new(1, 1).unwrap()));
 
         store
             .atomic_store_u32(MemoryHandle::Local(local), 4, 0x1122_3344)

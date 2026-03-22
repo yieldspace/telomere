@@ -8,7 +8,9 @@ use custom_section::NameSubSection;
 
 pub use vm_result::VMResult;
 mod memory;
-pub use memory::{AtomicRmwOp, LocalMemoryObject, MemArg, Memory, SharedMemoryObject};
+pub use memory::{
+    AtomicRmwOp, LocalMemoryObject, MemArg, Memory, MemoryInitError, SharedMemoryObject,
+};
 pub use memory::{AtomicWaitResult, SharedWaitRegistration};
 pub(crate) mod stack;
 use stack::CachedMemoryKind;

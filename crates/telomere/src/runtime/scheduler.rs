@@ -215,14 +215,18 @@ impl<'a> Scheduler<'a> {
                     let push_result = task.stack.push_i32(value);
                     task.pending_effects -= 1;
                     task.fp = fp;
+                    let push_result = vm_result_to_unit(push_result);
                     if task.pending_effects == 0 {
-                        if let Some(result) = task.terminal_result.take() {
+                        if push_result.is_err() {
+                            complete_result = Some(push_result);
+                        } else if let Some(result) = task.terminal_result.take() {
                             complete_result = Some(result);
                         } else {
-                            complete_result = Some(vm_result_to_unit(push_result));
+                            task.ready_flag = ReadyFlag::Ready;
+                            self.ready_count += 1;
                         }
                     } else if push_result.is_err() {
-                        task.terminal_result = Some(vm_result_to_unit(push_result));
+                        task.terminal_result = Some(push_result);
                     } else {
                         task.ready_flag = ReadyFlag::Ready;
                         self.ready_count += 1;

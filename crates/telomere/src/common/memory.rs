@@ -304,6 +304,27 @@ fn ensure_atomic_alignment(offset: usize, alignment: usize) -> VMResult<()> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryInitError {
+    InvalidPageBounds { page_count: u32, max_page_size: u32 },
+}
+
+impl fmt::Display for MemoryInitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPageBounds {
+                page_count,
+                max_page_size,
+            } => write!(
+                f,
+                "invalid memory bounds: page_count ({page_count}) must be <= max_page_size ({max_page_size})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MemoryInitError {}
+
 pub struct Memory {
     region: MmapRegion,
     current_pages: u32,
@@ -320,22 +341,32 @@ impl fmt::Debug for Memory {
 }
 
 impl Memory {
-    pub fn new(page_count: u32, max_page_size: u32) -> Self {
+    pub fn new(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
         Self::new_with_mapping(page_count, max_page_size, false)
     }
 
-    pub fn new_shared(page_count: u32, max_page_size: u32) -> Self {
+    pub fn new_shared(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
         Self::new_with_mapping(page_count, max_page_size, true)
     }
 
-    fn new_with_mapping(page_count: u32, max_page_size: u32, shared: bool) -> Self {
+    fn new_with_mapping(
+        page_count: u32,
+        max_page_size: u32,
+        shared: bool,
+    ) -> Result<Self, MemoryInitError> {
+        if page_count > max_page_size {
+            return Err(MemoryInitError::InvalidPageBounds {
+                page_count,
+                max_page_size,
+            });
+        }
         let reserved = (max_page_size as usize * PAGE_SIZE).max(PAGE_SIZE);
         let region = MmapRegion::new(reserved, shared);
-        Self {
+        Ok(Self {
             region,
             current_pages: page_count,
             max_pages: max_page_size,
-        }
+        })
     }
 
     pub fn page_size(&self) -> u32 {
@@ -773,10 +804,10 @@ pub struct LocalMemoryObject {
 }
 
 impl LocalMemoryObject {
-    pub fn new(page_count: u32, max_page_size: u32) -> Self {
-        Self {
-            memory: Memory::new(page_count, max_page_size),
-        }
+    pub fn new(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
+        Ok(Self {
+            memory: Memory::new(page_count, max_page_size)?,
+        })
     }
 
     pub fn memory(&self) -> &Memory {
@@ -985,14 +1016,14 @@ pub struct SharedMemoryObject {
 }
 
 impl SharedMemoryObject {
-    pub fn new(page_count: u32, max_page_size: u32) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(page_count: u32, max_page_size: u32) -> Result<Arc<Self>, MemoryInitError> {
+        Ok(Arc::new(Self {
             state: Mutex::new(SharedMemoryState {
-                memory: Memory::new_shared(page_count, max_page_size),
+                memory: Memory::new_shared(page_count, max_page_size)?,
                 wait_queues: HashMap::new(),
                 next_waiter_id: 1,
             }),
-        })
+        }))
     }
 
     pub fn page_size(&self) -> u32 {
@@ -1268,7 +1299,7 @@ mod tests {
 
     #[test]
     fn memory_write_copy_fill_and_grow_match_linear_model_bytes() {
-        let mut memory = Memory::new(1, 3);
+        let mut memory = Memory::new(1, 3).unwrap();
 
         assert!(matches!(
             memory.write_bytes(0, &[0x10, 0x20, 0x30, 0x40]),
@@ -1299,9 +1330,41 @@ mod tests {
             .all(|byte| *byte == 0));
     }
 
+    #[test]
+    fn memory_constructors_reject_page_count_larger_than_max() {
+        assert!(matches!(
+            Memory::new(2, 1),
+            Err(MemoryInitError::InvalidPageBounds {
+                page_count: 2,
+                max_page_size: 1,
+            })
+        ));
+        assert!(matches!(
+            Memory::new_shared(2, 1),
+            Err(MemoryInitError::InvalidPageBounds {
+                page_count: 2,
+                max_page_size: 1,
+            })
+        ));
+        assert!(matches!(
+            LocalMemoryObject::new(2, 1),
+            Err(MemoryInitError::InvalidPageBounds {
+                page_count: 2,
+                max_page_size: 1,
+            })
+        ));
+        assert!(matches!(
+            SharedMemoryObject::new(2, 1),
+            Err(MemoryInitError::InvalidPageBounds {
+                page_count: 2,
+                max_page_size: 1,
+            })
+        ));
+    }
+
     #[tokio::test]
     async fn shared_wait_queue_internal_state_tracks_notify_and_timeout_cleanup() {
-        let shared = SharedMemoryObject::new(1, 1);
+        let shared = SharedMemoryObject::new(1, 1).unwrap();
         assert!(matches!(
             shared.atomic_store_u32(0, 7),
             VMResult::Success(())
@@ -1346,7 +1409,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_wait_queue_rejects_mismatch_and_notifies_fifo_up_to_count() {
-        let shared = SharedMemoryObject::new(1, 1);
+        let shared = SharedMemoryObject::new(1, 1).unwrap();
         assert!(matches!(
             shared.atomic_store_u32(0, 11),
             VMResult::Success(())
@@ -1384,5 +1447,43 @@ mod tests {
         assert_eq!(shared.notify_waiters(0, 10).unwrap(), 1);
         assert_eq!(third.wait_result(shared.clone(), 0).await, 0);
         assert_eq!(shared.notify_waiters(0, 1).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn shared_wait64_queue_tracks_notify_and_timeout_cleanup() {
+        let shared = SharedMemoryObject::new(1, 1).unwrap();
+        let value = 0x0102_0304_0506_0708u64;
+        assert!(matches!(
+            shared.atomic_store_u64(8, value),
+            VMResult::Success(())
+        ));
+
+        let first = match shared.register_wait64(8, value).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+        let second = match shared.register_wait64(8, value).unwrap() {
+            AtomicWaitResult::Pending(wait) => wait,
+            AtomicWaitResult::NotEqual => panic!("expected waiting registration"),
+        };
+
+        assert_eq!(shared.notify_waiters(8, 1).unwrap(), 1);
+        assert_eq!(first.wait_result(shared.clone(), -1).await, 0);
+
+        {
+            let state = shared.state.lock();
+            let queue = state.wait_queues.get(&8).expect("one waiter should remain");
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue.front().unwrap().id(), second.waiter.id());
+            assert!(queue.front().unwrap().is_waiting());
+        }
+
+        assert_eq!(second.wait_result(shared.clone(), 0).await, 2);
+
+        {
+            let state = shared.state.lock();
+            assert!(!state.wait_queues.contains_key(&8));
+        }
+        assert_eq!(shared.notify_waiters(8, 1).unwrap(), 0);
     }
 }
