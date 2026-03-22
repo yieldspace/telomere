@@ -1,7 +1,7 @@
 use std::{collections::HashSet, ops::Range};
 
 use crate::{
-    common::{Instr, MemArg, Operand},
+    common::{Instr, MemArg, Operand, ValueSize},
     parser::core::instruction_generator::InstructionProgram,
     runtime::vm::{self, compute_memory_offset},
     VMResult,
@@ -15,58 +15,122 @@ struct DecodedInstruction {
 }
 
 #[derive(Clone, Copy, Debug)]
+enum TypedConst {
+    I32(i32),
+    I64(i64),
+    F32(u32),
+    F64(u64),
+}
+
+impl TypedConst {
+    fn width(self) -> ValueSize {
+        match self {
+            Self::I32(_) | Self::F32(_) => ValueSize::Byte4,
+            Self::I64(_) | Self::F64(_) => ValueSize::Byte8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TypedScalarOp {
+    I32(vm::I32ScalarKind),
+    I64(vm::I64ScalarKind),
+    F32(vm::FloatScalarKind),
+    F64(vm::FloatScalarKind),
+}
+
+impl TypedScalarOp {
+    fn width(self) -> ValueSize {
+        match self {
+            Self::I32(_) | Self::F32(_) => ValueSize::Byte4,
+            Self::I64(_) | Self::F64(_) => ValueSize::Byte8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TypedCompareOp {
+    I32(vm::IntCompareKind),
+    I64(vm::IntCompareKind),
+    F32(vm::FloatCompareKind),
+    F64(vm::FloatCompareKind),
+}
+
+impl TypedCompareOp {
+    fn width(self) -> ValueSize {
+        match self {
+            Self::I32(_) | Self::F32(_) => ValueSize::Byte4,
+            Self::I64(_) | Self::F64(_) => ValueSize::Byte8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TypedLoadOp {
+    Bits4(vm::Load4Kind),
+    Bits8(vm::Load8Kind),
+}
+
+impl TypedLoadOp {
+    fn uses_dedicated_const(self) -> bool {
+        matches!(self, Self::Bits4(vm::Load4Kind::I32))
+    }
+
+    fn uses_dedicated_local_addr(self) -> bool {
+        matches!(
+            self,
+            Self::Bits4(
+                vm::Load4Kind::I32
+                    | vm::Load4Kind::I32Load8U
+                    | vm::Load4Kind::I32Load16S
+                    | vm::Load4Kind::I32Load16U
+                    | vm::Load4Kind::F32
+            )
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TypedStoreOp {
+    Bits4(vm::Store4Kind),
+    Bits8(vm::Store8Kind),
+}
+
+impl TypedStoreOp {
+    fn value_width(self) -> ValueSize {
+        match self {
+            Self::Bits4(_) => ValueSize::Byte4,
+            Self::Bits8(_) => ValueSize::Byte8,
+        }
+    }
+
+    fn uses_dedicated_const(self) -> bool {
+        matches!(self, Self::Bits4(vm::Store4Kind::I32))
+    }
+
+    fn uses_dedicated_local_local(self) -> bool {
+        matches!(
+            self,
+            Self::Bits4(
+                vm::Store4Kind::I32 | vm::Store4Kind::I32Store8 | vm::Store4Kind::I32Store16
+            )
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 enum DecodedKind {
     Raw,
-    I32Const(i32),
-    LocalGet4(u32),
-    LocalSet4(u32),
-    LocalTee4(u32),
+    Const(TypedConst),
+    LocalGet(ValueSize, u32),
+    LocalSet(ValueSize, u32),
+    LocalTee(ValueSize, u32),
     BrIf(u32),
-    I32Add,
-    I32Sub,
-    I32And,
-    I32Shl,
-    I32ShrU,
-    I32Eqz,
-    I32GeU,
-    I32LoadLocal(MemArg),
-    I32Load8ULocal(MemArg),
-    I32Load16SLocal(MemArg),
-    I32Load16ULocal(MemArg),
-    F32LoadLocal(MemArg),
-    I32StoreLocal(MemArg),
-    I32Store8Local(MemArg),
-    I32Store16Local(MemArg),
-}
-
-#[derive(Clone, Copy)]
-enum LocalImmSetTeeOp {
-    Add,
-    Sub,
-    And,
-    Shl,
-    ShrU,
-}
-
-#[derive(Clone, Copy)]
-enum LocalLocalSetTeeOp {
-    Add,
-}
-
-#[derive(Clone, Copy)]
-enum LocalAddrLoadOp {
-    I32,
-    I32Load8U,
-    I32Load16S,
-    I32Load16U,
-    F32,
-}
-
-#[derive(Clone, Copy)]
-enum LocalLocalStoreOp {
-    I32,
-    I32Store8,
-    I32Store16,
+    Eqz(ValueSize),
+    Scalar(TypedScalarOp),
+    Compare(TypedCompareOp),
+    Load(TypedLoadOp, MemArg),
+    Store(TypedStoreOp, MemArg),
 }
 
 enum OptimizedInstruction {
@@ -74,10 +138,10 @@ enum OptimizedInstruction {
     LocalImmSetTee {
         old_range: Range<usize>,
         src_local: u32,
-        imm: i32,
+        imm: TypedConst,
         dst_local: u32,
         tee: bool,
-        op: LocalImmSetTeeOp,
+        op: TypedScalarOp,
     },
     LocalLocalSetTee {
         old_range: Range<usize>,
@@ -85,12 +149,13 @@ enum OptimizedInstruction {
         rhs_local_addr: u32,
         dst_local: u32,
         tee: bool,
-        op: LocalLocalSetTeeOp,
+        op: TypedScalarOp,
     },
-    I32LocalEqzBrIf {
+    LocalEqzBrIf {
         old_range: Range<usize>,
         local_addr: u32,
         target_old: u32,
+        width: ValueSize,
     },
     I32LocalLocalGeUBrIf {
         old_range: Range<usize>,
@@ -98,52 +163,80 @@ enum OptimizedInstruction {
         rhs_local_addr: u32,
         target_old: u32,
     },
-    I32LoadConstLocal {
+    CompareSetTeeLocal {
         old_range: Range<usize>,
-        start: u32,
+        lhs_local_addr: u32,
+        rhs_local_addr: u32,
+        dst_local: u32,
+        tee: bool,
+        op: TypedCompareOp,
     },
-    I32LocalGet4StoreConstLocal {
+    CompareSetTeeConst {
+        old_range: Range<usize>,
+        lhs_local_addr: u32,
+        rhs_const: TypedConst,
+        dst_local: u32,
+        tee: bool,
+        op: TypedCompareOp,
+    },
+    CompareBrIfLocal {
+        old_range: Range<usize>,
+        lhs_local_addr: u32,
+        rhs_local_addr: u32,
+        target_old: u32,
+        op: TypedCompareOp,
+    },
+    CompareBrIfConst {
+        old_range: Range<usize>,
+        lhs_local_addr: u32,
+        rhs_const: TypedConst,
+        target_old: u32,
+        op: TypedCompareOp,
+    },
+    LoadConstLocal {
         old_range: Range<usize>,
         start: u32,
-        local_addr: u32,
+        op: TypedLoadOp,
+    },
+    StoreConstLocal {
+        old_range: Range<usize>,
+        start: u32,
+        value_local_addr: u32,
+        op: TypedStoreOp,
     },
     LocalAddrLoad {
         old_range: Range<usize>,
         local_addr: u32,
         memarg: MemArg,
-        op: LocalAddrLoadOp,
+        op: TypedLoadOp,
     },
     LocalLocalStore {
         old_range: Range<usize>,
         addr_local_addr: u32,
         value_local_addr: u32,
         memarg: MemArg,
-        op: LocalLocalStoreOp,
+        op: TypedStoreOp,
     },
 }
 
 type MatchOutcome = (usize, OptimizedInstruction);
 type Matcher = fn(&[DecodedInstruction], usize, &HashSet<usize>) -> Option<MatchOutcome>;
 
-const LOCAL_IMM_SET_TEE_MATCHERS: &[Matcher] = &[
-    match_local_add_sub_imm_set_tee,
-    match_local_bitwise_imm_set_tee,
+const LOCAL_IMM_SET_TEE_MATCHERS: &[Matcher] = &[match_local_imm_scalar_set_tee];
+const LOCAL_LOCAL_SET_TEE_MATCHERS: &[Matcher] = &[match_local_local_scalar_set_tee];
+const COMPARE_SET_TEE_MATCHERS: &[Matcher] = &[
+    match_local_local_compare_set_tee,
+    match_local_const_compare_set_tee,
 ];
-const LOCAL_LOCAL_SET_TEE_MATCHERS: &[Matcher] = &[match_local_local_add_set_tee];
-const BRANCH_MATCHERS: &[Matcher] = &[match_local_eqz_br_if, match_local_local_ge_u_br_if];
-const CONST_ADDR_MATCHERS: &[Matcher] = &[match_const_i32_load, match_const_local_get_i32_store];
-const LOCAL_ADDR_LOAD_MATCHERS: &[Matcher] = &[
-    match_local_addr_i32_load,
-    match_local_addr_i32_load8_u,
-    match_local_addr_i32_load16_s,
-    match_local_addr_i32_load16_u,
-    match_local_addr_f32_load,
+const BRANCH_MATCHERS: &[Matcher] = &[
+    match_local_eqz_br_if,
+    match_local_local_ge_u_br_if,
+    match_local_local_compare_br_if,
+    match_local_const_compare_br_if,
 ];
-const LOCAL_LOCAL_STORE_MATCHERS: &[Matcher] = &[
-    match_local_local_i32_store,
-    match_local_local_i32_store8,
-    match_local_local_i32_store16,
-];
+const CONST_ADDR_MATCHERS: &[Matcher] = &[match_const_load, match_const_local_store];
+const LOCAL_ADDR_LOAD_MATCHERS: &[Matcher] = &[match_local_addr_load];
+const LOCAL_LOCAL_STORE_MATCHERS: &[Matcher] = &[match_local_local_store];
 
 pub(crate) fn optimize_core_program(program: InstructionProgram) -> Vec<Instr> {
     if program.instruction_starts.is_empty() {
@@ -173,66 +266,494 @@ fn decode_instructions(instrs: &[Instr], starts: &[usize]) -> Vec<DecodedInstruc
 
 fn decode_kind(raw: &[Instr]) -> DecodedKind {
     let op = unsafe { raw[0].op };
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_i32_const as crate::common::Op) {
-        return DecodedKind::I32Const(unsafe { raw[1].operand.i32 });
+
+    macro_rules! decode1 {
+        ($vmop:path, $kind:expr) => {
+            if raw.len() == 1 && std::ptr::fn_addr_eq(op, $vmop as crate::common::Op) {
+                return $kind;
+            }
+        };
     }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_local_get4 as crate::common::Op) {
-        return DecodedKind::LocalGet4(unsafe { raw[1].operand.local_addr });
+    macro_rules! decode2 {
+        ($vmop:path, $kind:expr) => {
+            if raw.len() == 2 && std::ptr::fn_addr_eq(op, $vmop as crate::common::Op) {
+                return $kind;
+            }
+        };
     }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_local_set4 as crate::common::Op) {
-        return DecodedKind::LocalSet4(unsafe { raw[1].operand.local_addr });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_local_tee4 as crate::common::Op) {
-        return DecodedKind::LocalTee4(unsafe { raw[1].operand.local_addr });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_br_if as crate::common::Op) {
-        return DecodedKind::BrIf(unsafe { raw[1].operand.jump_addr });
-    }
-    if raw.len() == 1 && std::ptr::fn_addr_eq(op, vm::op_i32_add as crate::common::Op) {
-        return DecodedKind::I32Add;
-    }
-    if raw.len() == 1 && std::ptr::fn_addr_eq(op, vm::op_i32_sub as crate::common::Op) {
-        return DecodedKind::I32Sub;
-    }
-    if raw.len() == 1 && std::ptr::fn_addr_eq(op, vm::op_i32_and as crate::common::Op) {
-        return DecodedKind::I32And;
-    }
-    if raw.len() == 1 && std::ptr::fn_addr_eq(op, vm::op_i32_shl as crate::common::Op) {
-        return DecodedKind::I32Shl;
-    }
-    if raw.len() == 1 && std::ptr::fn_addr_eq(op, vm::op_i32_shr_u as crate::common::Op) {
-        return DecodedKind::I32ShrU;
-    }
-    if raw.len() == 1 && std::ptr::fn_addr_eq(op, vm::op_i32_eqz as crate::common::Op) {
-        return DecodedKind::I32Eqz;
-    }
-    if raw.len() == 1 && std::ptr::fn_addr_eq(op, vm::op_i32_ge_u as crate::common::Op) {
-        return DecodedKind::I32GeU;
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_i32_load_local as crate::common::Op) {
-        return DecodedKind::I32LoadLocal(unsafe { raw[1].operand.memarg });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_local as crate::common::Op) {
-        return DecodedKind::I32Load8ULocal(unsafe { raw[1].operand.memarg });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_local as crate::common::Op) {
-        return DecodedKind::I32Load16SLocal(unsafe { raw[1].operand.memarg });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_local as crate::common::Op) {
-        return DecodedKind::I32Load16ULocal(unsafe { raw[1].operand.memarg });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_f32_load_local as crate::common::Op) {
-        return DecodedKind::F32LoadLocal(unsafe { raw[1].operand.memarg });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_i32_store_local as crate::common::Op) {
-        return DecodedKind::I32StoreLocal(unsafe { raw[1].operand.memarg });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_i32_store8_local as crate::common::Op) {
-        return DecodedKind::I32Store8Local(unsafe { raw[1].operand.memarg });
-    }
-    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_i32_store16_local as crate::common::Op) {
-        return DecodedKind::I32Store16Local(unsafe { raw[1].operand.memarg });
-    }
+
+    decode2!(
+        vm::op_i32_const,
+        DecodedKind::Const(TypedConst::I32(unsafe { raw[1].operand.i32 }))
+    );
+    decode2!(
+        vm::op_i64_const,
+        DecodedKind::Const(TypedConst::I64(unsafe { raw[1].operand.i64 }))
+    );
+    decode2!(
+        vm::op_f32_const,
+        DecodedKind::Const(TypedConst::F32(unsafe { raw[1].operand.f32 }.to_bits()))
+    );
+    decode2!(
+        vm::op_f64_const,
+        DecodedKind::Const(TypedConst::F64(unsafe { raw[1].operand.f64 }.to_bits()))
+    );
+
+    decode2!(
+        vm::op_local_get4,
+        DecodedKind::LocalGet(ValueSize::Byte4, unsafe { raw[1].operand.local_addr })
+    );
+    decode2!(
+        vm::op_local_get8,
+        DecodedKind::LocalGet(ValueSize::Byte8, unsafe { raw[1].operand.local_addr })
+    );
+    decode2!(
+        vm::op_local_get16,
+        DecodedKind::LocalGet(ValueSize::Byte16, unsafe { raw[1].operand.local_addr })
+    );
+    decode2!(
+        vm::op_local_set4,
+        DecodedKind::LocalSet(ValueSize::Byte4, unsafe { raw[1].operand.local_addr })
+    );
+    decode2!(
+        vm::op_local_set8,
+        DecodedKind::LocalSet(ValueSize::Byte8, unsafe { raw[1].operand.local_addr })
+    );
+    decode2!(
+        vm::op_local_set16,
+        DecodedKind::LocalSet(ValueSize::Byte16, unsafe { raw[1].operand.local_addr })
+    );
+    decode2!(
+        vm::op_local_tee4,
+        DecodedKind::LocalTee(ValueSize::Byte4, unsafe { raw[1].operand.local_addr })
+    );
+    decode2!(
+        vm::op_local_tee8,
+        DecodedKind::LocalTee(ValueSize::Byte8, unsafe { raw[1].operand.local_addr })
+    );
+    decode2!(
+        vm::op_local_tee16,
+        DecodedKind::LocalTee(ValueSize::Byte16, unsafe { raw[1].operand.local_addr })
+    );
+
+    decode2!(
+        vm::op_br_if,
+        DecodedKind::BrIf(unsafe { raw[1].operand.jump_addr })
+    );
+
+    decode1!(vm::op_i32_eqz, DecodedKind::Eqz(ValueSize::Byte4));
+    decode1!(vm::op_i64_eqz, DecodedKind::Eqz(ValueSize::Byte8));
+
+    decode1!(
+        vm::op_i32_add,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+    );
+    decode1!(
+        vm::op_i32_sub,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Sub))
+    );
+    decode1!(
+        vm::op_i32_mul,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Mul))
+    );
+    decode1!(
+        vm::op_i32_and,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::And))
+    );
+    decode1!(
+        vm::op_i32_or,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Or))
+    );
+    decode1!(
+        vm::op_i32_xor,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Xor))
+    );
+    decode1!(
+        vm::op_i32_shl,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Shl))
+    );
+    decode1!(
+        vm::op_i32_shr_s,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::ShrS))
+    );
+    decode1!(
+        vm::op_i32_shr_u,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::ShrU))
+    );
+    decode1!(
+        vm::op_i32_div_s,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::DivS))
+    );
+    decode1!(
+        vm::op_i32_div_u,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::DivU))
+    );
+    decode1!(
+        vm::op_i32_rem_s,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::RemS))
+    );
+    decode1!(
+        vm::op_i32_rem_u,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::RemU))
+    );
+
+    decode1!(
+        vm::op_i64_add,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Add))
+    );
+    decode1!(
+        vm::op_i64_sub,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Sub))
+    );
+    decode1!(
+        vm::op_i64_mul,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Mul))
+    );
+    decode1!(
+        vm::op_i64_and,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::And))
+    );
+    decode1!(
+        vm::op_i64_or,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Or))
+    );
+    decode1!(
+        vm::op_i64_xor,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Xor))
+    );
+    decode1!(
+        vm::op_i64_shl,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Shl))
+    );
+    decode1!(
+        vm::op_i64_shr_s,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::ShrS))
+    );
+    decode1!(
+        vm::op_i64_shr_u,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::ShrU))
+    );
+    decode1!(
+        vm::op_i64_div_s,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::DivS))
+    );
+    decode1!(
+        vm::op_i64_div_u,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::DivU))
+    );
+    decode1!(
+        vm::op_i64_rem_s,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::RemS))
+    );
+    decode1!(
+        vm::op_i64_rem_u,
+        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::RemU))
+    );
+
+    decode1!(
+        vm::op_f32_add,
+        DecodedKind::Scalar(TypedScalarOp::F32(vm::FloatScalarKind::Add))
+    );
+    decode1!(
+        vm::op_f32_sub,
+        DecodedKind::Scalar(TypedScalarOp::F32(vm::FloatScalarKind::Sub))
+    );
+    decode1!(
+        vm::op_f32_mul,
+        DecodedKind::Scalar(TypedScalarOp::F32(vm::FloatScalarKind::Mul))
+    );
+    decode1!(
+        vm::op_f32_div,
+        DecodedKind::Scalar(TypedScalarOp::F32(vm::FloatScalarKind::Div))
+    );
+    decode1!(
+        vm::op_f64_add,
+        DecodedKind::Scalar(TypedScalarOp::F64(vm::FloatScalarKind::Add))
+    );
+    decode1!(
+        vm::op_f64_sub,
+        DecodedKind::Scalar(TypedScalarOp::F64(vm::FloatScalarKind::Sub))
+    );
+    decode1!(
+        vm::op_f64_mul,
+        DecodedKind::Scalar(TypedScalarOp::F64(vm::FloatScalarKind::Mul))
+    );
+    decode1!(
+        vm::op_f64_div,
+        DecodedKind::Scalar(TypedScalarOp::F64(vm::FloatScalarKind::Div))
+    );
+
+    decode1!(
+        vm::op_i32_eq,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::Eq))
+    );
+    decode1!(
+        vm::op_i32_ne,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::Ne))
+    );
+    decode1!(
+        vm::op_i32_lt_s,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::LtS))
+    );
+    decode1!(
+        vm::op_i32_lt_u,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::LtU))
+    );
+    decode1!(
+        vm::op_i32_gt_s,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GtS))
+    );
+    decode1!(
+        vm::op_i32_gt_u,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GtU))
+    );
+    decode1!(
+        vm::op_i32_le_s,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::LeS))
+    );
+    decode1!(
+        vm::op_i32_le_u,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::LeU))
+    );
+    decode1!(
+        vm::op_i32_ge_s,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GeS))
+    );
+    decode1!(
+        vm::op_i32_ge_u,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GeU))
+    );
+
+    decode1!(
+        vm::op_i64_eq,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::Eq))
+    );
+    decode1!(
+        vm::op_i64_ne,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::Ne))
+    );
+    decode1!(
+        vm::op_i64_lt_s,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::LtS))
+    );
+    decode1!(
+        vm::op_i64_lt_u,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::LtU))
+    );
+    decode1!(
+        vm::op_i64_gt_s,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::GtS))
+    );
+    decode1!(
+        vm::op_i64_gt_u,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::GtU))
+    );
+    decode1!(
+        vm::op_i64_le_s,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::LeS))
+    );
+    decode1!(
+        vm::op_i64_le_u,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::LeU))
+    );
+    decode1!(
+        vm::op_i64_ge_s,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::GeS))
+    );
+    decode1!(
+        vm::op_i64_ge_u,
+        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::GeU))
+    );
+
+    decode1!(
+        vm::op_f32_eq,
+        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Eq))
+    );
+    decode1!(
+        vm::op_f32_ne,
+        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Ne))
+    );
+    decode1!(
+        vm::op_f32_lt,
+        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Lt))
+    );
+    decode1!(
+        vm::op_f32_gt,
+        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Gt))
+    );
+    decode1!(
+        vm::op_f32_le,
+        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Le))
+    );
+    decode1!(
+        vm::op_f32_ge,
+        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Ge))
+    );
+    decode1!(
+        vm::op_f64_eq,
+        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Eq))
+    );
+    decode1!(
+        vm::op_f64_ne,
+        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Ne))
+    );
+    decode1!(
+        vm::op_f64_lt,
+        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Lt))
+    );
+    decode1!(
+        vm::op_f64_gt,
+        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Gt))
+    );
+    decode1!(
+        vm::op_f64_le,
+        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Le))
+    );
+    decode1!(
+        vm::op_f64_ge,
+        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Ge))
+    );
+
+    decode2!(
+        vm::op_i32_load_local,
+        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i32_load8_s_local,
+        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32Load8S), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i32_load8_u_local,
+        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i32_load16_s_local,
+        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32Load16S), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i32_load16_u_local,
+        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32Load16U), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_load_local,
+        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_load8_s_local,
+        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load8S), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_load8_u_local,
+        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load8U), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_load16_s_local,
+        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load16S), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_load16_u_local,
+        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load16U), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_load32_s_local,
+        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load32S), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_load32_u_local,
+        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load32U), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_f32_load_local,
+        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::F32), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_f64_load_local,
+        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::F64), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+
+    decode2!(
+        vm::op_i32_store_local,
+        DecodedKind::Store(TypedStoreOp::Bits4(vm::Store4Kind::I32), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i32_store8_local,
+        DecodedKind::Store(TypedStoreOp::Bits4(vm::Store4Kind::I32Store8), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i32_store16_local,
+        DecodedKind::Store(TypedStoreOp::Bits4(vm::Store4Kind::I32Store16), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_store_local,
+        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::I64), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_store8_local,
+        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::I64Store8), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_store16_local,
+        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::I64Store16), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_i64_store32_local,
+        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::I64Store32), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_f32_store_local,
+        DecodedKind::Store(TypedStoreOp::Bits4(vm::Store4Kind::F32), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+    decode2!(
+        vm::op_f64_store_local,
+        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::F64), unsafe {
+            raw[1].operand.memarg
+        })
+    );
+
     DecodedKind::Raw
 }
 
@@ -281,6 +802,16 @@ fn fuse_superinstructions(
         }
         if let Some((consumed, fused)) = try_matchers(
             LOCAL_LOCAL_SET_TEE_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            COMPARE_SET_TEE_MATCHERS,
             decoded.as_slice(),
             index,
             jump_targets,
@@ -353,7 +884,68 @@ fn sequence_crosses_jump_targets(
     range.any(|idx| jump_targets.contains(&decoded[idx].old_range.start))
 }
 
-fn match_local_add_sub_imm_set_tee(
+fn same_width(lhs: ValueSize, rhs: ValueSize) -> bool {
+    matches!(
+        (lhs, rhs),
+        (ValueSize::Byte4, ValueSize::Byte4)
+            | (ValueSize::Byte8, ValueSize::Byte8)
+            | (ValueSize::Byte16, ValueSize::Byte16)
+    )
+}
+
+fn local_get(kind: DecodedKind) -> Option<(ValueSize, u32)> {
+    match kind {
+        DecodedKind::LocalGet(width, local_addr) => Some((width, local_addr)),
+        _ => None,
+    }
+}
+
+fn local_set_tee(kind: DecodedKind) -> Option<(ValueSize, u32, bool)> {
+    match kind {
+        DecodedKind::LocalSet(width, local_addr) => Some((width, local_addr, false)),
+        DecodedKind::LocalTee(width, local_addr) => Some((width, local_addr, true)),
+        _ => None,
+    }
+}
+
+fn scalar_matches_const(op: TypedScalarOp, value: TypedConst) -> bool {
+    matches!(
+        (op, value),
+        (TypedScalarOp::I32(_), TypedConst::I32(_))
+            | (TypedScalarOp::I64(_), TypedConst::I64(_))
+            | (TypedScalarOp::F32(_), TypedConst::F32(_))
+            | (TypedScalarOp::F64(_), TypedConst::F64(_))
+    )
+}
+
+fn compare_matches_const(op: TypedCompareOp, value: TypedConst) -> bool {
+    matches!(
+        (op, value),
+        (TypedCompareOp::I32(_), TypedConst::I32(_))
+            | (TypedCompareOp::I64(_), TypedConst::I64(_))
+            | (TypedCompareOp::F32(_), TypedConst::F32(_))
+            | (TypedCompareOp::F64(_), TypedConst::F64(_))
+    )
+}
+
+fn is_existing_i32_local_imm_fastpath(op: TypedScalarOp) -> bool {
+    matches!(
+        op,
+        TypedScalarOp::I32(
+            vm::I32ScalarKind::Add
+                | vm::I32ScalarKind::Sub
+                | vm::I32ScalarKind::And
+                | vm::I32ScalarKind::Shl
+                | vm::I32ScalarKind::ShrU
+        )
+    )
+}
+
+fn is_existing_i32_local_local_fastpath(op: TypedScalarOp) -> bool {
+    matches!(op, TypedScalarOp::I32(vm::I32ScalarKind::Add))
+}
+
+fn match_local_imm_scalar_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
     jump_targets: &HashSet<usize>,
@@ -364,24 +956,27 @@ fn match_local_add_sub_imm_set_tee(
     if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
         return None;
     }
-    let src_local = match first.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
-        _ => return None,
-    };
+    let (src_width, src_local) = local_get(first.kind)?;
+    if !matches!(src_width, ValueSize::Byte4 | ValueSize::Byte8) {
+        return None;
+    }
     let imm = match second.kind {
-        DecodedKind::I32Const(value) => value,
+        DecodedKind::Const(value) => value,
         _ => return None,
     };
     let op = match third.kind {
-        DecodedKind::I32Add => LocalImmSetTeeOp::Add,
-        DecodedKind::I32Sub => LocalImmSetTeeOp::Sub,
+        DecodedKind::Scalar(op) => op,
         _ => return None,
     };
-    let (dst_local, tee) = match fourth.kind {
-        DecodedKind::LocalSet4(local_addr) => (local_addr, false),
-        DecodedKind::LocalTee4(local_addr) => (local_addr, true),
-        _ => return None,
-    };
+    let (dst_width, dst_local, tee) = local_set_tee(fourth.kind)?;
+
+    if !same_width(src_width, imm.width())
+        || !same_width(src_width, op.width())
+        || !same_width(src_width, dst_width)
+        || !scalar_matches_const(op, imm)
+    {
+        return None;
+    }
 
     Some((
         4,
@@ -396,7 +991,7 @@ fn match_local_add_sub_imm_set_tee(
     ))
 }
 
-fn match_local_bitwise_imm_set_tee(
+fn match_local_local_scalar_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
     jump_targets: &HashSet<usize>,
@@ -407,66 +1002,21 @@ fn match_local_bitwise_imm_set_tee(
     if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
         return None;
     }
-    let src_local = match first.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
-        _ => return None,
-    };
-    let imm = match second.kind {
-        DecodedKind::I32Const(value) => value,
-        _ => return None,
-    };
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let (rhs_width, rhs_local_addr) = local_get(second.kind)?;
     let op = match third.kind {
-        DecodedKind::I32And => LocalImmSetTeeOp::And,
-        DecodedKind::I32Shl => LocalImmSetTeeOp::Shl,
-        DecodedKind::I32ShrU => LocalImmSetTeeOp::ShrU,
+        DecodedKind::Scalar(op) => op,
         _ => return None,
     };
-    let (dst_local, tee) = match fourth.kind {
-        DecodedKind::LocalSet4(local_addr) => (local_addr, false),
-        DecodedKind::LocalTee4(local_addr) => (local_addr, true),
-        _ => return None,
-    };
+    let (dst_width, dst_local, tee) = local_set_tee(fourth.kind)?;
 
-    Some((
-        4,
-        OptimizedInstruction::LocalImmSetTee {
-            old_range: first.old_range.start..fourth.old_range.end,
-            src_local,
-            imm,
-            dst_local,
-            tee,
-            op,
-        },
-    ))
-}
-
-fn match_local_local_add_set_tee(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
-        return None;
-    };
-    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+    if !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !same_width(lhs_width, rhs_width)
+        || !same_width(lhs_width, op.width())
+        || !same_width(lhs_width, dst_width)
+    {
         return None;
     }
-    let lhs_local_addr = match first.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
-        _ => return None,
-    };
-    let rhs_local_addr = match second.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
-        _ => return None,
-    };
-    if !matches!(third.kind, DecodedKind::I32Add) {
-        return None;
-    }
-    let (dst_local, tee) = match fourth.kind {
-        DecodedKind::LocalSet4(local_addr) => (local_addr, false),
-        DecodedKind::LocalTee4(local_addr) => (local_addr, true),
-        _ => return None,
-    };
 
     Some((
         4,
@@ -476,7 +1026,7 @@ fn match_local_local_add_set_tee(
             rhs_local_addr,
             dst_local,
             tee,
-            op: LocalLocalSetTeeOp::Add,
+            op,
         },
     ))
 }
@@ -492,24 +1042,26 @@ fn match_local_eqz_br_if(
     if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 3) {
         return None;
     }
-    let local_addr = match first.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
+    let (width, local_addr) = local_get(first.kind)?;
+    let eqz_width = match second.kind {
+        DecodedKind::Eqz(width) => width,
         _ => return None,
     };
-    if !matches!(second.kind, DecodedKind::I32Eqz) {
-        return None;
-    }
     let target_old = match third.kind {
         DecodedKind::BrIf(target) => target,
         _ => return None,
     };
+    if !same_width(width, eqz_width) || !matches!(width, ValueSize::Byte4 | ValueSize::Byte8) {
+        return None;
+    }
 
     Some((
         3,
-        OptimizedInstruction::I32LocalEqzBrIf {
+        OptimizedInstruction::LocalEqzBrIf {
             old_range: first.old_range.start..third.old_range.end,
             local_addr,
             target_old,
+            width,
         },
     ))
 }
@@ -525,21 +1077,21 @@ fn match_local_local_ge_u_br_if(
     if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
         return None;
     }
-    let lhs_local_addr = match first.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
-        _ => return None,
-    };
-    let rhs_local_addr = match second.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
-        _ => return None,
-    };
-    if !matches!(third.kind, DecodedKind::I32GeU) {
-        return None;
-    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let (rhs_width, rhs_local_addr) = local_get(second.kind)?;
     let target_old = match fourth.kind {
         DecodedKind::BrIf(target) => target,
         _ => return None,
     };
+    if !same_width(lhs_width, ValueSize::Byte4) || !same_width(rhs_width, ValueSize::Byte4) {
+        return None;
+    }
+    if !matches!(
+        third.kind,
+        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GeU))
+    ) {
+        return None;
+    }
 
     Some((
         4,
@@ -552,7 +1104,173 @@ fn match_local_local_ge_u_br_if(
     ))
 }
 
-fn match_const_i32_load(
+fn match_local_local_compare_set_tee(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+        return None;
+    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let (rhs_width, rhs_local_addr) = local_get(second.kind)?;
+    let op = match third.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let (dst_width, dst_local, tee) = local_set_tee(fourth.kind)?;
+    if !same_width(lhs_width, rhs_width)
+        || !same_width(lhs_width, op.width())
+        || !same_width(dst_width, ValueSize::Byte4)
+        || !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+    {
+        return None;
+    }
+
+    Some((
+        4,
+        OptimizedInstruction::CompareSetTeeLocal {
+            old_range: first.old_range.start..fourth.old_range.end,
+            lhs_local_addr,
+            rhs_local_addr,
+            dst_local,
+            tee,
+            op,
+        },
+    ))
+}
+
+fn match_local_const_compare_set_tee(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+        return None;
+    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let rhs_const = match second.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let op = match third.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let (dst_width, dst_local, tee) = local_set_tee(fourth.kind)?;
+    if !same_width(lhs_width, op.width())
+        || !same_width(lhs_width, rhs_const.width())
+        || !same_width(dst_width, ValueSize::Byte4)
+        || !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !compare_matches_const(op, rhs_const)
+    {
+        return None;
+    }
+
+    Some((
+        4,
+        OptimizedInstruction::CompareSetTeeConst {
+            old_range: first.old_range.start..fourth.old_range.end,
+            lhs_local_addr,
+            rhs_const,
+            dst_local,
+            tee,
+            op,
+        },
+    ))
+}
+
+fn match_local_local_compare_br_if(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+        return None;
+    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let (rhs_width, rhs_local_addr) = local_get(second.kind)?;
+    let op = match third.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let target_old = match fourth.kind {
+        DecodedKind::BrIf(target) => target,
+        _ => return None,
+    };
+    if !same_width(lhs_width, rhs_width)
+        || !same_width(lhs_width, op.width())
+        || !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+    {
+        return None;
+    }
+
+    Some((
+        4,
+        OptimizedInstruction::CompareBrIfLocal {
+            old_range: first.old_range.start..fourth.old_range.end,
+            lhs_local_addr,
+            rhs_local_addr,
+            target_old,
+            op,
+        },
+    ))
+}
+
+fn match_local_const_compare_br_if(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+        return None;
+    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let rhs_const = match second.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let op = match third.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let target_old = match fourth.kind {
+        DecodedKind::BrIf(target) => target,
+        _ => return None,
+    };
+    if !same_width(lhs_width, op.width())
+        || !same_width(lhs_width, rhs_const.width())
+        || !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !compare_matches_const(op, rhs_const)
+    {
+        return None;
+    }
+
+    Some((
+        4,
+        OptimizedInstruction::CompareBrIfConst {
+            old_range: first.old_range.start..fourth.old_range.end,
+            lhs_local_addr,
+            rhs_const,
+            target_old,
+            op,
+        },
+    ))
+}
+
+fn match_const_load(
     decoded: &[DecodedInstruction],
     index: usize,
     jump_targets: &HashSet<usize>,
@@ -564,11 +1282,11 @@ fn match_const_i32_load(
         return None;
     }
     let addr = match first.kind {
-        DecodedKind::I32Const(value) => value,
+        DecodedKind::Const(TypedConst::I32(value)) => value,
         _ => return None,
     };
-    let memarg = match second.kind {
-        DecodedKind::I32LoadLocal(memarg) => memarg,
+    let (op, memarg) = match second.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
         _ => return None,
     };
     let start = match compute_memory_offset(memarg, addr as u32) {
@@ -578,14 +1296,15 @@ fn match_const_i32_load(
 
     Some((
         2,
-        OptimizedInstruction::I32LoadConstLocal {
+        OptimizedInstruction::LoadConstLocal {
             old_range: first.old_range.start..second.old_range.end,
             start,
+            op,
         },
     ))
 }
 
-fn match_const_local_get_i32_store(
+fn match_const_local_store(
     decoded: &[DecodedInstruction],
     index: usize,
     jump_targets: &HashSet<usize>,
@@ -597,17 +1316,17 @@ fn match_const_local_get_i32_store(
         return None;
     }
     let addr = match first.kind {
-        DecodedKind::I32Const(value) => value,
+        DecodedKind::Const(TypedConst::I32(value)) => value,
         _ => return None,
     };
-    let local_addr = match second.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
+    let (value_width, value_local_addr) = local_get(second.kind)?;
+    let (op, memarg) = match third.kind {
+        DecodedKind::Store(op, memarg) => (op, memarg),
         _ => return None,
     };
-    let memarg = match third.kind {
-        DecodedKind::I32StoreLocal(memarg) => memarg,
-        _ => return None,
-    };
+    if !same_width(value_width, op.value_width()) {
+        return None;
+    }
     let start = match compute_memory_offset(memarg, addr as u32) {
         VMResult::Success(start) => u32::try_from(start).ok()?,
         _ => return None,
@@ -615,59 +1334,19 @@ fn match_const_local_get_i32_store(
 
     Some((
         3,
-        OptimizedInstruction::I32LocalGet4StoreConstLocal {
+        OptimizedInstruction::StoreConstLocal {
             old_range: first.old_range.start..third.old_range.end,
             start,
-            local_addr,
+            value_local_addr,
+            op,
         },
     ))
-}
-
-fn match_local_addr_i32_load(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    match_local_addr_load(decoded, index, jump_targets, LocalAddrLoadOp::I32)
-}
-
-fn match_local_addr_i32_load8_u(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    match_local_addr_load(decoded, index, jump_targets, LocalAddrLoadOp::I32Load8U)
-}
-
-fn match_local_addr_i32_load16_s(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    match_local_addr_load(decoded, index, jump_targets, LocalAddrLoadOp::I32Load16S)
-}
-
-fn match_local_addr_i32_load16_u(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    match_local_addr_load(decoded, index, jump_targets, LocalAddrLoadOp::I32Load16U)
-}
-
-fn match_local_addr_f32_load(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    match_local_addr_load(decoded, index, jump_targets, LocalAddrLoadOp::F32)
 }
 
 fn match_local_addr_load(
     decoded: &[DecodedInstruction],
     index: usize,
     jump_targets: &HashSet<usize>,
-    op: LocalAddrLoadOp,
 ) -> Option<MatchOutcome> {
     let [first, second] = decoded.get(index..index + 2)? else {
         return None;
@@ -675,18 +1354,14 @@ fn match_local_addr_load(
     if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 2) {
         return None;
     }
-    let local_addr = match first.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
+    let (addr_width, local_addr) = local_get(first.kind)?;
+    let (op, memarg) = match second.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
         _ => return None,
     };
-    let memarg = match (op, second.kind) {
-        (LocalAddrLoadOp::I32, DecodedKind::I32LoadLocal(memarg))
-        | (LocalAddrLoadOp::I32Load8U, DecodedKind::I32Load8ULocal(memarg))
-        | (LocalAddrLoadOp::I32Load16S, DecodedKind::I32Load16SLocal(memarg))
-        | (LocalAddrLoadOp::I32Load16U, DecodedKind::I32Load16ULocal(memarg))
-        | (LocalAddrLoadOp::F32, DecodedKind::F32LoadLocal(memarg)) => memarg,
-        _ => return None,
-    };
+    if !same_width(addr_width, ValueSize::Byte4) {
+        return None;
+    }
 
     Some((
         2,
@@ -699,35 +1374,10 @@ fn match_local_addr_load(
     ))
 }
 
-fn match_local_local_i32_store(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    match_local_local_store(decoded, index, jump_targets, LocalLocalStoreOp::I32)
-}
-
-fn match_local_local_i32_store8(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    match_local_local_store(decoded, index, jump_targets, LocalLocalStoreOp::I32Store8)
-}
-
-fn match_local_local_i32_store16(
-    decoded: &[DecodedInstruction],
-    index: usize,
-    jump_targets: &HashSet<usize>,
-) -> Option<MatchOutcome> {
-    match_local_local_store(decoded, index, jump_targets, LocalLocalStoreOp::I32Store16)
-}
-
 fn match_local_local_store(
     decoded: &[DecodedInstruction],
     index: usize,
     jump_targets: &HashSet<usize>,
-    op: LocalLocalStoreOp,
 ) -> Option<MatchOutcome> {
     let [first, second, third] = decoded.get(index..index + 3)? else {
         return None;
@@ -735,20 +1385,15 @@ fn match_local_local_store(
     if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 3) {
         return None;
     }
-    let addr_local_addr = match first.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
+    let (addr_width, addr_local_addr) = local_get(first.kind)?;
+    let (value_width, value_local_addr) = local_get(second.kind)?;
+    let (op, memarg) = match third.kind {
+        DecodedKind::Store(op, memarg) => (op, memarg),
         _ => return None,
     };
-    let value_local_addr = match second.kind {
-        DecodedKind::LocalGet4(local_addr) => local_addr,
-        _ => return None,
-    };
-    let memarg = match (op, third.kind) {
-        (LocalLocalStoreOp::I32, DecodedKind::I32StoreLocal(memarg))
-        | (LocalLocalStoreOp::I32Store8, DecodedKind::I32Store8Local(memarg))
-        | (LocalLocalStoreOp::I32Store16, DecodedKind::I32Store16Local(memarg)) => memarg,
-        _ => return None,
-    };
+    if !same_width(addr_width, ValueSize::Byte4) || !same_width(value_width, op.value_width()) {
+        return None;
+    }
 
     Some((
         3,
@@ -785,10 +1430,14 @@ fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
         OptimizedInstruction::Raw(decoded) => &decoded.old_range,
         OptimizedInstruction::LocalImmSetTee { old_range, .. }
         | OptimizedInstruction::LocalLocalSetTee { old_range, .. }
-        | OptimizedInstruction::I32LocalEqzBrIf { old_range, .. }
+        | OptimizedInstruction::LocalEqzBrIf { old_range, .. }
         | OptimizedInstruction::I32LocalLocalGeUBrIf { old_range, .. }
-        | OptimizedInstruction::I32LoadConstLocal { old_range, .. }
-        | OptimizedInstruction::I32LocalGet4StoreConstLocal { old_range, .. }
+        | OptimizedInstruction::CompareSetTeeLocal { old_range, .. }
+        | OptimizedInstruction::CompareSetTeeConst { old_range, .. }
+        | OptimizedInstruction::CompareBrIfLocal { old_range, .. }
+        | OptimizedInstruction::CompareBrIfConst { old_range, .. }
+        | OptimizedInstruction::LoadConstLocal { old_range, .. }
+        | OptimizedInstruction::StoreConstLocal { old_range, .. }
         | OptimizedInstruction::LocalAddrLoad { old_range, .. }
         | OptimizedInstruction::LocalLocalStore { old_range, .. } => old_range,
     }
@@ -797,15 +1446,108 @@ fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
 fn output_len(instruction: &OptimizedInstruction) -> usize {
     match instruction {
         OptimizedInstruction::Raw(decoded) => decoded.raw.len(),
-        OptimizedInstruction::LocalImmSetTee { .. } => 4,
-        OptimizedInstruction::LocalLocalSetTee { .. } => 4,
-        OptimizedInstruction::I32LocalEqzBrIf { .. } => 3,
+        OptimizedInstruction::LocalImmSetTee { op, .. } => {
+            if is_existing_i32_local_imm_fastpath(*op) {
+                4
+            } else {
+                5
+            }
+        }
+        OptimizedInstruction::LocalLocalSetTee { op, .. } => {
+            if is_existing_i32_local_local_fastpath(*op) {
+                4
+            } else {
+                5
+            }
+        }
+        OptimizedInstruction::LocalEqzBrIf { .. } => 3,
         OptimizedInstruction::I32LocalLocalGeUBrIf { .. } => 4,
-        OptimizedInstruction::I32LoadConstLocal { .. } => 2,
-        OptimizedInstruction::I32LocalGet4StoreConstLocal { .. } => 3,
-        OptimizedInstruction::LocalAddrLoad { .. } => 3,
-        OptimizedInstruction::LocalLocalStore { .. } => 4,
+        OptimizedInstruction::CompareSetTeeLocal { .. }
+        | OptimizedInstruction::CompareSetTeeConst { .. }
+        | OptimizedInstruction::CompareBrIfLocal { .. }
+        | OptimizedInstruction::CompareBrIfConst { .. } => 5,
+        OptimizedInstruction::LoadConstLocal { op, .. } => {
+            if op.uses_dedicated_const() {
+                2
+            } else {
+                3
+            }
+        }
+        OptimizedInstruction::StoreConstLocal { op, .. } => {
+            if op.uses_dedicated_const() {
+                3
+            } else {
+                4
+            }
+        }
+        OptimizedInstruction::LocalAddrLoad { op, .. } => {
+            if op.uses_dedicated_local_addr() {
+                3
+            } else {
+                4
+            }
+        }
+        OptimizedInstruction::LocalLocalStore { op, .. } => {
+            if op.uses_dedicated_local_local() {
+                4
+            } else {
+                5
+            }
+        }
     }
+}
+
+fn scalar_kind_operand(op: TypedScalarOp) -> u32 {
+    match op {
+        TypedScalarOp::I32(kind) => kind as u32,
+        TypedScalarOp::I64(kind) => kind as u32,
+        TypedScalarOp::F32(kind) => kind as u32,
+        TypedScalarOp::F64(kind) => kind as u32,
+    }
+}
+
+fn compare_kind_operand(op: TypedCompareOp) -> u32 {
+    match op {
+        TypedCompareOp::I32(kind) => kind as u32,
+        TypedCompareOp::I64(kind) => kind as u32,
+        TypedCompareOp::F32(kind) => kind as u32,
+        TypedCompareOp::F64(kind) => kind as u32,
+    }
+}
+
+fn load_kind_operand(op: TypedLoadOp) -> u32 {
+    match op {
+        TypedLoadOp::Bits4(kind) => kind as u32,
+        TypedLoadOp::Bits8(kind) => kind as u32,
+    }
+}
+
+fn store_kind_operand(op: TypedStoreOp) -> u32 {
+    match op {
+        TypedStoreOp::Bits4(kind) => kind as u32,
+        TypedStoreOp::Bits8(kind) => kind as u32,
+    }
+}
+
+fn push_const_operand(lowered: &mut Vec<Instr>, value: TypedConst) {
+    lowered.push(match value {
+        TypedConst::I32(value) => Instr {
+            operand: Operand { i32: value },
+        },
+        TypedConst::I64(value) => Instr {
+            operand: Operand { u64: value as u64 },
+        },
+        TypedConst::F32(bits) => Instr {
+            operand: Operand {
+                f32: f32::from_bits(bits),
+            },
+        },
+        TypedConst::F64(bits) => Instr {
+            operand: Operand {
+                f64: f64::from_bits(bits),
+            },
+        },
+    });
 }
 
 fn lower_instruction(
@@ -824,34 +1566,149 @@ fn lower_instruction(
             tee,
             op,
             ..
-        } => {
-            let op = match (op, tee) {
-                (LocalImmSetTeeOp::Add, false) => vm::op_i32_local_add_imm_set4,
-                (LocalImmSetTeeOp::Add, true) => vm::op_i32_local_add_imm_tee4,
-                (LocalImmSetTeeOp::Sub, false) => vm::op_i32_local_sub_imm_set4,
-                (LocalImmSetTeeOp::Sub, true) => vm::op_i32_local_sub_imm_tee4,
-                (LocalImmSetTeeOp::And, false) => vm::op_i32_local_and_imm_set4,
-                (LocalImmSetTeeOp::And, true) => vm::op_i32_local_and_imm_tee4,
-                (LocalImmSetTeeOp::Shl, false) => vm::op_i32_local_shl_imm_set4,
-                (LocalImmSetTeeOp::Shl, true) => vm::op_i32_local_shl_imm_tee4,
-                (LocalImmSetTeeOp::ShrU, false) => vm::op_i32_local_shr_u_imm_set4,
-                (LocalImmSetTeeOp::ShrU, true) => vm::op_i32_local_shr_u_imm_tee4,
-            };
-            lowered.push(Instr { op });
-            lowered.push(Instr {
-                operand: Operand {
-                    local_addr: src_local,
-                },
-            });
-            lowered.push(Instr {
-                operand: Operand { i32: imm },
-            });
-            lowered.push(Instr {
-                operand: Operand {
-                    local_addr: dst_local,
-                },
-            });
-        }
+        } => match op {
+            TypedScalarOp::I32(kind)
+                if matches!(
+                    kind,
+                    vm::I32ScalarKind::Add
+                        | vm::I32ScalarKind::Sub
+                        | vm::I32ScalarKind::And
+                        | vm::I32ScalarKind::Shl
+                        | vm::I32ScalarKind::ShrU
+                ) =>
+            {
+                let op = match (kind, tee) {
+                    (vm::I32ScalarKind::Add, false) => vm::op_i32_local_add_imm_set4,
+                    (vm::I32ScalarKind::Add, true) => vm::op_i32_local_add_imm_tee4,
+                    (vm::I32ScalarKind::Sub, false) => vm::op_i32_local_sub_imm_set4,
+                    (vm::I32ScalarKind::Sub, true) => vm::op_i32_local_sub_imm_tee4,
+                    (vm::I32ScalarKind::And, false) => vm::op_i32_local_and_imm_set4,
+                    (vm::I32ScalarKind::And, true) => vm::op_i32_local_and_imm_tee4,
+                    (vm::I32ScalarKind::Shl, false) => vm::op_i32_local_shl_imm_set4,
+                    (vm::I32ScalarKind::Shl, true) => vm::op_i32_local_shl_imm_tee4,
+                    (vm::I32ScalarKind::ShrU, false) => vm::op_i32_local_shr_u_imm_set4,
+                    (vm::I32ScalarKind::ShrU, true) => vm::op_i32_local_shr_u_imm_tee4,
+                    _ => unreachable!(),
+                };
+                lowered.push(Instr { op });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: src_local,
+                    },
+                });
+                let TypedConst::I32(imm) = imm else {
+                    unreachable!()
+                };
+                lowered.push(Instr {
+                    operand: Operand { i32: imm },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+            }
+            TypedScalarOp::I32(_) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_i32_local_scalar_imm_tee4
+                    } else {
+                        vm::op_i32_local_scalar_imm_set4
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: src_local,
+                    },
+                });
+                push_const_operand(lowered, imm);
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: scalar_kind_operand(op),
+                    },
+                });
+            }
+            TypedScalarOp::I64(_) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_i64_local_scalar_imm_tee8
+                    } else {
+                        vm::op_i64_local_scalar_imm_set8
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: src_local,
+                    },
+                });
+                push_const_operand(lowered, imm);
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: scalar_kind_operand(op),
+                    },
+                });
+            }
+            TypedScalarOp::F32(_) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_f32_local_scalar_imm_tee4
+                    } else {
+                        vm::op_f32_local_scalar_imm_set4
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: src_local,
+                    },
+                });
+                push_const_operand(lowered, imm);
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: scalar_kind_operand(op),
+                    },
+                });
+            }
+            TypedScalarOp::F64(_) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_f64_local_scalar_imm_tee8
+                    } else {
+                        vm::op_f64_local_scalar_imm_set8
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: src_local,
+                    },
+                });
+                push_const_operand(lowered, imm);
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: scalar_kind_operand(op),
+                    },
+                });
+            }
+        },
         OptimizedInstruction::LocalLocalSetTee {
             lhs_local_addr,
             rhs_local_addr,
@@ -859,35 +1716,160 @@ fn lower_instruction(
             tee,
             op,
             ..
-        } => {
-            let op = match (op, tee) {
-                (LocalLocalSetTeeOp::Add, false) => vm::op_i32_local_local_add_set4,
-                (LocalLocalSetTeeOp::Add, true) => vm::op_i32_local_local_add_tee4,
-            };
-            lowered.push(Instr { op });
-            lowered.push(Instr {
-                operand: Operand {
-                    local_addr: lhs_local_addr,
-                },
-            });
-            lowered.push(Instr {
-                operand: Operand {
-                    local_addr: rhs_local_addr,
-                },
-            });
-            lowered.push(Instr {
-                operand: Operand {
-                    local_addr: dst_local,
-                },
-            });
-        }
-        OptimizedInstruction::I32LocalEqzBrIf {
+        } => match op {
+            TypedScalarOp::I32(vm::I32ScalarKind::Add) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_i32_local_local_add_tee4
+                    } else {
+                        vm::op_i32_local_local_add_set4
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: lhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: rhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+            }
+            TypedScalarOp::I32(_) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_i32_local_local_scalar_tee4
+                    } else {
+                        vm::op_i32_local_local_scalar_set4
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: lhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: rhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: scalar_kind_operand(op),
+                    },
+                });
+            }
+            TypedScalarOp::I64(_) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_i64_local_local_scalar_tee8
+                    } else {
+                        vm::op_i64_local_local_scalar_set8
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: lhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: rhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: scalar_kind_operand(op),
+                    },
+                });
+            }
+            TypedScalarOp::F32(_) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_f32_local_local_scalar_tee4
+                    } else {
+                        vm::op_f32_local_local_scalar_set4
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: lhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: rhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: scalar_kind_operand(op),
+                    },
+                });
+            }
+            TypedScalarOp::F64(_) => {
+                lowered.push(Instr {
+                    op: if tee {
+                        vm::op_f64_local_local_scalar_tee8
+                    } else {
+                        vm::op_f64_local_local_scalar_set8
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: lhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: rhs_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: dst_local,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: scalar_kind_operand(op),
+                    },
+                });
+            }
+        },
+        OptimizedInstruction::LocalEqzBrIf {
             local_addr,
             target_old,
+            width,
             ..
         } => {
             lowered.push(Instr {
-                op: vm::op_i32_local_eqz_br_if,
+                op: match width {
+                    ValueSize::Byte4 => vm::op_i32_local_eqz_br_if,
+                    ValueSize::Byte8 => vm::op_i64_local_eqz_br_if,
+                    ValueSize::Byte16 => unreachable!(),
+                },
             });
             lowered.push(Instr {
                 operand: Operand { local_addr },
@@ -923,26 +1905,212 @@ fn lower_instruction(
                 },
             });
         }
-        OptimizedInstruction::I32LoadConstLocal { start, .. } => {
+        OptimizedInstruction::CompareSetTeeLocal {
+            lhs_local_addr,
+            rhs_local_addr,
+            dst_local,
+            tee,
+            op: compare_op,
+            ..
+        } => {
+            let handler = match (compare_op, tee) {
+                (TypedCompareOp::I32(_), false) => vm::op_i32_local_local_compare_set4,
+                (TypedCompareOp::I32(_), true) => vm::op_i32_local_local_compare_tee4,
+                (TypedCompareOp::I64(_), false) => vm::op_i64_local_local_compare_set4,
+                (TypedCompareOp::I64(_), true) => vm::op_i64_local_local_compare_tee4,
+                (TypedCompareOp::F32(_), false) => vm::op_f32_local_local_compare_set4,
+                (TypedCompareOp::F32(_), true) => vm::op_f32_local_local_compare_tee4,
+                (TypedCompareOp::F64(_), false) => vm::op_f64_local_local_compare_set4,
+                (TypedCompareOp::F64(_), true) => vm::op_f64_local_local_compare_tee4,
+            };
+            lowered.push(Instr { op: handler });
             lowered.push(Instr {
-                op: vm::op_i32_load_const_local,
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
             });
             lowered.push(Instr {
-                operand: Operand { u32: start },
+                operand: Operand {
+                    local_addr: rhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: dst_local,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
             });
         }
-        OptimizedInstruction::I32LocalGet4StoreConstLocal {
-            start, local_addr, ..
+        OptimizedInstruction::CompareSetTeeConst {
+            lhs_local_addr,
+            rhs_const,
+            dst_local,
+            tee,
+            op: compare_op,
+            ..
         } => {
+            let handler = match (compare_op, tee) {
+                (TypedCompareOp::I32(_), false) => vm::op_i32_local_const_compare_set4,
+                (TypedCompareOp::I32(_), true) => vm::op_i32_local_const_compare_tee4,
+                (TypedCompareOp::I64(_), false) => vm::op_i64_local_const_compare_set4,
+                (TypedCompareOp::I64(_), true) => vm::op_i64_local_const_compare_tee4,
+                (TypedCompareOp::F32(_), false) => vm::op_f32_local_const_compare_set4,
+                (TypedCompareOp::F32(_), true) => vm::op_f32_local_const_compare_tee4,
+                (TypedCompareOp::F64(_), false) => vm::op_f64_local_const_compare_set4,
+                (TypedCompareOp::F64(_), true) => vm::op_f64_local_const_compare_tee4,
+            };
+            lowered.push(Instr { op: handler });
             lowered.push(Instr {
-                op: vm::op_i32_local_get4_store_const_local,
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
+            });
+            push_const_operand(lowered, rhs_const);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: dst_local,
+                },
             });
             lowered.push(Instr {
-                operand: Operand { u32: start },
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::CompareBrIfLocal {
+            lhs_local_addr,
+            rhs_local_addr,
+            target_old,
+            op: compare_op,
+            ..
+        } => {
+            let handler = match compare_op {
+                TypedCompareOp::I32(_) => vm::op_i32_local_local_compare_br_if,
+                TypedCompareOp::I64(_) => vm::op_i64_local_local_compare_br_if,
+                TypedCompareOp::F32(_) => vm::op_f32_local_local_compare_br_if,
+                TypedCompareOp::F64(_) => vm::op_f64_local_local_compare_br_if,
+            };
+            lowered.push(Instr { op: handler });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
             });
             lowered.push(Instr {
-                operand: Operand { local_addr },
+                operand: Operand {
+                    local_addr: rhs_local_addr,
+                },
             });
+            lowered.push(Instr {
+                operand: Operand {
+                    jump_addr: remap_jump_target(target_old, old_to_new),
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::CompareBrIfConst {
+            lhs_local_addr,
+            rhs_const,
+            target_old,
+            op: compare_op,
+            ..
+        } => {
+            let handler = match compare_op {
+                TypedCompareOp::I32(_) => vm::op_i32_local_const_compare_br_if,
+                TypedCompareOp::I64(_) => vm::op_i64_local_const_compare_br_if,
+                TypedCompareOp::F32(_) => vm::op_f32_local_const_compare_br_if,
+                TypedCompareOp::F64(_) => vm::op_f64_local_const_compare_br_if,
+            };
+            lowered.push(Instr { op: handler });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
+            });
+            push_const_operand(lowered, rhs_const);
+            lowered.push(Instr {
+                operand: Operand {
+                    jump_addr: remap_jump_target(target_old, old_to_new),
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::LoadConstLocal { start, op, .. } => {
+            if op.uses_dedicated_const() {
+                lowered.push(Instr {
+                    op: vm::op_i32_load_const_local,
+                });
+                lowered.push(Instr {
+                    operand: Operand { u32: start },
+                });
+            } else {
+                lowered.push(Instr {
+                    op: match op {
+                        TypedLoadOp::Bits4(_) => vm::op_load_const_local4,
+                        TypedLoadOp::Bits8(_) => vm::op_load_const_local8,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand { u32: start },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: load_kind_operand(op),
+                    },
+                });
+            }
+        }
+        OptimizedInstruction::StoreConstLocal {
+            start,
+            value_local_addr,
+            op,
+            ..
+        } => {
+            if op.uses_dedicated_const() {
+                lowered.push(Instr {
+                    op: vm::op_i32_local_get4_store_const_local,
+                });
+                lowered.push(Instr {
+                    operand: Operand { u32: start },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: value_local_addr,
+                    },
+                });
+            } else {
+                lowered.push(Instr {
+                    op: match op {
+                        TypedStoreOp::Bits4(_) => vm::op_local_store_const_local4,
+                        TypedStoreOp::Bits8(_) => vm::op_local_store_const_local8,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand { u32: start },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: value_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: store_kind_operand(op),
+                    },
+                });
+            }
         }
         OptimizedInstruction::LocalAddrLoad {
             local_addr,
@@ -950,20 +2118,41 @@ fn lower_instruction(
             op,
             ..
         } => {
-            let op = match op {
-                LocalAddrLoadOp::I32 => vm::op_i32_local_addr_load,
-                LocalAddrLoadOp::I32Load8U => vm::op_i32_local_addr_load8_u,
-                LocalAddrLoadOp::I32Load16S => vm::op_i32_local_addr_load16_s,
-                LocalAddrLoadOp::I32Load16U => vm::op_i32_local_addr_load16_u,
-                LocalAddrLoadOp::F32 => vm::op_f32_local_addr_load,
-            };
-            lowered.push(Instr { op });
-            lowered.push(Instr {
-                operand: Operand { local_addr },
-            });
-            lowered.push(Instr {
-                operand: Operand { memarg },
-            });
+            if op.uses_dedicated_local_addr() {
+                let op = match op {
+                    TypedLoadOp::Bits4(vm::Load4Kind::I32) => vm::op_i32_local_addr_load,
+                    TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U) => vm::op_i32_local_addr_load8_u,
+                    TypedLoadOp::Bits4(vm::Load4Kind::I32Load16S) => vm::op_i32_local_addr_load16_s,
+                    TypedLoadOp::Bits4(vm::Load4Kind::I32Load16U) => vm::op_i32_local_addr_load16_u,
+                    TypedLoadOp::Bits4(vm::Load4Kind::F32) => vm::op_f32_local_addr_load,
+                    _ => unreachable!(),
+                };
+                lowered.push(Instr { op });
+                lowered.push(Instr {
+                    operand: Operand { local_addr },
+                });
+                lowered.push(Instr {
+                    operand: Operand { memarg },
+                });
+            } else {
+                lowered.push(Instr {
+                    op: match op {
+                        TypedLoadOp::Bits4(_) => vm::op_local_addr_load4,
+                        TypedLoadOp::Bits8(_) => vm::op_local_addr_load8,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand { local_addr },
+                });
+                lowered.push(Instr {
+                    operand: Operand { memarg },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: load_kind_operand(op),
+                    },
+                });
+            }
         }
         OptimizedInstruction::LocalLocalStore {
             addr_local_addr,
@@ -972,25 +2161,55 @@ fn lower_instruction(
             op,
             ..
         } => {
-            let op = match op {
-                LocalLocalStoreOp::I32 => vm::op_i32_local_local_store,
-                LocalLocalStoreOp::I32Store8 => vm::op_i32_local_local_store8,
-                LocalLocalStoreOp::I32Store16 => vm::op_i32_local_local_store16,
-            };
-            lowered.push(Instr { op });
-            lowered.push(Instr {
-                operand: Operand {
-                    local_addr: addr_local_addr,
-                },
-            });
-            lowered.push(Instr {
-                operand: Operand {
-                    local_addr: value_local_addr,
-                },
-            });
-            lowered.push(Instr {
-                operand: Operand { memarg },
-            });
+            if op.uses_dedicated_local_local() {
+                let op = match op {
+                    TypedStoreOp::Bits4(vm::Store4Kind::I32) => vm::op_i32_local_local_store,
+                    TypedStoreOp::Bits4(vm::Store4Kind::I32Store8) => vm::op_i32_local_local_store8,
+                    TypedStoreOp::Bits4(vm::Store4Kind::I32Store16) => {
+                        vm::op_i32_local_local_store16
+                    }
+                    _ => unreachable!(),
+                };
+                lowered.push(Instr { op });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: addr_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: value_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand { memarg },
+                });
+            } else {
+                lowered.push(Instr {
+                    op: match op {
+                        TypedStoreOp::Bits4(_) => vm::op_local_local_store4,
+                        TypedStoreOp::Bits8(_) => vm::op_local_local_store8,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: addr_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        local_addr: value_local_addr,
+                    },
+                });
+                lowered.push(Instr {
+                    operand: Operand { memarg },
+                });
+                lowered.push(Instr {
+                    operand: Operand {
+                        u32: store_kind_operand(op),
+                    },
+                });
+            }
         }
     }
 }
@@ -1068,6 +2287,72 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             unsafe { optimized[2].op },
             vm::op_local_get4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn optimizer_does_not_fuse_scalar_when_local_widths_mismatch() {
+        let optimized = optimize_core_program(InstructionProgram {
+            instr: vec![
+                Instr {
+                    op: vm::op_local_get8,
+                },
+                Instr {
+                    operand: Operand { local_addr: 0 },
+                },
+                Instr {
+                    op: vm::op_i64_const,
+                },
+                Instr {
+                    operand: Operand { i64: 1 },
+                },
+                Instr { op: vm::op_i64_add },
+                Instr {
+                    op: vm::op_local_set4,
+                },
+                Instr {
+                    operand: Operand { local_addr: 0 },
+                },
+            ],
+            instruction_starts: vec![0, 2, 4, 5],
+        });
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { optimized[0].op },
+            vm::op_local_get8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn optimizer_does_not_fuse_compare_when_result_local_is_wide() {
+        let optimized = optimize_core_program(InstructionProgram {
+            instr: vec![
+                Instr {
+                    op: vm::op_local_get8,
+                },
+                Instr {
+                    operand: Operand { local_addr: 0 },
+                },
+                Instr {
+                    op: vm::op_local_get8,
+                },
+                Instr {
+                    operand: Operand { local_addr: 8 },
+                },
+                Instr { op: vm::op_i64_eq },
+                Instr {
+                    op: vm::op_local_set8,
+                },
+                Instr {
+                    operand: Operand { local_addr: 16 },
+                },
+            ],
+            instruction_starts: vec![0, 2, 4, 5],
+        });
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { optimized[0].op },
+            vm::op_local_get8 as crate::common::Op
         ));
     }
 }

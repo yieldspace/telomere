@@ -4626,6 +4626,216 @@ mod tests {
     }
 
     #[test]
+    fn parser_specializes_i64_local_mul_imm_set8_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i64)
+                local.get 0
+                i64.const 3
+                i64.mul
+                local.set 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i64_local_scalar_imm_set8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_f64_local_div_imm_tee8_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param f64) (result f64)
+                local.get 0
+                f64.const 2
+                f64.div
+                local.tee 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_f64_local_scalar_imm_tee8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i64_local_local_xor_set8_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i64 i64)
+                local.get 0
+                local.get 1
+                i64.xor
+                local.set 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i64_local_local_scalar_set8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i64_local_eqz_br_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i64)
+                block
+                  local.get 0
+                  i64.eqz
+                  br_if 0
+                end))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i64_local_eqz_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i64_compare_set4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i64 i64) (local i32)
+                local.get 0
+                local.get 1
+                i64.lt_s
+                local.set 2))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i64_local_local_compare_set4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_f64_const_compare_br_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param f64)
+                block
+                  local.get 0
+                  f64.const 0
+                  f64.lt
+                  br_if 0
+                end))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_f64_local_const_compare_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i64_load_const_local_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (result i64)
+                i32.const 8
+                i64.load))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_load_const_local8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i64_local_addr_load_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i64)
+                local.get 0
+                i64.load))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_local_addr_load8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i64_local_local_store_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i64)
+                local.get 0
+                local.get 1
+                i64.store))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_local_local_store8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_keeps_shared_i64_load_out_of_local_addr_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1 1 shared)
+              (func (export "f") (param i32) (result i64)
+                local.get 0
+                i64.load))
+            "#,
+            2,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i64_load_shared as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_keeps_indexed_i64_store_out_of_local_local_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (memory $dst 1)
+              (func (export "f") (param i32 i64)
+                local.get 0
+                local.get 1
+                i64.store $dst))
+            "#,
+            4,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i64_store_indexed_local as crate::common::Op
+        ));
+    }
+
+    #[test]
     fn parser_decodes_indexed_memarg_memidx_and_offset() {
         let memarg = unsafe {
             operand_at(
