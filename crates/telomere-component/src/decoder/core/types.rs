@@ -155,7 +155,7 @@ fn parse_wasm_memtype(reader: &mut impl BinaryReader) -> SizedResult<WasmMemType
             "memory size must be at most 65536 pages (4GiB)".to_owned(),
         ));
     }
-    Ok((reader.read_count() - start, WasmMemType(limits)))
+    Ok((reader.read_count() - start, WasmMemType::new(limits, false)))
 }
 
 fn resolve_core_func_type(local_types: &[LocalCoreType], idx: u32) -> SizedResult<CoreFuncType> {

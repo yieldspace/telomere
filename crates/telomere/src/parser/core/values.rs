@@ -66,11 +66,35 @@ pub fn parse_name<R: BinaryReader>(reader: &mut R) -> Result<(usize, String)> {
 pub fn parse_memarg<R: BinaryReader>(
     reader: &mut R,
     natural_align: u32,
-) -> Result<(usize, MemArg)> {
-    let (len, align) = parse_u32(reader)?;
+) -> Result<(usize, u32, MemArg)> {
+    let (len, flags) = parse_u32(reader)?;
+    let (len2, memidx, align) = if flags >= 0x40 {
+        let (len2, memidx) = parse_u32(reader)?;
+        (len2, memidx, flags - 0x40)
+    } else {
+        (0, 0, flags)
+    };
     if align > natural_align {
         Err(WasmParserError::InvalidAlignment(align))?;
     }
-    let (len2, offset) = parse_u32(reader)?;
-    Ok((len + len2, MemArg { align, offset }))
+    let (len3, offset) = parse_u32(reader)?;
+    Ok((len + len2 + len3, memidx, MemArg { align, offset }))
+}
+
+pub fn parse_memarg_exact<R: BinaryReader>(
+    reader: &mut R,
+    natural_align_log2: u32,
+) -> Result<(usize, u32, MemArg)> {
+    let (len, flags) = parse_u32(reader)?;
+    let (len2, memidx, align) = if flags >= 0x40 {
+        let (len2, memidx) = parse_u32(reader)?;
+        (len2, memidx, flags - 0x40)
+    } else {
+        (0, 0, flags)
+    };
+    if align != natural_align_log2 {
+        Err(WasmParserError::InvalidAlignment(align))?;
+    }
+    let (len3, offset) = parse_u32(reader)?;
+    Ok((len + len2 + len3, memidx, MemArg { align, offset }))
 }

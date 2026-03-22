@@ -44,6 +44,7 @@ fn generate_vm_unary_op(
     op_name: impl IdentFragment,
     closure: impl ToTokens,
 ) -> TokenStream {
+    let handler_name = handler.to_string();
     let mut mangled_names = vec![];
     for target in target.iter() {
         let mangled = format_ident!("{}_{}", target, op_name);
@@ -51,10 +52,32 @@ fn generate_vm_unary_op(
     }
     let mut stream = TokenStream::new();
     for (mangled, target) in mangled_names {
-        stream.extend( quote! {
-          pub unsafe fn #mangled(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-              #handler::<#target>(tail_code, ctx, #closure)
-          }
+        let mnemonic = mangled.to_string().replacen('_', ".", 1);
+        let title = format!("WebAssembly `{mnemonic}`.");
+        let stack = if handler_name == "handle_unary_op" {
+            "[v128, v128] -> [v128]"
+        } else {
+            "[v128] -> [v128]"
+        };
+        stream.extend(quote! {
+            #[doc = #title]
+            #[doc = ""]
+            #[doc = "Spec:"]
+            #[doc = "- Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html"]
+            #[doc = "- Validation: https://webassembly.github.io/spec/core/valid/instructions.html"]
+            #[doc = "- Execution: https://webassembly.github.io/spec/core/exec/instructions.html"]
+            #[doc = ""]
+            #[doc = concat!("Stack effect: `", #stack, "`.")]
+            #[doc = "Traps: none."]
+            #[doc = "Notes: Implements the validated SIMD semantics and tail-dispatches with `call_next`."]
+            #[doc = ""]
+            #[doc = "# Safety"]
+            #[doc = "- `tail_code` must point to the decoded instruction for this handler in the active function body."]
+            #[doc = "- `ctx` must reference a live execution context whose validated operand stack and locals satisfy this instruction."]
+            #[doc = "- This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`."]
+            pub unsafe fn #mangled(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+                #handler::<#target>(tail_code, ctx, #closure)
+            }
         });
     }
     stream

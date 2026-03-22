@@ -164,6 +164,7 @@ fn vm_result_to_anyhow<T>(
         }
         telomere::VMResult::Unlinkable => Err(anyhow::anyhow!("{context}: unlinkable")),
         telomere::VMResult::InvalidOperand => Err(anyhow::anyhow!("{context}: invalid operand")),
+        telomere::VMResult::UnalignedAtomic => Err(anyhow::anyhow!("{context}: unaligned atomic")),
     }
 }
 

@@ -1,12 +1,12 @@
 use crate::{
     common::{
-        execute_elem_init_const_expr,
-        gc::{FunctionInstanceData, GcRef, Header, InstanceData, MemoryPool, ObjectType},
-        word_size, AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CodeSection,
-        ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection, ExecuteContext,
-        Export, ExportDesc, ExportSection, FuncIdx, FunctionBody, GlobalIdx, HostFunction,
-        HostFunctionDefinition, ImportDesc, ImportSection, InstanceHandle, Instr, Limits,
-        LocalReference, MemIdx, ModuleInstance, NativeModule, StablePc, TableIdx, TypeIdx,
+        execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
+        AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
+        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
+        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
+        FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
+        ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
+        ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
         TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
@@ -17,11 +17,11 @@ use crate::{
 };
 
 pub(crate) fn init_global(
-    gc: &mut MemoryPool,
+    gc: &mut StoreInner,
     init: &ConstExpr,
-    globals: &[GcRef],
-    funcs: &[GcRef],
-) -> VMResult<GcRef> {
+    globals: &[ObjectRef],
+    funcs: &[ObjectRef],
+) -> VMResult<ObjectRef> {
     tracing::trace!("global init: {init:?}");
 
     let res = match init {
@@ -31,7 +31,7 @@ pub(crate) fn init_global(
         ConstExpr::F64(v) => gc.new_global_data8(v.to_bits()),
         ConstExpr::V128(v) => gc.new_global_data16(*v),
 
-        ConstExpr::RefNull(_t) => gc.new_global_ref(GcRef(0)),
+        ConstExpr::RefNull(_t) => gc.new_global_ref(ObjectRef(0)),
         ConstExpr::FuncRef(v) => {
             let addr = funcs.get(*v as usize);
             if let Some(addr) = addr {
@@ -75,27 +75,26 @@ fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMRe
     VMResult::Success(())
 }
 fn execute_offset_const_expr(
-    gc: &mut MemoryPool,
-    globals: &[GcRef],
+    gc: &mut StoreInner,
+    globals: &[ObjectRef],
     exprs: &[ConstExpr],
 ) -> VMResult<u32> {
-    for expr in exprs {
-        return VMResult::Success(match expr {
-            ConstExpr::I32(v) => *v as u32,
-            ConstExpr::GlobalGet(idx) => {
-                let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
-                    VMResult::Unlinkable
-                }));
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(unsafe { gc.get_global(addr) });
-                u32::from_le_bytes(buf)
-            }
-            _ => {
-                todo!()
-            }
-        });
+    if exprs.len() != 1 {
+        return VMResult::Unlinkable;
     }
-    VMResult::Unlinkable
+    match &exprs[0] {
+        ConstExpr::I32(v) => VMResult::Success(*v as u32),
+        ConstExpr::GlobalGet(idx) => {
+            let addr = *vm_try!(VMResult::from_option(globals.get(*idx as usize), || {
+                VMResult::Unlinkable
+            }));
+            let Ok(buf): Result<[u8; 4], _> = gc.get_global(addr).try_into() else {
+                return VMResult::Unlinkable;
+            };
+            VMResult::Success(u32::from_le_bytes(buf))
+        }
+        _ => VMResult::Unlinkable,
+    }
 }
 
 fn convert_native_module_to_module(m: NativeModule) -> Module {
@@ -230,9 +229,9 @@ pub async fn instantiate(
         let instance_id = store.new_instance_id();
 
         // -> addr
-        let mut memory: Option<GcRef> = None;
+        let mut memories: Vec<ObjectRef> = Vec::new();
         let mut globals = vec![];
-        let mut funcs: Vec<GcRef> = vec![];
+        let mut funcs: Vec<ObjectRef> = vec![];
         let mut tables = vec![];
 
         for import in &imports.0 {
@@ -242,15 +241,15 @@ pub async fn instantiate(
                     tracing::error!("unknown instance");
                     VMResult::Unlinkable
                 }));
-            let instance_gc_ref = vm_try!(VMResult::from_option(
-                ext_inst_addr.get_gc_ref_with_pool(store, &gc),
+            let instance_object_ref = vm_try!(VMResult::from_option(
+                ext_inst_addr.object_ref_for_store(store),
                 || {
                     tracing::error!("instance handle belongs to another store");
                     VMResult::Unlinkable
                 }
             ));
-            let ext_inst = unsafe { &*gc.get_instance_unchecked(instance_gc_ref) };
-            let ext_module = unsafe { gc.get_module(ext_inst.module_addr) };
+            let ext_inst = unsafe { &*gc.get_instance_unchecked(instance_object_ref) };
+            let ext_module = gc.get_module(ext_inst.module_addr);
             let export = vm_try!(VMResult::from_option(
                 ext_module.exports.find(&import.name),
                 || {
@@ -270,7 +269,7 @@ pub async fn instantiate(
                         tracing::trace!("import function type");
                         return VMResult::Unlinkable;
                     }
-                    let funcaddr = ext_inst.funcs.as_slice(&gc)[funcidx.0 as usize];
+                    let funcaddr = ext_inst.funcs.as_slice()[funcidx.0 as usize];
                     let funcidx = funcs.len();
                     funcs.push(funcaddr);
                     tracing::trace!("linking: {funcidx} => {funcaddr:?}")
@@ -281,7 +280,7 @@ pub async fn instantiate(
                         tracing::trace!("import global type");
                         return VMResult::Unlinkable;
                     }
-                    globals.push(ext_inst.globals.as_slice(&gc)[global_idx.0 as usize]);
+                    globals.push(ext_inst.globals.as_slice()[global_idx.0 as usize]);
                 }
                 (ImportDesc::TableType(import_tt), ExportDesc::Table(idx)) => {
                     let export_tt = ext_module.tables[idx.0 as usize];
@@ -291,25 +290,35 @@ pub async fn instantiate(
                         tracing::trace!("import table type");
                         return VMResult::Unlinkable;
                     }
-                    let addr = ext_inst.tables.as_slice(&gc)[idx.0 as usize];
+                    let addr = ext_inst.tables.as_slice()[idx.0 as usize];
                     vm_try!(validate_limit(
                         import_tt.limits,
-                        unsafe { gc.get_table(addr) }.1.len() as u32,
+                        gc.get_table(addr).1.len() as u32,
                         export_tt.limits
                     ));
-                    tables.push(ext_inst.tables.as_slice(&gc)[idx.0 as usize]);
+                    tables.push(ext_inst.tables.as_slice()[idx.0 as usize]);
                 }
                 (ImportDesc::MemType(mt), ExportDesc::Mem(_idx)) => {
-                    memory = ext_inst.mems.as_slice(&gc).first().copied();
-                    let limits = ext_module.mems[0].0;
+                    let memory_addr = *vm_try!(VMResult::from_option(
+                        ext_inst.mems.as_slice().get(_idx.0 as usize),
+                        || {
+                            tracing::trace!("invalid instance memory");
+                            VMResult::Unlinkable
+                        }
+                    ));
+                    let limits = ext_module.mems[_idx.0 as usize];
 
-                    if let Some(memory_addr) = memory {
-                        let memory = unsafe { gc.get_memory(memory_addr) };
-                        vm_try!(validate_limit(mt.0, memory.page_size(), limits))
-                    } else {
-                        tracing::trace!("invalid instance memory");
+                    if mt.shared != limits.shared {
+                        tracing::trace!("import shared memory flag mismatch");
                         return VMResult::Unlinkable;
                     }
+                    let handle = gc.memory_handle(memory_addr);
+                    vm_try!(validate_limit(
+                        mt.limits,
+                        gc.memory_page_size(handle),
+                        limits.limits
+                    ));
+                    memories.push(memory_addr);
                 }
                 _ => {
                     tracing::trace!("import other type objects");
@@ -318,32 +327,51 @@ pub async fn instantiate(
             }
         }
 
-        let inst_addr = gc.allocate(Header::new(
-            ObjectType::Instance,
-            word_size::<InstanceData>(),
-        ));
-        if memory.is_none() {
-            if let Some(mem) = mems.first() {
-                memory = Some(gc.new_memory(mem.0.min, mem.0.max.unwrap_or(PAGE_SIZE_MAX as u32)));
-            }
+        let mod_addr = gc.new_module(ModuleInstance {
+            function_types: fts.0.clone(),
+            functions: functions.clone(),
+            exports: exs.clone(),
+            tables: m_tables.clone(),
+            globals: m_globals.clone(),
+            mems: mems.clone(),
+        });
+        let inst_id = gc.alloc_instance(InstanceData {
+            instance_id,
+            module_addr: mod_addr,
+            globals: Vec::new(),
+            funcs: Vec::new(),
+            tables: Vec::new(),
+            mems: Vec::new(),
+            memory_slots: Vec::new(),
+        });
+        let inst_addr = gc.object_ref_for_instance(inst_id);
+
+        for mem in mems.iter().skip(memories.len()) {
+            let limits = mem.limits;
+            memories.push(if mem.shared {
+                gc.new_shared_memory(limits.min, limits.max.unwrap_or(PAGE_SIZE_MAX as u32))
+            } else {
+                gc.new_memory(limits.min, limits.max.unwrap_or(PAGE_SIZE_MAX as u32))
+            });
         }
 
         for (idx, d) in (0..).zip(data.0.into_iter()) {
             match &d.mode {
                 DataMode::Active(mem, offset) => {
-                    assert_eq!(mem.0, 0);
                     let offset =
                         vm_try!(execute_offset_const_expr(&mut gc, &globals, offset)) as usize;
-                    if let Some(memory) = &memory {
-                        let memory = unsafe { gc.get_memory(*memory) };
+                    let memory =
+                        *vm_try!(VMResult::from_option(memories.get(mem.0 as usize), || {
+                            VMResult::MemoryIndexOutOfRange
+                        }));
+                    vm_try!(gc.with_memory_by_addr(memory, |memory| {
                         if let Some(slice) = memory.get_mut(offset..offset + d.init.len()) {
                             slice.copy_from_slice(&d.init);
+                            VMResult::Success(())
                         } else {
-                            return VMResult::MemoryIndexOutOfRange;
+                            VMResult::MemoryIndexOutOfRange
                         }
-                    } else {
-                        return VMResult::MemoryIndexOutOfRange;
-                    }
+                    }));
                     store.lock_segments().data.insert((instance_id, idx), d);
                 }
                 DataMode::Passive => {
@@ -356,35 +384,19 @@ pub async fn instantiate(
             let funcidx = funcs.len() as u32;
 
             let func_addr = match func {
-                FunctionBody::Wasm(code) => {
-                    let body = gc.new_function_body(&code.locals, &code.expr);
-                    gc.new_func(&FunctionInstanceData {
-                        instance_addr: inst_addr,
-                        function_flags: FunctionInstanceData::create_wasm_flags(&code.locals),
-                        body,
-                        funcidx,
-                    })
-                }
-                FunctionBody::Host(fp) => {
-                    let align = align_of::<HostFunction>();
-                    let align64 = align == 8;
-                    let header = if align64 {
-                        Header::new(ObjectType::Raw, word_size::<usize>())
-                            .align64()
-                            .initialized()
-                    } else {
-                        Header::new(ObjectType::Raw, word_size::<usize>()).initialized()
-                    };
-                    let body = gc.allocate(header);
-                    let ptr = unsafe { gc.get_value_mut::<usize>(body, 0) };
-                    unsafe { std::ptr::write(ptr, fp as usize) };
-                    gc.new_func(&FunctionInstanceData {
-                        instance_addr: inst_addr,
-                        function_flags: FunctionInstanceData::create_host_flags(),
-                        body,
-                        funcidx,
-                    })
-                }
+                FunctionBody::Wasm(code) => gc.new_func(&FunctionInstanceData {
+                    instance: inst_id,
+                    body: RuntimeFunctionBody::Wasm {
+                        locals: code.locals,
+                        code: code.expr.into(),
+                    },
+                    funcidx,
+                }),
+                FunctionBody::Host(fp) => gc.new_func(&FunctionInstanceData {
+                    instance: inst_id,
+                    body: RuntimeFunctionBody::Host(fp),
+                    funcidx,
+                }),
             };
 
             funcs.push(func_addr);
@@ -394,7 +406,8 @@ pub async fn instantiate(
         for init in &global_init {
             globals.push(vm_try!(init_global(&mut gc, init, &globals, &funcs)));
         }
-        let mut table_instances: Vec<GcRef> = m_tables.iter().map(|v| gc.new_table(*v)).collect();
+        let mut table_instances: Vec<ObjectRef> =
+            m_tables.iter().map(|v| gc.new_table(*v)).collect();
         tables.append(&mut table_instances);
 
         let res = (|| {
@@ -406,7 +419,7 @@ pub async fn instantiate(
                                 vm_try!(execute_offset_const_expr(&mut gc, &globals, offset))
                                     as usize;
                             let table_addr = tables[idx.0 as usize];
-                            let instance = unsafe { gc.get_table(table_addr) };
+                            let instance = gc.get_table(table_addr);
 
                             if instance.0.reftype != elem.kind {
                                 panic!("reftype mismatch")
@@ -423,7 +436,7 @@ pub async fn instantiate(
                                 vm_try!(execute_offset_const_expr(&mut gc, &globals, offset))
                                     as usize;
                             let table_addr = tables[idx.0 as usize];
-                            let instance = unsafe { gc.get_table(table_addr) };
+                            let instance = gc.get_table(table_addr);
                             if offset + idxs.len() > instance.1.len() {
                                 return VMResult::TableIndexOutOfRange;
                             }
@@ -433,7 +446,7 @@ pub async fn instantiate(
                                 let elem_addr = vm_try!(execute_elem_init_const_expr(
                                     &mut gc, &globals, &funcs, idx_expr, rt
                                 ));
-                                let instance = unsafe { gc.get_table(table_addr) };
+                                let instance = gc.get_table(table_addr);
                                 instance.1[offset + idx] = elem_addr.get();
                             }
                         }
@@ -447,19 +460,10 @@ pub async fn instantiate(
             VMResult::Success(())
         })();
 
-        let mod_addr = gc.new_module(ModuleInstance {
-            function_types: fts.0,
-            functions,
-            exports: exs,
-            tables: m_tables,
-            globals: m_globals,
-            mems,
-        });
-
         let instance = Instance {
             module_addr: mod_addr,
             instance_id,
-            memory: memory.into_iter().collect::<Vec<_>>(),
+            memory: memories,
             tables,
             globals,
             funcs,
@@ -469,19 +473,26 @@ pub async fn instantiate(
             gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
-        let root_slot = gc.reserve_root_slot();
-        gc.write_root_slot(root_slot, inst_addr);
-        let addr = InstanceHandle::from_root_slot(store, root_slot);
+        let addr = InstanceHandle::new(store, inst_id, instance_id);
 
         let has_start = if let Some(start) = start {
             let mut stack = Stack::new(128 * 1024);
             let funcaddr = instance.funcs[start.0 as usize];
-            let funcinst = unsafe { gc.get_func(funcaddr) };
+            let funcinst = gc.get_func(funcaddr);
+            let func_instance = gc.instance(funcinst.instance);
             if funcinst.is_host_func() {
                 let local_reference = vm_try!(stack.function_call(
                     0,
                     0,
-                    funcaddr,
+                    CallFrameCache::from_parts(
+                        funcaddr,
+                        funcinst,
+                        func_instance
+                            .memory_slots
+                            .first()
+                            .copied()
+                            .and_then(|slot| slot.handle()),
+                    ),
                     LocalReference {
                         local_size: 0,
                         local_top: 0
@@ -500,11 +511,19 @@ pub async fn instantiate(
                     terminal_result: None,
                 });
             } else {
-                let (locals, _offset) = funcinst.locals_and_code_offset(&gc);
+                let locals = funcinst.locals();
                 let local_reference = vm_try!(stack.function_call(
                     0,
                     locals.byte_size(),
-                    funcaddr,
+                    CallFrameCache::from_parts(
+                        funcaddr,
+                        funcinst,
+                        func_instance
+                            .memory_slots
+                            .first()
+                            .copied()
+                            .and_then(|slot| slot.handle()),
+                    ),
                     LocalReference {
                         local_size: 0,
                         local_top: 0
@@ -538,7 +557,6 @@ pub async fn instantiate(
 
     VMResult::Success(addr)
 }
-// TODO:
 #[allow(dead_code)]
 pub fn aliasing(
     registry: &Registry,
@@ -558,7 +576,7 @@ pub fn aliasing(
     let mut tables = vec![];
     let mut function_addrs = vec![];
     let mut global_addrs = vec![];
-    let mut mem_addr = None;
+    let mut memory_addrs = vec![];
     let mut table_addrs = vec![];
     let mut exports = vec![];
     for (modname, importname, exportname) in triplets {
@@ -566,12 +584,12 @@ pub fn aliasing(
             VMResult::Unlinkable
         }));
 
-        let gc_ref = vm_try!(VMResult::from_option(
-            instance_addr.get_gc_ref_with_pool(store, &gc),
+        let object_ref = vm_try!(VMResult::from_option(
+            instance_addr.object_ref_for_store(store),
             || { VMResult::Unlinkable }
         ));
-        let ext_instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
-        let ext_module = unsafe { gc.get_module(ext_instance.module_addr) };
+        let ext_instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
+        let ext_module = gc.get_module(ext_instance.module_addr);
         let export_desc = vm_try!(VMResult::from_option(
             ext_module.exports.find(importname),
             || { VMResult::Unlinkable }
@@ -585,7 +603,7 @@ pub fn aliasing(
                 let new_funcidx = functions.len();
                 function_types.push(ft.clone());
                 functions.push(TypeIdx(new_tidx as u32));
-                let addr = ext_instance.funcs.as_slice(&gc)[idx.0 as usize];
+                let addr = ext_instance.funcs.as_slice()[idx.0 as usize];
                 function_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -596,7 +614,7 @@ pub fn aliasing(
                 let gt = ext_module.globals[idx.0 as usize];
                 let new_gidx = globals.len();
                 globals.push(gt);
-                let addr = ext_instance.globals.as_slice(&gc)[idx.0 as usize];
+                let addr = ext_instance.globals.as_slice()[idx.0 as usize];
                 global_addrs.push(addr);
                 exports.push(Export(
                     exportname,
@@ -607,7 +625,8 @@ pub fn aliasing(
                 let mt = ext_module.mems[idx.0 as usize];
                 let new_memidx = memories.len();
                 memories.push(mt);
-                mem_addr = Some(ext_instance.mems.as_slice(&gc)[idx.0 as usize]);
+                let addr = ext_instance.mems.as_slice()[idx.0 as usize];
+                memory_addrs.push(addr);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Mem(MemIdx(new_memidx as u32)),
@@ -617,7 +636,7 @@ pub fn aliasing(
                 let tt = ext_module.tables[idx.0 as usize];
                 let new_tableidx = tables.len();
                 tables.push(tt);
-                table_addrs.push(ext_instance.tables.as_slice(&gc)[idx.0 as usize]);
+                table_addrs.push(ext_instance.tables.as_slice()[idx.0 as usize]);
                 exports.push(Export(
                     exportname,
                     ExportDesc::Table(TableIdx(new_tableidx as u32)),
@@ -633,17 +652,16 @@ pub fn aliasing(
         function_types,
         mems: memories,
     });
-    let inst_addr = gc.new_instance(&Instance {
+    let inst_id_handle = gc.alloc_instance(InstanceData {
         module_addr: mod_addr,
-        memory: mem_addr.into_iter().collect::<Vec<_>>(),
+        mems: memory_addrs,
         globals: global_addrs,
         funcs: function_addrs,
         tables: table_addrs,
         instance_id: inst_id,
+        memory_slots: Vec::new(),
     });
-    let root_slot = gc.reserve_root_slot();
-    gc.write_root_slot(root_slot, inst_addr);
-    VMResult::Success(InstanceHandle::from_root_slot(store, root_slot))
+    VMResult::Success(InstanceHandle::new(store, inst_id_handle, inst_id))
 }
 pub fn link_host_function_with_function_idx(
     addr: &InstanceHandle,
@@ -658,16 +676,14 @@ pub fn link_host_function_with_function_idx(
         return;
     }
     let mut gc = store.lock_gc();
-    let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
+    let Some(object_ref) = addr.object_ref_for_store(store) else {
         tracing::error!("instance handle belongs to another store");
         return;
     };
-    let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
-    let funcaddr = instance.funcs.as_slice(&gc)[funcidx as usize];
-    let func = unsafe { gc.get_func_mut(funcaddr) };
-    func.function_flags = FunctionInstanceData::create_host_flags();
-    let funcbody = func.body;
-    unsafe { *gc.get_value_mut::<HostFunction>(funcbody, 0) = f };
+    let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
+    let funcaddr = instance.funcs.as_slice()[funcidx as usize];
+    let func = gc.get_func_mut(funcaddr);
+    func.replace_host_code_pointer(f);
 }
 pub fn link_host_function_with_export_name(
     addr: &InstanceHandle,
@@ -682,12 +698,12 @@ pub fn link_host_function_with_export_name(
         return;
     }
     let gc = store.lock_gc();
-    let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
+    let Some(object_ref) = addr.object_ref_for_store(store) else {
         tracing::error!("instance handle belongs to another store");
         return;
     };
-    let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
-    let module = unsafe { gc.get_module(instance.module_addr) };
+    let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
+    let module = gc.get_module(instance.module_addr);
     let export = &module.exports.find(name).unwrap();
     let func_idx = if let ExportDesc::Func(v) = export {
         v.0
@@ -710,16 +726,14 @@ pub fn link_async_host_function_with_function_idx(
         return;
     }
     let mut gc = store.lock_gc();
-    let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
+    let Some(object_ref) = addr.object_ref_for_store(store) else {
         tracing::error!("instance handle belongs to another store");
         return;
     };
-    let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
-    let funcaddr = instance.funcs.as_slice(&gc)[funcidx as usize];
-    let func = unsafe { gc.get_func_mut(funcaddr) };
-    func.function_flags = FunctionInstanceData::create_async_host_flags();
-    let funcbody = func.body;
-    unsafe { *gc.get_value_mut::<AsyncHostFunction>(funcbody, 0) = f };
+    let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
+    let funcaddr = instance.funcs.as_slice()[funcidx as usize];
+    let func = gc.get_func_mut(funcaddr);
+    func.replace_async_host_code_pointer(f);
 }
 
 pub fn link_async_host_function_with_export_name(
@@ -735,12 +749,12 @@ pub fn link_async_host_function_with_export_name(
         return;
     }
     let gc = store.lock_gc();
-    let Some(gc_ref) = addr.get_gc_ref_with_pool(store, &gc) else {
+    let Some(object_ref) = addr.object_ref_for_store(store) else {
         tracing::error!("instance handle belongs to another store");
         return;
     };
-    let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
-    let module = unsafe { gc.get_module(instance.module_addr) };
+    let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
+    let module = gc.get_module(instance.module_addr);
     let export = &module.exports.find(name).unwrap();
     let func_idx = if let ExportDesc::Func(v) = export {
         v.0
@@ -749,4 +763,26 @@ pub fn link_async_host_function_with_export_name(
     };
     drop(gc);
     link_async_host_function_with_function_idx(addr, func_idx, f, store);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execute_offset_const_expr_fail_closes_non_i32_const() {
+        let store = Store::new();
+        let mut gc = store.lock_gc();
+        let result = execute_offset_const_expr(&mut gc, &[], &[ConstExpr::F64(1.0)]);
+        assert!(matches!(result, VMResult::Unlinkable));
+    }
+
+    #[test]
+    fn execute_offset_const_expr_fail_closes_non_i32_global_get() {
+        let store = Store::new();
+        let mut gc = store.lock_gc();
+        let global = gc.new_global_data8(42);
+        let result = execute_offset_const_expr(&mut gc, &[global], &[ConstExpr::GlobalGet(0)]);
+        assert!(matches!(result, VMResult::Unlinkable));
+    }
 }

@@ -12,9 +12,7 @@ use crate::support::common::{
     VMResult, ValType as CoreValType, WasmValue,
 };
 use crate::support::runtime::instantiate_native_module;
-use crate::support::{
-    aliasing, run_module_function, Module, Registry, ResultValue, Store, VMResult as CoreVMResult,
-};
+use crate::support::{aliasing, Module, Registry, ResultValue, Store, VMResult as CoreVMResult};
 use crate::{ComponentError, ComponentInstance, ComponentLinker, ComponentProgram, ComponentValue};
 use futures::executor::block_on;
 use std::cell::{Cell, RefCell};
@@ -26,7 +24,6 @@ use std::task::{Context, Poll, Waker};
 
 thread_local! {
     static HOST_BINDINGS: RefCell<HashMap<(u32, u32), Rc<HostBinding>>> = RefCell::new(HashMap::new());
-    static ACTIVE_COMPONENT_HOST_GC: Cell<*mut crate::support::common::gc::MemoryPool> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 const MAX_FLAT_PARAMS: usize = 16;
@@ -130,7 +127,7 @@ enum ResolvedCallable {
     Lifted {
         core: RuntimeCoreFunc,
         func_type: FuncType,
-        options: RuntimeCanonicalOptions,
+        options: Box<RuntimeCanonicalOptions>,
         program: Rc<ComponentProgram>,
     },
 }

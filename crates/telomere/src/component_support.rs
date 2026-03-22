@@ -45,79 +45,155 @@ pub mod parser {
 pub mod common {
     pub use crate::common::*;
 
-    pub mod gc {
-        pub use crate::common::gc::{GcRef, MemoryPool};
-    }
-
-    pub fn instance_gc_ref(
-        handle: &crate::common::InstanceHandle,
-        store: &crate::common::Store,
-        pool: &crate::common::gc::MemoryPool,
-    ) -> Option<crate::common::gc::GcRef> {
-        handle.get_gc_ref_with_pool(store, pool)
-    }
+    pub type CoreMemoryHandle = crate::common::MemoryHandle;
 
     pub fn instance_id(
         handle: &crate::common::InstanceHandle,
         store: &crate::common::Store,
-        pool: &crate::common::gc::MemoryPool,
     ) -> Option<u32> {
-        let gc_ref = handle.get_gc_ref_with_pool(store, pool)?;
-        Some(unsafe { (*pool.get_instance_unchecked(gc_ref)).instance_id })
+        handle.matches_store(store).then_some(handle.instance_id())
     }
 
-    pub fn memory_export_addr(
+    pub fn memory_export(
         instance: &crate::common::InstanceHandle,
         store: &crate::common::Store,
         export_name: &str,
-        gc: &mut crate::common::gc::MemoryPool,
-    ) -> Result<crate::common::gc::GcRef, String> {
-        let gc_ref = instance
-            .get_gc_ref_with_pool(store, gc)
+    ) -> Result<CoreMemoryHandle, String> {
+        let object_ref = instance
+            .object_ref_for_store(store)
             .ok_or_else(|| "instance handle belongs to another store".to_owned())?;
-        let instance = unsafe { &*gc.get_instance_unchecked(gc_ref) };
-        let module = unsafe { gc.get_module(instance.module_addr) };
-        let crate::common::ExportDesc::Mem(idx) = module
-            .exports
-            .find(export_name)
-            .ok_or_else(|| format!("memory export '{export_name}' is missing"))?
-        else {
-            return Err(format!("export '{export_name}' is not a memory"));
-        };
-        instance
-            .mems
-            .as_slice(gc)
-            .get(idx.0 as usize)
-            .copied()
-            .ok_or_else(|| "memory index is out of bounds".to_owned())
+        store
+            .with_active_runtime(|gc| {
+                let instance = gc.get_instance(object_ref);
+                let module = gc.get_module(instance.module_addr);
+                let crate::common::ExportDesc::Mem(idx) = module
+                    .exports
+                    .find(export_name)
+                    .ok_or_else(|| format!("memory export '{export_name}' is missing"))?
+                else {
+                    return Err(format!("export '{export_name}' is not a memory"));
+                };
+                instance
+                    .mems
+                    .get(idx.0 as usize)
+                    .copied()
+                    .map(|addr| gc.memory_handle(addr))
+                    .ok_or_else(|| "memory index is out of bounds".to_owned())
+            })
+            .unwrap_or_else(|| {
+                let gc = store.lock_gc();
+                let instance = gc.get_instance(object_ref);
+                let module = gc.get_module(instance.module_addr);
+                let crate::common::ExportDesc::Mem(idx) = module
+                    .exports
+                    .find(export_name)
+                    .ok_or_else(|| format!("memory export '{export_name}' is missing"))?
+                else {
+                    return Err(format!("export '{export_name}' is not a memory"));
+                };
+                instance
+                    .mems
+                    .get(idx.0 as usize)
+                    .copied()
+                    .map(|addr| gc.memory_handle(addr))
+                    .ok_or_else(|| "memory index is out of bounds".to_owned())
+            })
     }
 
     pub fn read_memory(
-        gc: &mut crate::common::gc::MemoryPool,
-        addr: crate::common::gc::GcRef,
+        store: &crate::common::Store,
+        memory: &CoreMemoryHandle,
         ptr: u32,
         len: usize,
     ) -> Option<Vec<u8>> {
-        let memory = unsafe { gc.get_memory(addr) };
         let end = ptr.checked_add(len as u32)? as usize;
-        memory.get(ptr as usize..end).map(|bytes| bytes.to_vec())
+        store
+            .with_active_runtime(|gc| match *memory {
+                crate::common::MemoryHandle::Local(id) => gc
+                    .local_memory(id)
+                    .memory()
+                    .get(ptr as usize..end)
+                    .map(|bytes| bytes.to_vec()),
+                crate::common::MemoryHandle::Shared(id) => {
+                    gc.shared_memory(id).with_memory(|memory| {
+                        memory.get(ptr as usize..end).map(|bytes| bytes.to_vec())
+                    })
+                }
+            })
+            .unwrap_or_else(|| {
+                let gc = store.lock_gc();
+                match *memory {
+                    crate::common::MemoryHandle::Local(id) => gc
+                        .local_memory(id)
+                        .memory()
+                        .get(ptr as usize..end)
+                        .map(|bytes| bytes.to_vec()),
+                    crate::common::MemoryHandle::Shared(id) => {
+                        gc.shared_memory(id).with_memory(|memory| {
+                            memory.get(ptr as usize..end).map(|bytes| bytes.to_vec())
+                        })
+                    }
+                }
+            })
     }
 
     pub fn write_memory(
-        gc: &mut crate::common::gc::MemoryPool,
-        addr: crate::common::gc::GcRef,
+        store: &crate::common::Store,
+        memory: &CoreMemoryHandle,
         ptr: u32,
         bytes: &[u8],
     ) -> bool {
-        let memory = unsafe { gc.get_memory(addr) };
         let Some(end) = ptr.checked_add(bytes.len() as u32).map(|it| it as usize) else {
             return false;
         };
-        let Some(slot) = memory.get_mut(ptr as usize..end) else {
-            return false;
-        };
-        slot.copy_from_slice(bytes);
-        true
+        store
+            .with_active_runtime(|gc| match *memory {
+                crate::common::MemoryHandle::Local(id) => {
+                    let Some(slot) = gc
+                        .local_memory_mut(id)
+                        .memory_mut()
+                        .get_mut(ptr as usize..end)
+                    else {
+                        return false;
+                    };
+                    slot.copy_from_slice(bytes);
+                    true
+                }
+                crate::common::MemoryHandle::Shared(id) => {
+                    gc.shared_memory(id).with_memory(|memory| {
+                        let Some(slot) = memory.get_mut(ptr as usize..end) else {
+                            return false;
+                        };
+                        slot.copy_from_slice(bytes);
+                        true
+                    })
+                }
+            })
+            .unwrap_or_else(|| {
+                let mut gc = store.lock_gc();
+                match *memory {
+                    crate::common::MemoryHandle::Local(id) => {
+                        let Some(slot) = gc
+                            .local_memory_mut(id)
+                            .memory_mut()
+                            .get_mut(ptr as usize..end)
+                        else {
+                            return false;
+                        };
+                        slot.copy_from_slice(bytes);
+                        true
+                    }
+                    crate::common::MemoryHandle::Shared(id) => {
+                        gc.shared_memory(id).with_memory(|memory| {
+                            let Some(slot) = memory.get_mut(ptr as usize..end) else {
+                                return false;
+                            };
+                            slot.copy_from_slice(bytes);
+                            true
+                        })
+                    }
+                }
+            })
     }
 }
 
@@ -128,14 +204,25 @@ pub mod runtime {
         run_module_function, ResultValue,
     };
 
-    pub fn run_module_function_sync_with_gc(
+    pub fn run_core_export_sync_reentrant(
         instance: &crate::common::InstanceHandle,
         store: &crate::common::Store,
-        gc: &mut crate::common::gc::MemoryPool,
         name: &str,
         args: &crate::runtime::ResultValue,
     ) -> Result<crate::common::VMResult<crate::runtime::ResultValue>, String> {
-        crate::runtime::vm::run_module_function_sync_with_gc(instance, store, gc, name, args)
-            .map_err(|error| format!("{error:?}"))
+        store
+            .with_active_runtime(|gc| {
+                crate::runtime::vm::run_module_function_sync_with_gc(
+                    instance, store, gc, name, args,
+                )
+                .map_err(|error| format!("{error:?}"))
+            })
+            .unwrap_or_else(|| {
+                let mut gc = store.lock_gc();
+                crate::runtime::vm::run_module_function_sync_with_gc(
+                    instance, store, &mut gc, name, args,
+                )
+                .map_err(|error| format!("{error:?}"))
+            })
     }
 }

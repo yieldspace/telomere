@@ -311,11 +311,10 @@ fn component_host_trampoline(ctx: &mut ExecuteContext) -> VMResult<*const Instr>
         Ok(args) => args,
         Err(_) => return VMResult::Unreachable,
     };
-    let results =
-        match with_active_component_host_gc(ctx.gc, || binding.call_sync(ctx.store, &args)) {
-            Ok(results) => results,
-            Err(_) => return VMResult::Unreachable,
-        };
+    let results = match binding.call_sync(ctx.store, &args) {
+        Ok(results) => results,
+        Err(_) => return VMResult::Unreachable,
+    };
     let slot = ctx.return_slot();
     let mut offset = 0usize;
     for value in &results {
@@ -385,7 +384,7 @@ fn component_host_trampoline(ctx: &mut ExecuteContext) -> VMResult<*const Instr>
     let (prev_local_ref, return_addr) =
         ctx.stack
             .function_return_in_place(&ctx.local_reference, offset, ctx.gc);
-    ctx.local_reference = prev_local_ref;
+    ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
 }
 
@@ -466,8 +465,7 @@ pub(super) fn linker_binding_to_callable(binding: LinkerBinding) -> ResolvedCall
 }
 
 fn instance_id(instance: &InstanceHandle, store: &Store) -> u32 {
-    let gc = store.lock_gc();
-    crate::support::common::instance_id(instance, store, &gc)
+    crate::support::common::instance_id(instance, store)
         .expect("instance handle belongs to another store")
 }
 
@@ -477,28 +475,19 @@ fn call_core_export_sync(
     export_name: &str,
     args: &[WasmValue],
 ) -> Result<Vec<WasmValue>, ComponentError> {
-    let result = with_active_component_host_gc_ptr(|gc| match gc {
-        Some(gc) => crate::support::runtime::run_module_function_sync_with_gc(
-            instance,
-            store,
-            gc,
-            export_name,
-            &ResultValue::new(args.to_vec()),
-        )
-        .map_err(|error| {
-            ComponentError::Runtime(format!(
-                "core function `{export_name}` cannot suspend during sync execution: {error:?}"
-            ))
-        }),
-        None => Ok(block_on(run_module_function(
-            instance,
-            store,
-            export_name,
-            &ResultValue::new(args.to_vec()),
-        ))),
+    let result = crate::support::runtime::run_core_export_sync_reentrant(
+        instance,
+        store,
+        export_name,
+        &ResultValue::new(args.to_vec()),
+    )
+    .map_err(|error| {
+        ComponentError::Runtime(format!(
+            "core function `{export_name}` cannot suspend during sync execution: {error:?}"
+        ))
     })?;
     match result {
-        CoreVMResult::Success(values) => Ok(values.iter().copied().collect()),
+        CoreVMResult::Success(values) => Ok(values.iter().copied().collect::<Vec<_>>()),
         other => Err(vm_result_to_component_error(other, export_name)),
     }
 }
@@ -516,44 +505,6 @@ where
             "{context} yielded in sync execution"
         ))),
     }
-}
-
-fn with_active_component_host_gc<T>(
-    gc: &mut crate::support::common::gc::MemoryPool,
-    f: impl FnOnce() -> T,
-) -> T {
-    struct ResetGuard<'a> {
-        slot: &'a Cell<*mut crate::support::common::gc::MemoryPool>,
-        previous: *mut crate::support::common::gc::MemoryPool,
-    }
-
-    impl Drop for ResetGuard<'_> {
-        fn drop(&mut self) {
-            self.slot.set(self.previous);
-        }
-    }
-
-    ACTIVE_COMPONENT_HOST_GC.with(|slot| {
-        let previous = slot.replace(gc as *mut _);
-        let _guard = ResetGuard { slot, previous };
-        f()
-    })
-}
-
-pub(super) fn with_active_component_host_gc_ptr<T>(
-    f: impl FnOnce(Option<&mut crate::support::common::gc::MemoryPool>) -> T,
-) -> T {
-    ACTIVE_COMPONENT_HOST_GC.with(|slot| {
-        let ptr = slot.get();
-        if ptr.is_null() {
-            f(None)
-        } else {
-            // SAFETY: the pointer is set only while the current thread is executing a
-            // synchronous host trampoline, so nested canonical ABI calls can reuse the same
-            // mutable GC borrow before control returns to the outer VM frame.
-            f(Some(unsafe { &mut *ptr }))
-        }
-    })
 }
 
 pub(super) fn vm_result_to_component_error(
@@ -583,6 +534,9 @@ pub(super) fn vm_result_to_component_error(
         CoreVMResult::Unlinkable => ComponentError::Link(format!("{context} failed: unlinkable")),
         CoreVMResult::InvalidOperand => {
             ComponentError::Runtime(format!("{context} failed: invalid operand"))
+        }
+        CoreVMResult::UnalignedAtomic => {
+            ComponentError::Trap(format!("{context} trapped: unaligned atomic"))
         }
     }
 }

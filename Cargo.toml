@@ -7,10 +7,14 @@ authors.workspace = true
 homepage.workspace = true
 publish.workspace = true
 
+[features]
+default = ["full"]
+full = ["telomere/full"]
+
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
 anyhow = "1.0.98"
-telomere.workspace = true
+telomere = { path = "crates/telomere", default-features = false }
 telomere-component.workspace = true
 telomere-component-wasi = { path = "crates/telomere-component-wasi" }
 tokio.workspace = true

@@ -1,16 +1,12 @@
-use super::memory_effect::{AsyncCompletion, AsyncEffect, AsyncEffectFuture, AsyncResult, Effect};
+use super::memory_effect::{
+    Completion, CompletionPayload, HostCallPending, MemoryWaitPending, PendingOp,
+};
 use crate::{
-    common::{gc::MemoryPool, ExecuteContext, LocalReference, StablePc},
+    common::{CallFrameCache, ExecuteContext, LocalReference, StablePc, StoreInner},
     Stack, Store, VMResult,
 };
-use futures::{future::FusedFuture, stream::FuturesUnordered};
-use std::{
-    collections::VecDeque,
-    future::Future,
-    pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
-    task::{Poll, Waker},
-};
+use futures::{stream::FuturesUnordered, StreamExt};
+use std::{collections::VecDeque, future::Future, pin::Pin};
 
 fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
     match result {
@@ -18,6 +14,7 @@ fn vm_result_to_unit<T>(result: VMResult<T>) -> VMResult<()> {
         VMResult::Unreachable => VMResult::Unreachable,
         VMResult::StackOverflow => VMResult::StackOverflow,
         VMResult::MemoryIndexOutOfRange => VMResult::MemoryIndexOutOfRange,
+        VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
         VMResult::TableIndexOutOfRange => VMResult::TableIndexOutOfRange,
         VMResult::CallIndirectInvalidType => VMResult::CallIndirectInvalidType,
         VMResult::TableUninitialized => VMResult::TableUninitialized,
@@ -31,6 +28,7 @@ pub(crate) enum ReadyFlag {
     Ready,
     NonReady,
 }
+
 #[derive(Debug)]
 pub(crate) struct Task {
     pub task_id: u32,
@@ -54,122 +52,139 @@ pub(crate) enum SyncRunError {
     Stalled,
 }
 
-pub(crate) struct Notify {
-    ready: AtomicBool,
-    waker: Waker,
-}
-impl Notify {
-    pub fn new() -> Self {
-        Self {
-            ready: AtomicBool::new(false),
-            waker: Waker::noop().clone(),
-        }
-    }
-    fn wake(&self) {
-        trace!("wake");
-
-        self.ready.store(true, std::sync::atomic::Ordering::Release);
-        self.waker.wake_by_ref();
-    }
-    fn receiver(&mut self) -> NotificationReceiver<'_> {
-        NotificationReceiver { notify: self }
-    }
-}
-
-struct NotificationReceiver<'a> {
-    notify: &'a mut Notify,
-}
-impl Future for NotificationReceiver<'_> {
-    type Output = ();
-
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        match self
-            .notify
-            .ready
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(true) => {
-                trace!("ready");
-                Poll::Ready(())
-            }
-            Err(false) => {
-                trace!("pending");
-                self.notify.waker.clone_from(cx.waker());
-                Poll::Pending
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl FusedFuture for NotificationReceiver<'_> {
-    fn is_terminated(&self) -> bool {
-        false
-    }
-}
-pub(crate) struct Scheduler<'a> {
-    tasks: VecDeque<Task>,
-    notify: Notify,
-    async_tasks: FuturesUnordered<AsyncEffectFuture>,
-    pub(crate) completed_tasks: Vec<CompletedTask>,
-    pub(crate) store: &'a Store,
-    effects: VecDeque<Effect>,
-    ready_count: u32,
-}
-
 pub struct EffectSupplier<'a> {
+    task_id: u32,
     pending_effects: &'a mut u32,
-    effects: &'a mut VecDeque<Effect>,
+    queue: &'a mut VecDeque<PendingOp>,
 }
+
 impl EffectSupplier<'_> {
     pub fn get_pending_count(&self) -> u32 {
         *self.pending_effects
     }
 
-    #[cfg(feature = "async-runtime")]
-    pub(crate) fn push_async_effect(&mut self, future: AsyncEffectFuture) {
-        self.effects
-            .push_back(Effect::AsyncEffect(AsyncEffect { future }));
+    #[cfg(test)]
+    pub(crate) fn from_parts<'a>(
+        task_id: u32,
+        pending_effects: &'a mut u32,
+        queue: &'a mut VecDeque<PendingOp>,
+    ) -> EffectSupplier<'a> {
+        EffectSupplier {
+            task_id,
+            pending_effects,
+            queue,
+        }
+    }
+
+    pub(crate) fn push_pending(&mut self, op: PendingOp) {
+        debug_assert_eq!(op.task_id(), self.task_id);
+        self.queue.push_back(op);
         *self.pending_effects += 1;
     }
+}
+
+type DriverFuture = Pin<Box<dyn Future<Output = Completion>>>;
+
+pub trait ExecutionDriver {
+    fn submit(&mut self, op: PendingOp);
+    fn next_completion<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<Completion>> + 'a>>;
+}
+
+#[derive(Default)]
+pub struct TokioDriver {
+    inflight: FuturesUnordered<DriverFuture>,
+}
+
+impl TokioDriver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn submit_host_call(&mut self, op: HostCallPending) {
+        self.inflight.push(Box::pin(async move {
+            Completion {
+                task_id: op.task_id,
+                payload: CompletionPayload::HostCall {
+                    result: op.future.await,
+                },
+            }
+        }));
+    }
+
+    fn submit_memory_wait(&mut self, op: MemoryWaitPending) {
+        self.inflight.push(Box::pin(async move {
+            let value = op.wait.wait_result(op.shared, op.timeout_ns).await;
+            Completion {
+                task_id: op.task_id,
+                payload: CompletionPayload::ResumeWithI32 { fp: op.fp, value },
+            }
+        }));
+    }
+}
+
+impl ExecutionDriver for TokioDriver {
+    fn submit(&mut self, op: PendingOp) {
+        match op {
+            PendingOp::HostCall(op) => self.submit_host_call(op),
+            PendingOp::MemoryWait(op) => self.submit_memory_wait(op),
+            PendingOp::WasmAsync(op) => {
+                panic!(
+                    "Wasm async pending op is not implemented yet for task {}",
+                    op.task_id
+                )
+            }
+        }
+    }
+
+    fn next_completion<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Option<Completion>> + 'a>> {
+        Box::pin(async move { self.inflight.next().await })
+    }
+}
+
+pub(crate) struct Scheduler<'a> {
+    tasks: VecDeque<Task>,
+    pending_queue: VecDeque<PendingOp>,
+    pub(crate) completed_tasks: Vec<CompletedTask>,
+    pub(crate) store: &'a Store,
+    ready_count: u32,
 }
 
 impl<'a> Scheduler<'a> {
     pub fn new(store: &'a Store) -> Self {
         Self {
             tasks: VecDeque::new(),
+            pending_queue: VecDeque::new(),
             completed_tasks: vec![],
             store,
-            effects: VecDeque::new(),
             ready_count: 0,
-            notify: Notify::new(),
-            async_tasks: FuturesUnordered::new(),
         }
     }
+
     pub fn push(&mut self, task: Task) {
         let is_ready = task.ready_flag == ReadyFlag::Ready;
         self.tasks.push_back(task);
         if is_ready {
             self.ready_count += 1;
-            self.notify.wake();
         }
     }
-    #[cfg(feature = "async-runtime")]
-    unsafe fn handle_async_effect_call(&mut self, effect: AsyncEffect) {
-        self.async_tasks.push(effect.future);
+
+    fn submit_pending_ops<D: ExecutionDriver>(&mut self, driver: &mut D) {
+        while let Some(op) = self.pending_queue.pop_front() {
+            driver.submit(op);
+        }
     }
-    fn handle_async_return(&mut self, ret: AsyncResult) {
+
+    fn apply_completion(&mut self, completion: Completion) {
         let Some(task_index) = self
             .tasks
             .iter()
-            .position(|task| task.task_id == ret.task_id)
+            .position(|task| task.task_id == completion.task_id)
         else {
             return;
         };
-        match ret.completion {
-            AsyncCompletion::Continue { fp } => {
+        match completion.payload {
+            CompletionPayload::Resume { fp } => {
+                let fp = StablePc::from_raw(fp);
                 let mut complete_result = None;
                 {
                     let task = self.tasks.get_mut(task_index).unwrap();
@@ -181,7 +196,6 @@ impl<'a> Scheduler<'a> {
                         } else {
                             task.ready_flag = ReadyFlag::Ready;
                             self.ready_count += 1;
-                            self.notify.wake();
                         }
                     }
                 }
@@ -193,7 +207,40 @@ impl<'a> Scheduler<'a> {
                     });
                 }
             }
-            AsyncCompletion::HostCall { result } => match result {
+            CompletionPayload::ResumeWithI32 { fp, value } => {
+                let fp = StablePc::from_raw(fp);
+                let mut complete_result = None;
+                {
+                    let task = self.tasks.get_mut(task_index).unwrap();
+                    let push_result = task.stack.push_i32(value);
+                    task.pending_effects -= 1;
+                    task.fp = fp;
+                    let push_result = vm_result_to_unit(push_result);
+                    if task.pending_effects == 0 {
+                        if push_result.is_err() {
+                            complete_result = Some(push_result);
+                        } else if let Some(result) = task.terminal_result.take() {
+                            complete_result = Some(result);
+                        } else {
+                            task.ready_flag = ReadyFlag::Ready;
+                            self.ready_count += 1;
+                        }
+                    } else if push_result.is_err() {
+                        task.terminal_result = Some(push_result);
+                    } else {
+                        task.ready_flag = ReadyFlag::Ready;
+                        self.ready_count += 1;
+                    }
+                }
+                if let Some(result) = complete_result {
+                    let task = self.tasks.remove(task_index).unwrap();
+                    self.completed_tasks.push(CompletedTask {
+                        stack: task.stack,
+                        result,
+                    });
+                }
+            }
+            CompletionPayload::HostCall { result } => match result {
                 VMResult::Success(fp) => {
                     let gc = self.store.lock_gc();
                     let fp = {
@@ -211,7 +258,6 @@ impl<'a> Scheduler<'a> {
                             } else {
                                 task.ready_flag = ReadyFlag::Ready;
                                 self.ready_count += 1;
-                                self.notify.wake();
                             }
                         }
                     }
@@ -237,292 +283,174 @@ impl<'a> Scheduler<'a> {
                     }
                 }
             },
+            CompletionPayload::WasmAsync => {
+                panic!("Wasm async completion is not implemented yet")
+            }
         }
     }
-    #[cfg(feature = "async-runtime")]
-    async fn await_executation(&mut self) {
-        use futures::{select_biased, StreamExt};
-        trace!("await_executation");
-        loop {
-            select_biased! {
-                fut = self.async_tasks.select_next_some() => {
-                    self.handle_async_return(fut);
-                    if self.ready_count != 0 || self.tasks.is_empty() {
-                        break;
+
+    fn run_ready_tasks_with_gc(&mut self, gc: &mut StoreInner) {
+        while self.ready_count != 0 {
+            let task = self.tasks.pop_front().unwrap();
+            if task.ready_flag == ReadyFlag::NonReady {
+                self.tasks.push_back(task);
+                continue;
+            }
+            self.ready_count -= 1;
+            let Task {
+                local_reference,
+                fp: pc,
+                mut stack,
+                task_id,
+                mut pending_effects,
+                ..
+            } = task;
+            let fp = pc.resolve(gc, &stack, local_reference);
+
+            let (res, cont, local_reference) = {
+                let current_frame = if local_reference.local_size as usize
+                    >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
+                {
+                    stack.frame_cache(&local_reference)
+                } else {
+                    CallFrameCache::dummy()
+                };
+                let mut ec = ExecuteContext {
+                    gc,
+                    local_reference,
+                    current_frame,
+                    stack: &mut stack,
+                    store: self.store,
+                    effect: EffectSupplier {
+                        task_id,
+                        pending_effects: &mut pending_effects,
+                        queue: &mut self.pending_queue,
+                    },
+                    cont: fp,
+                    task_id,
+                };
+                let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
+                (res, ec.cont, ec.local_reference)
+            };
+            match res {
+                VMResult::Success(()) => {
+                    if !cont.is_null() {
+                        self.tasks.push_back(Task {
+                            local_reference,
+                            fp: StablePc::from_raw_in_frame(gc, &stack, local_reference, cont),
+                            ready_flag: if pending_effects == 0 {
+                                ReadyFlag::Ready
+                            } else {
+                                ReadyFlag::NonReady
+                            },
+                            task_id,
+                            stack,
+                            pending_effects,
+                            terminal_result: None,
+                        });
+                        if pending_effects == 0 {
+                            self.ready_count += 1;
+                        }
+                    } else if pending_effects == 0 {
+                        self.completed_tasks.push(CompletedTask {
+                            stack,
+                            result: VMResult::Success(()),
+                        });
+                    } else {
+                        self.tasks.push_back(Task {
+                            local_reference,
+                            fp: pc,
+                            ready_flag: ReadyFlag::NonReady,
+                            task_id,
+                            stack,
+                            pending_effects,
+                            terminal_result: Some(VMResult::Success(())),
+                        });
                     }
                 }
-                _ = self.notify.receiver() => {
-                    break;
+                other => {
+                    if pending_effects == 0 {
+                        self.completed_tasks.push(CompletedTask {
+                            stack,
+                            result: other,
+                        });
+                    } else {
+                        self.tasks.push_back(Task {
+                            local_reference,
+                            fp: pc,
+                            ready_flag: ReadyFlag::NonReady,
+                            task_id,
+                            stack,
+                            pending_effects,
+                            terminal_result: Some(other),
+                        });
+                    }
                 }
             }
+        }
+    }
+
+    pub async fn run_with_driver<D: ExecutionDriver>(&mut self, driver: &mut D) {
+        while !self.tasks.is_empty() {
+            {
+                let mut gc = self.store.lock_gc();
+                self.run_ready_tasks_with_gc(&mut gc);
+            }
+            if self.tasks.is_empty() {
+                break;
+            }
+            self.submit_pending_ops(driver);
+            if self.ready_count != 0 {
+                continue;
+            }
+            let Some(completion) = driver.next_completion().await else {
+                break;
+            };
+            self.apply_completion(completion);
         }
     }
 
     pub async fn run(&mut self) {
-        while !self.tasks.is_empty() {
-            self.await_executation().await;
-            let mut gc = self.store.lock_gc();
-            while self.ready_count != 0 {
-                trace!("task ready count: {:?}", self.ready_count);
-
-                let task = self.tasks.pop_front().unwrap();
-                if task.ready_flag == ReadyFlag::NonReady {
-                    self.tasks.push_back(task);
-                    continue;
-                }
-                self.ready_count -= 1;
-                let Task {
-                    local_reference,
-                    fp: pc,
-                    mut stack,
-                    task_id,
-                    mut pending_effects,
-                    ..
-                } = task;
-                let fp = pc.resolve(&gc, &stack, local_reference);
-
-                let (res, cont, local_reference) = {
-                    let mut ec = ExecuteContext {
-                        gc: &mut gc,
-                        local_reference,
-                        stack: &mut stack,
-                        store: self.store,
-                        effect: EffectSupplier {
-                            pending_effects: &mut pending_effects,
-                            effects: &mut self.effects,
-                        },
-                        cont: fp,
-                        task_id,
-                    };
-                    let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
-                    (res, ec.cont, ec.local_reference)
-                };
-                match res {
-                    VMResult::Success(()) => {
-                        if !cont.is_null() {
-                            trace!("continue task: {}", task_id);
-                            let new_task = Task {
-                                local_reference,
-                                fp: StablePc::from_raw_in_frame(&gc, &stack, local_reference, cont),
-                                ready_flag: ReadyFlag::NonReady,
-                                task_id,
-                                stack,
-                                pending_effects,
-                                terminal_result: None,
-                            };
-                            self.tasks.push_back(new_task);
-                        } else {
-                            if pending_effects == 0 {
-                                trace!("complte task: {}", task_id);
-                                self.completed_tasks.push(CompletedTask {
-                                    stack,
-                                    result: VMResult::Success(()),
-                                })
-                            } else {
-                                self.tasks.push_back(Task {
-                                    local_reference,
-                                    fp: pc,
-                                    ready_flag: ReadyFlag::NonReady,
-                                    task_id,
-                                    stack,
-                                    pending_effects,
-                                    terminal_result: Some(VMResult::Success(())),
-                                });
-                            }
-                        }
-                    }
-                    other => {
-                        if pending_effects == 0 {
-                            trace!("trap task: {}", task_id);
-                            self.completed_tasks.push(CompletedTask {
-                                stack,
-                                result: other,
-                            })
-                        } else {
-                            self.tasks.push_back(Task {
-                                local_reference,
-                                fp: pc,
-                                ready_flag: ReadyFlag::NonReady,
-                                task_id,
-                                stack,
-                                pending_effects,
-                                terminal_result: Some(other),
-                            });
-                        }
-                    }
-                }
-            }
-            self.processing_effect(&mut gc);
-        }
+        let mut driver = TokioDriver::new();
+        self.run_with_driver(&mut driver).await;
     }
 
-    pub fn run_sync_with_gc(&mut self, gc: &mut MemoryPool) -> Result<(), SyncRunError> {
+    pub fn run_sync_with_gc(&mut self, gc: &mut StoreInner) -> Result<(), SyncRunError> {
         while !self.tasks.is_empty() {
-            while self.ready_count != 0 {
-                trace!("task ready count: {:?}", self.ready_count);
-
-                let task = self.tasks.pop_front().unwrap();
-                if task.ready_flag == ReadyFlag::NonReady {
-                    self.tasks.push_back(task);
-                    continue;
-                }
-                self.ready_count -= 1;
-                let Task {
-                    local_reference,
-                    fp: pc,
-                    mut stack,
-                    task_id,
-                    mut pending_effects,
-                    ..
-                } = task;
-                let fp = pc.resolve(gc, &stack, local_reference);
-
-                let (res, cont, local_reference) = {
-                    let mut ec = ExecuteContext {
-                        gc,
-                        local_reference,
-                        stack: &mut stack,
-                        store: self.store,
-                        effect: EffectSupplier {
-                            pending_effects: &mut pending_effects,
-                            effects: &mut self.effects,
-                        },
-                        cont: fp,
-                        task_id,
-                    };
-                    let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
-                    (res, ec.cont, ec.local_reference)
-                };
-                match res {
-                    VMResult::Success(()) => {
-                        if !cont.is_null() {
-                            trace!("continue task: {}", task_id);
-                            let new_task = Task {
-                                local_reference,
-                                fp: StablePc::from_raw_in_frame(gc, &stack, local_reference, cont),
-                                ready_flag: ReadyFlag::NonReady,
-                                task_id,
-                                stack,
-                                pending_effects,
-                                terminal_result: None,
-                            };
-                            self.tasks.push_back(new_task);
-                        } else {
-                            if pending_effects == 0 {
-                                trace!("complte task: {}", task_id);
-                                self.completed_tasks.push(CompletedTask {
-                                    stack,
-                                    result: VMResult::Success(()),
-                                })
-                            } else {
-                                self.tasks.push_back(Task {
-                                    local_reference,
-                                    fp: pc,
-                                    ready_flag: ReadyFlag::NonReady,
-                                    task_id,
-                                    stack,
-                                    pending_effects,
-                                    terminal_result: Some(VMResult::Success(())),
-                                });
-                            }
-                        }
-                    }
-                    other => {
-                        if pending_effects == 0 {
-                            trace!("trap task: {}", task_id);
-                            self.completed_tasks.push(CompletedTask {
-                                stack,
-                                result: other,
-                            })
-                        } else {
-                            self.tasks.push_back(Task {
-                                local_reference,
-                                fp: pc,
-                                ready_flag: ReadyFlag::NonReady,
-                                task_id,
-                                stack,
-                                pending_effects,
-                                terminal_result: Some(other),
-                            });
-                        }
-                    }
-                }
-            }
-            self.processing_effect(gc);
+            self.run_ready_tasks_with_gc(gc);
             if self.tasks.is_empty() {
                 break;
             }
             if self.ready_count != 0 {
                 continue;
             }
-            #[cfg(feature = "async-runtime")]
-            if !self.async_tasks.is_empty() {
+            if !self.pending_queue.is_empty() {
                 return Err(SyncRunError::AsyncPending);
             }
-            if self.effects.is_empty() {
-                return Err(SyncRunError::Stalled);
-            }
+            return Err(SyncRunError::Stalled);
         }
         Ok(())
     }
-
-    fn processing_effect(&mut self, _gc: &mut MemoryPool) {
-        while let Some(effect) = self.effects.pop_front() {
-            match effect {
-                #[cfg(feature = "async-runtime")]
-                Effect::AsyncEffect(effect) => {
-                    unsafe { self.handle_async_effect_call(effect) };
-                }
-            }
-        }
-    }
 }
+
 #[cfg(test)]
 mod tests {
-    use crate::{
-        common::{ExecuteContext, Instr, LocalReference, StablePc},
-        runtime::memory_effect::{AsyncCompletion, AsyncEffect, AsyncResult, Effect},
-        Stack, Store, VMResult,
-    };
+    use super::{CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, TokioDriver};
+    use crate::VMResult;
 
-    use super::{ReadyFlag, Scheduler, Task};
-    const ASYNC_END: Instr = Instr { op: async_end };
-    fn async_end(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-        ctx.cont = std::ptr::null();
-        trace!("ok");
-        VMResult::Success(())
-    }
-    async fn example_func(task_id: u32, fp: StablePc) -> AsyncResult {
-        AsyncResult {
-            task_id,
-            completion: AsyncCompletion::Continue { fp },
-        }
-    }
     #[tokio::test]
-    async fn test_async() {
-        let store = Store::new();
-        let mut scheduler = Scheduler::new(&store);
-        let async_end_program = [Instr { op: async_end }];
-        {
-            scheduler.push(Task {
-                task_id: 0,
-                stack: Stack::new(256),
-                local_reference: LocalReference {
-                    local_size: 0,
-                    local_top: 0,
-                },
-                pending_effects: 1,
-                ready_flag: ReadyFlag::NonReady,
-                fp: StablePc::from_stable_ptr(async_end_program.as_ptr()),
-                terminal_result: None,
-            });
-            scheduler
-                .effects
-                .push_back(Effect::AsyncEffect(AsyncEffect {
-                    future: Box::pin(example_func(0, StablePc::from_stable_ptr(&ASYNC_END))),
-                }));
-            scheduler.notify.wake();
+    async fn tokio_driver_completes_host_call_future() {
+        let mut driver = TokioDriver::new();
+        driver.submit(PendingOp::HostCall(HostCallPending {
+            task_id: 3,
+            future: Box::pin(async { VMResult::Success(std::ptr::null()) }),
+        }));
+        let completion = driver.next_completion().await.unwrap();
+        match completion.payload {
+            CompletionPayload::HostCall { result } => {
+                assert!(matches!(result, VMResult::Success(ptr) if ptr.is_null()));
+            }
+            other => panic!("unexpected completion: {other:?}"),
         }
-        scheduler.run().await;
     }
 }

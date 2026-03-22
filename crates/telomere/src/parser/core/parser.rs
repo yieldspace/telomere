@@ -22,6 +22,7 @@ use crate::{
 
 use super::base::WasmBaseParser;
 use super::custom_section::CustomSectionParser;
+#[cfg(feature = "simd")]
 use super::simd_instruction::v128_const;
 use super::validate::{assert_memory, assert_valtype, validate_active_elem};
 use super::{Result, WasmParserError};
@@ -238,12 +239,22 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                     (1 + len, ConstExpr::FuncRef(idx))
                 }
                 0xFD => {
-                    let (len, code) = self.parse_u32()?;
-                    if code == v128_const::CODE {
-                        let v = self.reader.read_exact::<16>()?;
-                        (1 + len + 16, ConstExpr::V128(u128::from_le_bytes(v)))
-                    } else {
-                        Err(WasmParserError::InvalidConstInstruction(0xFD))? //FIXME:
+                    #[cfg(not(feature = "simd"))]
+                    {
+                        Err(WasmParserError::unsupported_feature(
+                            super::ProposalFeature::Simd,
+                            [0xFD, 0, 0, 0],
+                        ))?
+                    }
+                    #[cfg(feature = "simd")]
+                    {
+                        let (len, code) = self.parse_u32()?;
+                        if code == v128_const::CODE {
+                            let v = self.reader.read_exact::<16>()?;
+                            (1 + len + 16, ConstExpr::V128(u128::from_le_bytes(v)))
+                        } else {
+                            Err(WasmParserError::InvalidConstInstruction(0xFD))?
+                        }
                     }
                 }
                 unknown => Err(WasmParserError::InvalidConstInstruction(unknown))?,
@@ -469,12 +480,14 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 idx += 1;
             }
         }
+        let imported_function_len = idx;
 
         let (len, mut codes) = self.parse_vec(|me| {
             let (len, func) = me.parse_code(
                 FuncIdx(idx),
                 type_section,
                 functions,
+                imported_function_len,
                 mems,
                 globals,
                 tables,
@@ -713,6 +726,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         functype: &FuncType,
         type_section: &TypeSection,
         functions: &[TypeIdx],
+        imported_function_len: u32,
         mems: &[MemType],
         globals: &[GlobalType],
         table_section: &[TableType],
@@ -733,6 +747,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             self.reader(),
             type_section,
             functions,
+            imported_function_len,
             funcidx,
             mems,
             functype,
@@ -783,6 +798,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         funcidx: FuncIdx,
         type_section: &TypeSection,
         functions: &[TypeIdx],
+        imported_function_len: u32,
         mems: &[MemType],
         globals: &[GlobalType],
         table_section: &[TableType],
@@ -804,6 +820,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             functype,
             type_section,
             functions,
+            imported_function_len,
             mems,
             globals,
             table_section,
@@ -860,9 +877,6 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                         }
                     }
                 }
-                if mems.len() > 1 {
-                    Err(WasmParserError::MultipleMemory)?;
-                }
                 let code_section = code_section.unwrap_or_else(|| CodeSection(vec![]));
                 if functions.len() - imported_function_len != code_section.0.len() {
                     Err(WasmParserError::FunctionAndCodeSectionLengthMismatch)?
@@ -895,17 +909,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
 
             match st {
                 WasmSectionType::Unknown(id) => Err(WasmParserError::InvalidSectionType(id))?,
-                WasmSectionType::Custom => {
-                    match self.parse_section_body(Self::parse_namedata)? {
-                        NameData::NameSection(subsec) => {
-                            // TODO: we should validate position
-                            name_section = Some(subsec)
-                        }
-                        NameData::Unknown(name) => {
-                            tracing::warn!("encounted unknown custom section: {name}")
-                        }
+                WasmSectionType::Custom => match self.parse_section_body(Self::parse_namedata)? {
+                    NameData::NameSection(subsec) => name_section = Some(subsec),
+                    NameData::Unknown(name) => {
+                        tracing::warn!("encounted unknown custom section: {name}")
                     }
-                }
+                },
                 WasmSectionType::Type => {
                     trace!("type section");
                     type_section = Some(self.parse_section_body(Self::parse_type_section)?);

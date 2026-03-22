@@ -1,6 +1,23 @@
+use std::fmt;
+
 use thiserror::Error;
 
 use crate::common::{FuncIdx, Limits, TypeIdx, ValType};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProposalFeature {
+    Simd,
+    Threads,
+}
+
+impl fmt::Display for ProposalFeature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Simd => f.write_str("simd"),
+            Self::Threads => f.write_str("threads"),
+        }
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum WasmParserError {
@@ -26,6 +43,11 @@ pub enum WasmParserError {
     IoError(#[from] std::io::Error),
     #[error("invalid instruction: {0:?}")]
     InvalidInstruction([u8; 4]),
+    #[error("unsupported proposal feature `{feature}` for opcode {opcode:?}")]
+    UnsupportedFeature {
+        feature: ProposalFeature,
+        opcode: [u8; 4],
+    },
     #[error("constant expression required")]
     InvalidConstInstruction(u8),
     #[error("invalid blocktype")]
@@ -100,5 +122,9 @@ pub enum WasmParserError {
 impl WasmParserError {
     pub fn invalid_instruction1(inst: u8) -> WasmParserError {
         WasmParserError::InvalidInstruction([inst, 0, 0, 0])
+    }
+
+    pub fn unsupported_feature(feature: ProposalFeature, opcode: [u8; 4]) -> WasmParserError {
+        WasmParserError::UnsupportedFeature { feature, opcode }
     }
 }

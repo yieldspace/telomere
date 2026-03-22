@@ -15,6 +15,11 @@ pub use instantiate::link_async_host_function_with_export_name;
 pub use instantiate::link_async_host_function_with_function_idx;
 pub use instantiate::link_host_function_with_export_name;
 pub use instantiate::link_host_function_with_function_idx;
+pub use memory_effect::{
+    Completion, CompletionPayload, HostCallPending, MemoryWaitPending, PendingOp, WasmAsyncPending,
+};
+pub use scheduler::{ExecutionDriver, TokioDriver};
 pub use vm::get_global;
 pub use vm::run_module_function;
+pub use vm::run_module_function_with_driver;
 pub use vm::special_function_return;

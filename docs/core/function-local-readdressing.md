@@ -39,10 +39,10 @@
 ```rust
 #[repr(C)]
 pub struct FunctionInstanceData {
-    pub instance_addr: GcRef,
+    pub instance_addr: ObjectRef,
     pub funcidx: u32,
     pub function_flags: u32, // TODO: more efficient encoding
-    pub body: GcRef,         // locals とコード（または関数ポインタ）を含むメモリブロックへの参照
+    pub body: ObjectRef,         // locals とコード（または関数ポインタ）を含むメモリブロックへの参照
 }
 ```
 

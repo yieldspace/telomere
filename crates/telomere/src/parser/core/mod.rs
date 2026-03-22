@@ -8,7 +8,7 @@ mod type_checker;
 mod types;
 mod validate;
 pub(crate) mod values;
-pub use error::WasmParserError;
+pub use error::{ProposalFeature, WasmParserError};
 pub(crate) use instruction::InstructionParser;
 pub use parser::WasmParser;
 pub type Result<R> = std::result::Result<R, WasmParserError>;
