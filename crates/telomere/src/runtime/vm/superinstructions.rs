@@ -535,6 +535,41 @@ enum ControlBranchKind {
 }
 
 #[inline(always)]
+unsafe fn branch_target_relative(
+    tail_code: *const Instr,
+    ctx: &ExecuteContext,
+    jump_slot: usize,
+    fallthrough_operands: isize,
+    branch_kind: ControlBranchKind,
+    taken: bool,
+) -> *const Instr {
+    let target = (*tail_code.add(jump_slot)).operand.jump_addr;
+    match (branch_kind, taken) {
+        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
+        (ControlBranchKind::BrIf, false) => tail_code.offset(fallthrough_operands),
+        (ControlBranchKind::If, true) => tail_code.offset(fallthrough_operands),
+        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
+    }
+}
+
+#[inline(always)]
+unsafe fn branch_target_ptr(
+    tail_code: *const Instr,
+    jump_slot: usize,
+    fallthrough_operands: isize,
+    branch_kind: ControlBranchKind,
+    taken: bool,
+) -> *const Instr {
+    let target = (*tail_code.add(jump_slot)).operand.code_ptr as *const Instr;
+    match (branch_kind, taken) {
+        (ControlBranchKind::BrIf, true) => target,
+        (ControlBranchKind::BrIf, false) => tail_code.offset(fallthrough_operands),
+        (ControlBranchKind::If, true) => tail_code.offset(fallthrough_operands),
+        (ControlBranchKind::If, false) => target,
+    }
+}
+
+#[inline(always)]
 unsafe fn op_i32_local_bit_imm(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -816,15 +851,23 @@ unsafe fn op_local_branch_u32(
     branch_kind: ControlBranchKind,
 ) -> VMResult<()> {
     let local_addr = (*tail_code).operand.local_addr;
-    let target = (*tail_code.add(1)).operand.jump_addr;
     let cond = local_u32(ctx.stack, &ctx.local_reference(), local_addr) == 0;
     let taken = if zero_test { cond } else { !cond };
-    let ptr = match (branch_kind, taken) {
-        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
-        (ControlBranchKind::BrIf, false) => tail_code.offset(2),
-        (ControlBranchKind::If, true) => tail_code.offset(2),
-        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
-    };
+    let ptr = branch_target_relative(tail_code, ctx, 1, 2, branch_kind, taken);
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_local_branch_u32_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    zero_test: bool,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let local_addr = (*tail_code).operand.local_addr;
+    let cond = local_u32(ctx.stack, &ctx.local_reference(), local_addr) == 0;
+    let taken = if zero_test { cond } else { !cond };
+    let ptr = branch_target_ptr(tail_code, 1, 2, branch_kind, taken);
     call_next(ptr, 0, ctx)
 }
 
@@ -853,6 +896,58 @@ pub unsafe fn op_i32_local_eqz_if(
     op_local_branch_u32(tail_code, ctx, true, ControlBranchKind::If)
 }
 
+/// Telomere runtime helper `op_i32_local_br_if_ptr`.
+///
+/// Stack effect: `internal local branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u32_ptr(tail_code, ctx, false, ControlBranchKind::BrIf)
+}
+
+/// Telomere runtime helper `op_i32_local_eqz_br_if_ptr`.
+///
+/// Stack effect: `internal local branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_eqz_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u32_ptr(tail_code, ctx, true, ControlBranchKind::BrIf)
+}
+
+/// Telomere runtime helper `op_i32_local_if_ptr`.
+///
+/// Stack effect: `internal local branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u32_ptr(tail_code, ctx, false, ControlBranchKind::If)
+}
+
+/// Telomere runtime helper `op_i32_local_eqz_if_ptr`.
+///
+/// Stack effect: `internal local branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_eqz_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u32_ptr(tail_code, ctx, true, ControlBranchKind::If)
+}
+
 #[inline(always)]
 unsafe fn op_local_branch_u64(
     tail_code: *const Instr,
@@ -861,15 +956,23 @@ unsafe fn op_local_branch_u64(
     branch_kind: ControlBranchKind,
 ) -> VMResult<()> {
     let local_addr = (*tail_code).operand.local_addr;
-    let target = (*tail_code.add(1)).operand.jump_addr;
     let cond = local_u64(ctx.stack, &ctx.local_reference(), local_addr) == 0;
     let taken = if zero_test { cond } else { !cond };
-    let ptr = match (branch_kind, taken) {
-        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
-        (ControlBranchKind::BrIf, false) => tail_code.offset(2),
-        (ControlBranchKind::If, true) => tail_code.offset(2),
-        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
-    };
+    let ptr = branch_target_relative(tail_code, ctx, 1, 2, branch_kind, taken);
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_local_branch_u64_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    zero_test: bool,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let local_addr = (*tail_code).operand.local_addr;
+    let cond = local_u64(ctx.stack, &ctx.local_reference(), local_addr) == 0;
+    let taken = if zero_test { cond } else { !cond };
+    let ptr = branch_target_ptr(tail_code, 1, 2, branch_kind, taken);
     call_next(ptr, 0, ctx)
 }
 
@@ -898,6 +1001,58 @@ pub unsafe fn op_i64_local_eqz_if(
     op_local_branch_u64(tail_code, ctx, true, ControlBranchKind::If)
 }
 
+/// Telomere runtime helper `op_i64_local_br_if_ptr`.
+///
+/// Stack effect: `internal local branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i64_local_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u64_ptr(tail_code, ctx, false, ControlBranchKind::BrIf)
+}
+
+/// Telomere runtime helper `op_i64_local_eqz_br_if_ptr`.
+///
+/// Stack effect: `internal local branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i64_local_eqz_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u64_ptr(tail_code, ctx, true, ControlBranchKind::BrIf)
+}
+
+/// Telomere runtime helper `op_i64_local_if_ptr`.
+///
+/// Stack effect: `internal local branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i64_local_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u64_ptr(tail_code, ctx, false, ControlBranchKind::If)
+}
+
+/// Telomere runtime helper `op_i64_local_eqz_if_ptr`.
+///
+/// Stack effect: `internal local branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i64_local_eqz_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u64_ptr(tail_code, ctx, true, ControlBranchKind::If)
+}
+
 #[inline(always)]
 unsafe fn op_i32_local_and_imm_branch(
     tail_code: *const Instr,
@@ -907,15 +1062,24 @@ unsafe fn op_i32_local_and_imm_branch(
 ) -> VMResult<()> {
     let local_addr = (*tail_code).operand.local_addr;
     let imm = (*tail_code.add(1)).operand.i32 as u32;
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let cond = (local_u32(ctx.stack, &ctx.local_reference(), local_addr) & imm) == 0;
     let taken = if zero_test { cond } else { !cond };
-    let ptr = match (branch_kind, taken) {
-        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
-        (ControlBranchKind::BrIf, false) => tail_code.offset(3),
-        (ControlBranchKind::If, true) => tail_code.offset(3),
-        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
-    };
+    let ptr = branch_target_relative(tail_code, ctx, 2, 3, branch_kind, taken);
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_i32_local_and_imm_branch_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    zero_test: bool,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let local_addr = (*tail_code).operand.local_addr;
+    let imm = (*tail_code.add(1)).operand.i32 as u32;
+    let cond = (local_u32(ctx.stack, &ctx.local_reference(), local_addr) & imm) == 0;
+    let taken = if zero_test { cond } else { !cond };
+    let ptr = branch_target_ptr(tail_code, 2, 3, branch_kind, taken);
     call_next(ptr, 0, ctx)
 }
 
@@ -947,6 +1111,58 @@ pub unsafe fn op_i32_local_and_imm_eqz_if(
     op_i32_local_and_imm_branch(tail_code, ctx, true, ControlBranchKind::If)
 }
 
+/// Telomere runtime helper `op_i32_local_and_imm_br_if_ptr`.
+///
+/// Stack effect: `internal local+imm branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_and_imm_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_and_imm_branch_ptr(tail_code, ctx, false, ControlBranchKind::BrIf)
+}
+
+/// Telomere runtime helper `op_i32_local_and_imm_eqz_br_if_ptr`.
+///
+/// Stack effect: `internal local+imm branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_and_imm_eqz_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_and_imm_branch_ptr(tail_code, ctx, true, ControlBranchKind::BrIf)
+}
+
+/// Telomere runtime helper `op_i32_local_and_imm_if_ptr`.
+///
+/// Stack effect: `internal local+imm branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_and_imm_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_and_imm_branch_ptr(tail_code, ctx, false, ControlBranchKind::If)
+}
+
+/// Telomere runtime helper `op_i32_local_and_imm_eqz_if_ptr`.
+///
+/// Stack effect: `internal local+imm branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_and_imm_eqz_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_and_imm_branch_ptr(tail_code, ctx, true, ControlBranchKind::If)
+}
+
 #[inline(always)]
 unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_branch(
     tail_code: *const Instr,
@@ -956,18 +1172,30 @@ unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_branch(
     let local_addr = (*tail_code).operand.local_addr;
     let memarg = (*tail_code.add(1)).operand.memarg;
     let imm = (*tail_code.add(2)).operand.i32 as u32;
-    let target = (*tail_code.add(3)).operand.jump_addr;
     let start = vm_try!(local_mem_start_from_local(ctx, local_addr, memarg));
     let loaded = u32::from(vm_try!(ctx
         .gc
         .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start)));
     let taken = (loaded & imm) == 0;
-    let ptr = match (branch_kind, taken) {
-        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
-        (ControlBranchKind::BrIf, false) => tail_code.offset(4),
-        (ControlBranchKind::If, true) => tail_code.offset(4),
-        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
-    };
+    let ptr = branch_target_relative(tail_code, ctx, 3, 4, branch_kind, taken);
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_branch_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let local_addr = (*tail_code).operand.local_addr;
+    let memarg = (*tail_code.add(1)).operand.memarg;
+    let imm = (*tail_code.add(2)).operand.i32 as u32;
+    let start = vm_try!(local_mem_start_from_local(ctx, local_addr, memarg));
+    let loaded = u32::from(vm_try!(ctx
+        .gc
+        .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start)));
+    let taken = (loaded & imm) == 0;
+    let ptr = branch_target_ptr(tail_code, 3, 4, branch_kind, taken);
     call_next(ptr, 0, ctx)
 }
 
@@ -989,17 +1217,68 @@ pub unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_if(
     op_i32_local_addr_load8_u_and_imm_eqz_branch(tail_code, ctx, ControlBranchKind::If)
 }
 
+#[cold]
+#[inline(never)]
+/// Telomere runtime helper `op_i32_local_addr_load8_u_and_imm_eqz_br_if_ptr`.
+///
+/// Stack effect: `internal load+mask branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_addr_load8_u_and_imm_eqz_branch_ptr(tail_code, ctx, ControlBranchKind::BrIf)
+}
+
+#[cold]
+#[inline(never)]
+/// Telomere runtime helper `op_i32_local_addr_load8_u_and_imm_eqz_if_ptr`.
+///
+/// Stack effect: `internal load+mask branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_addr_load8_u_and_imm_eqz_branch_ptr(tail_code, ctx, ControlBranchKind::If)
+}
+
 pub unsafe fn op_i32_local_local_ge_u_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let lhs_local_addr = (*tail_code).operand.local_addr;
     let rhs_local_addr = (*tail_code.add(1)).operand.local_addr;
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let ptr = if local_u32(ctx.stack, &ctx.local_reference(), lhs_local_addr)
         >= local_u32(ctx.stack, &ctx.local_reference(), rhs_local_addr)
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 3, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(3)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_i32_local_local_ge_u_br_if_ptr`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_local_ge_u_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local_addr = (*tail_code).operand.local_addr;
+    let rhs_local_addr = (*tail_code.add(1)).operand.local_addr;
+    let ptr = if local_u32(ctx.stack, &ctx.local_reference(), lhs_local_addr)
+        >= local_u32(ctx.stack, &ctx.local_reference(), rhs_local_addr)
+    {
+        branch_target_ptr(tail_code, 2, 3, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(3)
     };
@@ -1977,7 +2256,6 @@ pub unsafe fn op_i32_local_local_compare_br_if(
 ) -> VMResult<()> {
     let lhs_local = (*tail_code).operand.local_addr;
     let rhs_local = (*tail_code.add(1)).operand.local_addr;
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let kind = IntCompareKind::from_raw((*tail_code.add(3)).operand.u32);
     let ptr = if i32_compare_eval(
         local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
@@ -1985,20 +2263,45 @@ pub unsafe fn op_i32_local_local_compare_br_if(
         kind,
     ) != 0
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 4, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(4)
     };
     call_next(ptr, 0, ctx)
 }
 
+pub unsafe fn op_i32_local_local_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = IntCompareKind::from_raw((*tail_code.add(3)).operand.u32);
+    let ptr = if i32_compare_eval(
+        local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+        local_u32(ctx.stack, &ctx.local_reference(), rhs_local),
+        kind,
+    ) != 0
+    {
+        branch_target_ptr(tail_code, 2, 4, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(4)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_i32_local_const_compare_br_if`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
 pub unsafe fn op_i32_local_const_compare_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     let lhs_local = (*tail_code).operand.local_addr;
     let rhs = (*tail_code.add(1)).operand.i32 as u32;
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let kind = IntCompareKind::from_raw((*tail_code.add(3)).operand.u32);
     let ptr = if i32_compare_eval(
         local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
@@ -2006,7 +2309,33 @@ pub unsafe fn op_i32_local_const_compare_br_if(
         kind,
     ) != 0
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 4, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(4)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_i32_local_const_compare_br_if_ptr`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i32_local_const_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.i32 as u32;
+    let kind = IntCompareKind::from_raw((*tail_code.add(3)).operand.u32);
+    let ptr = if i32_compare_eval(
+        local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+        rhs,
+        kind,
+    ) != 0
+    {
+        branch_target_ptr(tail_code, 2, 4, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(4)
     };
@@ -2019,7 +2348,6 @@ pub unsafe fn op_i64_local_local_compare_br_if(
 ) -> VMResult<()> {
     let lhs_local = (*tail_code).operand.local_addr;
     let rhs_local = (*tail_code.add(1)).operand.local_addr;
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let kind = IntCompareKind::from_raw((*tail_code.add(3)).operand.u32);
     let ptr = if i64_compare_eval(
         local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
@@ -2027,7 +2355,33 @@ pub unsafe fn op_i64_local_local_compare_br_if(
         kind,
     ) != 0
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 4, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(4)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_i64_local_local_compare_br_if_ptr`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i64_local_local_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = IntCompareKind::from_raw((*tail_code.add(3)).operand.u32);
+    let ptr = if i64_compare_eval(
+        local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+        local_u64(ctx.stack, &ctx.local_reference(), rhs_local),
+        kind,
+    ) != 0
+    {
+        branch_target_ptr(tail_code, 2, 4, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(4)
     };
@@ -2040,7 +2394,6 @@ pub unsafe fn op_i64_local_const_compare_br_if(
 ) -> VMResult<()> {
     let lhs_local = (*tail_code).operand.local_addr;
     let rhs = (*tail_code.add(1)).operand.u64;
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let kind = IntCompareKind::from_raw((*tail_code.add(3)).operand.u32);
     let ptr = if i64_compare_eval(
         local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
@@ -2048,7 +2401,33 @@ pub unsafe fn op_i64_local_const_compare_br_if(
         kind,
     ) != 0
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 4, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(4)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_i64_local_const_compare_br_if_ptr`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_i64_local_const_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.u64;
+    let kind = IntCompareKind::from_raw((*tail_code.add(3)).operand.u32);
+    let ptr = if i64_compare_eval(
+        local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+        rhs,
+        kind,
+    ) != 0
+    {
+        branch_target_ptr(tail_code, 2, 4, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(4)
     };
@@ -2061,7 +2440,6 @@ pub unsafe fn op_f32_local_local_compare_br_if(
 ) -> VMResult<()> {
     let lhs_local = (*tail_code).operand.local_addr;
     let rhs_local = (*tail_code.add(1)).operand.local_addr;
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let kind = FloatCompareKind::from_raw((*tail_code.add(3)).operand.u32);
     let ptr = if f32_compare_eval(
         local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
@@ -2069,7 +2447,33 @@ pub unsafe fn op_f32_local_local_compare_br_if(
         kind,
     ) != 0
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 4, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(4)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_f32_local_local_compare_br_if_ptr`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_f32_local_local_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = FloatCompareKind::from_raw((*tail_code.add(3)).operand.u32);
+    let ptr = if f32_compare_eval(
+        local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+        local_u32(ctx.stack, &ctx.local_reference(), rhs_local),
+        kind,
+    ) != 0
+    {
+        branch_target_ptr(tail_code, 2, 4, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(4)
     };
@@ -2082,7 +2486,6 @@ pub unsafe fn op_f32_local_const_compare_br_if(
 ) -> VMResult<()> {
     let lhs_local = (*tail_code).operand.local_addr;
     let rhs = (*tail_code.add(1)).operand.f32.to_bits();
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let kind = FloatCompareKind::from_raw((*tail_code.add(3)).operand.u32);
     let ptr = if f32_compare_eval(
         local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
@@ -2090,7 +2493,33 @@ pub unsafe fn op_f32_local_const_compare_br_if(
         kind,
     ) != 0
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 4, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(4)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_f32_local_const_compare_br_if_ptr`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_f32_local_const_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.f32.to_bits();
+    let kind = FloatCompareKind::from_raw((*tail_code.add(3)).operand.u32);
+    let ptr = if f32_compare_eval(
+        local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+        rhs,
+        kind,
+    ) != 0
+    {
+        branch_target_ptr(tail_code, 2, 4, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(4)
     };
@@ -2103,7 +2532,6 @@ pub unsafe fn op_f64_local_local_compare_br_if(
 ) -> VMResult<()> {
     let lhs_local = (*tail_code).operand.local_addr;
     let rhs_local = (*tail_code.add(1)).operand.local_addr;
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let kind = FloatCompareKind::from_raw((*tail_code.add(3)).operand.u32);
     let ptr = if f64_compare_eval(
         local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
@@ -2111,7 +2539,33 @@ pub unsafe fn op_f64_local_local_compare_br_if(
         kind,
     ) != 0
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 4, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(4)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_f64_local_local_compare_br_if_ptr`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_f64_local_local_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = FloatCompareKind::from_raw((*tail_code.add(3)).operand.u32);
+    let ptr = if f64_compare_eval(
+        local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+        local_u64(ctx.stack, &ctx.local_reference(), rhs_local),
+        kind,
+    ) != 0
+    {
+        branch_target_ptr(tail_code, 2, 4, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(4)
     };
@@ -2124,7 +2578,6 @@ pub unsafe fn op_f64_local_const_compare_br_if(
 ) -> VMResult<()> {
     let lhs_local = (*tail_code).operand.local_addr;
     let rhs = (*tail_code.add(1)).operand.f64.to_bits();
-    let target = (*tail_code.add(2)).operand.jump_addr;
     let kind = FloatCompareKind::from_raw((*tail_code.add(3)).operand.u32);
     let ptr = if f64_compare_eval(
         local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
@@ -2132,7 +2585,33 @@ pub unsafe fn op_f64_local_const_compare_br_if(
         kind,
     ) != 0
     {
-        ctx.code().offset(target as isize)
+        branch_target_relative(tail_code, ctx, 2, 4, ControlBranchKind::BrIf, true)
+    } else {
+        tail_code.offset(4)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_f64_local_const_compare_br_if_ptr`.
+///
+/// Stack effect: `internal compare branch dispatch`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing operands for this specialized branch.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_f64_local_const_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.f64.to_bits();
+    let kind = FloatCompareKind::from_raw((*tail_code.add(3)).operand.u32);
+    let ptr = if f64_compare_eval(
+        local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+        rhs,
+        kind,
+    ) != 0
+    {
+        branch_target_ptr(tail_code, 2, 4, ControlBranchKind::BrIf, true)
     } else {
         tail_code.offset(4)
     };

@@ -1,11 +1,19 @@
-use std::{collections::HashSet, ops::Range};
+use std::{collections::HashSet, ops::Range, sync::Arc};
 
 use crate::{
-    common::{Instr, MemArg, Operand, ValueSize},
+    common::{
+        ControlFlowMetadataKind, ControlFlowMetadataSite, Instr, MemArg, Op, Operand, ReturnShape,
+        ValueSize,
+    },
     parser::core::instruction_generator::InstructionProgram,
     runtime::vm::{self, compute_memory_offset},
     VMResult,
 };
+
+pub(crate) struct OptimizedCoreProgram {
+    pub(crate) instr: Vec<Instr>,
+    pub(crate) control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
+}
 
 #[derive(Clone)]
 struct DecodedInstruction {
@@ -362,18 +370,39 @@ pub(crate) fn optimize_core_program(program: InstructionProgram) -> Vec<Instr> {
     optimize_core_program_with_function_index(program, 0)
 }
 
+#[allow(dead_code)]
 pub(crate) fn optimize_core_program_with_function_index(
     program: InstructionProgram,
     function_index: u32,
 ) -> Vec<Instr> {
+    optimize_core_program_with_metadata(program, function_index, 0).instr
+}
+
+pub(crate) fn optimize_core_program_with_metadata(
+    program: InstructionProgram,
+    function_index: u32,
+    frame_stack_base: u32,
+) -> OptimizedCoreProgram {
     if program.instruction_starts.is_empty() {
-        return program.instr;
+        return OptimizedCoreProgram {
+            instr: program.instr,
+            control_flow_metadata: Arc::from([]),
+        };
     }
 
     let decoded = decode_instructions(&program.instr, &program.instruction_starts);
     let jump_targets = collect_jump_targets(&decoded);
     let optimized = fuse_superinstructions(decoded, &jump_targets);
-    lower_program(optimized, program.instr.len(), function_index)
+    let lowered = lower_program(optimized, program.instr.len(), function_index);
+    let control_flow_metadata = collect_control_flow_metadata(
+        &lowered.instr,
+        &lowered.instruction_starts,
+        frame_stack_base,
+    );
+    OptimizedCoreProgram {
+        instr: lowered.instr,
+        control_flow_metadata,
+    }
 }
 
 fn decode_instructions(instrs: &[Instr], starts: &[usize]) -> Vec<DecodedInstruction> {
@@ -2241,11 +2270,16 @@ fn match_local_imm_local_store(
     ))
 }
 
+struct LoweredProgram {
+    instr: Vec<Instr>,
+    instruction_starts: Vec<usize>,
+}
+
 fn lower_program(
     optimized: Vec<OptimizedInstruction>,
     old_flat_len: usize,
     function_index: u32,
-) -> Vec<Instr> {
+) -> LoweredProgram {
     let mut old_to_new = vec![0u32; old_flat_len];
     let mut new_len = 0usize;
     for instruction in &optimized {
@@ -2257,7 +2291,9 @@ fn lower_program(
     }
 
     let mut lowered = Vec::with_capacity(new_len);
+    let mut instruction_starts = Vec::with_capacity(optimized.len());
     for (instruction_ordinal, instruction) in optimized.into_iter().enumerate() {
+        instruction_starts.push(lowered.len());
         lower_instruction(
             instruction,
             &old_to_new,
@@ -2266,7 +2302,160 @@ fn lower_program(
             instruction_ordinal as u32,
         );
     }
-    lowered
+    LoweredProgram {
+        instr: lowered,
+        instruction_starts,
+    }
+}
+
+fn op_eq(op: Op, expected: Op) -> bool {
+    std::ptr::fn_addr_eq(op, expected)
+}
+
+fn single_jump_operand_slot(op: Op) -> Option<u8> {
+    if op_eq(op, vm::op_br as Op)
+        || op_eq(op, vm::op_br_if as Op)
+        || op_eq(op, vm::op_br_if_r0 as Op)
+        || op_eq(op, vm::op_br_if_r1 as Op)
+        || op_eq(op, vm::op_br_if_r2 as Op)
+        || op_eq(op, vm::op_br_if_r3 as Op)
+        || op_eq(op, vm::op_if as Op)
+        || op_eq(op, vm::op_else as Op)
+    {
+        return Some(1);
+    }
+    if op_eq(op, vm::op_i32_local_br_if as Op)
+        || op_eq(op, vm::op_i32_local_eqz_br_if as Op)
+        || op_eq(op, vm::op_i32_local_if as Op)
+        || op_eq(op, vm::op_i32_local_eqz_if as Op)
+        || op_eq(op, vm::op_i64_local_br_if as Op)
+        || op_eq(op, vm::op_i64_local_eqz_br_if as Op)
+        || op_eq(op, vm::op_i64_local_if as Op)
+        || op_eq(op, vm::op_i64_local_eqz_if as Op)
+    {
+        return Some(2);
+    }
+    if op_eq(op, vm::op_i32_local_and_imm_br_if as Op)
+        || op_eq(op, vm::op_i32_local_and_imm_eqz_br_if as Op)
+        || op_eq(op, vm::op_i32_local_and_imm_if as Op)
+        || op_eq(op, vm::op_i32_local_and_imm_eqz_if as Op)
+        || op_eq(op, vm::op_i32_local_local_ge_u_br_if as Op)
+        || op_eq(op, vm::op_i32_local_local_compare_br_if as Op)
+        || op_eq(op, vm::op_i32_local_const_compare_br_if as Op)
+        || op_eq(op, vm::op_i64_local_local_compare_br_if as Op)
+        || op_eq(op, vm::op_i64_local_const_compare_br_if as Op)
+        || op_eq(op, vm::op_f32_local_local_compare_br_if as Op)
+        || op_eq(op, vm::op_f32_local_const_compare_br_if as Op)
+        || op_eq(op, vm::op_f64_local_local_compare_br_if as Op)
+        || op_eq(op, vm::op_f64_local_const_compare_br_if as Op)
+    {
+        return Some(3);
+    }
+    if op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if as Op)
+        || op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_if as Op)
+    {
+        return Some(4);
+    }
+    None
+}
+
+fn is_br_table(op: Op) -> bool {
+    op_eq(op, vm::op_br_table as Op)
+}
+
+fn loop_shape_op(op: Op) -> Option<ReturnShape> {
+    if op_eq(op, vm::op_loop_empty as Op) {
+        Some(ReturnShape::Empty)
+    } else if op_eq(op, vm::op_loop4 as Op) {
+        Some(ReturnShape::Scalar4)
+    } else if op_eq(op, vm::op_loop8 as Op) {
+        Some(ReturnShape::Scalar8)
+    } else if op_eq(op, vm::op_loop_generic as Op) || op_eq(op, vm::op_loop as Op) {
+        Some(ReturnShape::Generic)
+    } else {
+        None
+    }
+}
+
+fn block_return_shape_op(op: Op) -> Option<ReturnShape> {
+    if op_eq(op, vm::special_block_return_empty as Op) {
+        Some(ReturnShape::Empty)
+    } else if op_eq(op, vm::special_block_return4 as Op) {
+        Some(ReturnShape::Scalar4)
+    } else if op_eq(op, vm::special_block_return8 as Op) {
+        Some(ReturnShape::Scalar8)
+    } else if op_eq(op, vm::special_block_return_generic as Op)
+        || op_eq(op, vm::special_block_return as Op)
+    {
+        Some(ReturnShape::Generic)
+    } else {
+        None
+    }
+}
+
+fn collect_control_flow_metadata(
+    code: &[Instr],
+    instruction_starts: &[usize],
+    frame_stack_base: u32,
+) -> Arc<[ControlFlowMetadataSite]> {
+    let mut metadata = Vec::new();
+    for &start in instruction_starts {
+        let op = unsafe { code[start].op };
+        if let Some(jump_slot) = single_jump_operand_slot(op) {
+            let target = unsafe { code[start + jump_slot as usize].operand.jump_addr };
+            metadata.push(ControlFlowMetadataSite {
+                instruction_ordinal: start as u32,
+                kind: ControlFlowMetadataKind::Jump {
+                    jump_operand_slots: Arc::from([jump_slot]),
+                    target_ordinals: Arc::from([target]),
+                },
+            });
+            continue;
+        }
+        if is_br_table(op) {
+            let table_size = unsafe { code[start + 1].operand.u32 as usize };
+            let mut jump_slots = Vec::with_capacity(table_size + 1);
+            let mut target_ordinals = Vec::with_capacity(table_size + 1);
+            for slot in 0..=table_size {
+                let jump_slot = u8::try_from(slot + 2).expect("br_table jump slot exceeds u8");
+                jump_slots.push(jump_slot);
+                target_ordinals
+                    .push(unsafe { code[start + usize::from(jump_slot)].operand.jump_addr });
+            }
+            metadata.push(ControlFlowMetadataSite {
+                instruction_ordinal: start as u32,
+                kind: ControlFlowMetadataKind::Jump {
+                    jump_operand_slots: Arc::from(jump_slots),
+                    target_ordinals: Arc::from(target_ordinals),
+                },
+            });
+            continue;
+        }
+        if let Some(shape) = loop_shape_op(op) {
+            let loop_param = unsafe { code[start + 1].operand.loop_param };
+            metadata.push(ControlFlowMetadataSite {
+                instruction_ordinal: start as u32,
+                kind: ControlFlowMetadataKind::Loop {
+                    dst_from_local_top: frame_stack_base + loop_param.stack_top,
+                    param_size: loop_param.param_size(),
+                    shape,
+                },
+            });
+            continue;
+        }
+        if let Some(shape) = block_return_shape_op(op) {
+            let block_return = unsafe { code[start + 1].operand.block_return };
+            metadata.push(ControlFlowMetadataSite {
+                instruction_ordinal: start as u32,
+                kind: ControlFlowMetadataKind::BlockReturn {
+                    dst_from_local_top: frame_stack_base + block_return.stack_top,
+                    return_size: block_return.return_size(),
+                    shape,
+                },
+            });
+        }
+    }
+    Arc::from(metadata)
 }
 
 fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {

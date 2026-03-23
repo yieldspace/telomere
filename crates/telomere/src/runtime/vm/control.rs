@@ -21,6 +21,26 @@ macro_rules! replicated_br_if {
     };
 }
 
+macro_rules! replicated_br_if_ptr {
+    ($name:ident) => {
+        #[inline(never)]
+        pub(crate) unsafe fn $name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            let cond = ctx.stack.pop_u32();
+            trace!("op_br_if_ptr: {cond}");
+
+            let ptr = if cond != 0 {
+                (*tail_code).operand.code_ptr as *const Instr
+            } else {
+                tail_code.offset(1)
+            };
+            call_next(ptr, 0, ctx)
+        }
+    };
+}
+
 macro_rules! define_loop_handler {
     ($name:ident, $method:ident $(, size = $size:ident)?) => {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
@@ -29,6 +49,20 @@ macro_rules! define_loop_handler {
             ctx.stack.$method(
                 &ctx.local_reference(),
                 loop_param.stack_top as usize
+                $(, loop_param.$size() as usize)?,
+            );
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
+macro_rules! define_precomputed_loop_handler {
+    ($name:ident, $method:ident $(, size = $size:ident)?) => {
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let loop_param = (*tail_code).operand.precomputed_loop_param;
+            ctx.stack.$method(
+                &ctx.local_reference(),
+                loop_param.dst_from_local_top as usize
                 $(, loop_param.$size() as usize)?,
             );
             call_next(tail_code, 1, ctx)
@@ -52,6 +86,20 @@ macro_rules! define_special_block_return_handler {
                 $(, block_return.$size() as usize)?,
             );
             trace!("stack: {:?}", ctx.stack);
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
+macro_rules! define_precomputed_special_block_return_handler {
+    ($name:ident, $method:ident $(, size = $size:ident)?) => {
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let block_return = (*tail_code).operand.precomputed_block_return;
+            ctx.stack.$method(
+                &ctx.local_reference(),
+                block_return.dst_from_local_top as usize
+                $(, block_return.$size() as usize)?,
+            );
             call_next(tail_code, 1, ctx)
         }
     };
@@ -146,6 +194,16 @@ pub unsafe fn op_br(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
     call_next(tail_code, 0, ctx)
 }
 
+/// Telomere runtime helper `op_br_ptr`.
+///
+/// Stack effect: `[] -> []`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing branch operand in the active instruction stream.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_br_ptr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    call_next((*tail_code).operand.code_ptr as *const Instr, 0, ctx)
+}
+
 /// WebAssembly `else`.
 ///
 /// Spec:
@@ -167,6 +225,16 @@ pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     let addr = (*tail_code).operand.jump_addr;
     let tail_code = ctx.code().offset(addr as isize);
     call_next(tail_code, 1, ctx)
+}
+
+/// Telomere runtime helper `op_else_ptr`.
+///
+/// Stack effect: `[] -> []`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing else operand in the active instruction stream.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_else_ptr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    call_next((*tail_code).operand.code_ptr as *const Instr, 1, ctx)
 }
 
 /// WebAssembly `br_if`.
@@ -197,10 +265,32 @@ pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMR
     call_next(ptr, 0, ctx)
 }
 
+/// Telomere runtime helper `op_br_if_ptr`.
+///
+/// Stack effect: `[..., i32] -> [...]`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing branch operand in the active instruction stream.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_br_if_ptr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let cond = ctx.stack.pop_u32();
+    trace!("op_br_if_ptr: {cond}");
+
+    let ptr = if cond != 0 {
+        (*tail_code).operand.code_ptr as *const Instr
+    } else {
+        tail_code.offset(1)
+    };
+    call_next(ptr, 0, ctx)
+}
+
 replicated_br_if!(op_br_if_r0);
 replicated_br_if!(op_br_if_r1);
 replicated_br_if!(op_br_if_r2);
 replicated_br_if!(op_br_if_r3);
+replicated_br_if_ptr!(op_br_if_ptr_r0);
+replicated_br_if_ptr!(op_br_if_ptr_r1);
+replicated_br_if_ptr!(op_br_if_ptr_r2);
+replicated_br_if_ptr!(op_br_if_ptr_r3);
 
 /// WebAssembly `br_table`.
 ///
@@ -238,6 +328,25 @@ pub unsafe fn op_br_table(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 0, ctx)
 }
 
+/// Telomere runtime helper `op_br_table_ptr`.
+///
+/// Stack effect: `[..., i32] -> [...]`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing branch table payload in the active instruction stream.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_br_table_ptr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let index = ctx.stack.pop_u32();
+    let table_size = (*tail_code).operand.u32;
+    let ptr = if index < table_size {
+        (*tail_code.offset((index + 1) as isize)).operand.code_ptr as *const Instr
+    } else {
+        (*tail_code.offset((table_size + 1) as isize))
+            .operand
+            .code_ptr as *const Instr
+    };
+    call_next(ptr, 0, ctx)
+}
+
 /// WebAssembly `loop`.
 ///
 /// Spec:
@@ -272,6 +381,14 @@ define_loop_handler!(op_loop_empty, block_return_empty);
 define_loop_handler!(op_loop4, block_return4);
 define_loop_handler!(op_loop8, block_return8);
 define_loop_handler!(op_loop_generic, block_return_generic, size = param_size);
+define_precomputed_loop_handler!(op_loop_empty_precomputed, block_return_empty_precomputed);
+define_precomputed_loop_handler!(op_loop4_precomputed, block_return4_precomputed);
+define_precomputed_loop_handler!(op_loop8_precomputed, block_return8_precomputed);
+define_precomputed_loop_handler!(
+    op_loop_generic_precomputed,
+    block_return_generic_precomputed,
+    size = param_size
+);
 
 /// WebAssembly `if`.
 ///
@@ -297,6 +414,22 @@ pub unsafe fn op_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResu
         tail_code.offset(1)
     } else {
         ctx.code().offset(else_addr as isize)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+/// Telomere runtime helper `op_if_ptr`.
+///
+/// Stack effect: `[i32] -> []`.
+/// # Safety
+/// - `tail_code` must point at the pointer-bearing if operand in the active instruction stream.
+/// - `ctx` must reference a live execution context for the same validated frame and store.
+pub unsafe fn op_if_ptr(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = ctx.stack.pop_u32();
+    let ptr = if value != 0 {
+        tail_code.offset(1)
+    } else {
+        (*tail_code).operand.code_ptr as *const Instr
     };
     call_next(ptr, 0, ctx)
 }
@@ -383,6 +516,23 @@ define_special_block_return_handler!(special_block_return8, block_return8);
 define_special_block_return_handler!(
     special_block_return_generic,
     block_return_generic,
+    size = return_size
+);
+define_precomputed_special_block_return_handler!(
+    special_block_return_empty_precomputed,
+    block_return_empty_precomputed
+);
+define_precomputed_special_block_return_handler!(
+    special_block_return4_precomputed,
+    block_return4_precomputed
+);
+define_precomputed_special_block_return_handler!(
+    special_block_return8_precomputed,
+    block_return8_precomputed
+);
+define_precomputed_special_block_return_handler!(
+    special_block_return_generic_precomputed,
+    block_return_generic_precomputed,
     size = return_size
 );
 

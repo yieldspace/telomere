@@ -5,7 +5,7 @@ use crate::common::custom_section::NameSubSection;
 use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, LocalsData, Operand};
 use crate::parser::core::instruction_generator::InstructionGenerator;
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
-use crate::parser::core::optimizer::optimize_core_program_with_function_index;
+use crate::parser::core::optimizer::optimize_core_program_with_metadata;
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::validate::validate_locals;
 use crate::parser::core::InstructionParser;
@@ -810,9 +810,14 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         instrs.seal_emitted_instruction();
         jump_resolver.evaluate(&mut instrs);
         let program = instrs.build();
+        let frame_stack_base = functype.param_stack_byte_size()
+            + locals_data.byte_size() as u32
+            + std::mem::size_of::<crate::common::stack::CallStackInfo>() as u32;
+        let optimized = optimize_core_program_with_metadata(program, funcidx.0, frame_stack_base);
         Ok(Func {
             locals: locals_data,
-            expr: optimize_core_program_with_function_index(program, funcidx.0),
+            expr: optimized.instr,
+            control_flow_metadata: optimized.control_flow_metadata,
         })
     }
     #[allow(clippy::too_many_arguments)]

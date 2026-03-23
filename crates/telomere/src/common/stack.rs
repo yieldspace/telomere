@@ -205,7 +205,7 @@ impl CallFrameCache {
         let (memory0_kind, memory0_raw) = CachedMemoryKind::from_memory_handle(memory0);
         Self {
             code_addr,
-            code_base: func.canonical_code_pointer().unwrap_or(std::ptr::null()),
+            code_base: func.code_pointer().unwrap_or(std::ptr::null()),
             instance: func.instance,
             memory0_kind,
             memory0_raw,
@@ -587,6 +587,13 @@ impl Stack {
     #[inline(always)]
     fn block_return_dst(reference: &LocalReference, stack_top: usize) -> usize {
         reference.local_top + reference.local_size as usize + stack_top
+    }
+    #[inline(always)]
+    fn precomputed_block_return_dst(
+        reference: &LocalReference,
+        dst_from_local_top: usize,
+    ) -> usize {
+        reference.local_top + dst_from_local_top
     }
     pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
         self.flush_cached_operands();
@@ -1050,6 +1057,49 @@ impl Stack {
             ReturnShape::Scalar8 => self.block_return8(reference, stack_top),
             ReturnShape::Generic => self.block_return_generic(reference, stack_top, return_size),
         }
+    }
+
+    pub fn block_return_empty_precomputed(
+        &mut self,
+        reference: &LocalReference,
+        dst_from_local_top: usize,
+    ) {
+        self.cache = OperandCache::EMPTY;
+        self.top = Self::precomputed_block_return_dst(reference, dst_from_local_top);
+    }
+
+    pub fn block_return4_precomputed(
+        &mut self,
+        reference: &LocalReference,
+        dst_from_local_top: usize,
+    ) {
+        self.move_top_scalar4_to(Self::precomputed_block_return_dst(
+            reference,
+            dst_from_local_top,
+        ));
+    }
+
+    pub fn block_return8_precomputed(
+        &mut self,
+        reference: &LocalReference,
+        dst_from_local_top: usize,
+    ) {
+        self.move_top_scalar8_to(Self::precomputed_block_return_dst(
+            reference,
+            dst_from_local_top,
+        ));
+    }
+
+    pub fn block_return_generic_precomputed(
+        &mut self,
+        reference: &LocalReference,
+        dst_from_local_top: usize,
+        return_size: usize,
+    ) {
+        self.move_top_generic_to(
+            Self::precomputed_block_return_dst(reference, dst_from_local_top),
+            return_size,
+        );
     }
 }
 pub(crate) trait StackOperation<T> {

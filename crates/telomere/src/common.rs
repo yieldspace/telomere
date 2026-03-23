@@ -393,6 +393,7 @@ pub struct Global(pub GlobalType, pub Vec<ConstExpr>);
 pub struct Func {
     pub locals: LocalsData,
     pub expr: Vec<Instr>,
+    pub(crate) control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
 }
 impl Func {
     pub fn local_size(&self) -> usize {
@@ -484,6 +485,40 @@ pub struct BlockReturn {
     pub stack_top: u32,
     meta: u32,
 }
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedLoopParam {
+    pub dst_from_local_top: u32,
+    meta: u32,
+}
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedBlockReturn {
+    pub dst_from_local_top: u32,
+    meta: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ControlFlowMetadataSite {
+    pub instruction_ordinal: u32,
+    pub kind: ControlFlowMetadataKind,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ControlFlowMetadataKind {
+    Jump {
+        jump_operand_slots: Arc<[u8]>,
+        target_ordinals: Arc<[u32]>,
+    },
+    Loop {
+        dst_from_local_top: u32,
+        param_size: u32,
+        shape: ReturnShape,
+    },
+    BlockReturn {
+        dst_from_local_top: u32,
+        return_size: u32,
+        shape: ReturnShape,
+    },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -544,10 +579,53 @@ impl LoopParam {
     }
 }
 
+impl PrecomputedLoopParam {
+    pub(crate) const fn with_shape(
+        dst_from_local_top: u32,
+        param_size: u32,
+        shape: ReturnShape,
+    ) -> Self {
+        Self {
+            dst_from_local_top,
+            meta: ReturnShape::encode_meta(param_size, shape),
+        }
+    }
+
+    pub(crate) const fn param_size(self) -> u32 {
+        ReturnShape::size_from_meta(self.meta)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn param_shape(self) -> ReturnShape {
+        ReturnShape::decode_meta(self.meta)
+    }
+}
+
 impl BlockReturn {
     pub(crate) const fn with_shape(stack_top: u32, return_size: u32, shape: ReturnShape) -> Self {
         Self {
             stack_top,
+            meta: ReturnShape::encode_meta(return_size, shape),
+        }
+    }
+
+    pub(crate) const fn return_size(self) -> u32 {
+        ReturnShape::size_from_meta(self.meta)
+    }
+
+    pub(crate) const fn return_shape(self) -> ReturnShape {
+        ReturnShape::decode_meta(self.meta)
+    }
+}
+
+impl PrecomputedBlockReturn {
+    pub(crate) const fn with_shape(
+        dst_from_local_top: u32,
+        return_size: u32,
+        shape: ReturnShape,
+    ) -> Self {
+        Self {
+            dst_from_local_top,
             meta: ReturnShape::encode_meta(return_size, shape),
         }
     }
@@ -571,12 +649,15 @@ pub union Operand {
     pub f64: f64,
 
     pub jump_addr: u32,
+    pub code_ptr: usize,
     pub drop_size: u32,
     pub local_addr: u32,
     pub select: u32,
     pub memarg: MemArg,
     pub block_return: BlockReturn,
     pub loop_param: LoopParam,
+    pub precomputed_block_return: PrecomputedBlockReturn,
+    pub precomputed_loop_param: PrecomputedLoopParam,
     pub encoded: [u8; 8],
     pub start_host_function: HostFunction,
 }

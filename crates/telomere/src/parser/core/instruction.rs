@@ -4134,9 +4134,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
 mod tests {
     use super::*;
     use crate::{
-        common::{FunctionBody, Operand},
+        common::{ControlFlowMetadataKind, FunctionBody, Operand},
         IoReadBinaryReader, WasmParser,
     };
+
+    fn func_in_module(wat: &str, func_index: usize) -> crate::common::Func {
+        let bytes = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        let module = parser.parse_module().expect("module must parse");
+        let FunctionBody::Wasm(func) = &module.codes.0[func_index] else {
+            panic!("expected wasm function body");
+        };
+        func.clone()
+    }
 
     fn op_at_in_func(wat: &str, func_index: usize, index: usize) -> crate::common::Op {
         let bytes = wat::parse_str(wat).expect("wat must parse");
@@ -4171,13 +4182,7 @@ mod tests {
     }
 
     fn operand_at(wat: &str, index: usize) -> Operand {
-        let bytes = wat::parse_str(wat).expect("wat must parse");
-        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
-        let mut parser = WasmParser::new(&mut reader);
-        let module = parser.parse_module().expect("module must parse");
-        let FunctionBody::Wasm(func) = &module.codes.0[0] else {
-            panic!("expected wasm function body");
-        };
+        let func = func_in_module(wat, 0);
         unsafe { func.expr[index].operand }
     }
 
@@ -4223,6 +4228,104 @@ mod tests {
             local,
             vm::op_i32_load_indexed_local as crate::common::Op
         ));
+    }
+
+    #[test]
+    fn parser_collects_control_flow_metadata_for_raw_br_table_and_if_else() {
+        let func = func_in_module(
+            r#"
+            (module
+              (func (export "f") (param i32 i32) (result i32)
+                block (result i32)
+                  local.get 0
+                  if (result i32)
+                    local.get 1
+                    i32.const 1
+                    br_table 0 0
+                  else
+                    i32.const 7
+                  end
+                end))
+            "#,
+            0,
+        );
+
+        assert!(!func.control_flow_metadata.is_empty());
+        let mut saw_if = false;
+        let mut saw_else = false;
+        let mut saw_br_table = false;
+        for site in func.control_flow_metadata.iter() {
+            assert!((site.instruction_ordinal as usize) < func.expr.len());
+            let op = unsafe { func.expr[site.instruction_ordinal as usize].op };
+            match &site.kind {
+                ControlFlowMetadataKind::Jump {
+                    jump_operand_slots,
+                    target_ordinals,
+                } if std::ptr::fn_addr_eq(op, vm::op_if as crate::common::Op) => {
+                    saw_if = true;
+                    assert_eq!(&**jump_operand_slots, &[1]);
+                    assert_eq!(target_ordinals.len(), 1);
+                }
+                ControlFlowMetadataKind::Jump {
+                    jump_operand_slots,
+                    target_ordinals,
+                } if std::ptr::fn_addr_eq(op, vm::op_else as crate::common::Op) => {
+                    saw_else = true;
+                    assert_eq!(&**jump_operand_slots, &[1]);
+                    assert_eq!(target_ordinals.len(), 1);
+                }
+                ControlFlowMetadataKind::Jump {
+                    jump_operand_slots,
+                    target_ordinals,
+                } if std::ptr::fn_addr_eq(op, vm::op_br_table as crate::common::Op) => {
+                    saw_br_table = true;
+                    assert_eq!(jump_operand_slots.len(), 2);
+                    assert_eq!(target_ordinals.len(), 2);
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_if, "if site must be recorded");
+        assert!(saw_else, "else site must be recorded");
+        assert!(saw_br_table, "br_table site must be recorded");
+    }
+
+    #[test]
+    fn parser_collects_control_flow_metadata_for_specialized_branch_superinstructions() {
+        let func = func_in_module(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                block
+                  local.get 0
+                  i32.eqz
+                  br_if 0
+                end
+                i32.const 9))
+            "#,
+            0,
+        );
+
+        let site = func
+            .control_flow_metadata
+            .iter()
+            .find(|site| {
+                let op = unsafe { func.expr[site.instruction_ordinal as usize].op };
+                std::ptr::fn_addr_eq(op, vm::op_i32_local_eqz_br_if as crate::common::Op)
+            })
+            .expect("specialized br_if site must be recorded");
+
+        match &site.kind {
+            ControlFlowMetadataKind::Jump {
+                jump_operand_slots,
+                target_ordinals,
+            } => {
+                assert_eq!(&**jump_operand_slots, &[2]);
+                assert_eq!(target_ordinals.len(), 1);
+                assert!((target_ordinals[0] as usize) < func.expr.len());
+            }
+            other => panic!("expected jump metadata, got {other:?}"),
+        }
     }
 
     #[test]

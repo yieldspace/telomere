@@ -1,13 +1,16 @@
+use std::sync::Arc;
+
 use crate::{
     common::{
         execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
-        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
-        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FuncType, FunctionBody,
-        FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
-        ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
-        ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
-        TypeSection, PAGE_SIZE_MAX,
+        CodeSection, ConstExpr, ControlFlowMetadataKind, ControlFlowMetadataSite, DataMode,
+        DataSection, ElemInit, ElemMode, ElementSection, ExecuteContext, Export, ExportDesc,
+        ExportSection, FuncIdx, FuncType, FunctionBody, FunctionInstanceData, GlobalIdx,
+        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceData,
+        InstanceHandle, Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule,
+        ObjectRef, Op, Operand, PrecomputedBlockReturn, PrecomputedLoopParam, StablePc, StoreInner,
+        TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
@@ -40,6 +43,183 @@ fn build_execution_metadata(
         result_stack_bytes: ft.result_stack_byte_size(),
         result_shape: shape_for_result_type(&ft.1),
     }
+}
+
+fn op_eq(op: Op, expected: Op) -> bool {
+    std::ptr::fn_addr_eq(op, expected)
+}
+
+fn rewrite_jump_op(op: Op) -> Option<Op> {
+    Some(if op_eq(op, vm::op_br as Op) {
+        vm::op_br_ptr
+    } else if op_eq(op, vm::op_br_if as Op) {
+        vm::op_br_if_ptr
+    } else if op_eq(op, vm::op_br_if_r0 as Op) {
+        vm::op_br_if_ptr_r0
+    } else if op_eq(op, vm::op_br_if_r1 as Op) {
+        vm::op_br_if_ptr_r1
+    } else if op_eq(op, vm::op_br_if_r2 as Op) {
+        vm::op_br_if_ptr_r2
+    } else if op_eq(op, vm::op_br_if_r3 as Op) {
+        vm::op_br_if_ptr_r3
+    } else if op_eq(op, vm::op_if as Op) {
+        vm::op_if_ptr
+    } else if op_eq(op, vm::op_else as Op) {
+        vm::op_else_ptr
+    } else if op_eq(op, vm::op_br_table as Op) {
+        vm::op_br_table_ptr
+    } else if op_eq(op, vm::op_i32_local_br_if as Op) {
+        vm::op_i32_local_br_if_ptr
+    } else if op_eq(op, vm::op_i32_local_eqz_br_if as Op) {
+        vm::op_i32_local_eqz_br_if_ptr
+    } else if op_eq(op, vm::op_i32_local_if as Op) {
+        vm::op_i32_local_if_ptr
+    } else if op_eq(op, vm::op_i32_local_eqz_if as Op) {
+        vm::op_i32_local_eqz_if_ptr
+    } else if op_eq(op, vm::op_i64_local_br_if as Op) {
+        vm::op_i64_local_br_if_ptr
+    } else if op_eq(op, vm::op_i64_local_eqz_br_if as Op) {
+        vm::op_i64_local_eqz_br_if_ptr
+    } else if op_eq(op, vm::op_i64_local_if as Op) {
+        vm::op_i64_local_if_ptr
+    } else if op_eq(op, vm::op_i64_local_eqz_if as Op) {
+        vm::op_i64_local_eqz_if_ptr
+    } else if op_eq(op, vm::op_i32_local_and_imm_br_if as Op) {
+        vm::op_i32_local_and_imm_br_if_ptr
+    } else if op_eq(op, vm::op_i32_local_and_imm_eqz_br_if as Op) {
+        vm::op_i32_local_and_imm_eqz_br_if_ptr
+    } else if op_eq(op, vm::op_i32_local_and_imm_if as Op) {
+        vm::op_i32_local_and_imm_if_ptr
+    } else if op_eq(op, vm::op_i32_local_and_imm_eqz_if as Op) {
+        vm::op_i32_local_and_imm_eqz_if_ptr
+    } else if op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if as Op) {
+        vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if_ptr
+    } else if op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_if as Op) {
+        vm::op_i32_local_addr_load8_u_and_imm_eqz_if_ptr
+    } else if op_eq(op, vm::op_i32_local_local_ge_u_br_if as Op) {
+        vm::op_i32_local_local_ge_u_br_if_ptr
+    } else if op_eq(op, vm::op_i32_local_local_compare_br_if as Op) {
+        vm::op_i32_local_local_compare_br_if_ptr
+    } else if op_eq(op, vm::op_i32_local_const_compare_br_if as Op) {
+        vm::op_i32_local_const_compare_br_if_ptr
+    } else if op_eq(op, vm::op_i64_local_local_compare_br_if as Op) {
+        vm::op_i64_local_local_compare_br_if_ptr
+    } else if op_eq(op, vm::op_i64_local_const_compare_br_if as Op) {
+        vm::op_i64_local_const_compare_br_if_ptr
+    } else if op_eq(op, vm::op_f32_local_local_compare_br_if as Op) {
+        vm::op_f32_local_local_compare_br_if_ptr
+    } else if op_eq(op, vm::op_f32_local_const_compare_br_if as Op) {
+        vm::op_f32_local_const_compare_br_if_ptr
+    } else if op_eq(op, vm::op_f64_local_local_compare_br_if as Op) {
+        vm::op_f64_local_local_compare_br_if_ptr
+    } else if op_eq(op, vm::op_f64_local_const_compare_br_if as Op) {
+        vm::op_f64_local_const_compare_br_if_ptr
+    } else {
+        return None;
+    })
+}
+
+fn rewrite_loop_op(op: Op) -> Option<Op> {
+    Some(if op_eq(op, vm::op_loop_empty as Op) {
+        vm::op_loop_empty_precomputed
+    } else if op_eq(op, vm::op_loop4 as Op) {
+        vm::op_loop4_precomputed
+    } else if op_eq(op, vm::op_loop8 as Op) {
+        vm::op_loop8_precomputed
+    } else if op_eq(op, vm::op_loop_generic as Op) || op_eq(op, vm::op_loop as Op) {
+        vm::op_loop_generic_precomputed
+    } else {
+        return None;
+    })
+}
+
+fn rewrite_block_return_op(op: Op) -> Option<Op> {
+    Some(if op_eq(op, vm::special_block_return_empty as Op) {
+        vm::special_block_return_empty_precomputed
+    } else if op_eq(op, vm::special_block_return4 as Op) {
+        vm::special_block_return4_precomputed
+    } else if op_eq(op, vm::special_block_return8 as Op) {
+        vm::special_block_return8_precomputed
+    } else if op_eq(op, vm::special_block_return_generic as Op)
+        || op_eq(op, vm::special_block_return as Op)
+    {
+        vm::special_block_return_generic_precomputed
+    } else {
+        return None;
+    })
+}
+
+fn build_derived_code(
+    canonical: &Arc<[Instr]>,
+    control_flow_metadata: &[ControlFlowMetadataSite],
+) -> Option<Arc<[Instr]>> {
+    if control_flow_metadata.is_empty() {
+        return None;
+    }
+
+    let mut derived: Arc<[Instr]> = canonical.iter().copied().collect::<Vec<_>>().into();
+    let base = derived.as_ptr();
+    let code = Arc::get_mut(&mut derived).expect("derived code must be uniquely owned");
+
+    for site in control_flow_metadata {
+        let start = site.instruction_ordinal as usize;
+        let op = unsafe { code[start].op };
+        match &site.kind {
+            ControlFlowMetadataKind::Jump {
+                jump_operand_slots,
+                target_ordinals,
+            } => {
+                let ptr_op =
+                    rewrite_jump_op(op).expect("jump metadata must target a jump-capable op");
+                code[start] = Instr { op: ptr_op };
+                for (&slot, &target) in jump_operand_slots.iter().zip(target_ordinals.iter()) {
+                    let target_ptr = unsafe { base.add(target as usize) } as usize;
+                    code[start + usize::from(slot)] = Instr {
+                        operand: Operand {
+                            code_ptr: target_ptr,
+                        },
+                    };
+                }
+            }
+            ControlFlowMetadataKind::Loop {
+                dst_from_local_top,
+                param_size,
+                shape,
+            } => {
+                let ptr_op = rewrite_loop_op(op).expect("loop metadata must target a loop op");
+                code[start] = Instr { op: ptr_op };
+                code[start + 1] = Instr {
+                    operand: Operand {
+                        precomputed_loop_param: PrecomputedLoopParam::with_shape(
+                            *dst_from_local_top,
+                            *param_size,
+                            *shape,
+                        ),
+                    },
+                };
+            }
+            ControlFlowMetadataKind::BlockReturn {
+                dst_from_local_top,
+                return_size,
+                shape,
+            } => {
+                let ptr_op = rewrite_block_return_op(op)
+                    .expect("block-return metadata must target a block-return op");
+                code[start] = Instr { op: ptr_op };
+                code[start + 1] = Instr {
+                    operand: Operand {
+                        precomputed_block_return: PrecomputedBlockReturn::with_shape(
+                            *dst_from_local_top,
+                            *return_size,
+                            *shape,
+                        ),
+                    },
+                };
+            }
+        }
+    }
+
+    Some(derived)
 }
 
 pub(crate) fn init_global(
@@ -415,14 +595,15 @@ pub async fn instantiate(
 
             let func_addr = match func {
                 FunctionBody::Wasm(code) => {
-                    let code_expr: std::sync::Arc<[Instr]> = code.expr.into();
+                    let code_expr: Arc<[Instr]> = code.expr.into();
+                    let derived_code = build_derived_code(&code_expr, &code.control_flow_metadata);
                     gc.new_func(&FunctionInstanceData {
                         instance: inst_id,
                         execution: build_execution_metadata(typeidx, ft, FunctionKind::Wasm),
                         body: RuntimeFunctionBody::Wasm {
                             locals: code.locals.clone(),
                             code: code_expr.clone(),
-                            derived_code: None,
+                            derived_code,
                             metadata: WasmExecutionMetadata {
                                 code_base_addr: code_expr.as_ptr() as usize,
                                 locals_byte_size: code.locals.byte_size() as u32,
@@ -812,6 +993,14 @@ pub fn link_async_host_function_with_export_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{common::FunctionBody as ParsedFunctionBody, IoReadBinaryReader, WasmParser};
+
+    fn parse_wat_module(wat: &str) -> crate::common::Module {
+        let source = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(source.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        parser.parse_module().expect("module must parse")
+    }
 
     #[test]
     fn execute_offset_const_expr_fail_closes_non_i32_const() {
@@ -828,5 +1017,71 @@ mod tests {
         let global = gc.new_global_data8(42);
         let result = execute_offset_const_expr(&mut gc, &[global], &[ConstExpr::GlobalGet(0)]);
         assert!(matches!(result, VMResult::Unlinkable));
+    }
+
+    #[tokio::test]
+    async fn instantiate_builds_pointer_bearing_derived_code_for_control_flow_sites() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let module = parse_wat_module(
+            r#"
+            (module
+              (func (export "branchy") (param i32) (result i32)
+                block (result i32)
+                  local.get 0
+                  if (result i32)
+                    i32.const 1
+                  else
+                    i32.const 2
+                  end
+                end)
+              (func (export "looped") (param i32) (result i32)
+                (block
+                  loop
+                    local.get 0
+                    br_if 1
+                  end)
+                i32.const 9))
+            "#,
+        );
+
+        let parsed_branch = match &module.codes.0[0] {
+            ParsedFunctionBody::Wasm(func) => func.clone(),
+            ParsedFunctionBody::Host(_) => panic!("expected wasm function"),
+        };
+        assert!(!parsed_branch.control_flow_metadata.is_empty());
+
+        let instance = instantiate(module, &store, &registry).await.unwrap();
+        let gc = store.lock_gc();
+        let inst = gc.get_instance(
+            instance
+                .object_ref_for_store(&store)
+                .expect("instance must stay live in store"),
+        );
+        let branch_func = gc.get_func(inst.funcs[0]);
+        let loop_func = gc.get_func(inst.funcs[1]);
+
+        let branch_canonical = branch_func.canonical_code().expect("canonical wasm code");
+        let branch_active = branch_func.code().expect("active wasm code");
+        assert_eq!(branch_canonical.len(), branch_active.len());
+        assert_ne!(
+            branch_func.code_pointer().unwrap(),
+            branch_func.canonical_code_pointer().unwrap()
+        );
+        assert!(branch_active.iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_if_ptr as Op)
+                || std::ptr::fn_addr_eq(instr.op, vm::op_else_ptr as Op)
+                || std::ptr::fn_addr_eq(instr.op, vm::special_block_return4_precomputed as Op)
+        }));
+        assert!(branch_canonical.iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_if as Op)
+                || std::ptr::fn_addr_eq(instr.op, vm::op_else as Op)
+        }));
+
+        let loop_active = loop_func.code().expect("active wasm code");
+        assert!(loop_active.iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_loop_empty_precomputed as Op)
+                || std::ptr::fn_addr_eq(instr.op, vm::special_block_return_empty_precomputed as Op)
+        }));
     }
 }

@@ -86,7 +86,7 @@ unsafe fn internal_op_call(
         }
 
         let ptr = funcinst
-            .canonical_code_pointer()
+            .code_pointer()
             .expect("wasm function must expose a code pointer");
         debug_assert!(!is_host_func);
         VMResult::Success(CallOutcome::Immediate(ptr))
