@@ -809,6 +809,182 @@ async fn local_address_load_store_superinstructions_preserve_traps() {
 }
 
 #[tokio::test]
+async fn narrow_copy_superinstructions_preserve_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed")
+            i32.const 0
+            i32.const 0x34
+            i32.store8
+            i32.const 1
+            i32.const 0x12
+            i32.store8)
+          (func (export "fused_copy8") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.load8_u
+            i32.store8)
+          (func (export "baseline_copy8") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.load8_u
+            i32.const 0
+            i32.or
+            i32.store8)
+          (func (export "fused_copy16") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.load16_u
+            i32.store16)
+          (func (export "baseline_copy16") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.load16_u
+            i32.const 0
+            i32.or
+            i32.store16)
+          (func (export "byte_at") (param i32) (result i32)
+            local.get 0
+            i32.load8_u)
+          (func (export "half_at") (param i32) (result i32)
+            local.get 0
+            i32.load16_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(&instance, &store, "seed", &ResultValue::new(vec![])).await,
+        VMResult::Success(_)
+    ));
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "fused_copy8",
+            &ResultValue::new(vec![WasmValue::I32(8), WasmValue::I32(0)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(8)]).await,
+        0x34,
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "baseline_copy8",
+            &ResultValue::new(vec![WasmValue::I32(9), WasmValue::I32(1)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "byte_at", vec![WasmValue::I32(9)]).await,
+        0x12,
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "fused_copy16",
+            &ResultValue::new(vec![WasmValue::I32(16), WasmValue::I32(0)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "half_at", vec![WasmValue::I32(16)]).await,
+        0x1234,
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "baseline_copy16",
+            &ResultValue::new(vec![WasmValue::I32(24), WasmValue::I32(0)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success_i32(
+        call_i32(&instance, &store, "half_at", vec![WasmValue::I32(24)]).await,
+        0x1234,
+    );
+}
+
+#[tokio::test]
+async fn narrow_copy_superinstructions_preserve_oob_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "fused_copy8") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.load8_u
+            i32.store8)
+          (func (export "baseline_copy8") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.load8_u
+            i32.const 0
+            i32.or
+            i32.store8)
+          (func (export "fused_copy16") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.load16_u
+            i32.store16)
+          (func (export "baseline_copy16") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.load16_u
+            i32.const 0
+            i32.or
+            i32.store16))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args) in [
+        (
+            "fused_copy8",
+            ResultValue::new(vec![WasmValue::I32(65536), WasmValue::I32(0)]),
+        ),
+        (
+            "baseline_copy8",
+            ResultValue::new(vec![WasmValue::I32(65536), WasmValue::I32(0)]),
+        ),
+        (
+            "fused_copy16",
+            ResultValue::new(vec![WasmValue::I32(65535), WasmValue::I32(0)]),
+        ),
+        (
+            "baseline_copy16",
+            ResultValue::new(vec![WasmValue::I32(65535), WasmValue::I32(0)]),
+        ),
+    ] {
+        assert_memory_oob(run_module_function(&instance, &store, name, &args).await);
+    }
+}
+
+#[tokio::test]
 async fn mem_fill_trap_leaves_memory_unchanged() {
     let store = Store::new();
     let registry = Registry::new();

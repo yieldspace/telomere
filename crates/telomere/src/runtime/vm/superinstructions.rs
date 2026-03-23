@@ -524,6 +524,11 @@ enum LocalBitImmOp {
     ShrU,
 }
 
+enum NarrowCopyKind {
+    Load8Store8,
+    Load16Store16,
+}
+
 enum ControlBranchKind {
     BrIf,
     If,
@@ -942,6 +947,48 @@ pub unsafe fn op_i32_local_and_imm_eqz_if(
     op_i32_local_and_imm_branch(tail_code, ctx, true, ControlBranchKind::If)
 }
 
+#[inline(always)]
+unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_branch(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let local_addr = (*tail_code).operand.local_addr;
+    let memarg = (*tail_code.add(1)).operand.memarg;
+    let imm = (*tail_code.add(2)).operand.i32 as u32;
+    let target = (*tail_code.add(3)).operand.jump_addr;
+    let start = vm_try!(local_mem_start_from_local(ctx, local_addr, memarg));
+    let loaded = u32::from(vm_try!(ctx
+        .gc
+        .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start)));
+    let taken = (loaded & imm) == 0;
+    let ptr = match (branch_kind, taken) {
+        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
+        (ControlBranchKind::BrIf, false) => tail_code.offset(4),
+        (ControlBranchKind::If, true) => tail_code.offset(4),
+        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[cold]
+#[inline(never)]
+pub unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_addr_load8_u_and_imm_eqz_branch(tail_code, ctx, ControlBranchKind::BrIf)
+}
+
+#[cold]
+#[inline(never)]
+pub unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_addr_load8_u_and_imm_eqz_branch(tail_code, ctx, ControlBranchKind::If)
+}
+
 pub unsafe fn op_i32_local_local_ge_u_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -992,10 +1039,7 @@ unsafe fn local_addr_mem_start(
 ) -> VMResult<usize> {
     let local_addr = (*tail_code).operand.local_addr;
     let memarg = (*tail_code.add(1)).operand.memarg;
-    compute_memory_offset(
-        memarg,
-        local_u32(ctx.stack, &ctx.local_reference(), local_addr),
-    )
+    local_mem_start_from_local(ctx, local_addr, memarg)
 }
 
 #[inline(always)]
@@ -1009,6 +1053,18 @@ unsafe fn local_imm_addr_mem_start(
     compute_memory_offset(
         memarg,
         local_u32(ctx.stack, &ctx.local_reference(), local_addr).wrapping_add(imm),
+    )
+}
+
+#[inline(always)]
+unsafe fn local_mem_start_from_local(
+    ctx: &mut ExecuteContext,
+    local_addr: u32,
+    memarg: MemArg,
+) -> VMResult<usize> {
+    compute_memory_offset(
+        memarg,
+        local_u32(ctx.stack, &ctx.local_reference(), local_addr),
     )
 }
 
@@ -1237,6 +1293,90 @@ pub unsafe fn op_i32_local_imm_local_store16(
         .gc
         .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, &bytes));
     call_next(tail_code, 4, ctx)
+}
+
+#[cold]
+#[inline(never)]
+pub unsafe fn op_i32_local_local_load_tee_add_imm_store(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let store_addr_local = (*tail_code).operand.local_addr;
+    let load_addr_local = (*tail_code.add(1)).operand.local_addr;
+    let tee_local = (*tail_code.add(2)).operand.local_addr;
+    let imm = (*tail_code.add(3)).operand.i32 as u32;
+    let load_memarg = (*tail_code.add(4)).operand.memarg;
+    let store_memarg = (*tail_code.add(5)).operand.memarg;
+    let load_start = vm_try!(local_mem_start_from_local(
+        ctx,
+        load_addr_local,
+        load_memarg
+    ));
+    let loaded = vm_try!(ctx
+        .gc
+        .local_read_u32_at(ctx.default_local_memory_id_unchecked(), load_start));
+    write_local_u32(ctx.stack, &ctx.local_reference(), tee_local, loaded);
+    let value = loaded.wrapping_add(imm);
+    let store_start = vm_try!(local_mem_start_from_local(
+        ctx,
+        store_addr_local,
+        store_memarg
+    ));
+    let bytes = value.to_le_bytes();
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.default_local_memory_id_unchecked(), store_start, &bytes));
+    call_next(tail_code, 6, ctx)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn op_i32_local_local_narrow_copy(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    kind: NarrowCopyKind,
+) -> VMResult<()> {
+    let dst_local = (*tail_code).operand.local_addr;
+    let src_local = (*tail_code.add(1)).operand.local_addr;
+    let load_memarg = (*tail_code.add(2)).operand.memarg;
+    let store_memarg = (*tail_code.add(3)).operand.memarg;
+    let load_start = vm_try!(local_mem_start_from_local(ctx, src_local, load_memarg));
+    let store_start = vm_try!(local_mem_start_from_local(ctx, dst_local, store_memarg));
+    let bytes = match kind {
+        NarrowCopyKind::Load8Store8 => StoreBytes::Write1([vm_try!(ctx
+            .gc
+            .local_read_u8_at(ctx.default_local_memory_id_unchecked(), load_start))]),
+        NarrowCopyKind::Load16Store16 => StoreBytes::Write2(
+            vm_try!(ctx
+                .gc
+                .local_read_u16_at(ctx.default_local_memory_id_unchecked(), load_start))
+            .to_le_bytes(),
+        ),
+    };
+    vm_try!(ctx.gc.local_write_bytes(
+        ctx.default_local_memory_id_unchecked(),
+        store_start,
+        bytes.as_slice(),
+    ));
+    call_next(tail_code, 4, ctx)
+}
+
+#[cold]
+#[inline(never)]
+pub unsafe fn op_i32_local_local_load8_u_store8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_local_narrow_copy(tail_code, ctx, NarrowCopyKind::Load8Store8)
+}
+
+#[cold]
+#[inline(never)]
+pub unsafe fn op_i32_local_local_load16_u_store16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_local_narrow_copy(tail_code, ctx, NarrowCopyKind::Load16Store16)
 }
 
 pub unsafe fn op_i32_local_scalar_imm_push4(

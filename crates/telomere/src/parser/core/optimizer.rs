@@ -141,6 +141,12 @@ enum ControlBranchKind {
     If,
 }
 
+#[derive(Clone, Copy)]
+enum NarrowCopyKind {
+    Load8Store8,
+    Load16Store16,
+}
+
 enum OptimizedInstruction {
     Raw(DecodedInstruction),
     ConstSetTee {
@@ -198,6 +204,14 @@ enum OptimizedInstruction {
         imm: i32,
         target_old: u32,
         zero_test: bool,
+        branch_kind: ControlBranchKind,
+    },
+    I32LocalAddrLoad8UAndImmEqzBranch {
+        old_range: Range<usize>,
+        local_addr: u32,
+        memarg: MemArg,
+        imm: i32,
+        target_old: u32,
         branch_kind: ControlBranchKind,
     },
     I32LocalLocalGeUBrIf {
@@ -274,6 +288,15 @@ enum OptimizedInstruction {
         memarg: MemArg,
         op: TypedLoadOp,
     },
+    I32LocalLocalLoadTeeAddImmStore {
+        old_range: Range<usize>,
+        store_addr_local_addr: u32,
+        load_addr_local_addr: u32,
+        tee_local_addr: u32,
+        imm: i32,
+        load_memarg: MemArg,
+        store_memarg: MemArg,
+    },
     LocalLocalStore {
         old_range: Range<usize>,
         addr_local_addr: u32,
@@ -288,6 +311,14 @@ enum OptimizedInstruction {
         value_local_addr: u32,
         memarg: MemArg,
         op: TypedStoreOp,
+    },
+    I32LocalLocalNarrowCopy {
+        old_range: Range<usize>,
+        dst_local_addr: u32,
+        src_local_addr: u32,
+        load_memarg: MemArg,
+        store_memarg: MemArg,
+        kind: NarrowCopyKind,
     },
 }
 
@@ -308,6 +339,7 @@ const COMPARE_SELECT_MATCHERS: &[Matcher] = &[
     match_local_local_compare_select,
     match_local_const_compare_select,
 ];
+const LOAD_MASK_BRANCH_MATCHERS: &[Matcher] = &[match_i32_local_addr_load8_u_and_imm_eqz_branch];
 const BRANCH_MATCHERS: &[Matcher] = &[
     match_i32_local_and_imm_branch,
     match_local_branch,
@@ -317,6 +349,11 @@ const BRANCH_MATCHERS: &[Matcher] = &[
 ];
 const CONST_ADDR_MATCHERS: &[Matcher] = &[match_const_load, match_const_local_store];
 const LOCAL_ADDR_LOAD_MATCHERS: &[Matcher] = &[match_local_imm_addr_load, match_local_addr_load];
+const LOAD_MODIFY_STORE_MATCHERS: &[Matcher] = &[match_i32_local_local_load_tee_add_imm_store];
+const LOAD_STORE_NARROW_COPY_MATCHERS: &[Matcher] = &[
+    match_i32_local_local_load8_u_store8_copy,
+    match_i32_local_local_load16_u_store16_copy,
+];
 const LOCAL_LOCAL_STORE_MATCHERS: &[Matcher] =
     &[match_local_imm_local_store, match_local_local_store];
 
@@ -934,6 +971,16 @@ fn fuse_superinstructions(
             index += consumed;
             continue;
         }
+        if let Some((consumed, fused)) = try_matchers(
+            LOAD_MASK_BRANCH_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
         if let Some((consumed, fused)) =
             try_matchers(BRANCH_MATCHERS, decoded.as_slice(), index, jump_targets)
         {
@@ -961,6 +1008,26 @@ fn fuse_superinstructions(
         if let Some((consumed, fused)) =
             try_matchers(CONST_ADDR_MATCHERS, decoded.as_slice(), index, jump_targets)
         {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            LOAD_MODIFY_STORE_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            LOAD_STORE_NARROW_COPY_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
             optimized.push(fused);
             index += consumed;
             continue;
@@ -1408,6 +1475,55 @@ fn match_i32_local_and_imm_branch(
             imm,
             target_old,
             zero_test,
+            branch_kind,
+        },
+    ))
+}
+
+fn match_i32_local_addr_load8_u_and_imm_eqz_branch(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth, fifth, sixth] = decoded.get(index..index + 6)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 6) {
+        return None;
+    }
+    let (addr_width, local_addr) = local_get(first.kind)?;
+    let (load_op, memarg) = match second.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    let imm = match third.kind {
+        DecodedKind::Const(TypedConst::I32(value)) => value,
+        _ => return None,
+    };
+    if !same_width(addr_width, ValueSize::Byte4)
+        || !matches!(load_op, TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U))
+        || !matches!(
+            fourth.kind,
+            DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::And))
+        )
+        || !matches!(fifth.kind, DecodedKind::Eqz(ValueSize::Byte4))
+    {
+        return None;
+    }
+    let (branch_kind, target_old) = match sixth.kind {
+        DecodedKind::BrIf(target) => (ControlBranchKind::BrIf, target),
+        DecodedKind::If(target) => (ControlBranchKind::If, target),
+        _ => return None,
+    };
+
+    Some((
+        6,
+        OptimizedInstruction::I32LocalAddrLoad8UAndImmEqzBranch {
+            old_range: first.old_range.start..sixth.old_range.end,
+            local_addr,
+            memarg,
+            imm,
+            target_old,
             branch_kind,
         },
     ))
@@ -1918,6 +2034,61 @@ fn match_local_imm_addr_load(
     ))
 }
 
+fn match_i32_local_local_load_tee_add_imm_store(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth, fifth, sixth, seventh] = decoded.get(index..index + 7)?
+    else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 7) {
+        return None;
+    }
+    let (store_addr_width, store_addr_local_addr) = local_get(first.kind)?;
+    let (load_addr_width, load_addr_local_addr) = local_get(second.kind)?;
+    let (load_op, load_memarg) = match third.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    let (tee_width, tee_local_addr, tee) = local_set_tee(fourth.kind)?;
+    let imm = match fifth.kind {
+        DecodedKind::Const(TypedConst::I32(value)) => value,
+        _ => return None,
+    };
+    let (store_op, store_memarg) = match seventh.kind {
+        DecodedKind::Store(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    if !same_width(store_addr_width, ValueSize::Byte4)
+        || !same_width(load_addr_width, ValueSize::Byte4)
+        || !matches!(load_op, TypedLoadOp::Bits4(vm::Load4Kind::I32))
+        || !same_width(tee_width, ValueSize::Byte4)
+        || !tee
+        || !matches!(
+            sixth.kind,
+            DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+        )
+        || !matches!(store_op, TypedStoreOp::Bits4(vm::Store4Kind::I32))
+    {
+        return None;
+    }
+
+    Some((
+        7,
+        OptimizedInstruction::I32LocalLocalLoadTeeAddImmStore {
+            old_range: first.old_range.start..seventh.old_range.end,
+            store_addr_local_addr,
+            load_addr_local_addr,
+            tee_local_addr,
+            imm,
+            load_memarg,
+            store_memarg,
+        },
+    ))
+}
+
 fn match_local_local_store(
     decoded: &[DecodedInstruction],
     index: usize,
@@ -1947,6 +2118,78 @@ fn match_local_local_store(
             value_local_addr,
             memarg,
             op,
+        },
+    ))
+}
+
+fn match_i32_local_local_load8_u_store8_copy(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    match_i32_local_local_narrow_copy(decoded, index, jump_targets, NarrowCopyKind::Load8Store8)
+}
+
+fn match_i32_local_local_load16_u_store16_copy(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    match_i32_local_local_narrow_copy(decoded, index, jump_targets, NarrowCopyKind::Load16Store16)
+}
+
+fn match_i32_local_local_narrow_copy(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+    kind: NarrowCopyKind,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+        return None;
+    }
+    let (dst_width, dst_local_addr) = local_get(first.kind)?;
+    let (src_width, src_local_addr) = local_get(second.kind)?;
+    let (load_op, load_memarg) = match third.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    let (store_op, store_memarg) = match fourth.kind {
+        DecodedKind::Store(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+
+    let op_matches = matches!(
+        (kind, load_op, store_op),
+        (
+            NarrowCopyKind::Load8Store8,
+            TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U),
+            TypedStoreOp::Bits4(vm::Store4Kind::I32Store8),
+        ) | (
+            NarrowCopyKind::Load16Store16,
+            TypedLoadOp::Bits4(vm::Load4Kind::I32Load16U),
+            TypedStoreOp::Bits4(vm::Store4Kind::I32Store16),
+        )
+    );
+
+    if !same_width(dst_width, ValueSize::Byte4)
+        || !same_width(src_width, ValueSize::Byte4)
+        || !op_matches
+    {
+        return None;
+    }
+
+    Some((
+        4,
+        OptimizedInstruction::I32LocalLocalNarrowCopy {
+            old_range: first.old_range.start..fourth.old_range.end,
+            dst_local_addr,
+            src_local_addr,
+            load_memarg,
+            store_memarg,
+            kind,
         },
     ))
 }
@@ -2037,6 +2280,7 @@ fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
         | OptimizedInstruction::LocalLocalSetTee { old_range, .. }
         | OptimizedInstruction::LocalBranch { old_range, .. }
         | OptimizedInstruction::I32LocalAndImmBranch { old_range, .. }
+        | OptimizedInstruction::I32LocalAddrLoad8UAndImmEqzBranch { old_range, .. }
         | OptimizedInstruction::I32LocalLocalGeUBrIf { old_range, .. }
         | OptimizedInstruction::CompareSetTeeLocal { old_range, .. }
         | OptimizedInstruction::CompareSetTeeConst { old_range, .. }
@@ -2048,8 +2292,10 @@ fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
         | OptimizedInstruction::StoreConstLocal { old_range, .. }
         | OptimizedInstruction::LocalAddrLoad { old_range, .. }
         | OptimizedInstruction::LocalImmAddrLoad { old_range, .. }
+        | OptimizedInstruction::I32LocalLocalLoadTeeAddImmStore { old_range, .. }
         | OptimizedInstruction::LocalLocalStore { old_range, .. }
-        | OptimizedInstruction::LocalImmLocalStore { old_range, .. } => old_range,
+        | OptimizedInstruction::LocalImmLocalStore { old_range, .. }
+        | OptimizedInstruction::I32LocalLocalNarrowCopy { old_range, .. } => old_range,
     }
 }
 
@@ -2077,6 +2323,7 @@ fn output_len(instruction: &OptimizedInstruction) -> usize {
         }
         OptimizedInstruction::LocalBranch { .. } => 3,
         OptimizedInstruction::I32LocalAndImmBranch { .. } => 4,
+        OptimizedInstruction::I32LocalAddrLoad8UAndImmEqzBranch { .. } => 5,
         OptimizedInstruction::I32LocalLocalGeUBrIf { .. } => 4,
         OptimizedInstruction::CompareSetTeeLocal { .. }
         | OptimizedInstruction::CompareSetTeeConst { .. }
@@ -2106,6 +2353,7 @@ fn output_len(instruction: &OptimizedInstruction) -> usize {
             }
         }
         OptimizedInstruction::LocalImmAddrLoad { .. } => 4,
+        OptimizedInstruction::I32LocalLocalLoadTeeAddImmStore { .. } => 7,
         OptimizedInstruction::LocalLocalStore { op, .. } => {
             if op.uses_dedicated_local_local() {
                 4
@@ -2114,6 +2362,7 @@ fn output_len(instruction: &OptimizedInstruction) -> usize {
             }
         }
         OptimizedInstruction::LocalImmLocalStore { .. } => 5,
+        OptimizedInstruction::I32LocalLocalNarrowCopy { .. } => 5,
     }
 }
 
@@ -2630,6 +2879,35 @@ fn lower_instruction(
                 },
             });
         }
+        OptimizedInstruction::I32LocalAddrLoad8UAndImmEqzBranch {
+            local_addr,
+            memarg,
+            imm,
+            target_old,
+            branch_kind,
+            ..
+        } => {
+            lowered.push(Instr {
+                op: match branch_kind {
+                    ControlBranchKind::BrIf => vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if,
+                    ControlBranchKind::If => vm::op_i32_local_addr_load8_u_and_imm_eqz_if,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand { local_addr },
+            });
+            lowered.push(Instr {
+                operand: Operand { memarg },
+            });
+            lowered.push(Instr {
+                operand: Operand { i32: imm },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    jump_addr: remap_jump_target(target_old, old_to_new),
+                },
+            });
+        }
         OptimizedInstruction::I32LocalLocalGeUBrIf {
             lhs_local_addr,
             rhs_local_addr,
@@ -3028,6 +3306,47 @@ fn lower_instruction(
                 operand: Operand { memarg },
             });
         }
+        OptimizedInstruction::I32LocalLocalLoadTeeAddImmStore {
+            store_addr_local_addr,
+            load_addr_local_addr,
+            tee_local_addr,
+            imm,
+            load_memarg,
+            store_memarg,
+            ..
+        } => {
+            lowered.push(Instr {
+                op: vm::op_i32_local_local_load_tee_add_imm_store,
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: store_addr_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: load_addr_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: tee_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand { i32: imm },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    memarg: load_memarg,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    memarg: store_memarg,
+                },
+            });
+        }
         OptimizedInstruction::LocalLocalStore {
             addr_local_addr,
             value_local_addr,
@@ -3117,6 +3436,41 @@ fn lower_instruction(
             });
             lowered.push(Instr {
                 operand: Operand { memarg },
+            });
+        }
+        OptimizedInstruction::I32LocalLocalNarrowCopy {
+            dst_local_addr,
+            src_local_addr,
+            load_memarg,
+            store_memarg,
+            kind,
+            ..
+        } => {
+            lowered.push(Instr {
+                op: match kind {
+                    NarrowCopyKind::Load8Store8 => vm::op_i32_local_local_load8_u_store8,
+                    NarrowCopyKind::Load16Store16 => vm::op_i32_local_local_load16_u_store16,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: dst_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: src_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    memarg: load_memarg,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    memarg: store_memarg,
+                },
             });
         }
     }
@@ -3356,6 +3710,50 @@ mod tests {
         });
 
         assert!(is_local_get4_family(unsafe { optimized[6].op }));
+    }
+
+    #[test]
+    fn optimizer_does_not_fuse_load_mask_branch_across_jump_target_boundary() {
+        let optimized = optimize_core_program(InstructionProgram {
+            instr: vec![
+                Instr { op: vm::op_br_if },
+                Instr {
+                    operand: Operand { jump_addr: 4 },
+                },
+                Instr {
+                    op: vm::op_local_get4,
+                },
+                Instr {
+                    operand: Operand { local_addr: 0 },
+                },
+                Instr {
+                    op: vm::op_i32_load8_u_local,
+                },
+                Instr {
+                    operand: Operand {
+                        memarg: MemArg {
+                            align: 1,
+                            offset: 0,
+                        },
+                    },
+                },
+                Instr {
+                    op: vm::op_i32_const,
+                },
+                Instr {
+                    operand: Operand { i32: 32 },
+                },
+                Instr { op: vm::op_i32_and },
+                Instr { op: vm::op_i32_eqz },
+                Instr { op: vm::op_if },
+                Instr {
+                    operand: Operand { jump_addr: 0 },
+                },
+            ],
+            instruction_starts: vec![0, 2, 4, 6, 8, 9, 10],
+        });
+
+        assert!(is_local_get4_family(unsafe { optimized[2].op }));
     }
 
     #[test]

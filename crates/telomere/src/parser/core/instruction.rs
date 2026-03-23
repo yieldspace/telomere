@@ -4766,6 +4766,57 @@ mod tests {
     }
 
     #[test]
+    fn parser_specializes_i32_local_addr_load8_u_and_imm_eqz_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32)
+                local.get 0
+                i32.load8_u
+                i32.const 32
+                i32.and
+                i32.eqz
+                if
+                  nop
+                end))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_addr_load8_u_and_imm_eqz_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_addr_load8_u_and_imm_eqz_br_if_superinstruction() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i32)
+                block
+                  local.get 0
+                  i32.load8_u
+                  i32.const 32
+                  i32.and
+                  i32.eqz
+                  br_if 0
+                  i32.const 7
+                  return
+                end
+                i32.const 9))
+            "#,
+            0,
+        );
+        assert!(contains_op(
+            &ops,
+            vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
     fn parser_specializes_i32_local_addr_load16_s_superinstruction() {
         let op = op_at(
             r#"
@@ -4860,6 +4911,29 @@ mod tests {
     }
 
     #[test]
+    fn parser_specializes_i32_local_local_load_tee_add_imm_store_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (local i32)
+                local.get 0
+                local.get 0
+                i32.load
+                local.tee 1
+                i32.const 4
+                i32.add
+                i32.store))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_load_tee_add_imm_store as crate::common::Op
+        ));
+    }
+
+    #[test]
     fn parser_specializes_i32_local_local_store8_superinstruction() {
         let op = op_at(
             r#"
@@ -4879,6 +4953,26 @@ mod tests {
     }
 
     #[test]
+    fn parser_specializes_i32_local_local_load8_u_store8_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i32)
+                local.get 0
+                local.get 1
+                i32.load8_u
+                i32.store8))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_load8_u_store8 as crate::common::Op
+        ));
+    }
+
+    #[test]
     fn parser_specializes_i32_local_local_store16_superinstruction() {
         let op = op_at(
             r#"
@@ -4894,6 +4988,26 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             op,
             vm::op_i32_local_local_store16 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_load16_u_store16_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i32)
+                local.get 0
+                local.get 1
+                i32.load16_u
+                i32.store16))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_load16_u_store16 as crate::common::Op
         ));
     }
 

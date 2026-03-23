@@ -453,6 +453,271 @@ async fn local_copy_and_branch_superinstructions_match_expected_results() {
 }
 
 #[tokio::test]
+async fn load_mask_branch_superinstructions_match_unfused_semantics_and_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store8)
+          (func (export "fused_if") (param i32) (result i32)
+            (local i32)
+            i32.const 9
+            local.set 1
+            local.get 0
+            i32.load8_u
+            i32.const 32
+            i32.and
+            i32.eqz
+            if
+              i32.const 7
+              local.set 1
+            end
+            local.get 1)
+          (func (export "baseline_if") (param i32) (result i32)
+            (local i32)
+            i32.const 9
+            local.set 1
+            local.get 0
+            i32.load8_u
+            i32.const 32
+            i32.and
+            i32.eqz
+            i32.const 0
+            i32.or
+            if
+              i32.const 7
+              local.set 1
+            end
+            local.get 1)
+          (func (export "fused_br_if") (param i32) (result i32)
+            block $taken
+              local.get 0
+              i32.load8_u
+              i32.const 32
+              i32.and
+              i32.eqz
+              br_if $taken
+              i32.const 0
+              return
+            end
+            i32.const 1)
+          (func (export "baseline_br_if") (param i32) (result i32)
+            block $taken
+              local.get 0
+              i32.load8_u
+              i32.const 32
+              i32.and
+              i32.eqz
+              i32.const 0
+              i32.or
+              br_if $taken
+              i32.const 0
+              return
+            end
+            i32.const 1))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(&instance, &store, "fused_if", vec![WasmValue::I32(0)]).await,
+        7,
+        "fused_if zero bit",
+    );
+    assert_success(
+        call_i32(&instance, &store, "baseline_if", vec![WasmValue::I32(0)]).await,
+        7,
+        "baseline_if zero bit",
+    );
+    assert_success(
+        call_i32(&instance, &store, "fused_br_if", vec![WasmValue::I32(0)]).await,
+        1,
+        "fused_br_if zero bit",
+    );
+    assert_success(
+        call_i32(&instance, &store, "baseline_br_if", vec![WasmValue::I32(0)]).await,
+        1,
+        "baseline_br_if zero bit",
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(32)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(&instance, &store, "fused_if", vec![WasmValue::I32(0)]).await,
+        9,
+        "fused_if masked bit",
+    );
+    assert_success(
+        call_i32(&instance, &store, "baseline_if", vec![WasmValue::I32(0)]).await,
+        9,
+        "baseline_if masked bit",
+    );
+    assert_success(
+        call_i32(&instance, &store, "fused_br_if", vec![WasmValue::I32(0)]).await,
+        0,
+        "fused_br_if masked bit",
+    );
+    assert_success(
+        call_i32(&instance, &store, "baseline_br_if", vec![WasmValue::I32(0)]).await,
+        0,
+        "baseline_br_if masked bit",
+    );
+
+    assert_memory_oob(
+        call_i32(&instance, &store, "fused_if", vec![WasmValue::I32(65536)]).await,
+        "fused_if_oob",
+    );
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_if",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "baseline_if_oob",
+    );
+}
+
+#[tokio::test]
+async fn load_modify_store_superinstruction_matches_unfused_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store)
+          (func (export "read") (param i32) (result i32)
+            local.get 0
+            i32.load)
+          (func (export "fused_update") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.get 0
+            i32.load
+            local.tee 1
+            i32.const 4
+            i32.add
+            i32.store
+            local.get 1)
+          (func (export "baseline_update") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.get 0
+            i32.load
+            i32.const 0
+            i32.or
+            local.tee 1
+            i32.const 4
+            i32.add
+            i32.store
+            local.get 1))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(8), WasmValue::I32(100)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(&instance, &store, "fused_update", vec![WasmValue::I32(8)]).await,
+        100,
+        "fused_update tee result",
+    );
+    assert_success(
+        call_i32(&instance, &store, "read", vec![WasmValue::I32(8)]).await,
+        104,
+        "fused_update stored result",
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(12), WasmValue::I32(200)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_update",
+            vec![WasmValue::I32(12)],
+        )
+        .await,
+        200,
+        "baseline_update tee result",
+    );
+    assert_success(
+        call_i32(&instance, &store, "read", vec![WasmValue::I32(12)]).await,
+        204,
+        "baseline_update stored result",
+    );
+
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "fused_update",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "fused_update_oob",
+    );
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_update",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "baseline_update_oob",
+    );
+}
+
+#[tokio::test]
 async fn const_set_superinstructions_match_expected_results() {
     let store = Store::new();
     let registry = Registry::new();
