@@ -4920,6 +4920,195 @@ mod tests {
     }
 
     #[test]
+    fn parser_specializes_producer_tee_eqz_if_superinstruction() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (func (export "f") (param i32)
+                (local i32)
+                block
+                  local.get 0
+                  i32.const 255
+                  i32.and
+                  local.tee 1
+                  i32.eqz
+                  if
+                    nop
+                end
+                end))
+            "#,
+            0,
+        );
+        assert!(contains_op(
+            &ops,
+            vm::op_i32_seed_tee_eqz_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_producer_tee_eqz_br_if_superinstruction() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (local i32)
+                block $skip
+                  local.get 0
+                  i32.const 255
+                  i32.and
+                  local.tee 1
+                  i32.eqz
+                  br_if $skip
+                  local.get 1
+                  return
+                end
+                i32.const 0))
+            "#,
+            0,
+        );
+        assert!(contains_op(
+            &ops,
+            vm::op_i32_seed_tee_eqz_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_producer_tee_imm_compare_br_if_superinstruction() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (local i32)
+                block $skip
+                  local.get 0
+                  i32.const 255
+                  i32.and
+                  local.tee 1
+                  i32.const 32
+                  i32.gt_u
+                  br_if $skip
+                  local.get 1
+                  return
+                end
+                i32.const 0))
+            "#,
+            0,
+        );
+        assert!(contains_op(
+            &ops,
+            vm::op_i32_seed_tee_imm_compare_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_producer_tee_imm_scalar_set4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (local i32)
+                local.get 0
+                local.tee 1
+                i32.const 3
+                i32.shl
+                local.set 1
+                local.get 1))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_seed_tee_imm_scalar_set4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_producer_tee_imm_scalar_tee4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (local i32)
+                local.get 0
+                local.tee 1
+                i32.const 3
+                i32.shl
+                local.tee 1))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_seed_tee_imm_scalar_tee4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_producer_tee_const_self_select4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (local i32)
+                local.get 0
+                local.tee 1
+                i32.const 7
+                local.get 1
+                select))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_seed_tee_const_self_select4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_compare_tee_select4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32 i32 i32 i32) (result i32) (local i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                local.get 3
+                i32.lt_u
+                local.tee 4
+                select))
+            "#,
+            4,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_compare_tee_select4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_const_compare_tee_select4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32 i32 i32) (result i32) (local i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                i32.const 7
+                i32.gt_u
+                local.tee 3
+                select))
+            "#,
+            4,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_const_compare_tee_select4 as crate::common::Op
+        ));
+    }
+
+    #[test]
     fn parser_specializes_i32_local_addr_load16_s_superinstruction() {
         let op = op_at(
             r#"
@@ -5403,6 +5592,122 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             op,
             vm::op_i64_local_const_compare_select8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_seed_tee_eqz_br_if_superinstruction() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i32) (local i32)
+                block $exit
+                  local.get 0
+                  i32.load8_u
+                  local.tee 1
+                  i32.eqz
+                  br_if $exit
+                  i32.const 0
+                  return
+                end
+                local.get 1))
+            "#,
+            0,
+        );
+        assert!(contains_op(
+            &ops,
+            vm::op_i32_seed_tee_eqz_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_seed_tee_imm_compare_br_if_superinstruction() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i32) (local i32)
+                block $exit
+                  local.get 0
+                  i32.load8_u
+                  local.tee 1
+                  i32.const 31
+                  i32.gt_u
+                  br_if $exit
+                  i32.const 0
+                  return
+                end
+                local.get 1))
+            "#,
+            0,
+        );
+        assert!(contains_op(
+            &ops,
+            vm::op_i32_seed_tee_imm_compare_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_seed_tee_imm_scalar_tee4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.const 1
+                i32.add
+                local.tee 0
+                i32.const 255
+                i32.and
+                local.tee 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_seed_tee_imm_scalar_tee4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i64_seed_tee_imm_scalar_set8_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i64) (result i64)
+                local.get 0
+                local.tee 0
+                i64.const 3
+                i64.shr_u
+                local.set 0
+                local.get 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i64_seed_tee_imm_scalar_set8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_seed_tee_const_self_select4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32) (local i32)
+                local.get 0
+                local.tee 1
+                i32.const 7
+                local.get 1
+                select))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_seed_tee_const_self_select4 as crate::common::Op
         ));
     }
 

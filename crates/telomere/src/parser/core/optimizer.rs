@@ -80,6 +80,13 @@ enum TypedLoadOp {
 }
 
 impl TypedLoadOp {
+    fn width(self) -> ValueSize {
+        match self {
+            Self::Bits4(_) => ValueSize::Byte4,
+            Self::Bits8(_) => ValueSize::Byte8,
+        }
+    }
+
     fn uses_dedicated_const(self) -> bool {
         matches!(self, Self::Bits4(vm::Load4Kind::I32))
     }
@@ -153,6 +160,62 @@ enum ControlBranchKind {
 enum NarrowCopyKind {
     Load8Store8,
     Load16Store16,
+}
+
+#[derive(Clone, Copy)]
+enum ProducerSeed {
+    Local {
+        width: ValueSize,
+        local_addr: u32,
+    },
+    LocalImmScalar {
+        width: ValueSize,
+        src_local: u32,
+        imm: TypedConst,
+        op: TypedScalarOp,
+    },
+    LocalLocalScalar {
+        width: ValueSize,
+        lhs_local_addr: u32,
+        rhs_local_addr: u32,
+        op: TypedScalarOp,
+    },
+    LocalAddrLoad {
+        width: ValueSize,
+        local_addr: u32,
+        memarg: MemArg,
+        op: TypedLoadOp,
+    },
+    LocalImmAddrLoad {
+        width: ValueSize,
+        local_addr: u32,
+        imm: i32,
+        memarg: MemArg,
+        op: TypedLoadOp,
+    },
+    ConstAddrLoad {
+        width: ValueSize,
+        start: u32,
+        op: TypedLoadOp,
+    },
+}
+
+impl ProducerSeed {
+    fn width(self) -> ValueSize {
+        match self {
+            Self::Local { width, .. }
+            | Self::LocalImmScalar { width, .. }
+            | Self::LocalLocalScalar { width, .. }
+            | Self::LocalAddrLoad { width, .. }
+            | Self::LocalImmAddrLoad { width, .. }
+            | Self::ConstAddrLoad { width, .. } => width,
+        }
+    }
+}
+
+struct ProducerSeedMatch {
+    seed: ProducerSeed,
+    consumed: usize,
 }
 
 enum OptimizedInstruction {
@@ -328,6 +391,55 @@ enum OptimizedInstruction {
         store_memarg: MemArg,
         kind: NarrowCopyKind,
     },
+    ProducerTeeEqzBranch {
+        old_range: Range<usize>,
+        seed: ProducerSeed,
+        tee_local_addr: u32,
+        target_old: u32,
+        width: ValueSize,
+        branch_kind: ControlBranchKind,
+    },
+    ProducerTeeImmCompareBranch {
+        old_range: Range<usize>,
+        seed: ProducerSeed,
+        tee_local_addr: u32,
+        rhs_const: TypedConst,
+        target_old: u32,
+        op: TypedCompareOp,
+        branch_kind: ControlBranchKind,
+    },
+    ProducerTeeImmScalarSetTee {
+        old_range: Range<usize>,
+        seed: ProducerSeed,
+        tee_local_addr: u32,
+        rhs_const: TypedConst,
+        dst_local: u32,
+        dst_tee: bool,
+        op: TypedScalarOp,
+    },
+    ProducerTeeConstSelfSelect {
+        old_range: Range<usize>,
+        seed: ProducerSeed,
+        tee_local_addr: u32,
+        rhs_const: TypedConst,
+        width: ValueSize,
+    },
+    CompareTeeSelectLocal {
+        old_range: Range<usize>,
+        lhs_local_addr: u32,
+        rhs_local_addr: u32,
+        tee_local_addr: u32,
+        select_width: ValueSize,
+        op: TypedCompareOp,
+    },
+    CompareTeeSelectConst {
+        old_range: Range<usize>,
+        lhs_local_addr: u32,
+        rhs_const: TypedConst,
+        tee_local_addr: u32,
+        select_width: ValueSize,
+        op: TypedCompareOp,
+    },
 }
 
 type MatchOutcome = (usize, OptimizedInstruction);
@@ -348,6 +460,16 @@ const COMPARE_SELECT_MATCHERS: &[Matcher] = &[
     match_local_const_compare_select,
 ];
 const LOAD_MASK_BRANCH_MATCHERS: &[Matcher] = &[match_i32_local_addr_load8_u_and_imm_eqz_branch];
+const PRODUCER_TEE_EQZ_BRANCH_MATCHERS: &[Matcher] = &[match_producer_tee_eqz_branch];
+const PRODUCER_TEE_IMM_COMPARE_BRANCH_MATCHERS: &[Matcher] =
+    &[match_producer_tee_imm_compare_branch];
+const PRODUCER_TEE_IMM_SCALAR_SET_TEE_MATCHERS: &[Matcher] =
+    &[match_producer_tee_imm_scalar_set_tee];
+const PRODUCER_TEE_SELECT_MATCHERS: &[Matcher] = &[match_producer_tee_const_self_select];
+const COMPARE_TEE_SELECT_MATCHERS: &[Matcher] = &[
+    match_local_local_compare_tee_select,
+    match_local_const_compare_tee_select,
+];
 const BRANCH_MATCHERS: &[Matcher] = &[
     match_i32_local_and_imm_branch,
     match_local_branch,
@@ -961,6 +1083,56 @@ fn fuse_superinstructions(
 
     while index < decoded.len() {
         if let Some((consumed, fused)) = try_matchers(
+            PRODUCER_TEE_EQZ_BRANCH_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            PRODUCER_TEE_IMM_COMPARE_BRANCH_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            PRODUCER_TEE_IMM_SCALAR_SET_TEE_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            PRODUCER_TEE_SELECT_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            COMPARE_TEE_SELECT_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
             LOCAL_IMM_SET_TEE_MATCHERS,
             decoded.as_slice(),
             index,
@@ -1197,6 +1369,517 @@ fn is_existing_i32_local_imm_fastpath(op: TypedScalarOp) -> bool {
 
 fn is_existing_i32_local_local_fastpath(op: TypedScalarOp) -> bool {
     matches!(op, TypedScalarOp::I32(vm::I32ScalarKind::Add))
+}
+
+fn is_integer_scalar(op: TypedScalarOp) -> bool {
+    matches!(op, TypedScalarOp::I32(_) | TypedScalarOp::I64(_))
+}
+
+fn is_supported_tee_consumer_scalar(op: TypedScalarOp) -> bool {
+    matches!(
+        op,
+        TypedScalarOp::I32(
+            vm::I32ScalarKind::Add
+                | vm::I32ScalarKind::Sub
+                | vm::I32ScalarKind::And
+                | vm::I32ScalarKind::Or
+                | vm::I32ScalarKind::Xor
+                | vm::I32ScalarKind::Shl
+                | vm::I32ScalarKind::ShrS
+                | vm::I32ScalarKind::ShrU
+        ) | TypedScalarOp::I64(
+            vm::I64ScalarKind::Add
+                | vm::I64ScalarKind::Sub
+                | vm::I64ScalarKind::And
+                | vm::I64ScalarKind::Or
+                | vm::I64ScalarKind::Xor
+                | vm::I64ScalarKind::Shl
+                | vm::I64ScalarKind::ShrS
+                | vm::I64ScalarKind::ShrU
+        )
+    )
+}
+
+fn is_integer_compare(op: TypedCompareOp) -> bool {
+    matches!(op, TypedCompareOp::I32(_) | TypedCompareOp::I64(_))
+}
+
+fn is_integer_load(op: TypedLoadOp) -> bool {
+    matches!(
+        op,
+        TypedLoadOp::Bits4(
+            vm::Load4Kind::I32
+                | vm::Load4Kind::I32Load8S
+                | vm::Load4Kind::I32Load8U
+                | vm::Load4Kind::I32Load16S
+                | vm::Load4Kind::I32Load16U
+        ) | TypedLoadOp::Bits8(
+            vm::Load8Kind::I64
+                | vm::Load8Kind::I64Load8S
+                | vm::Load8Kind::I64Load8U
+                | vm::Load8Kind::I64Load16S
+                | vm::Load8Kind::I64Load16U
+                | vm::Load8Kind::I64Load32S
+                | vm::Load8Kind::I64Load32U
+        )
+    )
+}
+
+fn match_producer_seed(decoded: &[DecodedInstruction], index: usize) -> Option<ProducerSeedMatch> {
+    match_local_imm_addr_load_seed(decoded, index)
+        .or_else(|| match_const_addr_load_seed(decoded, index))
+        .or_else(|| match_local_addr_load_seed(decoded, index))
+        .or_else(|| match_local_imm_scalar_seed(decoded, index))
+        .or_else(|| match_local_local_scalar_seed(decoded, index))
+        .or_else(|| match_local_seed(decoded, index))
+}
+
+fn match_local_seed(decoded: &[DecodedInstruction], index: usize) -> Option<ProducerSeedMatch> {
+    let first = decoded.get(index)?;
+    let (width, local_addr) = local_get(first.kind)?;
+    if !matches!(width, ValueSize::Byte4 | ValueSize::Byte8) {
+        return None;
+    }
+    Some(ProducerSeedMatch {
+        seed: ProducerSeed::Local { width, local_addr },
+        consumed: 1,
+    })
+}
+
+fn match_local_imm_scalar_seed(
+    decoded: &[DecodedInstruction],
+    index: usize,
+) -> Option<ProducerSeedMatch> {
+    let [first, second, third] = decoded.get(index..index + 3)? else {
+        return None;
+    };
+    let (width, src_local) = local_get(first.kind)?;
+    let imm = match second.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let op = match third.kind {
+        DecodedKind::Scalar(op) => op,
+        _ => return None,
+    };
+    if !matches!(width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !same_width(width, imm.width())
+        || !same_width(width, op.width())
+        || !scalar_matches_const(op, imm)
+        || !is_integer_scalar(op)
+    {
+        return None;
+    }
+    Some(ProducerSeedMatch {
+        seed: ProducerSeed::LocalImmScalar {
+            width,
+            src_local,
+            imm,
+            op,
+        },
+        consumed: 3,
+    })
+}
+
+fn match_local_local_scalar_seed(
+    decoded: &[DecodedInstruction],
+    index: usize,
+) -> Option<ProducerSeedMatch> {
+    let [first, second, third] = decoded.get(index..index + 3)? else {
+        return None;
+    };
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let (rhs_width, rhs_local_addr) = local_get(second.kind)?;
+    let op = match third.kind {
+        DecodedKind::Scalar(op) => op,
+        _ => return None,
+    };
+    if !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !same_width(lhs_width, rhs_width)
+        || !same_width(lhs_width, op.width())
+        || !is_integer_scalar(op)
+    {
+        return None;
+    }
+    Some(ProducerSeedMatch {
+        seed: ProducerSeed::LocalLocalScalar {
+            width: lhs_width,
+            lhs_local_addr,
+            rhs_local_addr,
+            op,
+        },
+        consumed: 3,
+    })
+}
+
+fn match_local_addr_load_seed(
+    decoded: &[DecodedInstruction],
+    index: usize,
+) -> Option<ProducerSeedMatch> {
+    let [first, second] = decoded.get(index..index + 2)? else {
+        return None;
+    };
+    let (addr_width, local_addr) = local_get(first.kind)?;
+    let (op, memarg) = match second.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    if !same_width(addr_width, ValueSize::Byte4) || !is_integer_load(op) {
+        return None;
+    }
+    Some(ProducerSeedMatch {
+        seed: ProducerSeed::LocalAddrLoad {
+            width: op.width(),
+            local_addr,
+            memarg,
+            op,
+        },
+        consumed: 2,
+    })
+}
+
+fn match_local_imm_addr_load_seed(
+    decoded: &[DecodedInstruction],
+    index: usize,
+) -> Option<ProducerSeedMatch> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    let (addr_width, local_addr) = local_get(first.kind)?;
+    let imm = match second.kind {
+        DecodedKind::Const(TypedConst::I32(value)) => value,
+        _ => return None,
+    };
+    if !matches!(
+        third.kind,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+    ) {
+        return None;
+    }
+    let (op, memarg) = match fourth.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    if !same_width(addr_width, ValueSize::Byte4) || !is_integer_load(op) {
+        return None;
+    }
+    Some(ProducerSeedMatch {
+        seed: ProducerSeed::LocalImmAddrLoad {
+            width: op.width(),
+            local_addr,
+            imm,
+            memarg,
+            op,
+        },
+        consumed: 4,
+    })
+}
+
+fn match_const_addr_load_seed(
+    decoded: &[DecodedInstruction],
+    index: usize,
+) -> Option<ProducerSeedMatch> {
+    let [first, second] = decoded.get(index..index + 2)? else {
+        return None;
+    };
+    let addr = match first.kind {
+        DecodedKind::Const(TypedConst::I32(value)) => value,
+        _ => return None,
+    };
+    let (op, memarg) = match second.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    if !is_integer_load(op) {
+        return None;
+    }
+    let start = match compute_memory_offset(memarg, addr as u32) {
+        VMResult::Success(start) => u32::try_from(start).ok()?,
+        _ => return None,
+    };
+    Some(ProducerSeedMatch {
+        seed: ProducerSeed::ConstAddrLoad {
+            width: op.width(),
+            start,
+            op,
+        },
+        consumed: 2,
+    })
+}
+
+fn match_producer_tee_eqz_branch(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let seed_match = match_producer_seed(decoded, index)?;
+    let tee_index = index + seed_match.consumed;
+    let eqz_index = tee_index + 1;
+    let branch_index = tee_index + 2;
+    let tee = decoded.get(tee_index)?;
+    let eqz = decoded.get(eqz_index)?;
+    let branch = decoded.get(branch_index)?;
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..branch_index + 1) {
+        return None;
+    }
+    let (tee_width, tee_local_addr, tee) = local_set_tee(tee.kind)?;
+    if !tee || !same_width(seed_match.seed.width(), tee_width) {
+        return None;
+    }
+    let eqz_width = match eqz.kind {
+        DecodedKind::Eqz(width) => width,
+        _ => return None,
+    };
+    if !same_width(tee_width, eqz_width) {
+        return None;
+    }
+    let (branch_kind, target_old) = match branch.kind {
+        DecodedKind::BrIf(target) => (ControlBranchKind::BrIf, target),
+        DecodedKind::If(target) => (ControlBranchKind::If, target),
+        _ => return None,
+    };
+    Some((
+        seed_match.consumed + 3,
+        OptimizedInstruction::ProducerTeeEqzBranch {
+            old_range: decoded[index].old_range.start..branch.old_range.end,
+            seed: seed_match.seed,
+            tee_local_addr,
+            target_old,
+            width: tee_width,
+            branch_kind,
+        },
+    ))
+}
+
+fn match_producer_tee_imm_compare_branch(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let seed_match = match_producer_seed(decoded, index)?;
+    let tee_index = index + seed_match.consumed;
+    let const_index = tee_index + 1;
+    let compare_index = tee_index + 2;
+    let branch_index = tee_index + 3;
+    let tee = decoded.get(tee_index)?;
+    let rhs_const = match decoded.get(const_index)?.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let compare_op = match decoded.get(compare_index)?.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let branch = decoded.get(branch_index)?;
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..branch_index + 1) {
+        return None;
+    }
+    let (tee_width, tee_local_addr, tee) = local_set_tee(tee.kind)?;
+    if !tee
+        || !same_width(seed_match.seed.width(), tee_width)
+        || !same_width(tee_width, rhs_const.width())
+        || !same_width(tee_width, compare_op.width())
+        || !is_integer_compare(compare_op)
+        || !compare_matches_const(compare_op, rhs_const)
+    {
+        return None;
+    }
+    let (branch_kind, target_old) = match branch.kind {
+        DecodedKind::BrIf(target) => (ControlBranchKind::BrIf, target),
+        DecodedKind::If(target) => (ControlBranchKind::If, target),
+        _ => return None,
+    };
+    Some((
+        seed_match.consumed + 4,
+        OptimizedInstruction::ProducerTeeImmCompareBranch {
+            old_range: decoded[index].old_range.start..branch.old_range.end,
+            seed: seed_match.seed,
+            tee_local_addr,
+            rhs_const,
+            target_old,
+            op: compare_op,
+            branch_kind,
+        },
+    ))
+}
+
+fn match_producer_tee_imm_scalar_set_tee(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let seed_match = match_producer_seed(decoded, index)?;
+    let tee_index = index + seed_match.consumed;
+    let const_index = tee_index + 1;
+    let scalar_index = tee_index + 2;
+    let set_tee_index = tee_index + 3;
+    let tee = decoded.get(tee_index)?;
+    let rhs_const = match decoded.get(const_index)?.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let scalar_op = match decoded.get(scalar_index)?.kind {
+        DecodedKind::Scalar(op) => op,
+        _ => return None,
+    };
+    let set_tee = decoded.get(set_tee_index)?;
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..set_tee_index + 1) {
+        return None;
+    }
+    let (tee_width, tee_local_addr, tee) = local_set_tee(tee.kind)?;
+    let (dst_width, dst_local, dst_tee) = local_set_tee(set_tee.kind)?;
+    if !tee
+        || !same_width(seed_match.seed.width(), tee_width)
+        || !same_width(tee_width, rhs_const.width())
+        || !same_width(tee_width, scalar_op.width())
+        || !same_width(tee_width, dst_width)
+        || !is_supported_tee_consumer_scalar(scalar_op)
+        || !scalar_matches_const(scalar_op, rhs_const)
+    {
+        return None;
+    }
+    Some((
+        seed_match.consumed + 4,
+        OptimizedInstruction::ProducerTeeImmScalarSetTee {
+            old_range: decoded[index].old_range.start..decoded[set_tee_index].old_range.end,
+            seed: seed_match.seed,
+            tee_local_addr,
+            rhs_const,
+            dst_local,
+            dst_tee,
+            op: scalar_op,
+        },
+    ))
+}
+
+fn match_producer_tee_const_self_select(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let seed_match = match_producer_seed(decoded, index)?;
+    let tee_index = index + seed_match.consumed;
+    let const_index = tee_index + 1;
+    let get_index = tee_index + 2;
+    let select_index = tee_index + 3;
+    let tee = decoded.get(tee_index)?;
+    let rhs_const = match decoded.get(const_index)?.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let (tee_width, tee_local_addr, tee) = local_set_tee(tee.kind)?;
+    let (self_width, self_local_addr) = local_get(decoded.get(get_index)?.kind)?;
+    let select_width = select_width(decoded.get(select_index)?.kind)?;
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..select_index + 1) {
+        return None;
+    }
+    if !tee
+        || tee_local_addr != self_local_addr
+        || !same_width(seed_match.seed.width(), tee_width)
+        || !same_width(tee_width, rhs_const.width())
+        || !same_width(tee_width, self_width)
+        || !same_width(tee_width, select_width)
+    {
+        return None;
+    }
+    Some((
+        seed_match.consumed + 4,
+        OptimizedInstruction::ProducerTeeConstSelfSelect {
+            old_range: decoded[index].old_range.start..decoded[select_index].old_range.end,
+            seed: seed_match.seed,
+            tee_local_addr,
+            rhs_const,
+            width: tee_width,
+        },
+    ))
+}
+
+fn match_local_local_compare_tee_select(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth, fifth] = decoded.get(index..index + 5)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 5) {
+        return None;
+    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let (rhs_width, rhs_local_addr) = local_get(second.kind)?;
+    let compare_op = match third.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let (tee_width, tee_local_addr, tee) = local_set_tee(fourth.kind)?;
+    let select_width = select_width(fifth.kind)?;
+    if !tee
+        || !same_width(lhs_width, rhs_width)
+        || !same_width(lhs_width, compare_op.width())
+        || !same_width(tee_width, ValueSize::Byte4)
+        || !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !matches!(select_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !is_integer_compare(compare_op)
+    {
+        return None;
+    }
+    Some((
+        5,
+        OptimizedInstruction::CompareTeeSelectLocal {
+            old_range: first.old_range.start..fifth.old_range.end,
+            lhs_local_addr,
+            rhs_local_addr,
+            tee_local_addr,
+            select_width,
+            op: compare_op,
+        },
+    ))
+}
+
+fn match_local_const_compare_tee_select(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth, fifth] = decoded.get(index..index + 5)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 5) {
+        return None;
+    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let rhs_const = match second.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let compare_op = match third.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let (tee_width, tee_local_addr, tee) = local_set_tee(fourth.kind)?;
+    let select_width = select_width(fifth.kind)?;
+    if !tee
+        || !same_width(lhs_width, compare_op.width())
+        || !same_width(lhs_width, rhs_const.width())
+        || !same_width(tee_width, ValueSize::Byte4)
+        || !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !matches!(select_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !is_integer_compare(compare_op)
+        || !compare_matches_const(compare_op, rhs_const)
+    {
+        return None;
+    }
+    Some((
+        5,
+        OptimizedInstruction::CompareTeeSelectConst {
+            old_range: first.old_range.start..fifth.old_range.end,
+            lhs_local_addr,
+            rhs_const,
+            tee_local_addr,
+            select_width,
+            op: compare_op,
+        },
+    ))
 }
 
 fn match_local_imm_scalar_set_tee(
@@ -2356,6 +3039,20 @@ fn single_jump_operand_slot(op: Op) -> Option<u8> {
     {
         return Some(4);
     }
+    if op_eq(op, vm::op_i32_seed_tee_eqz_br_if as Op)
+        || op_eq(op, vm::op_i32_seed_tee_eqz_if as Op)
+        || op_eq(op, vm::op_i64_seed_tee_eqz_br_if as Op)
+        || op_eq(op, vm::op_i64_seed_tee_eqz_if as Op)
+    {
+        return Some(7);
+    }
+    if op_eq(op, vm::op_i32_seed_tee_imm_compare_br_if as Op)
+        || op_eq(op, vm::op_i32_seed_tee_imm_compare_if as Op)
+        || op_eq(op, vm::op_i64_seed_tee_imm_compare_br_if as Op)
+        || op_eq(op, vm::op_i64_seed_tee_imm_compare_if as Op)
+    {
+        return Some(8);
+    }
     None
 }
 
@@ -2484,7 +3181,13 @@ fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
         | OptimizedInstruction::I32LocalLocalLoadTeeAddImmStore { old_range, .. }
         | OptimizedInstruction::LocalLocalStore { old_range, .. }
         | OptimizedInstruction::LocalImmLocalStore { old_range, .. }
-        | OptimizedInstruction::I32LocalLocalNarrowCopy { old_range, .. } => old_range,
+        | OptimizedInstruction::I32LocalLocalNarrowCopy { old_range, .. }
+        | OptimizedInstruction::ProducerTeeEqzBranch { old_range, .. }
+        | OptimizedInstruction::ProducerTeeImmCompareBranch { old_range, .. }
+        | OptimizedInstruction::ProducerTeeImmScalarSetTee { old_range, .. }
+        | OptimizedInstruction::ProducerTeeConstSelfSelect { old_range, .. }
+        | OptimizedInstruction::CompareTeeSelectLocal { old_range, .. }
+        | OptimizedInstruction::CompareTeeSelectConst { old_range, .. } => old_range,
     }
 }
 
@@ -2552,6 +3255,12 @@ fn output_len(instruction: &OptimizedInstruction) -> usize {
         }
         OptimizedInstruction::LocalImmLocalStore { .. } => 5,
         OptimizedInstruction::I32LocalLocalNarrowCopy { .. } => 5,
+        OptimizedInstruction::ProducerTeeEqzBranch { .. } => 8,
+        OptimizedInstruction::ProducerTeeImmCompareBranch { .. } => 10,
+        OptimizedInstruction::ProducerTeeImmScalarSetTee { .. } => 10,
+        OptimizedInstruction::ProducerTeeConstSelfSelect { .. } => 8,
+        OptimizedInstruction::CompareTeeSelectLocal { .. }
+        | OptimizedInstruction::CompareTeeSelectConst { .. } => 5,
     }
 }
 
@@ -2587,6 +3296,23 @@ fn store_kind_operand(op: TypedStoreOp) -> u32 {
     }
 }
 
+fn producer_seed_kind_operand(seed: ProducerSeed) -> u32 {
+    match seed {
+        ProducerSeed::Local { .. } => 0,
+        ProducerSeed::LocalImmScalar { .. } => 1,
+        ProducerSeed::LocalLocalScalar { .. } => 2,
+        ProducerSeed::LocalAddrLoad { .. } => 3,
+        ProducerSeed::LocalImmAddrLoad { .. } => 4,
+        ProducerSeed::ConstAddrLoad { .. } => 5,
+    }
+}
+
+fn zero_operand() -> Instr {
+    Instr {
+        operand: Operand { u64: 0 },
+    }
+}
+
 fn push_const_operand(lowered: &mut Vec<Instr>, value: TypedConst) {
     lowered.push(match value {
         TypedConst::I32(value) => Instr {
@@ -2606,6 +3332,116 @@ fn push_const_operand(lowered: &mut Vec<Instr>, value: TypedConst) {
             },
         },
     });
+}
+
+fn push_producer_seed_operands(lowered: &mut Vec<Instr>, seed: ProducerSeed) {
+    lowered.push(Instr {
+        operand: Operand {
+            u32: producer_seed_kind_operand(seed),
+        },
+    });
+    match seed {
+        ProducerSeed::Local { local_addr, .. } => {
+            lowered.push(Instr {
+                operand: Operand { local_addr },
+            });
+            lowered.push(zero_operand());
+            lowered.push(zero_operand());
+            lowered.push(zero_operand());
+        }
+        ProducerSeed::LocalImmScalar {
+            src_local, imm, op, ..
+        } => {
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: src_local,
+                },
+            });
+            push_const_operand(lowered, imm);
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: scalar_kind_operand(op),
+                },
+            });
+            lowered.push(zero_operand());
+        }
+        ProducerSeed::LocalLocalScalar {
+            lhs_local_addr,
+            rhs_local_addr,
+            op,
+            ..
+        } => {
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: rhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: scalar_kind_operand(op),
+                },
+            });
+            lowered.push(zero_operand());
+        }
+        ProducerSeed::LocalAddrLoad {
+            local_addr,
+            memarg,
+            op,
+            ..
+        } => {
+            lowered.push(Instr {
+                operand: Operand { local_addr },
+            });
+            lowered.push(Instr {
+                operand: Operand { memarg },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: load_kind_operand(op),
+                },
+            });
+            lowered.push(zero_operand());
+        }
+        ProducerSeed::LocalImmAddrLoad {
+            local_addr,
+            imm,
+            memarg,
+            op,
+            ..
+        } => {
+            lowered.push(Instr {
+                operand: Operand { local_addr },
+            });
+            lowered.push(Instr {
+                operand: Operand { i32: imm },
+            });
+            lowered.push(Instr {
+                operand: Operand { memarg },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: load_kind_operand(op),
+                },
+            });
+        }
+        ProducerSeed::ConstAddrLoad { start, op, .. } => {
+            lowered.push(Instr {
+                operand: Operand { u32: start },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: load_kind_operand(op),
+                },
+            });
+            lowered.push(zero_operand());
+            lowered.push(zero_operand());
+        }
+    }
 }
 
 fn lower_instruction(
@@ -3356,6 +4192,220 @@ fn lower_instruction(
                 },
             });
             push_const_operand(lowered, rhs_const);
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::ProducerTeeEqzBranch {
+            seed,
+            tee_local_addr,
+            target_old,
+            width,
+            branch_kind,
+            ..
+        } => {
+            let op = match (width, branch_kind) {
+                (ValueSize::Byte4, ControlBranchKind::BrIf) => vm::op_i32_seed_tee_eqz_br_if,
+                (ValueSize::Byte4, ControlBranchKind::If) => vm::op_i32_seed_tee_eqz_if,
+                (ValueSize::Byte8, ControlBranchKind::BrIf) => vm::op_i64_seed_tee_eqz_br_if,
+                (ValueSize::Byte8, ControlBranchKind::If) => vm::op_i64_seed_tee_eqz_if,
+                _ => unreachable!("tee eqz branch only supports 4/8 byte producers"),
+            };
+            lowered.push(Instr { op });
+            push_producer_seed_operands(lowered, seed);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: tee_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    jump_addr: remap_jump_target(target_old, old_to_new),
+                },
+            });
+        }
+        OptimizedInstruction::ProducerTeeImmCompareBranch {
+            seed,
+            tee_local_addr,
+            rhs_const,
+            target_old,
+            op: compare_op,
+            branch_kind,
+            ..
+        } => {
+            let handler = match (compare_op, branch_kind) {
+                (TypedCompareOp::I32(_), ControlBranchKind::BrIf) => {
+                    vm::op_i32_seed_tee_imm_compare_br_if
+                }
+                (TypedCompareOp::I32(_), ControlBranchKind::If) => {
+                    vm::op_i32_seed_tee_imm_compare_if
+                }
+                (TypedCompareOp::I64(_), ControlBranchKind::BrIf) => {
+                    vm::op_i64_seed_tee_imm_compare_br_if
+                }
+                (TypedCompareOp::I64(_), ControlBranchKind::If) => {
+                    vm::op_i64_seed_tee_imm_compare_if
+                }
+                _ => unreachable!("tee compare branch only supports integer compares"),
+            };
+            lowered.push(Instr { op: handler });
+            push_producer_seed_operands(lowered, seed);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: tee_local_addr,
+                },
+            });
+            push_const_operand(lowered, rhs_const);
+            lowered.push(Instr {
+                operand: Operand {
+                    jump_addr: remap_jump_target(target_old, old_to_new),
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::ProducerTeeImmScalarSetTee {
+            seed,
+            tee_local_addr,
+            rhs_const,
+            dst_local,
+            dst_tee,
+            op: scalar_op,
+            ..
+        } => {
+            let handler = match (scalar_op, dst_tee) {
+                (TypedScalarOp::I32(_), false) => vm::op_i32_seed_tee_imm_scalar_set4,
+                (TypedScalarOp::I32(_), true) => vm::op_i32_seed_tee_imm_scalar_tee4,
+                (TypedScalarOp::I64(_), false) => vm::op_i64_seed_tee_imm_scalar_set8,
+                (TypedScalarOp::I64(_), true) => vm::op_i64_seed_tee_imm_scalar_tee8,
+                _ => unreachable!("tee consumer scalar family only supports integer 4/8 byte"),
+            };
+            lowered.push(Instr { op: handler });
+            push_producer_seed_operands(lowered, seed);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: tee_local_addr,
+                },
+            });
+            push_const_operand(lowered, rhs_const);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: dst_local,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: scalar_kind_operand(scalar_op),
+                },
+            });
+        }
+        OptimizedInstruction::ProducerTeeConstSelfSelect {
+            seed,
+            tee_local_addr,
+            rhs_const,
+            width,
+            ..
+        } => {
+            lowered.push(Instr {
+                op: match width {
+                    ValueSize::Byte4 => vm::op_i32_seed_tee_const_self_select4,
+                    ValueSize::Byte8 => vm::op_i64_seed_tee_const_self_select8,
+                    _ => unreachable!("tee const self select only supports 4/8 byte values"),
+                },
+            });
+            push_producer_seed_operands(lowered, seed);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: tee_local_addr,
+                },
+            });
+            push_const_operand(lowered, rhs_const);
+        }
+        OptimizedInstruction::CompareTeeSelectLocal {
+            lhs_local_addr,
+            rhs_local_addr,
+            tee_local_addr,
+            select_width,
+            op: compare_op,
+            ..
+        } => {
+            let handler = match (compare_op, select_width) {
+                (TypedCompareOp::I32(_), ValueSize::Byte4) => {
+                    vm::op_i32_local_local_compare_tee_select4
+                }
+                (TypedCompareOp::I32(_), ValueSize::Byte8) => {
+                    vm::op_i32_local_local_compare_tee_select8
+                }
+                (TypedCompareOp::I64(_), ValueSize::Byte4) => {
+                    vm::op_i64_local_local_compare_tee_select4
+                }
+                (TypedCompareOp::I64(_), ValueSize::Byte8) => {
+                    vm::op_i64_local_local_compare_tee_select8
+                }
+                _ => unreachable!("compare tee select only supports integer compares"),
+            };
+            lowered.push(Instr { op: handler });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: rhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: tee_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::CompareTeeSelectConst {
+            lhs_local_addr,
+            rhs_const,
+            tee_local_addr,
+            select_width,
+            op: compare_op,
+            ..
+        } => {
+            let handler = match (compare_op, select_width) {
+                (TypedCompareOp::I32(_), ValueSize::Byte4) => {
+                    vm::op_i32_local_const_compare_tee_select4
+                }
+                (TypedCompareOp::I32(_), ValueSize::Byte8) => {
+                    vm::op_i32_local_const_compare_tee_select8
+                }
+                (TypedCompareOp::I64(_), ValueSize::Byte4) => {
+                    vm::op_i64_local_const_compare_tee_select4
+                }
+                (TypedCompareOp::I64(_), ValueSize::Byte8) => {
+                    vm::op_i64_local_const_compare_tee_select8
+                }
+                _ => unreachable!("compare tee select only supports integer compares"),
+            };
+            lowered.push(Instr { op: handler });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
+            });
+            push_const_operand(lowered, rhs_const);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: tee_local_addr,
+                },
+            });
             lowered.push(Instr {
                 operand: Operand {
                     u32: compare_kind_operand(compare_op),

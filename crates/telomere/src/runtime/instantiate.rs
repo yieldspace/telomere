@@ -96,6 +96,22 @@ fn rewrite_jump_op(op: Op) -> Option<Op> {
         vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if_ptr
     } else if op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_if as Op) {
         vm::op_i32_local_addr_load8_u_and_imm_eqz_if_ptr
+    } else if op_eq(op, vm::op_i32_seed_tee_eqz_br_if as Op) {
+        vm::op_i32_seed_tee_eqz_br_if_ptr
+    } else if op_eq(op, vm::op_i32_seed_tee_eqz_if as Op) {
+        vm::op_i32_seed_tee_eqz_if_ptr
+    } else if op_eq(op, vm::op_i64_seed_tee_eqz_br_if as Op) {
+        vm::op_i64_seed_tee_eqz_br_if_ptr
+    } else if op_eq(op, vm::op_i64_seed_tee_eqz_if as Op) {
+        vm::op_i64_seed_tee_eqz_if_ptr
+    } else if op_eq(op, vm::op_i32_seed_tee_imm_compare_br_if as Op) {
+        vm::op_i32_seed_tee_imm_compare_br_if_ptr
+    } else if op_eq(op, vm::op_i32_seed_tee_imm_compare_if as Op) {
+        vm::op_i32_seed_tee_imm_compare_if_ptr
+    } else if op_eq(op, vm::op_i64_seed_tee_imm_compare_br_if as Op) {
+        vm::op_i64_seed_tee_imm_compare_br_if_ptr
+    } else if op_eq(op, vm::op_i64_seed_tee_imm_compare_if as Op) {
+        vm::op_i64_seed_tee_imm_compare_if_ptr
     } else if op_eq(op, vm::op_i32_local_local_ge_u_br_if as Op) {
         vm::op_i32_local_local_ge_u_br_if_ptr
     } else if op_eq(op, vm::op_i32_local_local_compare_br_if as Op) {
@@ -1082,6 +1098,49 @@ mod tests {
         assert!(loop_active.iter().any(|instr| unsafe {
             std::ptr::fn_addr_eq(instr.op, vm::op_loop_empty_precomputed as Op)
                 || std::ptr::fn_addr_eq(instr.op, vm::special_block_return_empty_precomputed as Op)
+        }));
+    }
+
+    #[tokio::test]
+    async fn instantiate_rewrites_seed_tee_branch_to_pointer_bearing_handler() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let module = parse_wat_module(
+            r#"
+            (module
+              (memory 1)
+              (func (export "branchy") (param i32) (result i32)
+                (local i32)
+                block $exit
+                  local.get 0
+                  i32.load8_u
+                  local.tee 1
+                  i32.const 32
+                  i32.gt_u
+                  br_if $exit
+                  i32.const 0
+                  return
+                end
+                local.get 1))
+            "#,
+        );
+
+        let instance = instantiate(module, &store, &registry).await.unwrap();
+        let gc = store.lock_gc();
+        let inst = gc.get_instance(
+            instance
+                .object_ref_for_store(&store)
+                .expect("instance must stay live in store"),
+        );
+        let func = gc.get_func(inst.funcs[0]);
+        let canonical = func.canonical_code().expect("canonical wasm code");
+        let active = func.code().expect("active wasm code");
+
+        assert!(canonical.iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_i32_seed_tee_imm_compare_br_if as Op)
+        }));
+        assert!(active.iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_i32_seed_tee_imm_compare_br_if_ptr as Op)
         }));
     }
 }

@@ -294,6 +294,32 @@ impl Store8Kind {
     }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProducerSeedKind {
+    Local = 0,
+    LocalImmScalar = 1,
+    LocalLocalScalar = 2,
+    LocalAddrLoad = 3,
+    LocalImmAddrLoad = 4,
+    ConstAddrLoad = 5,
+}
+
+impl ProducerSeedKind {
+    #[inline(always)]
+    fn from_raw(raw: u32) -> Self {
+        match raw {
+            0 => Self::Local,
+            1 => Self::LocalImmScalar,
+            2 => Self::LocalLocalScalar,
+            3 => Self::LocalAddrLoad,
+            4 => Self::LocalImmAddrLoad,
+            5 => Self::ConstAddrLoad,
+            _ => unreachable!("invalid ProducerSeedKind: {raw}"),
+        }
+    }
+}
+
 #[inline(always)]
 fn bool_to_u32(value: bool) -> u32 {
     if value {
@@ -492,6 +518,73 @@ fn store8_bytes(value: u64, kind: Store8Kind) -> StoreBytes {
             ((value >> 16) & 0xff) as u8,
             ((value >> 24) & 0xff) as u8,
         ]),
+    }
+}
+
+#[inline(always)]
+unsafe fn read_local_load4_kind(
+    ctx: &mut ExecuteContext,
+    start: usize,
+    kind: Load4Kind,
+) -> VMResult<u32> {
+    match kind {
+        Load4Kind::I32 => ctx
+            .gc
+            .local_read_u32_at(ctx.default_local_memory_id_unchecked(), start),
+        Load4Kind::I32Load8S => VMResult::Success(i32::from(vm_try!(ctx
+            .gc
+            .local_read_i8_at(ctx.default_local_memory_id_unchecked(), start,)))
+            as u32),
+        Load4Kind::I32Load8U => VMResult::Success(u32::from(vm_try!(ctx
+            .gc
+            .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start)))),
+        Load4Kind::I32Load16S => VMResult::Success(i32::from(vm_try!(ctx
+            .gc
+            .local_read_i16_at(ctx.default_local_memory_id_unchecked(), start,)))
+            as u32),
+        Load4Kind::I32Load16U => VMResult::Success(u32::from(vm_try!(ctx
+            .gc
+            .local_read_u16_at(ctx.default_local_memory_id_unchecked(), start)))),
+        Load4Kind::F32 => ctx
+            .gc
+            .local_read_u32_at(ctx.default_local_memory_id_unchecked(), start),
+    }
+}
+
+#[inline(always)]
+unsafe fn read_local_load8_kind(
+    ctx: &mut ExecuteContext,
+    start: usize,
+    kind: Load8Kind,
+) -> VMResult<u64> {
+    match kind {
+        Load8Kind::I64 => ctx
+            .gc
+            .local_read_u64_at(ctx.default_local_memory_id_unchecked(), start),
+        Load8Kind::I64Load8S => VMResult::Success(i64::from(vm_try!(ctx
+            .gc
+            .local_read_i8_at(ctx.default_local_memory_id_unchecked(), start,)))
+            as u64),
+        Load8Kind::I64Load8U => VMResult::Success(u64::from(vm_try!(ctx
+            .gc
+            .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start)))),
+        Load8Kind::I64Load16S => VMResult::Success(i64::from(vm_try!(ctx
+            .gc
+            .local_read_i16_at(ctx.default_local_memory_id_unchecked(), start,)))
+            as u64),
+        Load8Kind::I64Load16U => VMResult::Success(u64::from(vm_try!(ctx
+            .gc
+            .local_read_u16_at(ctx.default_local_memory_id_unchecked(), start)))),
+        Load8Kind::I64Load32S => VMResult::Success(i64::from(vm_try!(ctx
+            .gc
+            .local_read_i32_at(ctx.default_local_memory_id_unchecked(), start,)))
+            as u64),
+        Load8Kind::I64Load32U => VMResult::Success(u64::from(vm_try!(ctx
+            .gc
+            .local_read_u32_at(ctx.default_local_memory_id_unchecked(), start)))),
+        Load8Kind::F64 => ctx
+            .gc
+            .local_read_u64_at(ctx.default_local_memory_id_unchecked(), start),
     }
 }
 
@@ -1247,6 +1340,216 @@ pub unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_if_ptr(
     op_i32_local_addr_load8_u_and_imm_eqz_branch_ptr(tail_code, ctx, ControlBranchKind::If)
 }
 
+#[inline(always)]
+unsafe fn op_seed_tee_eqz_branch_u32(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+    pointer_bearing: bool,
+) -> VMResult<()> {
+    let value = vm_try!(producer_seed_u32(tail_code, ctx));
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        value,
+    );
+    let ptr = if pointer_bearing {
+        branch_target_ptr(tail_code, 6, 7, branch_kind, value == 0)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 7, branch_kind, value == 0)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_seed_tee_eqz_branch_u64(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+    pointer_bearing: bool,
+) -> VMResult<()> {
+    let value = vm_try!(producer_seed_u64(tail_code, ctx));
+    write_local_u64(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        value,
+    );
+    let ptr = if pointer_bearing {
+        branch_target_ptr(tail_code, 6, 7, branch_kind, value == 0)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 7, branch_kind, value == 0)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_seed_tee_imm_compare_branch_u32(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+    pointer_bearing: bool,
+) -> VMResult<()> {
+    let value = vm_try!(producer_seed_u32(tail_code, ctx));
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        value,
+    );
+    let taken = i32_compare_eval(
+        value,
+        (*tail_code.add(6)).operand.u32,
+        IntCompareKind::from_raw((*tail_code.add(8)).operand.u32),
+    ) != 0;
+    let ptr = if pointer_bearing {
+        branch_target_ptr(tail_code, 7, 9, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 7, 9, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_seed_tee_imm_compare_branch_u64(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+    pointer_bearing: bool,
+) -> VMResult<()> {
+    let value = vm_try!(producer_seed_u64(tail_code, ctx));
+    write_local_u64(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        value,
+    );
+    let taken = i64_compare_eval(
+        value,
+        (*tail_code.add(6)).operand.u64,
+        IntCompareKind::from_raw((*tail_code.add(8)).operand.u32),
+    ) != 0;
+    let ptr = if pointer_bearing {
+        branch_target_ptr(tail_code, 7, 9, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 7, 9, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_i32_seed_tee_eqz_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_eqz_branch_u32(tail_code, ctx, ControlBranchKind::BrIf, false)
+}
+
+pub unsafe fn op_i32_seed_tee_eqz_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_eqz_branch_u32(tail_code, ctx, ControlBranchKind::If, false)
+}
+
+pub unsafe fn op_i32_seed_tee_eqz_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_eqz_branch_u32(tail_code, ctx, ControlBranchKind::BrIf, true)
+}
+
+pub unsafe fn op_i32_seed_tee_eqz_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_eqz_branch_u32(tail_code, ctx, ControlBranchKind::If, true)
+}
+
+pub unsafe fn op_i64_seed_tee_eqz_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_eqz_branch_u64(tail_code, ctx, ControlBranchKind::BrIf, false)
+}
+
+pub unsafe fn op_i64_seed_tee_eqz_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_eqz_branch_u64(tail_code, ctx, ControlBranchKind::If, false)
+}
+
+pub unsafe fn op_i64_seed_tee_eqz_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_eqz_branch_u64(tail_code, ctx, ControlBranchKind::BrIf, true)
+}
+
+pub unsafe fn op_i64_seed_tee_eqz_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_eqz_branch_u64(tail_code, ctx, ControlBranchKind::If, true)
+}
+
+pub unsafe fn op_i32_seed_tee_imm_compare_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_imm_compare_branch_u32(tail_code, ctx, ControlBranchKind::BrIf, false)
+}
+
+pub unsafe fn op_i32_seed_tee_imm_compare_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_imm_compare_branch_u32(tail_code, ctx, ControlBranchKind::If, false)
+}
+
+pub unsafe fn op_i32_seed_tee_imm_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_imm_compare_branch_u32(tail_code, ctx, ControlBranchKind::BrIf, true)
+}
+
+pub unsafe fn op_i32_seed_tee_imm_compare_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_imm_compare_branch_u32(tail_code, ctx, ControlBranchKind::If, true)
+}
+
+pub unsafe fn op_i64_seed_tee_imm_compare_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_imm_compare_branch_u64(tail_code, ctx, ControlBranchKind::BrIf, false)
+}
+
+pub unsafe fn op_i64_seed_tee_imm_compare_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_imm_compare_branch_u64(tail_code, ctx, ControlBranchKind::If, false)
+}
+
+pub unsafe fn op_i64_seed_tee_imm_compare_br_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_imm_compare_branch_u64(tail_code, ctx, ControlBranchKind::BrIf, true)
+}
+
+pub unsafe fn op_i64_seed_tee_imm_compare_if_ptr(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_seed_tee_imm_compare_branch_u64(tail_code, ctx, ControlBranchKind::If, true)
+}
+
 pub unsafe fn op_i32_local_local_ge_u_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1329,6 +1632,16 @@ unsafe fn local_imm_addr_mem_start(
     let local_addr = (*tail_code).operand.local_addr;
     let imm = (*tail_code.add(1)).operand.i32 as u32;
     let memarg = (*tail_code.add(2)).operand.memarg;
+    local_imm_addr_mem_start_from_parts(ctx, local_addr, imm, memarg)
+}
+
+#[inline(always)]
+unsafe fn local_imm_addr_mem_start_from_parts(
+    ctx: &mut ExecuteContext,
+    local_addr: u32,
+    imm: u32,
+    memarg: MemArg,
+) -> VMResult<usize> {
     compute_memory_offset(
         memarg,
         local_u32(ctx.stack, &ctx.local_reference(), local_addr).wrapping_add(imm),
@@ -1345,6 +1658,132 @@ unsafe fn local_mem_start_from_local(
         memarg,
         local_u32(ctx.stack, &ctx.local_reference(), local_addr),
     )
+}
+
+#[inline(always)]
+unsafe fn producer_seed_u32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<u32> {
+    match ProducerSeedKind::from_raw((*tail_code).operand.u32) {
+        ProducerSeedKind::Local => VMResult::Success(local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(1)).operand.local_addr,
+        )),
+        ProducerSeedKind::LocalImmScalar => i32_scalar_eval(
+            local_u32(
+                ctx.stack,
+                &ctx.local_reference(),
+                (*tail_code.add(1)).operand.local_addr,
+            ),
+            (*tail_code.add(2)).operand.u32,
+            I32ScalarKind::from_raw((*tail_code.add(3)).operand.u32),
+        ),
+        ProducerSeedKind::LocalLocalScalar => i32_scalar_eval(
+            local_u32(
+                ctx.stack,
+                &ctx.local_reference(),
+                (*tail_code.add(1)).operand.local_addr,
+            ),
+            local_u32(
+                ctx.stack,
+                &ctx.local_reference(),
+                (*tail_code.add(2)).operand.local_addr,
+            ),
+            I32ScalarKind::from_raw((*tail_code.add(3)).operand.u32),
+        ),
+        ProducerSeedKind::LocalAddrLoad => {
+            let start = vm_try!(local_mem_start_from_local(
+                ctx,
+                (*tail_code.add(1)).operand.local_addr,
+                (*tail_code.add(2)).operand.memarg,
+            ));
+            read_local_load4_kind(
+                ctx,
+                start,
+                Load4Kind::from_raw((*tail_code.add(3)).operand.u32),
+            )
+        }
+        ProducerSeedKind::LocalImmAddrLoad => {
+            let start = vm_try!(local_imm_addr_mem_start_from_parts(
+                ctx,
+                (*tail_code.add(1)).operand.local_addr,
+                (*tail_code.add(2)).operand.i32 as u32,
+                (*tail_code.add(3)).operand.memarg,
+            ));
+            read_local_load4_kind(
+                ctx,
+                start,
+                Load4Kind::from_raw((*tail_code.add(4)).operand.u32),
+            )
+        }
+        ProducerSeedKind::ConstAddrLoad => read_local_load4_kind(
+            ctx,
+            (*tail_code.add(1)).operand.u32 as usize,
+            Load4Kind::from_raw((*tail_code.add(2)).operand.u32),
+        ),
+    }
+}
+
+#[inline(always)]
+unsafe fn producer_seed_u64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<u64> {
+    match ProducerSeedKind::from_raw((*tail_code).operand.u32) {
+        ProducerSeedKind::Local => VMResult::Success(local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(1)).operand.local_addr,
+        )),
+        ProducerSeedKind::LocalImmScalar => i64_scalar_eval(
+            local_u64(
+                ctx.stack,
+                &ctx.local_reference(),
+                (*tail_code.add(1)).operand.local_addr,
+            ),
+            (*tail_code.add(2)).operand.u64,
+            I64ScalarKind::from_raw((*tail_code.add(3)).operand.u32),
+        ),
+        ProducerSeedKind::LocalLocalScalar => i64_scalar_eval(
+            local_u64(
+                ctx.stack,
+                &ctx.local_reference(),
+                (*tail_code.add(1)).operand.local_addr,
+            ),
+            local_u64(
+                ctx.stack,
+                &ctx.local_reference(),
+                (*tail_code.add(2)).operand.local_addr,
+            ),
+            I64ScalarKind::from_raw((*tail_code.add(3)).operand.u32),
+        ),
+        ProducerSeedKind::LocalAddrLoad => {
+            let start = vm_try!(local_mem_start_from_local(
+                ctx,
+                (*tail_code.add(1)).operand.local_addr,
+                (*tail_code.add(2)).operand.memarg,
+            ));
+            read_local_load8_kind(
+                ctx,
+                start,
+                Load8Kind::from_raw((*tail_code.add(3)).operand.u32),
+            )
+        }
+        ProducerSeedKind::LocalImmAddrLoad => {
+            let start = vm_try!(local_imm_addr_mem_start_from_parts(
+                ctx,
+                (*tail_code.add(1)).operand.local_addr,
+                (*tail_code.add(2)).operand.i32 as u32,
+                (*tail_code.add(3)).operand.memarg,
+            ));
+            read_local_load8_kind(
+                ctx,
+                start,
+                Load8Kind::from_raw((*tail_code.add(4)).operand.u32),
+            )
+        }
+        ProducerSeedKind::ConstAddrLoad => read_local_load8_kind(
+            ctx,
+            (*tail_code.add(1)).operand.u32 as usize,
+            Load8Kind::from_raw((*tail_code.add(2)).operand.u32),
+        ),
+    }
 }
 
 pub unsafe fn op_i32_local_addr_load(
@@ -2616,6 +3055,346 @@ pub unsafe fn op_f64_local_const_compare_br_if_ptr(
         tail_code.offset(4)
     };
     call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_i32_seed_tee_imm_scalar_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let seed = vm_try!(producer_seed_u32(tail_code, ctx));
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        seed,
+    );
+    let value = vm_try!(i32_scalar_eval(
+        seed,
+        (*tail_code.add(6)).operand.u32,
+        I32ScalarKind::from_raw((*tail_code.add(8)).operand.u32),
+    ));
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(7)).operand.local_addr,
+        value,
+    );
+    call_next(tail_code, 9, ctx)
+}
+
+pub unsafe fn op_i32_seed_tee_imm_scalar_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let seed = vm_try!(producer_seed_u32(tail_code, ctx));
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        seed,
+    );
+    let value = vm_try!(i32_scalar_eval(
+        seed,
+        (*tail_code.add(6)).operand.u32,
+        I32ScalarKind::from_raw((*tail_code.add(8)).operand.u32),
+    ));
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(7)).operand.local_addr,
+        value,
+    );
+    vm_try!(ctx.stack.push_u32(value));
+    call_next(tail_code, 9, ctx)
+}
+
+pub unsafe fn op_i64_seed_tee_imm_scalar_set8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let seed = vm_try!(producer_seed_u64(tail_code, ctx));
+    write_local_u64(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        seed,
+    );
+    let value = vm_try!(i64_scalar_eval(
+        seed,
+        (*tail_code.add(6)).operand.u64,
+        I64ScalarKind::from_raw((*tail_code.add(8)).operand.u32),
+    ));
+    write_local_u64(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(7)).operand.local_addr,
+        value,
+    );
+    call_next(tail_code, 9, ctx)
+}
+
+pub unsafe fn op_i64_seed_tee_imm_scalar_tee8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let seed = vm_try!(producer_seed_u64(tail_code, ctx));
+    write_local_u64(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        seed,
+    );
+    let value = vm_try!(i64_scalar_eval(
+        seed,
+        (*tail_code.add(6)).operand.u64,
+        I64ScalarKind::from_raw((*tail_code.add(8)).operand.u32),
+    ));
+    write_local_u64(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(7)).operand.local_addr,
+        value,
+    );
+    vm_try!(ctx.stack.push_u64(value));
+    call_next(tail_code, 9, ctx)
+}
+
+pub unsafe fn op_i32_seed_tee_const_self_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let seed = vm_try!(producer_seed_u32(tail_code, ctx));
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        seed,
+    );
+    vm_try!(ctx.stack.push_u32(if seed == 0 {
+        (*tail_code.add(6)).operand.u32
+    } else {
+        seed
+    }));
+    call_next(tail_code, 7, ctx)
+}
+
+pub unsafe fn op_i64_seed_tee_const_self_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let seed = vm_try!(producer_seed_u64(tail_code, ctx));
+    write_local_u64(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(5)).operand.local_addr,
+        seed,
+    );
+    vm_try!(ctx.stack.push_u64(if seed == 0 {
+        (*tail_code.add(6)).operand.u64
+    } else {
+        seed
+    }));
+    call_next(tail_code, 7, ctx)
+}
+
+pub unsafe fn op_i32_local_local_compare_tee_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let cond = i32_compare_eval(
+        local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code).operand.local_addr,
+        ),
+        local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(1)).operand.local_addr,
+        ),
+        IntCompareKind::from_raw((*tail_code.add(3)).operand.u32),
+    );
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(2)).operand.local_addr,
+        cond,
+    );
+    select4_with_condition(ctx, cond);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_i32_local_local_compare_tee_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let cond = i32_compare_eval(
+        local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code).operand.local_addr,
+        ),
+        local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(1)).operand.local_addr,
+        ),
+        IntCompareKind::from_raw((*tail_code.add(3)).operand.u32),
+    );
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(2)).operand.local_addr,
+        cond,
+    );
+    select8_with_condition(ctx, cond);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_i32_local_const_compare_tee_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let cond = i32_compare_eval(
+        local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code).operand.local_addr,
+        ),
+        (*tail_code.add(1)).operand.u32,
+        IntCompareKind::from_raw((*tail_code.add(3)).operand.u32),
+    );
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(2)).operand.local_addr,
+        cond,
+    );
+    select4_with_condition(ctx, cond);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_i32_local_const_compare_tee_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let cond = i32_compare_eval(
+        local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code).operand.local_addr,
+        ),
+        (*tail_code.add(1)).operand.u32,
+        IntCompareKind::from_raw((*tail_code.add(3)).operand.u32),
+    );
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(2)).operand.local_addr,
+        cond,
+    );
+    select8_with_condition(ctx, cond);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_i64_local_local_compare_tee_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let cond = i64_compare_eval(
+        local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code).operand.local_addr,
+        ),
+        local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(1)).operand.local_addr,
+        ),
+        IntCompareKind::from_raw((*tail_code.add(3)).operand.u32),
+    );
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(2)).operand.local_addr,
+        cond,
+    );
+    select4_with_condition(ctx, cond);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_i64_local_local_compare_tee_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let cond = i64_compare_eval(
+        local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code).operand.local_addr,
+        ),
+        local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(1)).operand.local_addr,
+        ),
+        IntCompareKind::from_raw((*tail_code.add(3)).operand.u32),
+    );
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(2)).operand.local_addr,
+        cond,
+    );
+    select8_with_condition(ctx, cond);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_i64_local_const_compare_tee_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let cond = i64_compare_eval(
+        local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code).operand.local_addr,
+        ),
+        (*tail_code.add(1)).operand.u64,
+        IntCompareKind::from_raw((*tail_code.add(3)).operand.u32),
+    );
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(2)).operand.local_addr,
+        cond,
+    );
+    select4_with_condition(ctx, cond);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_i64_local_const_compare_tee_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let cond = i64_compare_eval(
+        local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code).operand.local_addr,
+        ),
+        (*tail_code.add(1)).operand.u64,
+        IntCompareKind::from_raw((*tail_code.add(3)).operand.u32),
+    );
+    write_local_u32(
+        ctx.stack,
+        &ctx.local_reference(),
+        (*tail_code.add(2)).operand.local_addr,
+        cond,
+    );
+    select8_with_condition(ctx, cond);
+    call_next(tail_code, 4, ctx)
 }
 
 pub unsafe fn op_i32_local_local_compare_select4(

@@ -718,6 +718,535 @@ async fn load_modify_store_superinstruction_matches_unfused_semantics() {
 }
 
 #[tokio::test]
+async fn tee_consumer_superinstructions_match_unfused_semantics_and_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store8)
+          (func (export "fused_load_if") (param i32) (result i32)
+            (local i32)
+            block
+              local.get 0
+              i32.load8_u
+              local.tee 1
+              i32.eqz
+              if
+                i32.const 7
+                local.set 1
+              end
+            end
+            local.get 1)
+          (func (export "baseline_load_if") (param i32) (result i32)
+            (local i32)
+            block
+              local.get 0
+              i32.load8_u
+              local.tee 1
+              i32.const 0
+              i32.or
+              i32.eqz
+              if
+                i32.const 7
+                local.set 1
+              end
+            end
+            local.get 1)
+          (func (export "fused_load_br_if") (param i32) (result i32)
+            (local i32)
+            block $skip
+              local.get 0
+              i32.load8_u
+              local.tee 1
+              i32.eqz
+              br_if $skip
+              i32.const 7
+              local.set 1
+            end
+            local.get 1)
+          (func (export "baseline_load_br_if") (param i32) (result i32)
+            (local i32)
+            block $skip
+              local.get 0
+              i32.load8_u
+              local.tee 1
+              i32.const 0
+              i32.or
+              i32.eqz
+              br_if $skip
+              i32.const 7
+              local.set 1
+            end
+            local.get 1)
+          (func (export "fused_compare_if") (param i32) (result i32)
+            (local i32)
+            block
+              local.get 0
+              local.tee 1
+              i32.const 32
+              i32.gt_u
+              if
+                i32.const 7
+                local.set 1
+              end
+            end
+            local.get 1)
+          (func (export "baseline_compare_if") (param i32) (result i32)
+            (local i32)
+            block
+              local.get 0
+              local.tee 1
+              i32.const 32
+              i32.gt_u
+              i32.const 0
+              i32.or
+              if
+                i32.const 7
+                local.set 1
+              end
+            end
+            local.get 1)
+          (func (export "fused_compare_br_if") (param i32) (result i32)
+            (local i32)
+            block $skip
+              local.get 0
+              local.tee 1
+              i32.const 32
+              i32.gt_u
+              br_if $skip
+              i32.const 7
+              local.set 1
+            end
+            local.get 1)
+          (func (export "baseline_compare_br_if") (param i32) (result i32)
+            (local i32)
+            block $skip
+              local.get 0
+              local.tee 1
+              i32.const 32
+              i32.gt_u
+              i32.const 0
+              i32.or
+              br_if $skip
+              i32.const 7
+              local.set 1
+            end
+            local.get 1)
+          (func (export "fused_shift_set") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.tee 1
+            i32.const 3
+            i32.shl
+            local.set 1
+            local.get 1)
+          (func (export "baseline_shift_set") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.tee 1
+            i32.const 3
+            i32.shl
+            i32.const 0
+            i32.or
+            local.set 1
+            local.get 1)
+          (func (export "fused_shift_tee") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.tee 1
+            i32.const 3
+            i32.shl
+            local.tee 1)
+          (func (export "baseline_shift_tee") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.tee 1
+            i32.const 3
+            i32.shl
+            i32.const 0
+            i32.or
+            local.tee 1)
+          (func (export "fused_self_select") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.tee 1
+            i32.const 7
+            local.get 1
+            select)
+          (func (export "baseline_self_select") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.tee 1
+            i32.const 0
+            i32.or
+            i32.const 7
+            local.get 1
+            select))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(&instance, &store, "fused_load_if", vec![WasmValue::I32(0)]).await,
+        7,
+        "fused_load_if zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_load_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        7,
+        "baseline_load_if zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_load_br_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        0,
+        "fused_load_br_if zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_load_br_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        0,
+        "baseline_load_br_if zero",
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(32)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(&instance, &store, "fused_load_if", vec![WasmValue::I32(0)]).await,
+        32,
+        "fused_load_if masked",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_load_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        32,
+        "baseline_load_if masked",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_load_br_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        7,
+        "fused_load_br_if masked",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_load_br_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        7,
+        "baseline_load_br_if masked",
+    );
+
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_compare_if",
+            vec![WasmValue::I32(40)],
+        )
+        .await,
+        7,
+        "fused_compare_if true",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_compare_if",
+            vec![WasmValue::I32(40)],
+        )
+        .await,
+        7,
+        "baseline_compare_if true",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_compare_br_if",
+            vec![WasmValue::I32(40)],
+        )
+        .await,
+        40,
+        "fused_compare_br_if true",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_compare_br_if",
+            vec![WasmValue::I32(40)],
+        )
+        .await,
+        40,
+        "baseline_compare_br_if true",
+    );
+
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_shift_set",
+            vec![WasmValue::I32(5)],
+        )
+        .await,
+        40,
+        "fused_shift_set",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_shift_set",
+            vec![WasmValue::I32(5)],
+        )
+        .await,
+        40,
+        "baseline_shift_set",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_shift_tee",
+            vec![WasmValue::I32(5)],
+        )
+        .await,
+        40,
+        "fused_shift_tee",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_shift_tee",
+            vec![WasmValue::I32(5)],
+        )
+        .await,
+        40,
+        "baseline_shift_tee",
+    );
+
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_self_select",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        7,
+        "fused_self_select zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_self_select",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        7,
+        "baseline_self_select zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_self_select",
+            vec![WasmValue::I32(11)],
+        )
+        .await,
+        11,
+        "fused_self_select nonzero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_self_select",
+            vec![WasmValue::I32(11)],
+        )
+        .await,
+        11,
+        "baseline_self_select nonzero",
+    );
+
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "fused_load_if",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "fused_load_if_oob",
+    );
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_load_if",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "baseline_load_if_oob",
+    );
+}
+
+#[tokio::test]
+async fn compare_tee_select_superinstructions_match_unfused_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "fused_compare_select") (param i32 i32 i32 i32) (result i32) (local i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            local.get 3
+            i32.lt_u
+            local.tee 4
+            select)
+          (func (export "baseline_compare_select") (param i32 i32 i32 i32) (result i32) (local i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            local.get 3
+            i32.lt_u
+            local.tee 4
+            i32.const 0
+            i32.or
+            select))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_compare_select",
+            vec![
+                WasmValue::I32(111),
+                WasmValue::I32(222),
+                WasmValue::I32(3),
+                WasmValue::I32(9),
+            ],
+        )
+        .await,
+        111,
+        "fused_compare_select true",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_compare_select",
+            vec![
+                WasmValue::I32(111),
+                WasmValue::I32(222),
+                WasmValue::I32(3),
+                WasmValue::I32(9),
+            ],
+        )
+        .await,
+        111,
+        "baseline_compare_select true",
+    );
+
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_compare_select",
+            vec![
+                WasmValue::I32(111),
+                WasmValue::I32(222),
+                WasmValue::I32(9),
+                WasmValue::I32(3),
+            ],
+        )
+        .await,
+        222,
+        "fused_compare_select false",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_compare_select",
+            vec![
+                WasmValue::I32(111),
+                WasmValue::I32(222),
+                WasmValue::I32(9),
+                WasmValue::I32(3),
+            ],
+        )
+        .await,
+        222,
+        "baseline_compare_select false",
+    );
+}
+
+#[tokio::test]
 async fn const_set_superinstructions_match_expected_results() {
     let store = Store::new();
     let registry = Registry::new();
@@ -903,6 +1432,234 @@ async fn compare_select_superinstructions_match_unfused_semantics() {
         call_f64_bits(&instance, &store, "baseline_f64_const_select", f64_args).await,
         9.5f64.to_bits(),
         "baseline_f64_const_select",
+    );
+}
+
+#[tokio::test]
+async fn producer_tee_branch_superinstructions_match_unfused_semantics_and_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store8)
+          (func (export "fused_eqz_br_if") (param i32) (result i32)
+            (local i32)
+            block $taken
+              local.get 0
+              i32.load8_u
+              local.tee 1
+              i32.eqz
+              br_if $taken
+              local.get 1
+              return
+            end
+            i32.const 0
+            )
+          (func (export "baseline_eqz_br_if") (param i32) (result i32)
+            (local i32)
+            block $taken
+              local.get 0
+              i32.load8_u
+              local.tee 1
+              i32.eqz
+              i32.const 0
+              i32.or
+              br_if $taken
+              local.get 1
+              return
+            end
+            i32.const 0
+            )
+          (func (export "fused_compare_br_if") (param i32) (result i32)
+            (local i32)
+            block $taken
+              local.get 0
+              i32.load8_u
+              local.tee 1
+              i32.const 31
+              i32.gt_u
+              br_if $taken
+              i32.const 0
+              return
+            end
+            local.get 1)
+          (func (export "baseline_compare_br_if") (param i32) (result i32)
+            (local i32)
+            block $taken
+              local.get 0
+              i32.load8_u
+              local.tee 1
+              i32.const 31
+              i32.gt_u
+              i32.const 0
+              i32.or
+              br_if $taken
+              i32.const 0
+              return
+            end
+            local.get 1))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_eqz_br_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        0,
+        "fused_eqz_br_if zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_eqz_br_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        0,
+        "baseline_eqz_br_if zero",
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(4), WasmValue::I32(55)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_eqz_br_if",
+            vec![WasmValue::I32(4)],
+        )
+        .await,
+        55,
+        "fused_eqz_br_if nonzero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_eqz_br_if",
+            vec![WasmValue::I32(4)],
+        )
+        .await,
+        55,
+        "baseline_eqz_br_if nonzero",
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(8), WasmValue::I32(48)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_compare_br_if",
+            vec![WasmValue::I32(8)],
+        )
+        .await,
+        48,
+        "fused_compare_br_if taken",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_compare_br_if",
+            vec![WasmValue::I32(8)],
+        )
+        .await,
+        48,
+        "baseline_compare_br_if taken",
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed",
+            &ResultValue::new(vec![WasmValue::I32(12), WasmValue::I32(7)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_compare_br_if",
+            vec![WasmValue::I32(12)],
+        )
+        .await,
+        0,
+        "fused_compare_br_if fallthrough",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_compare_br_if",
+            vec![WasmValue::I32(12)],
+        )
+        .await,
+        0,
+        "baseline_compare_br_if fallthrough",
+    );
+
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "fused_compare_br_if",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "fused_compare_br_if_oob",
+    );
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_compare_br_if",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "baseline_compare_br_if_oob",
     );
 }
 
