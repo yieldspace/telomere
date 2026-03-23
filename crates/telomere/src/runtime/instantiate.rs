@@ -22,6 +22,7 @@ use crate::{
 use crate::common::store::{FunctionExecutionMetadata, FunctionKind, WasmExecutionMetadata};
 use crate::common::store::{
     InstanceId, PrecomputedCallFrame, PrecomputedDirectCallSite, PrecomputedIndirectCallSite,
+    PrecomputedWaitSite,
 };
 
 #[derive(Clone)]
@@ -30,6 +31,12 @@ struct PendingWasmDerivedData {
     canonical_code: Arc<[Instr]>,
     control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
 }
+
+type PrecomputedSiteTriples = (
+    Arc<[PrecomputedDirectCallSite]>,
+    Arc<[PrecomputedIndirectCallSite]>,
+    Arc<[PrecomputedWaitSite]>,
+);
 
 fn shape_for_result_type(ty: &crate::common::ResultType) -> crate::common::ReturnShape {
     match (ty.0.first(), ty.0.get(1)) {
@@ -195,6 +202,20 @@ fn rewrite_indirect_call_op(op: Op) -> Option<Op> {
     })
 }
 
+fn rewrite_wait_op(op: Op) -> Option<Op> {
+    Some(if op_eq(op, vm::op_memory_atomic_wait32_shared as Op) {
+        vm::op_memory_atomic_wait32_shared_precomputed
+    } else if op_eq(op, vm::op_memory_atomic_wait32_indexed_shared as Op) {
+        vm::op_memory_atomic_wait32_indexed_shared_precomputed
+    } else if op_eq(op, vm::op_memory_atomic_wait64_shared as Op) {
+        vm::op_memory_atomic_wait64_shared_precomputed
+    } else if op_eq(op, vm::op_memory_atomic_wait64_indexed_shared as Op) {
+        vm::op_memory_atomic_wait64_indexed_shared_precomputed
+    } else {
+        return None;
+    })
+}
+
 fn build_precomputed_call_sites(
     canonical: &[Instr],
     frame_layout: &FrameLayoutHeader,
@@ -203,12 +224,10 @@ fn build_precomputed_call_sites(
     function_type_identities: &[crate::common::FuncTypeIdentity],
     gc: &StoreInner,
     allow_local_direct_precompute: bool,
-) -> (
-    Arc<[PrecomputedDirectCallSite]>,
-    Arc<[PrecomputedIndirectCallSite]>,
-) {
+) -> PrecomputedSiteTriples {
     let mut direct_sites = Vec::new();
     let mut indirect_sites = Vec::new();
+    let mut wait_sites = Vec::new();
 
     for (instruction_ordinal, instr) in canonical.iter().enumerate() {
         let op = unsafe { instr.op };
@@ -254,9 +273,13 @@ fn build_precomputed_call_sites(
             };
             direct_sites.push(PrecomputedDirectCallSite {
                 instruction_ordinal: instruction_ordinal as u32,
+                return_pc: StablePc::from_relative_index(instruction_ordinal + 2),
                 frame: PrecomputedCallFrame {
                     code_addr: funcaddr,
                     code_base_addr,
+                    code_len: funcinst.code().map_or(0, |code| {
+                        u32::try_from(code.len()).expect("code length overflow")
+                    }),
                     instance: funcinst.instance,
                     memory0_kind,
                     memory0_raw,
@@ -278,6 +301,7 @@ fn build_precomputed_call_sites(
             let expected_typeidx = unsafe { canonical[instruction_ordinal + 2].operand.u32 };
             indirect_sites.push(PrecomputedIndirectCallSite {
                 instruction_ordinal: instruction_ordinal as u32,
+                return_pc: StablePc::from_relative_index(instruction_ordinal + 3),
                 tableidx,
                 expected_type_identity_addr: function_type_identities
                     .get(expected_typeidx as usize)
@@ -291,10 +315,30 @@ fn build_precomputed_call_sites(
                     .unwind_site(instruction_ordinal as u32)
                     .map_or(0, |site| site as *const _ as usize),
             });
+        } else if rewrite_wait_op(op).is_some() {
+            let memarg = unsafe { canonical[instruction_ordinal + 1].operand.memarg };
+            let indexed = op_eq(op, vm::op_memory_atomic_wait32_indexed_shared as Op)
+                || op_eq(op, vm::op_memory_atomic_wait64_indexed_shared as Op);
+            wait_sites.push(PrecomputedWaitSite {
+                instruction_ordinal: instruction_ordinal as u32,
+                resume_pc: StablePc::from_relative_index(
+                    instruction_ordinal + if indexed { 3 } else { 2 },
+                ),
+                memarg,
+                memidx: if indexed {
+                    unsafe { canonical[instruction_ordinal + 2].operand.u32 }
+                } else {
+                    0
+                },
+            });
         }
     }
 
-    (direct_sites.into(), indirect_sites.into())
+    (
+        direct_sites.into(),
+        indirect_sites.into(),
+        wait_sites.into(),
+    )
 }
 
 fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut StoreInner) {
@@ -317,7 +361,7 @@ fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut Sto
         let canonical_code = func
             .canonical_code_arc()
             .expect("wasm function must retain canonical code");
-        let (direct_call_sites, indirect_call_sites) = build_precomputed_call_sites(
+        let (direct_call_sites, indirect_call_sites, wait_sites) = build_precomputed_call_sites(
             canonical_code.as_ref(),
             metadata.frame_layout_header(),
             func.instance,
@@ -331,18 +375,20 @@ fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut Sto
             metadata.control_flow_metadata.as_ref(),
             direct_call_sites.as_ref(),
             indirect_call_sites.as_ref(),
+            wait_sites.as_ref(),
         );
         rebuilt.push((
             funcaddr,
             direct_call_sites,
             indirect_call_sites,
+            wait_sites,
             derived_code,
         ));
     }
 
-    for (funcaddr, direct_call_sites, indirect_call_sites, derived_code) in rebuilt {
+    for (funcaddr, direct_call_sites, indirect_call_sites, wait_sites, derived_code) in rebuilt {
         let func = gc.get_func_mut(funcaddr);
-        func.set_precomputed_call_sites(direct_call_sites, indirect_call_sites);
+        func.set_precomputed_call_sites(direct_call_sites, indirect_call_sites, wait_sites);
         if let Some(derived_code) = derived_code {
             func.set_derived_code(derived_code);
         } else {
@@ -356,10 +402,12 @@ fn build_derived_code(
     control_flow_metadata: &[ControlFlowMetadataSite],
     direct_call_sites: &[PrecomputedDirectCallSite],
     indirect_call_sites: &[PrecomputedIndirectCallSite],
+    wait_sites: &[PrecomputedWaitSite],
 ) -> Option<Arc<[Instr]>> {
     if control_flow_metadata.is_empty()
         && direct_call_sites.is_empty()
         && indirect_call_sites.is_empty()
+        && wait_sites.is_empty()
     {
         return None;
     }
@@ -446,6 +494,17 @@ fn build_derived_code(
         code[start + 1] = Instr {
             operand: Operand {
                 code_ptr: site as *const PrecomputedIndirectCallSite as usize,
+            },
+        };
+    }
+
+    for site in wait_sites {
+        let start = site.instruction_ordinal as usize;
+        let ptr_op = rewrite_wait_op(unsafe { code[start].op }).expect("wait rewrite target");
+        code[start] = Instr { op: ptr_op };
+        code[start + 1] = Instr {
+            operand: Operand {
+                code_ptr: site as *const PrecomputedWaitSite as usize,
             },
         };
     }
@@ -943,7 +1002,7 @@ pub async fn instantiate(
                 .get_module(instance.module_addr)
                 .function_type_identities
                 .as_slice();
-            let (direct_call_sites, indirect_call_sites) = build_precomputed_call_sites(
+            let (direct_call_sites, indirect_call_sites, wait_sites) = build_precomputed_call_sites(
                 pending.canonical_code.as_ref(),
                 frame_layout,
                 caller_instance,
@@ -957,9 +1016,10 @@ pub async fn instantiate(
                 pending.control_flow_metadata.as_ref(),
                 direct_call_sites.as_ref(),
                 indirect_call_sites.as_ref(),
+                wait_sites.as_ref(),
             );
             let func = gc.get_func_mut(pending.func_addr);
-            func.set_precomputed_call_sites(direct_call_sites, indirect_call_sites);
+            func.set_precomputed_call_sites(direct_call_sites, indirect_call_sites, wait_sites);
             if let Some(derived_code) = derived_code {
                 func.set_derived_code(derived_code);
             }
@@ -1462,12 +1522,14 @@ mod tests {
             .first()
             .expect("direct call site");
         assert!(direct_site.callee_layout_ptr().is_some());
+        assert_eq!(direct_site.return_pc, StablePc::from_relative_index(4),);
 
         let return_call_site = tailcaller
             .direct_call_sites()
             .first()
             .expect("return_call site");
         assert!(return_call_site.callee_layout_ptr().is_some());
+        assert_eq!(return_call_site.return_pc, StablePc::from_relative_index(4),);
 
         let indirect_site = indirect
             .indirect_call_sites()
@@ -1475,6 +1537,7 @@ mod tests {
             .expect("indirect call site");
         assert_eq!(indirect_site.tableidx, 0);
         assert!(!indirect_site.expected_type_identity_ptr().is_null());
+        assert_eq!(indirect_site.return_pc, StablePc::from_relative_index(7),);
 
         let return_indirect_site = tailindirect
             .indirect_call_sites()
@@ -1482,5 +1545,56 @@ mod tests {
             .expect("return_call_indirect site");
         assert_eq!(return_indirect_site.tableidx, 0);
         assert!(!return_indirect_site.expected_type_identity_ptr().is_null());
+        assert_eq!(
+            return_indirect_site.return_pc,
+            StablePc::from_relative_index(7),
+        );
+    }
+
+    #[cfg(feature = "threads")]
+    #[tokio::test]
+    async fn instantiate_rewrites_shared_wait_handlers_to_precomputed_variants() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let module = parse_wat_module(
+            r#"
+            (module
+              (memory 1 1 shared)
+              (func (export "wait32") (param i32 i32 i64) (result i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                memory.atomic.wait32)
+              (func (export "wait64") (param i32 i64 i64) (result i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                memory.atomic.wait64))
+            "#,
+        );
+
+        let instance = instantiate(module, &store, &registry).await.unwrap();
+        let gc = store.lock_gc();
+        let inst = gc.get_instance(
+            instance
+                .object_ref_for_store(&store)
+                .expect("instance must stay live in store"),
+        );
+
+        let wait32 = gc.get_func(inst.funcs[0]);
+        let wait64 = gc.get_func(inst.funcs[1]);
+
+        assert!(wait32.code().unwrap().iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(
+                instr.op,
+                vm::op_memory_atomic_wait32_shared_precomputed as Op,
+            )
+        }));
+        assert!(wait64.code().unwrap().iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(
+                instr.op,
+                vm::op_memory_atomic_wait64_shared_precomputed as Op,
+            )
+        }));
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::common::store::PrecomputedWaitSite;
 use crate::common::AtomicRmwOp;
 use crate::common::AtomicWaitResult;
 use crate::runtime::memory_effect::{MemoryWaitPending, PendingOp};
@@ -48,6 +49,32 @@ unsafe fn atomic_start_indexed(
     let offset = ctx.stack.pop_u32();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     VMResult::Success((start, memidx))
+}
+
+#[inline(always)]
+unsafe fn precomputed_wait_site_unchecked(tail_code: *const Instr) -> &'static PrecomputedWaitSite {
+    &*((*tail_code).operand.code_ptr as *const PrecomputedWaitSite)
+}
+
+#[inline(always)]
+unsafe fn precomputed_wait_start(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<usize> {
+    let site = precomputed_wait_site_unchecked(tail_code);
+    let offset = ctx.stack.pop_u32();
+    compute_memory_offset(site.memarg, offset)
+}
+
+#[inline(always)]
+unsafe fn precomputed_wait_start_indexed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32)> {
+    let site = precomputed_wait_site_unchecked(tail_code);
+    let offset = ctx.stack.pop_u32();
+    let start = vm_try!(compute_memory_offset(site.memarg, offset));
+    VMResult::Success((start, site.memidx))
 }
 
 macro_rules! atomic_load_op {
@@ -2231,6 +2258,25 @@ unsafe fn push_wait_effect(
         }));
 }
 
+#[inline(always)]
+unsafe fn push_wait_effect_precomputed(
+    ctx: &mut ExecuteContext,
+    shared: std::sync::Arc<crate::common::SharedMemoryObject>,
+    wait: crate::common::SharedWaitRegistration,
+    timeout_ns: i64,
+    resume_pc: StablePc,
+) {
+    let task_id = ctx.task_id;
+    ctx.effect
+        .push_pending(PendingOp::MemoryWait(MemoryWaitPending {
+            task_id,
+            shared,
+            wait,
+            timeout_ns,
+            fp: resume_pc.raw(),
+        }));
+}
+
 /// WebAssembly `memory.atomic.wait32`.
 ///
 /// Related spec:
@@ -2296,6 +2342,48 @@ pub unsafe fn op_memory_atomic_wait32_shared(
     }
 }
 
+/// WebAssembly `memory.atomic.wait32` on shared default memory with precomputed continuation.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i32, i64] -> [i32]`.
+/// Traps: traps on out-of-bounds access or unaligned access.
+/// Notes: Uses instantiate-time precomputed resume metadata to avoid rebuilding the continuation on the pending path.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operand for this handler in the active instruction stream.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_memory_atomic_wait32_shared_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let timeout_ns = ctx.stack.pop_i64();
+    let expected = ctx.stack.pop_u32();
+    let start = vm_try!(precomputed_wait_start(tail_code, ctx));
+    let shared = ctx
+        .gc
+        .shared_memory(ctx.default_shared_memory_id_unchecked());
+    match vm_try!(shared.register_wait32(start, expected)) {
+        AtomicWaitResult::NotEqual => {
+            vm_try!(ctx.stack.push_i32(WAIT_RESULT_NOT_EQUAL));
+            call_next(tail_code, 1, ctx)
+        }
+        AtomicWaitResult::Pending(wait) => {
+            let site = precomputed_wait_site_unchecked(tail_code);
+            let shared = ctx
+                .gc
+                .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
+            ctx.cont = site
+                .resume_pc
+                .resolve(ctx.gc, ctx.stack, ctx.local_reference);
+            VMResult::Success(())
+        }
+    }
+}
+
 /// WebAssembly `memory.atomic.wait32` on unshared indexed memory.
 ///
 /// Related spec:
@@ -2355,6 +2443,48 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared(
             push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
             trace!("waiting effect: {:?}", resume_pc);
             ctx.cont = resume_pc;
+            VMResult::Success(())
+        }
+    }
+}
+
+/// WebAssembly `memory.atomic.wait32` on shared indexed memory with precomputed continuation.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i32, i64] -> [i32]`.
+/// Traps: traps on out-of-bounds access or unaligned access.
+/// Notes: Uses instantiate-time precomputed indexed-memory metadata and resume continuation on the pending path.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operand for this handler in the active instruction stream.
+/// - `ctx` must reference a live execution context whose indexed memory slot is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_memory_atomic_wait32_indexed_shared_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let timeout_ns = ctx.stack.pop_i64();
+    let expected = ctx.stack.pop_u32();
+    let (start, memidx) = vm_try!(precomputed_wait_start_indexed(tail_code, ctx));
+    let shared = ctx
+        .gc
+        .shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+    match vm_try!(shared.register_wait32(start, expected)) {
+        AtomicWaitResult::NotEqual => {
+            vm_try!(ctx.stack.push_i32(WAIT_RESULT_NOT_EQUAL));
+            call_next(tail_code, 2, ctx)
+        }
+        AtomicWaitResult::Pending(wait) => {
+            let site = precomputed_wait_site_unchecked(tail_code);
+            let shared = ctx
+                .gc
+                .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
+            ctx.cont = site
+                .resume_pc
+                .resolve(ctx.gc, ctx.stack, ctx.local_reference);
             VMResult::Success(())
         }
     }
@@ -2425,6 +2555,48 @@ pub unsafe fn op_memory_atomic_wait64_shared(
     }
 }
 
+/// WebAssembly `memory.atomic.wait64` on shared default memory with precomputed continuation.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i64, i64] -> [i32]`.
+/// Traps: traps on out-of-bounds access or unaligned access.
+/// Notes: Uses instantiate-time precomputed resume metadata to avoid rebuilding the continuation on the pending path.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operand for this handler in the active instruction stream.
+/// - `ctx` must reference a live execution context whose default memory is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_memory_atomic_wait64_shared_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let timeout_ns = ctx.stack.pop_i64();
+    let expected = ctx.stack.pop_u64();
+    let start = vm_try!(precomputed_wait_start(tail_code, ctx));
+    let shared = ctx
+        .gc
+        .shared_memory(ctx.default_shared_memory_id_unchecked());
+    match vm_try!(shared.register_wait64(start, expected)) {
+        AtomicWaitResult::NotEqual => {
+            vm_try!(ctx.stack.push_i32(WAIT_RESULT_NOT_EQUAL));
+            call_next(tail_code, 1, ctx)
+        }
+        AtomicWaitResult::Pending(wait) => {
+            let site = precomputed_wait_site_unchecked(tail_code);
+            let shared = ctx
+                .gc
+                .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
+            ctx.cont = site
+                .resume_pc
+                .resolve(ctx.gc, ctx.stack, ctx.local_reference);
+            VMResult::Success(())
+        }
+    }
+}
+
 /// WebAssembly `memory.atomic.wait64` on unshared indexed memory.
 ///
 /// Related spec:
@@ -2484,6 +2656,48 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
             push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
             trace!("waiting effect: {:?}", resume_pc);
             ctx.cont = resume_pc;
+            VMResult::Success(())
+        }
+    }
+}
+
+/// WebAssembly `memory.atomic.wait64` on shared indexed memory with precomputed continuation.
+///
+/// Related spec:
+/// - Threads: https://webassembly.github.io/threads/core/
+///
+/// Stack effect: `[i32, i64, i64] -> [i32]`.
+/// Traps: traps on out-of-bounds access or unaligned access.
+/// Notes: Uses instantiate-time precomputed indexed-memory metadata and resume continuation on the pending path.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operand for this handler in the active instruction stream.
+/// - `ctx` must reference a live execution context whose indexed memory slot is shared.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_memory_atomic_wait64_indexed_shared_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let timeout_ns = ctx.stack.pop_i64();
+    let expected = ctx.stack.pop_u64();
+    let (start, memidx) = vm_try!(precomputed_wait_start_indexed(tail_code, ctx));
+    let shared = ctx
+        .gc
+        .shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+    match vm_try!(shared.register_wait64(start, expected)) {
+        AtomicWaitResult::NotEqual => {
+            vm_try!(ctx.stack.push_i32(WAIT_RESULT_NOT_EQUAL));
+            call_next(tail_code, 2, ctx)
+        }
+        AtomicWaitResult::Pending(wait) => {
+            let site = precomputed_wait_site_unchecked(tail_code);
+            let shared = ctx
+                .gc
+                .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
+            ctx.cont = site
+                .resume_pc
+                .resolve(ctx.gc, ctx.stack, ctx.local_reference);
             VMResult::Success(())
         }
     }

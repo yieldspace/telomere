@@ -1353,6 +1353,7 @@ mod tests {
         CallFrameCache {
             code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
+            code_len: 0,
             instance: InstanceId::from_index(0),
             memory0_kind: kind,
             memory0_raw: raw,

@@ -23,6 +23,18 @@ unsafe fn internal_op_call(
     ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
+    let return_pc =
+        StablePc::from_raw_in_frame(ctx.gc, ctx.stack, ctx.local_reference, return_addr);
+    internal_op_call_with_return_pc(return_pc, funcaddr, ctx, is_return_call)
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_with_return_pc(
+    return_pc: StablePc,
+    funcaddr: ObjectRef,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<CallOutcome> {
     let funcinst = ctx.func_by_addr(funcaddr).clone();
     let instance = ctx.gc.instance(funcinst.instance);
     let memory0 = instance
@@ -31,6 +43,7 @@ unsafe fn internal_op_call(
         .copied()
         .and_then(|slot| slot.handle());
     let frame = CallFrameCache::from_parts(funcaddr, &funcinst, memory0);
+    let return_addr = return_pc.resolve(ctx.gc, ctx.stack, ctx.local_reference);
     trace!(
         "op_call_internal: {:?}({:?})  {funcaddr:?}",
         ctx.gc.object_ref_for_instance(funcinst.instance),
@@ -49,12 +62,12 @@ unsafe fn internal_op_call(
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
         } else {
-            let local_reference = vm_try!(ctx.stack.function_call_raw(
+            let local_reference = vm_try!(ctx.stack.function_call_raw_with_return_pc(
                 param_size,
                 0,
                 frame,
                 ctx.local_reference,
-                return_addr,
+                return_pc,
                 ctx.gc,
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
@@ -72,11 +85,11 @@ unsafe fn internal_op_call(
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
         } else {
-            let local_reference = vm_try!(ctx.stack.function_call_layout(
+            let local_reference = vm_try!(ctx.stack.function_call_layout_with_return_pc(
                 wasm_metadata.frame_layout_header(),
                 frame,
                 ctx.local_reference,
-                return_addr,
+                return_pc,
                 ctx.gc,
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
@@ -104,12 +117,14 @@ unsafe fn indirect_call_site_unchecked(
 
 #[inline(never)]
 unsafe fn internal_op_call_precomputed(
-    return_addr: *const Instr,
     site: &PrecomputedDirectCallSite,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
     let frame = site.frame.materialize(ctx.gc);
+    let return_addr = site
+        .return_pc
+        .resolve(ctx.gc, ctx.stack, ctx.local_reference);
     trace!("op_call_precomputed: {:?}", frame.code_addr);
     if let Some(layout) = site.callee_layout_ptr() {
         let layout = &*layout;
@@ -120,11 +135,11 @@ unsafe fn internal_op_call_precomputed(
                     .function_return_call_layout(&ctx.local_reference, layout, frame,));
             ctx.set_local_reference_with_frame(local_reference, frame);
         } else {
-            let local_reference = vm_try!(ctx.stack.function_call_layout(
+            let local_reference = vm_try!(ctx.stack.function_call_layout_with_return_pc(
                 layout,
                 frame,
                 ctx.local_reference,
-                return_addr,
+                site.return_pc,
                 ctx.gc,
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
@@ -142,12 +157,12 @@ unsafe fn internal_op_call_precomputed(
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
         } else {
-            let local_reference = vm_try!(ctx.stack.function_call_raw(
+            let local_reference = vm_try!(ctx.stack.function_call_raw_with_return_pc(
                 site.param_bytes as usize,
                 0,
                 frame,
                 ctx.local_reference,
-                return_addr,
+                site.return_pc,
                 ctx.gc,
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
@@ -198,12 +213,7 @@ unsafe fn op_precomputed_direct_call(
         return VMResult::Success(());
     }
     let site = &*direct_call_site_unchecked(tail_code);
-    match vm_try!(internal_op_call_precomputed(
-        tail_code.offset(1),
-        site,
-        ctx,
-        is_return_call
-    )) {
+    match vm_try!(internal_op_call_precomputed(site, ctx, is_return_call)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -388,7 +398,6 @@ unsafe fn internal_op_call_indirect(
 
 #[inline(never)]
 unsafe fn internal_op_call_indirect_precomputed(
-    return_addr: *const Instr,
     site: &PrecomputedIndirectCallSite,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
@@ -416,8 +425,8 @@ unsafe fn internal_op_call_indirect_precomputed(
     if &funcinst.execution.type_identity != expected_type_identity {
         return VMResult::CallIndirectInvalidType;
     }
-    let outcome = vm_try!(internal_op_call(
-        return_addr,
+    let outcome = vm_try!(internal_op_call_with_return_pc(
+        site.return_pc,
         func_addr,
         ctx,
         is_return_call
@@ -478,12 +487,7 @@ pub unsafe fn op_call_indirect_precomputed(
         return VMResult::Success(());
     }
     let site = &*indirect_call_site_unchecked(tail_code);
-    match vm_try!(internal_op_call_indirect_precomputed(
-        tail_code.offset(2),
-        site,
-        ctx,
-        false
-    )) {
+    match vm_try!(internal_op_call_indirect_precomputed(site, ctx, false)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -541,12 +545,7 @@ pub unsafe fn op_return_call_indirect_precomputed(
         return VMResult::Success(());
     }
     let site = &*indirect_call_site_unchecked(tail_code);
-    match vm_try!(internal_op_call_indirect_precomputed(
-        tail_code.offset(2),
-        site,
-        ctx,
-        true
-    )) {
+    match vm_try!(internal_op_call_indirect_precomputed(site, ctx, true)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }

@@ -868,25 +868,25 @@ impl StablePc {
     }
 
     pub(crate) fn from_raw_in_frame(
-        runtime: &StoreInner,
+        _runtime: &StoreInner,
         stack: &Stack,
         local_reference: LocalReference,
         ptr: *const Instr,
     ) -> Self {
-        Self::relative_index_for_ptr(runtime, stack, local_reference, ptr)
+        Self::relative_index_for_ptr(stack, local_reference, ptr)
             .map(Self::from_relative_index)
             .unwrap_or_else(|| Self::from_stable_ptr(ptr))
     }
 
     pub(crate) fn resolve(
         self,
-        runtime: &StoreInner,
+        _runtime: &StoreInner,
         stack: &Stack,
         local_reference: LocalReference,
     ) -> *const Instr {
         match self.relative_index() {
             Some(index) => {
-                let (base, len) = Self::current_frame_code_range(runtime, stack, local_reference)
+                let (base, len) = Self::current_frame_code_range(stack, local_reference)
                     .expect("relative continuation must resolve against a wasm frame");
                 debug_assert!(index < len);
                 unsafe { base.add(index) }
@@ -900,7 +900,6 @@ impl StablePc {
     }
 
     fn current_frame_code_range(
-        runtime: &StoreInner,
         stack: &Stack,
         local_reference: LocalReference,
     ) -> Option<(*const Instr, usize)> {
@@ -912,19 +911,19 @@ impl StablePc {
         if code_base.is_null() {
             return None;
         }
-        let code_addr = stack.code_addr(&local_reference);
-        let funcinst = runtime.get_func(code_addr);
-        let code = funcinst.canonical_code()?;
-        Some((code_base, code.len()))
+        let code_len = stack.code_len(&local_reference) as usize;
+        if code_len == 0 {
+            return None;
+        }
+        Some((code_base, code_len))
     }
 
     fn relative_index_for_ptr(
-        runtime: &StoreInner,
         stack: &Stack,
         local_reference: LocalReference,
         ptr: *const Instr,
     ) -> Option<usize> {
-        let (base, instr_len) = Self::current_frame_code_range(runtime, stack, local_reference)?;
+        let (base, instr_len) = Self::current_frame_code_range(stack, local_reference)?;
         let instr_size = std::mem::size_of::<Instr>();
         let base_addr = base as usize;
         let ptr_addr = ptr as usize;

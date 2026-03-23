@@ -6,7 +6,8 @@ use super::{
     stack::{CachedMemoryKind, CallFrameCache},
     AsyncHostFunction, ControlFlowMetadataSite, Data, Elem, ExportSection, FrameLayoutHeader,
     FrameLayoutMetadata, FuncType, FuncTypeIdentity, GlobalType, HostFunction, Instr, LocalsData,
-    MemType, ReturnShape, Stack, StackMapSite, TableType, TypeIdx, UnwindSiteMetadata, VMResult,
+    MemArg, MemType, ReturnShape, StablePc, Stack, StackMapSite, TableType, TypeIdx,
+    UnwindSiteMetadata, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -153,6 +154,7 @@ pub(crate) struct WasmExecutionMetadata {
 pub(crate) struct PrecomputedCallFrame {
     pub code_addr: ObjectRef,
     pub code_base_addr: usize,
+    pub code_len: u32,
     pub instance: InstanceId,
     pub memory0_kind: CachedMemoryKind,
     pub memory0_raw: u32,
@@ -171,6 +173,7 @@ impl PrecomputedCallFrame {
             } else {
                 self.code_base_addr as *const Instr
             },
+            code_len: self.code_len,
             instance: self.instance,
             memory0_kind: self.memory0_kind,
             memory0_raw: self.memory0_raw,
@@ -181,6 +184,7 @@ impl PrecomputedCallFrame {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedDirectCallSite {
     pub instruction_ordinal: u32,
+    pub return_pc: StablePc,
     pub frame: PrecomputedCallFrame,
     pub param_bytes: u32,
     pub param_shape: ReturnShape,
@@ -200,10 +204,19 @@ impl WasmExecutionMetadata {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedIndirectCallSite {
     pub instruction_ordinal: u32,
+    pub return_pc: StablePc,
     pub tableidx: u32,
     pub expected_type_identity_addr: usize,
     pub stack_map_site_addr: usize,
     pub unwind_site_addr: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedWaitSite {
+    pub instruction_ordinal: u32,
+    pub resume_pc: StablePc,
+    pub memarg: MemArg,
+    pub memidx: u32,
 }
 
 impl PrecomputedDirectCallSite {
@@ -227,6 +240,7 @@ impl PrecomputedDirectCallSite {
 pub(crate) struct DerivedCallMetadata {
     pub direct_call_sites: Arc<[PrecomputedDirectCallSite]>,
     pub indirect_call_sites: Arc<[PrecomputedIndirectCallSite]>,
+    pub wait_sites: Arc<[PrecomputedWaitSite]>,
 }
 
 impl PrecomputedIndirectCallSite {
@@ -455,16 +469,20 @@ impl FunctionInstanceData {
         &mut self,
         direct_call_sites: Arc<[PrecomputedDirectCallSite]>,
         indirect_call_sites: Arc<[PrecomputedIndirectCallSite]>,
+        wait_sites: Arc<[PrecomputedWaitSite]>,
     ) {
         match &mut self.body {
             FunctionBody::Wasm { metadata, .. } => {
-                metadata.derived_call_metadata =
-                    (!direct_call_sites.is_empty() || !indirect_call_sites.is_empty()).then(|| {
-                        Arc::new(DerivedCallMetadata {
-                            direct_call_sites,
-                            indirect_call_sites,
-                        })
-                    });
+                metadata.derived_call_metadata = (!direct_call_sites.is_empty()
+                    || !indirect_call_sites.is_empty()
+                    || !wait_sites.is_empty())
+                .then(|| {
+                    Arc::new(DerivedCallMetadata {
+                        direct_call_sites,
+                        indirect_call_sites,
+                        wait_sites,
+                    })
+                });
             }
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => {
                 unreachable!("precomputed call-site metadata is only valid for wasm functions")

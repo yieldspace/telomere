@@ -155,6 +155,7 @@ pub(crate) struct CallStackInfo {
     prev_local_reference_layout: Option<NonNull<FrameLayoutHeader>>,
     code_addr: ObjectRef,
     code_base: *const Instr,
+    code_len: u32,
     instance: InstanceId,
     memory0_kind: CachedMemoryKind,
     memory0_raw: u32,
@@ -173,6 +174,7 @@ struct PrevLocalReferenceFooter {
 struct CallFrameCacheFooter {
     code_addr: ObjectRef,
     code_base: *const Instr,
+    code_len: u32,
     instance: InstanceId,
     memory0_kind: CachedMemoryKind,
     memory0_raw: u32,
@@ -190,6 +192,7 @@ pub(crate) enum CachedMemoryKind {
 pub(crate) struct CallFrameCache {
     pub(crate) code_addr: ObjectRef,
     pub(crate) code_base: *const Instr,
+    pub(crate) code_len: u32,
     pub(crate) instance: InstanceId,
     pub(crate) memory0_kind: CachedMemoryKind,
     pub(crate) memory0_raw: u32,
@@ -210,6 +213,7 @@ impl CallFrameCache {
         Self {
             code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
+            code_len: 0,
             instance: InstanceId::from_index(0),
             memory0_kind: CachedMemoryKind::None,
             memory0_raw: 0,
@@ -225,6 +229,9 @@ impl CallFrameCache {
         Self {
             code_addr,
             code_base: func.code_pointer().unwrap_or(std::ptr::null()),
+            code_len: func.code().map_or(0, |code| {
+                u32::try_from(code.len()).expect("code length overflow")
+            }),
             instance: func.instance,
             memory0_kind,
             memory0_raw,
@@ -250,6 +257,7 @@ impl From<CallFrameCacheFooter> for CallFrameCache {
         Self {
             code_addr: value.code_addr,
             code_base: value.code_base,
+            code_len: value.code_len,
             instance: value.instance,
             memory0_kind: value.memory0_kind,
             memory0_raw: value.memory0_raw,
@@ -965,16 +973,19 @@ impl Stack {
     pub fn code_base(&self, reference: &LocalReference) -> *const Instr {
         self.current_frame_cache_footer(reference).code_base
     }
+    pub fn code_len(&self, reference: &LocalReference) -> u32 {
+        self.current_frame_cache_footer(reference).code_len
+    }
     pub(crate) fn frame_cache(&self, reference: &LocalReference) -> CallFrameCache {
         self.current_frame_cache_footer(reference).into()
     }
-    pub fn function_call_raw<F: IntoCallFrameCache>(
+    pub fn function_call_raw_with_return_pc<F: IntoCallFrameCache>(
         &mut self,
         param_size: usize,
         local_size: usize,
         frame: F,
         prev_local_reference: LocalReference,
-        return_addr: *const Instr,
+        return_pc: StablePc,
         runtime: &StoreInner,
     ) -> VMResult<LocalReference> {
         self.flush_cached_operands();
@@ -987,14 +998,10 @@ impl Stack {
         vm_try!(self.add_top(local_size));
         vm_try!(self.zero_new_locals(local_top + param_size, local_size));
         let info = CallStackInfo {
-            return_pc: StablePc::from_raw_in_frame(
-                runtime,
-                self,
-                prev_local_reference,
-                return_addr,
-            ),
+            return_pc,
             code_addr: frame.code_addr,
             code_base: frame.code_base,
+            code_len: frame.code_len,
             instance: frame.instance,
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
@@ -1008,6 +1015,60 @@ impl Stack {
             local_top,
             (param_size + local_size + std::mem::size_of::<CallStackInfo>()) as u32,
         ))
+    }
+    pub fn function_call_raw<F: IntoCallFrameCache>(
+        &mut self,
+        param_size: usize,
+        local_size: usize,
+        frame: F,
+        prev_local_reference: LocalReference,
+        return_addr: *const Instr,
+        runtime: &StoreInner,
+    ) -> VMResult<LocalReference> {
+        self.function_call_raw_with_return_pc(
+            param_size,
+            local_size,
+            frame,
+            prev_local_reference,
+            StablePc::from_raw_in_frame(runtime, self, prev_local_reference, return_addr),
+            runtime,
+        )
+    }
+    pub fn function_call_layout_with_return_pc<F: IntoCallFrameCache>(
+        &mut self,
+        layout: &FrameLayoutHeader,
+        frame: F,
+        prev_local_reference: LocalReference,
+        return_pc: StablePc,
+        runtime: &StoreInner,
+    ) -> VMResult<LocalReference> {
+        self.flush_cached_operands();
+        let frame = frame.into_call_frame_cache(runtime);
+        let local_top = vm_try!(VMResult::from_option(
+            self.top.checked_sub(layout.param_bytes as usize),
+            || VMResult::StackOverflow
+        ));
+
+        vm_try!(self.add_top(layout.locals_bytes as usize));
+        vm_try!(self.zero_new_locals(
+            local_top + layout.locals_zero_start_from_local_top as usize,
+            layout.locals_bytes as usize,
+        ));
+        let info = CallStackInfo {
+            return_pc,
+            code_addr: frame.code_addr,
+            code_base: frame.code_base,
+            code_len: frame.code_len,
+            instance: frame.instance,
+            memory0_kind: frame.memory0_kind,
+            memory0_raw: frame.memory0_raw,
+            prev_local_reference_top: prev_local_reference.local_top,
+            prev_local_reference_frame_bytes: prev_local_reference.frame_bytes,
+            prev_local_reference_layout: prev_local_reference.layout,
+        };
+        vm_try!(self.push_call_stack_info(info));
+
+        VMResult::Success(LocalReference::from_layout(local_top, layout))
     }
     pub fn function_call<F: IntoCallFrameCache>(
         &mut self,
@@ -1035,37 +1096,13 @@ impl Stack {
         return_addr: *const Instr,
         runtime: &StoreInner,
     ) -> VMResult<LocalReference> {
-        self.flush_cached_operands();
-        let frame = frame.into_call_frame_cache(runtime);
-        let local_top = vm_try!(VMResult::from_option(
-            self.top.checked_sub(layout.param_bytes as usize),
-            || VMResult::StackOverflow
-        ));
-
-        vm_try!(self.add_top(layout.locals_bytes as usize));
-        vm_try!(self.zero_new_locals(
-            local_top + layout.locals_zero_start_from_local_top as usize,
-            layout.locals_bytes as usize,
-        ));
-        let info = CallStackInfo {
-            return_pc: StablePc::from_raw_in_frame(
-                runtime,
-                self,
-                prev_local_reference,
-                return_addr,
-            ),
-            code_addr: frame.code_addr,
-            code_base: frame.code_base,
-            instance: frame.instance,
-            memory0_kind: frame.memory0_kind,
-            memory0_raw: frame.memory0_raw,
-            prev_local_reference_top: prev_local_reference.local_top,
-            prev_local_reference_frame_bytes: prev_local_reference.frame_bytes,
-            prev_local_reference_layout: prev_local_reference.layout,
-        };
-        vm_try!(self.push_call_stack_info(info));
-
-        VMResult::Success(LocalReference::from_layout(local_top, layout))
+        self.function_call_layout_with_return_pc(
+            layout,
+            frame,
+            prev_local_reference,
+            StablePc::from_raw_in_frame(runtime, self, prev_local_reference, return_addr),
+            runtime,
+        )
     }
     pub(crate) fn function_return_with_frame(
         &mut self,
@@ -1331,6 +1368,7 @@ impl Stack {
             return_pc,
             code_addr: frame.code_addr,
             code_base: frame.code_base,
+            code_len: frame.code_len,
             instance: frame.instance,
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
@@ -1362,6 +1400,7 @@ impl Stack {
             return_pc,
             code_addr: frame.code_addr,
             code_base: frame.code_base,
+            code_len: frame.code_len,
             instance: frame.instance,
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
@@ -1547,13 +1586,25 @@ stack_operation_wide!(u64x2);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::FrameLayoutMetadata;
+    use crate::common::{FrameLayoutMetadata, Operand};
     use std::sync::Arc;
 
     fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
         CallFrameCache {
             code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
+            code_len: 0,
+            instance: InstanceId::from_index(0),
+            memory0_kind: kind,
+            memory0_raw: raw,
+        }
+    }
+
+    fn frame_with_code(kind: CachedMemoryKind, raw: u32, code: &[Instr]) -> CallFrameCache {
+        CallFrameCache {
+            code_addr: ObjectRef(1),
+            code_base: code.as_ptr(),
+            code_len: u32::try_from(code.len()).unwrap(),
             instance: InstanceId::from_index(0),
             memory0_kind: kind,
             memory0_raw: raw,
@@ -1841,6 +1892,54 @@ mod tests {
             stack.frame_cache(&callee).memory0_handle(),
             Some(MemoryHandle::Shared(SharedMemoryId::from_raw(9)))
         );
+    }
+
+    #[test]
+    fn stable_pc_roundtrips_from_footer_code_base_and_len_without_runtime_lookup() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let caller_layout = layout(0, 4, ReturnShape::Empty, ReturnShape::Empty);
+        let callee_layout = layout(4, 8, ReturnShape::Scalar4, ReturnShape::Scalar4);
+        let code = [
+            Instr {
+                operand: Operand { u32: 0 },
+            },
+            Instr {
+                operand: Operand { u32: 1 },
+            },
+            Instr {
+                operand: Operand { u32: 2 },
+            },
+            Instr {
+                operand: Operand { u32: 3 },
+            },
+        ];
+
+        let caller = stack
+            .function_call_layout(
+                &caller_layout,
+                frame_with_code(CachedMemoryKind::Local, 7, &code),
+                LocalReference::empty(),
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        stack.push_u32(0x1234_5678).unwrap();
+        let callee = stack
+            .function_call_layout(
+                &callee_layout,
+                frame(CachedMemoryKind::Local, 9),
+                caller,
+                unsafe { code.as_ptr().add(2) },
+                &runtime,
+            )
+            .unwrap();
+
+        let return_pc = stack.return_pc(&callee);
+        assert_eq!(return_pc.resolve(&runtime, &stack, caller), unsafe {
+            code.as_ptr().add(2)
+        });
     }
 
     #[test]
