@@ -262,6 +262,386 @@ async fn typed_scalar_superinstructions_match_unfused_semantics() {
 }
 
 #[tokio::test]
+async fn producer_only_scalar_superinstructions_match_expected_results() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "i32_add_push") (param i32) (result i32)
+            local.get 0
+            i32.const 7
+            i32.add
+            i32.const 3
+            i32.xor)
+          (func (export "i32_local_local_sub_push") (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.sub
+            i32.const 1
+            i32.add)
+          (func (export "i32_div_u_push_trap") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            i32.div_u
+            i32.const 1
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_success(
+        call_i32(&instance, &store, "i32_add_push", vec![WasmValue::I32(9)]).await,
+        (9i32.wrapping_add(7)) ^ 3,
+        "i32_add_push",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "i32_local_local_sub_push",
+            vec![WasmValue::I32(20), WasmValue::I32(6)],
+        )
+        .await,
+        15,
+        "i32_local_local_sub_push",
+    );
+    assert_invalid_operand(
+        call_i32(
+            &instance,
+            &store,
+            "i32_div_u_push_trap",
+            vec![WasmValue::I32(9)],
+        )
+        .await,
+        "i32_div_u_push_trap",
+    );
+}
+
+#[tokio::test]
+async fn i32_local_and_branch_superinstructions_match_expected_results() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "and_eqz_br_if") (param i32) (result i32) (local i32)
+            i32.const 9
+            local.set 1
+            block
+              local.get 0
+              i32.const 2
+              i32.and
+              i32.eqz
+              br_if 0
+              i32.const 7
+              local.set 1
+            end
+            local.get 1)
+          (func (export "and_if") (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.and
+            if (result i32)
+              i32.const 7
+            else
+              i32.const 3
+            end))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_success(
+        call_i32(&instance, &store, "and_eqz_br_if", vec![WasmValue::I32(0)]).await,
+        9,
+        "and_eqz_br_if zero branch",
+    );
+    assert_success(
+        call_i32(&instance, &store, "and_eqz_br_if", vec![WasmValue::I32(2)]).await,
+        7,
+        "and_eqz_br_if fallthrough",
+    );
+    assert_success(
+        call_i32(&instance, &store, "and_if", vec![WasmValue::I32(1)]).await,
+        7,
+        "and_if truthy",
+    );
+    assert_success(
+        call_i32(&instance, &store, "and_if", vec![WasmValue::I32(2)]).await,
+        3,
+        "and_if falsy",
+    );
+}
+
+#[tokio::test]
+async fn local_copy_and_branch_superinstructions_match_expected_results() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "copy_set") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.set 1
+            local.get 1)
+          (func (export "copy_tee") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            local.tee 1
+            drop
+            local.get 1)
+          (func (export "local_br_if") (param i32) (result i32)
+            (local i32)
+            i32.const 11
+            local.set 1
+            block
+              local.get 0
+              br_if 0
+              i32.const 7
+              local.set 1
+            end
+            local.get 1)
+          (func (export "local_eqz_if") (param i32) (result i32)
+            local.get 0
+            i32.eqz
+            if (result i32)
+              i32.const 7
+            else
+              i32.const 9
+            end))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_success(
+        call_i32(&instance, &store, "copy_set", vec![WasmValue::I32(1234)]).await,
+        1234,
+        "copy_set",
+    );
+    assert_success(
+        call_i32(&instance, &store, "copy_tee", vec![WasmValue::I32(5678)]).await,
+        5678,
+        "copy_tee",
+    );
+    assert_success(
+        call_i32(&instance, &store, "local_br_if", vec![WasmValue::I32(0)]).await,
+        7,
+        "local_br_if zero",
+    );
+    assert_success(
+        call_i32(&instance, &store, "local_br_if", vec![WasmValue::I32(5)]).await,
+        11,
+        "local_br_if nonzero",
+    );
+    assert_success(
+        call_i32(&instance, &store, "local_eqz_if", vec![WasmValue::I32(0)]).await,
+        7,
+        "local_eqz_if zero",
+    );
+    assert_success(
+        call_i32(&instance, &store, "local_eqz_if", vec![WasmValue::I32(5)]).await,
+        9,
+        "local_eqz_if nonzero",
+    );
+}
+
+#[tokio::test]
+async fn const_set_superinstructions_match_expected_results() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "i32_const_set") (result i32)
+            (local i32)
+            i32.const 7
+            local.set 0
+            local.get 0)
+          (func (export "f64_const_set") (result f64)
+            (local f64)
+            f64.const 4.5
+            local.set 0
+            local.get 0))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_success(
+        call_i32(&instance, &store, "i32_const_set", vec![]).await,
+        7,
+        "i32_const_set",
+    );
+    assert_success(
+        call_f64_bits(&instance, &store, "f64_const_set", vec![]).await,
+        4.5f64.to_bits(),
+        "f64_const_set",
+    );
+}
+
+#[tokio::test]
+async fn typed_select_fast_paths_preserve_wasm_operand_order() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "choose_i32") (param i32 i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            select)
+          (func (export "choose_i64") (param i64 i64 i32) (result i64)
+            local.get 0
+            local.get 1
+            local.get 2
+            select))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "choose_i32",
+            vec![WasmValue::I32(10), WasmValue::I32(20), WasmValue::I32(0)],
+        )
+        .await,
+        20,
+        "choose_i32 false branch",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "choose_i32",
+            vec![WasmValue::I32(10), WasmValue::I32(20), WasmValue::I32(1)],
+        )
+        .await,
+        10,
+        "choose_i32 true branch",
+    );
+    assert_success(
+        call_i64(
+            &instance,
+            &store,
+            "choose_i64",
+            vec![WasmValue::I64(11), WasmValue::I64(22), WasmValue::I32(0)],
+        )
+        .await,
+        22,
+        "choose_i64 false branch",
+    );
+    assert_success(
+        call_i64(
+            &instance,
+            &store,
+            "choose_i64",
+            vec![WasmValue::I64(11), WasmValue::I64(22), WasmValue::I32(1)],
+        )
+        .await,
+        11,
+        "choose_i64 true branch",
+    );
+}
+
+#[tokio::test]
+async fn compare_select_superinstructions_match_unfused_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "fused_i32_lt_select") (param i32 i32 i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            local.get 3
+            i32.lt_u
+            select)
+          (func (export "baseline_i32_lt_select") (param i32 i32 i32 i32) (result i32) (local i32)
+            local.get 2
+            local.get 3
+            i32.lt_u
+            local.set 4
+            local.get 0
+            local.get 1
+            local.get 4
+            select)
+          (func (export "fused_f64_const_select") (param f64 f64 f64) (result f64)
+            local.get 0
+            local.get 1
+            local.get 2
+            f64.const 0
+            f64.gt
+            select)
+          (func (export "baseline_f64_const_select") (param f64 f64 f64) (result f64) (local i32)
+            local.get 2
+            f64.const 0
+            f64.gt
+            local.set 3
+            local.get 0
+            local.get 1
+            local.get 3
+            select))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let i32_args = vec![
+        WasmValue::I32(111),
+        WasmValue::I32(222),
+        WasmValue::I32(3),
+        WasmValue::I32(9),
+    ];
+    assert_success(
+        call_i32(&instance, &store, "fused_i32_lt_select", i32_args.clone()).await,
+        111,
+        "fused_i32_lt_select",
+    );
+    assert_success(
+        call_i32(&instance, &store, "baseline_i32_lt_select", i32_args).await,
+        111,
+        "baseline_i32_lt_select",
+    );
+
+    let f64_args = vec![
+        WasmValue::F64(1.5),
+        WasmValue::F64(9.5),
+        WasmValue::F64(-0.25),
+    ];
+    assert_success(
+        call_f64_bits(
+            &instance,
+            &store,
+            "fused_f64_const_select",
+            f64_args.clone(),
+        )
+        .await,
+        9.5f64.to_bits(),
+        "fused_f64_const_select",
+    );
+    assert_success(
+        call_f64_bits(&instance, &store, "baseline_f64_const_select", f64_args).await,
+        9.5f64.to_bits(),
+        "baseline_f64_const_select",
+    );
+}
+
+#[tokio::test]
 async fn compare_superinstructions_match_unfused_semantics_and_float_edges() {
     let store = Store::new();
     let registry = Registry::new();

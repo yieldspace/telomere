@@ -458,6 +458,16 @@ fn f64_compare_eval(lhs_bits: u64, rhs_bits: u64, kind: FloatCompareKind) -> u32
 }
 
 #[inline(always)]
+fn select4_with_condition(ctx: &mut ExecuteContext, cond: u32) {
+    ctx.stack.select_top_u32(cond);
+}
+
+#[inline(always)]
+fn select8_with_condition(ctx: &mut ExecuteContext, cond: u32) {
+    ctx.stack.select_top_u64(cond);
+}
+
+#[inline(always)]
 fn store4_bytes(value: u32, kind: Store4Kind) -> StoreBytes {
     match kind {
         Store4Kind::I32 | Store4Kind::F32 => StoreBytes::Write4(value.to_le_bytes()),
@@ -512,6 +522,11 @@ enum LocalBitImmOp {
     And,
     Shl,
     ShrU,
+}
+
+enum ControlBranchKind {
+    BrIf,
+    If,
 }
 
 #[inline(always)]
@@ -642,32 +657,289 @@ pub unsafe fn op_i32_local_local_add_tee4(
     op_i32_local_local_add(tail_code, ctx, true)
 }
 
+#[inline(always)]
+unsafe fn op_local_copy4_impl(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    tee: bool,
+) -> VMResult<()> {
+    let src_local = (*tail_code).operand.local_addr;
+    let dst_local = (*tail_code.add(1)).operand.local_addr;
+    let value = local_u32(ctx.stack, &ctx.local_reference(), src_local);
+    write_local_u32(ctx.stack, &ctx.local_reference(), dst_local, value);
+    if tee {
+        vm_try!(ctx.stack.push_u32(value));
+    }
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_local_copy4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_local_copy4_impl(tail_code, ctx, false)
+}
+
+pub unsafe fn op_local_copy_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_copy4_impl(tail_code, ctx, true)
+}
+
+#[inline(always)]
+unsafe fn op_local_copy8_impl(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    tee: bool,
+) -> VMResult<()> {
+    let src_local = (*tail_code).operand.local_addr;
+    let dst_local = (*tail_code.add(1)).operand.local_addr;
+    let value = local_u64(ctx.stack, &ctx.local_reference(), src_local);
+    write_local_u64(ctx.stack, &ctx.local_reference(), dst_local, value);
+    if tee {
+        vm_try!(ctx.stack.push_u64(value));
+    }
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_local_copy8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_local_copy8_impl(tail_code, ctx, false)
+}
+
+pub unsafe fn op_local_copy_tee8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_copy8_impl(tail_code, ctx, true)
+}
+
+#[inline(always)]
+unsafe fn op_i32_const_set_impl(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    tee: bool,
+) -> VMResult<()> {
+    let value = (*tail_code).operand.i32 as u32;
+    let dst_local = (*tail_code.add(1)).operand.local_addr;
+    write_local_u32(ctx.stack, &ctx.local_reference(), dst_local, value);
+    if tee {
+        vm_try!(ctx.stack.push_u32(value));
+    }
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_i32_const_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_i32_const_set_impl(tail_code, ctx, false)
+}
+
+pub unsafe fn op_i32_const_tee4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_i32_const_set_impl(tail_code, ctx, true)
+}
+
+#[inline(always)]
+unsafe fn op_i64_const_set_impl(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    tee: bool,
+) -> VMResult<()> {
+    let value = (*tail_code).operand.u64;
+    let dst_local = (*tail_code.add(1)).operand.local_addr;
+    write_local_u64(ctx.stack, &ctx.local_reference(), dst_local, value);
+    if tee {
+        vm_try!(ctx.stack.push_u64(value));
+    }
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_i64_const_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_i64_const_set_impl(tail_code, ctx, false)
+}
+
+pub unsafe fn op_i64_const_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_i64_const_set_impl(tail_code, ctx, true)
+}
+
+#[inline(always)]
+unsafe fn op_f32_const_set_impl(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    tee: bool,
+) -> VMResult<()> {
+    let value = (*tail_code).operand.f32.to_bits();
+    let dst_local = (*tail_code.add(1)).operand.local_addr;
+    write_local_u32(ctx.stack, &ctx.local_reference(), dst_local, value);
+    if tee {
+        vm_try!(ctx.stack.push_u32(value));
+    }
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_f32_const_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_f32_const_set_impl(tail_code, ctx, false)
+}
+
+pub unsafe fn op_f32_const_tee4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_f32_const_set_impl(tail_code, ctx, true)
+}
+
+#[inline(always)]
+unsafe fn op_f64_const_set_impl(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    tee: bool,
+) -> VMResult<()> {
+    let value = (*tail_code).operand.f64.to_bits();
+    let dst_local = (*tail_code.add(1)).operand.local_addr;
+    write_local_u64(ctx.stack, &ctx.local_reference(), dst_local, value);
+    if tee {
+        vm_try!(ctx.stack.push_u64(value));
+    }
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_f64_const_set8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_f64_const_set_impl(tail_code, ctx, false)
+}
+
+pub unsafe fn op_f64_const_tee8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_f64_const_set_impl(tail_code, ctx, true)
+}
+
+#[inline(always)]
+unsafe fn op_local_branch_u32(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    zero_test: bool,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let local_addr = (*tail_code).operand.local_addr;
+    let target = (*tail_code.add(1)).operand.jump_addr;
+    let cond = local_u32(ctx.stack, &ctx.local_reference(), local_addr) == 0;
+    let taken = if zero_test { cond } else { !cond };
+    let ptr = match (branch_kind, taken) {
+        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
+        (ControlBranchKind::BrIf, false) => tail_code.offset(2),
+        (ControlBranchKind::If, true) => tail_code.offset(2),
+        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
+    };
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_i32_local_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u32(tail_code, ctx, false, ControlBranchKind::BrIf)
+}
+
 pub unsafe fn op_i32_local_eqz_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    op_local_branch_u32(tail_code, ctx, true, ControlBranchKind::BrIf)
+}
+
+pub unsafe fn op_i32_local_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_local_branch_u32(tail_code, ctx, false, ControlBranchKind::If)
+}
+
+pub unsafe fn op_i32_local_eqz_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u32(tail_code, ctx, true, ControlBranchKind::If)
+}
+
+#[inline(always)]
+unsafe fn op_local_branch_u64(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    zero_test: bool,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
     let local_addr = (*tail_code).operand.local_addr;
     let target = (*tail_code.add(1)).operand.jump_addr;
-    let ptr = if local_u32(ctx.stack, &ctx.local_reference(), local_addr) == 0 {
-        ctx.code().offset(target as isize)
-    } else {
-        tail_code.offset(2)
+    let cond = local_u64(ctx.stack, &ctx.local_reference(), local_addr) == 0;
+    let taken = if zero_test { cond } else { !cond };
+    let ptr = match (branch_kind, taken) {
+        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
+        (ControlBranchKind::BrIf, false) => tail_code.offset(2),
+        (ControlBranchKind::If, true) => tail_code.offset(2),
+        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
     };
     call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_i64_local_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u64(tail_code, ctx, false, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i64_local_eqz_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
+    op_local_branch_u64(tail_code, ctx, true, ControlBranchKind::BrIf)
+}
+
+pub unsafe fn op_i64_local_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    op_local_branch_u64(tail_code, ctx, false, ControlBranchKind::If)
+}
+
+pub unsafe fn op_i64_local_eqz_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_local_branch_u64(tail_code, ctx, true, ControlBranchKind::If)
+}
+
+#[inline(always)]
+unsafe fn op_i32_local_and_imm_branch(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    zero_test: bool,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
     let local_addr = (*tail_code).operand.local_addr;
-    let target = (*tail_code.add(1)).operand.jump_addr;
-    let ptr = if local_u64(ctx.stack, &ctx.local_reference(), local_addr) == 0 {
-        ctx.code().offset(target as isize)
-    } else {
-        tail_code.offset(2)
+    let imm = (*tail_code.add(1)).operand.i32 as u32;
+    let target = (*tail_code.add(2)).operand.jump_addr;
+    let cond = (local_u32(ctx.stack, &ctx.local_reference(), local_addr) & imm) == 0;
+    let taken = if zero_test { cond } else { !cond };
+    let ptr = match (branch_kind, taken) {
+        (ControlBranchKind::BrIf, true) => ctx.code().offset(target as isize),
+        (ControlBranchKind::BrIf, false) => tail_code.offset(3),
+        (ControlBranchKind::If, true) => tail_code.offset(3),
+        (ControlBranchKind::If, false) => ctx.code().offset(target as isize),
     };
     call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_i32_local_and_imm_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_and_imm_branch(tail_code, ctx, false, ControlBranchKind::BrIf)
+}
+
+pub unsafe fn op_i32_local_and_imm_eqz_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_and_imm_branch(tail_code, ctx, true, ControlBranchKind::BrIf)
+}
+
+pub unsafe fn op_i32_local_and_imm_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_and_imm_branch(tail_code, ctx, false, ControlBranchKind::If)
+}
+
+pub unsafe fn op_i32_local_and_imm_eqz_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_i32_local_and_imm_branch(tail_code, ctx, true, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i32_local_local_ge_u_br_if(
@@ -839,6 +1111,22 @@ pub unsafe fn op_i32_local_local_store16(
     call_next(tail_code, 3, ctx)
 }
 
+pub unsafe fn op_i32_local_scalar_imm_push4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let src_local = (*tail_code).operand.local_addr;
+    let imm = (*tail_code.add(1)).operand.i32 as u32;
+    let kind = I32ScalarKind::from_raw((*tail_code.add(2)).operand.u32);
+    let value = vm_try!(i32_scalar_eval(
+        local_u32(ctx.stack, &ctx.local_reference(), src_local),
+        imm,
+        kind,
+    ));
+    vm_try!(ctx.stack.push_u32(value));
+    call_next(tail_code, 3, ctx)
+}
+
 pub unsafe fn op_i32_local_scalar_imm_set4(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -977,6 +1265,22 @@ pub unsafe fn op_f64_local_scalar_imm_tee8(
     write_local_u64(ctx.stack, &ctx.local_reference(), dst_local, value);
     vm_try!(ctx.stack.push_u64(value));
     call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_i32_local_local_scalar_push4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = I32ScalarKind::from_raw((*tail_code.add(2)).operand.u32);
+    let value = vm_try!(i32_scalar_eval(
+        local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+        local_u32(ctx.stack, &ctx.local_reference(), rhs_local),
+        kind,
+    ));
+    vm_try!(ctx.stack.push_u32(value));
+    call_next(tail_code, 3, ctx)
 }
 
 pub unsafe fn op_i32_local_local_scalar_set4(
@@ -1565,6 +1869,294 @@ pub unsafe fn op_f64_local_const_compare_br_if(
         tail_code.offset(4)
     };
     call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_i32_local_local_compare_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = IntCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select4_with_condition(
+        ctx,
+        i32_compare_eval(
+            local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+            local_u32(ctx.stack, &ctx.local_reference(), rhs_local),
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_local_local_compare_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = IntCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select8_with_condition(
+        ctx,
+        i32_compare_eval(
+            local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+            local_u32(ctx.stack, &ctx.local_reference(), rhs_local),
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_local_const_compare_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.i32 as u32;
+    let kind = IntCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select4_with_condition(
+        ctx,
+        i32_compare_eval(
+            local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+            rhs,
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_local_const_compare_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.i32 as u32;
+    let kind = IntCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select8_with_condition(
+        ctx,
+        i32_compare_eval(
+            local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+            rhs,
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i64_local_local_compare_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = IntCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select4_with_condition(
+        ctx,
+        i64_compare_eval(
+            local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+            local_u64(ctx.stack, &ctx.local_reference(), rhs_local),
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i64_local_local_compare_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = IntCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select8_with_condition(
+        ctx,
+        i64_compare_eval(
+            local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+            local_u64(ctx.stack, &ctx.local_reference(), rhs_local),
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i64_local_const_compare_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.u64;
+    let kind = IntCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select4_with_condition(
+        ctx,
+        i64_compare_eval(
+            local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+            rhs,
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i64_local_const_compare_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.u64;
+    let kind = IntCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select8_with_condition(
+        ctx,
+        i64_compare_eval(
+            local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+            rhs,
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_f32_local_local_compare_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = FloatCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select4_with_condition(
+        ctx,
+        f32_compare_eval(
+            local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+            local_u32(ctx.stack, &ctx.local_reference(), rhs_local),
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_f32_local_local_compare_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = FloatCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select8_with_condition(
+        ctx,
+        f32_compare_eval(
+            local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+            local_u32(ctx.stack, &ctx.local_reference(), rhs_local),
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_f32_local_const_compare_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.f32.to_bits();
+    let kind = FloatCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select4_with_condition(
+        ctx,
+        f32_compare_eval(
+            local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+            rhs,
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_f32_local_const_compare_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.f32.to_bits();
+    let kind = FloatCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select8_with_condition(
+        ctx,
+        f32_compare_eval(
+            local_u32(ctx.stack, &ctx.local_reference(), lhs_local),
+            rhs,
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_f64_local_local_compare_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = FloatCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select4_with_condition(
+        ctx,
+        f64_compare_eval(
+            local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+            local_u64(ctx.stack, &ctx.local_reference(), rhs_local),
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_f64_local_local_compare_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs_local = (*tail_code.add(1)).operand.local_addr;
+    let kind = FloatCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select8_with_condition(
+        ctx,
+        f64_compare_eval(
+            local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+            local_u64(ctx.stack, &ctx.local_reference(), rhs_local),
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_f64_local_const_compare_select4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.f64.to_bits();
+    let kind = FloatCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select4_with_condition(
+        ctx,
+        f64_compare_eval(
+            local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+            rhs,
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_f64_local_const_compare_select8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let lhs_local = (*tail_code).operand.local_addr;
+    let rhs = (*tail_code.add(1)).operand.f64.to_bits();
+    let kind = FloatCompareKind::from_raw((*tail_code.add(2)).operand.u32);
+    select8_with_condition(
+        ctx,
+        f64_compare_eval(
+            local_u64(ctx.stack, &ctx.local_reference(), lhs_local),
+            rhs,
+            kind,
+        ),
+    );
+    call_next(tail_code, 3, ctx)
 }
 
 pub unsafe fn op_load_const_local4(

@@ -933,12 +933,22 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     if matches!(x, ValType::ExternRef | ValType::FuncRef) {
                         Err(WasmParserError::InvalidStackValTypeAny)?
                     }
-                    instrs.push(Instr { op: vm::op_select });
-                    instrs.push(Instr {
-                        operand: Operand {
-                            select: x.stack_size().u32(),
-                        },
-                    });
+                    match x.stack_size() {
+                        ValueSize::Byte4 => {
+                            instrs.push(Instr { op: vm::op_select4 });
+                        }
+                        ValueSize::Byte8 => {
+                            instrs.push(Instr { op: vm::op_select8 });
+                        }
+                        _ => {
+                            instrs.push(Instr { op: vm::op_select });
+                            instrs.push(Instr {
+                                operand: Operand {
+                                    select: x.stack_size().u32(),
+                                },
+                            });
+                        }
+                    }
                 } else {
                     let x = checker.pop()?;
                     if matches!(
@@ -948,12 +958,22 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         Err(WasmParserError::InvalidStackValTypeAny)?
                     }
                     if let MaybeUnreachable::Normal(x) = x {
-                        instrs.push(Instr { op: vm::op_select });
-                        instrs.push(Instr {
-                            operand: Operand {
-                                select: x.stack_size().u32(),
-                            },
-                        });
+                        match x.stack_size() {
+                            ValueSize::Byte4 => {
+                                instrs.push(Instr { op: vm::op_select4 });
+                            }
+                            ValueSize::Byte8 => {
+                                instrs.push(Instr { op: vm::op_select8 });
+                            }
+                            _ => {
+                                instrs.push(Instr { op: vm::op_select });
+                                instrs.push(Instr {
+                                    operand: Operand {
+                                        select: x.stack_size().u32(),
+                                    },
+                                });
+                            }
+                        }
 
                         checker.push(x);
                     } else {
@@ -975,10 +995,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 checker.op(&operand, &operand)?;
                 if !instrs.is_unreachable() {
                     let bytes = operand.iter().map(|v| v.stack_size().u32()).sum();
-                    instrs.push(Instr { op: vm::op_select });
-                    instrs.push(Instr {
-                        operand: Operand { select: bytes },
-                    });
+                    match bytes {
+                        4 => {
+                            instrs.push(Instr { op: vm::op_select4 });
+                        }
+                        8 => {
+                            instrs.push(Instr { op: vm::op_select8 });
+                        }
+                        _ => {
+                            instrs.push(Instr { op: vm::op_select });
+                            instrs.push(Instr {
+                                operand: Operand { select: bytes },
+                            });
+                        }
+                    }
                 }
                 (1 + len, false)
             }
@@ -4113,7 +4143,7 @@ mod tests {
     fn parser_specializes_default_memory_load_handler() {
         let local = op_at(
             r#"(module (memory 1) (func (export "f") (param i32) (result i32) local.get 0 i32.const 0 i32.add i32.load))"#,
-            5,
+            4,
         );
         assert!(std::ptr::fn_addr_eq(
             local,
@@ -4285,6 +4315,90 @@ mod tests {
     }
 
     #[test]
+    fn parser_specializes_i32_local_br_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32)
+                block
+                  local.get 0
+                  br_if 0
+                end))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_eqz_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32)
+                local.get 0
+                i32.eqz
+                if
+                  nop
+                end))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_eqz_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_and_eqz_br_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32)
+                block
+                  local.get 0
+                  i32.const 2
+                  i32.and
+                  i32.eqz
+                  br_if 0
+                end))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_and_imm_eqz_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_and_if_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.const 1
+                i32.and
+                if (result i32)
+                  i32.const 1
+                else
+                  i32.const 0
+                end))
+            "#,
+            0,
+        );
+        assert!(
+            std::ptr::fn_addr_eq(op, vm::op_i32_local_and_imm_if as crate::common::Op)
+                || std::ptr::fn_addr_eq(op, vm::op_i32_local_scalar_imm_push4 as crate::common::Op)
+        );
+    }
+
+    #[test]
     fn parser_specializes_i32_local_local_ge_u_br_if_superinstruction() {
         let op = op_at(
             r#"
@@ -4382,6 +4496,62 @@ mod tests {
     }
 
     #[test]
+    fn parser_specializes_local_copy4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (local i32)
+                local.get 0
+                local.set 1
+                local.get 1))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_local_copy4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_local_copy_tee4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (local i32)
+                local.get 0
+                local.tee 1))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_local_copy_tee4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_const_set4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                (local i32)
+                i32.const 7
+                local.set 0
+                local.get 0))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_const_set4 as crate::common::Op
+        ));
+    }
+
+    #[test]
     fn parser_specializes_i32_local_local_add_tee4_superinstruction() {
         let op = op_at(
             r#"
@@ -4454,6 +4624,46 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             op,
             vm::op_i32_local_shr_u_imm_set4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_add_imm_push4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.const 7
+                i32.add
+                i32.const 3
+                i32.xor))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_scalar_imm_push4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_sub_push4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32 i32) (result i32)
+                local.get 0
+                local.get 1
+                i32.sub
+                i32.const 1
+                i32.add))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_scalar_push4 as crate::common::Op
         ));
     }
 
@@ -4739,6 +4949,86 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             op,
             vm::op_f64_local_const_compare_br_if as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_select4_handler() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32 i32 i32) (result i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                select))
+            "#,
+            6,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_select4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_select8_handler() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i64 i64 i32) (result i64)
+                local.get 0
+                local.get 1
+                local.get 2
+                select))
+            "#,
+            6,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_select8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_local_compare_select4_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i32 i32 i32 i32) (result i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                local.get 3
+                i32.lt_u
+                select))
+            "#,
+            4,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_local_compare_select4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i64_local_const_compare_select8_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (func (export "f") (param i64 i64 i64) (result i64)
+                local.get 0
+                local.get 1
+                local.get 2
+                i64.const 7
+                i64.gt_s
+                select))
+            "#,
+            4,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i64_local_const_compare_select8 as crate::common::Op
         ));
     }
 

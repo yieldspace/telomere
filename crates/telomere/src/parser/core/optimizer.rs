@@ -125,7 +125,9 @@ enum DecodedKind {
     LocalGet(ValueSize, u32),
     LocalSet(ValueSize, u32),
     LocalTee(ValueSize, u32),
+    Select(ValueSize),
     BrIf(u32),
+    If(u32),
     Eqz(ValueSize),
     Scalar(TypedScalarOp),
     Compare(TypedCompareOp),
@@ -133,8 +135,39 @@ enum DecodedKind {
     Store(TypedStoreOp, MemArg),
 }
 
+#[derive(Clone, Copy)]
+enum ControlBranchKind {
+    BrIf,
+    If,
+}
+
 enum OptimizedInstruction {
     Raw(DecodedInstruction),
+    ConstSetTee {
+        old_range: Range<usize>,
+        value: TypedConst,
+        dst_local: u32,
+        tee: bool,
+    },
+    LocalCopy {
+        old_range: Range<usize>,
+        src_local: u32,
+        dst_local: u32,
+        width: ValueSize,
+        tee: bool,
+    },
+    LocalImmPush {
+        old_range: Range<usize>,
+        src_local: u32,
+        imm: TypedConst,
+        op: TypedScalarOp,
+    },
+    LocalLocalPush {
+        old_range: Range<usize>,
+        lhs_local_addr: u32,
+        rhs_local_addr: u32,
+        op: TypedScalarOp,
+    },
     LocalImmSetTee {
         old_range: Range<usize>,
         src_local: u32,
@@ -151,11 +184,21 @@ enum OptimizedInstruction {
         tee: bool,
         op: TypedScalarOp,
     },
-    LocalEqzBrIf {
+    LocalBranch {
         old_range: Range<usize>,
         local_addr: u32,
         target_old: u32,
         width: ValueSize,
+        zero_test: bool,
+        branch_kind: ControlBranchKind,
+    },
+    I32LocalAndImmBranch {
+        old_range: Range<usize>,
+        local_addr: u32,
+        imm: i32,
+        target_old: u32,
+        zero_test: bool,
+        branch_kind: ControlBranchKind,
     },
     I32LocalLocalGeUBrIf {
         old_range: Range<usize>,
@@ -193,6 +236,20 @@ enum OptimizedInstruction {
         target_old: u32,
         op: TypedCompareOp,
     },
+    CompareSelectLocal {
+        old_range: Range<usize>,
+        lhs_local_addr: u32,
+        rhs_local_addr: u32,
+        select_width: ValueSize,
+        op: TypedCompareOp,
+    },
+    CompareSelectConst {
+        old_range: Range<usize>,
+        lhs_local_addr: u32,
+        rhs_const: TypedConst,
+        select_width: ValueSize,
+        op: TypedCompareOp,
+    },
     LoadConstLocal {
         old_range: Range<usize>,
         start: u32,
@@ -222,14 +279,23 @@ enum OptimizedInstruction {
 type MatchOutcome = (usize, OptimizedInstruction);
 type Matcher = fn(&[DecodedInstruction], usize, &HashSet<usize>) -> Option<MatchOutcome>;
 
+const LOCAL_COPY_MATCHERS: &[Matcher] = &[match_local_copy];
+const CONST_SET_TEE_MATCHERS: &[Matcher] = &[match_const_set_tee];
+const LOCAL_IMM_PUSH_MATCHERS: &[Matcher] = &[match_local_imm_scalar_push];
+const LOCAL_LOCAL_PUSH_MATCHERS: &[Matcher] = &[match_local_local_scalar_push];
 const LOCAL_IMM_SET_TEE_MATCHERS: &[Matcher] = &[match_local_imm_scalar_set_tee];
 const LOCAL_LOCAL_SET_TEE_MATCHERS: &[Matcher] = &[match_local_local_scalar_set_tee];
 const COMPARE_SET_TEE_MATCHERS: &[Matcher] = &[
     match_local_local_compare_set_tee,
     match_local_const_compare_set_tee,
 ];
+const COMPARE_SELECT_MATCHERS: &[Matcher] = &[
+    match_local_local_compare_select,
+    match_local_const_compare_select,
+];
 const BRANCH_MATCHERS: &[Matcher] = &[
-    match_local_eqz_br_if,
+    match_i32_local_and_imm_branch,
+    match_local_branch,
     match_local_local_ge_u_br_if,
     match_local_local_compare_br_if,
     match_local_const_compare_br_if,
@@ -340,6 +406,20 @@ fn decode_kind(raw: &[Instr]) -> DecodedKind {
         vm::op_br_if,
         DecodedKind::BrIf(unsafe { raw[1].operand.jump_addr })
     );
+    decode2!(
+        vm::op_if,
+        DecodedKind::If(unsafe { raw[1].operand.jump_addr })
+    );
+
+    decode1!(vm::op_select4, DecodedKind::Select(ValueSize::Byte4));
+    decode1!(vm::op_select8, DecodedKind::Select(ValueSize::Byte8));
+    if raw.len() == 2 && std::ptr::fn_addr_eq(op, vm::op_select as crate::common::Op) {
+        match unsafe { raw[1].operand.select } {
+            4 => return DecodedKind::Select(ValueSize::Byte4),
+            8 => return DecodedKind::Select(ValueSize::Byte8),
+            _ => {}
+        }
+    }
 
     decode1!(vm::op_i32_eqz, DecodedKind::Eqz(ValueSize::Byte4));
     decode1!(vm::op_i64_eqz, DecodedKind::Eqz(ValueSize::Byte8));
@@ -820,9 +900,56 @@ fn fuse_superinstructions(
             index += consumed;
             continue;
         }
+        if let Some((consumed, fused)) = try_matchers(
+            COMPARE_SELECT_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
         if let Some((consumed, fused)) =
             try_matchers(BRANCH_MATCHERS, decoded.as_slice(), index, jump_targets)
         {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            CONST_SET_TEE_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) =
+            try_matchers(LOCAL_COPY_MATCHERS, decoded.as_slice(), index, jump_targets)
+        {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            LOCAL_IMM_PUSH_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            LOCAL_LOCAL_PUSH_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
             optimized.push(fused);
             index += consumed;
             continue;
@@ -904,6 +1031,13 @@ fn local_set_tee(kind: DecodedKind) -> Option<(ValueSize, u32, bool)> {
     match kind {
         DecodedKind::LocalSet(width, local_addr) => Some((width, local_addr, false)),
         DecodedKind::LocalTee(width, local_addr) => Some((width, local_addr, true)),
+        _ => None,
+    }
+}
+
+fn select_width(kind: DecodedKind) -> Option<ValueSize> {
+    match kind {
+        DecodedKind::Select(width) => Some(width),
         _ => None,
     }
 }
@@ -991,6 +1125,111 @@ fn match_local_imm_scalar_set_tee(
     ))
 }
 
+fn match_local_copy(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second] = decoded.get(index..index + 2)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 2) {
+        return None;
+    }
+    let (src_width, src_local) = local_get(first.kind)?;
+    let (dst_width, dst_local, tee) = local_set_tee(second.kind)?;
+    if !matches!(src_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !same_width(src_width, dst_width)
+    {
+        return None;
+    }
+
+    Some((
+        2,
+        OptimizedInstruction::LocalCopy {
+            old_range: first.old_range.start..second.old_range.end,
+            src_local,
+            dst_local,
+            width: src_width,
+            tee,
+        },
+    ))
+}
+
+fn match_const_set_tee(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second] = decoded.get(index..index + 2)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 2) {
+        return None;
+    }
+    let value = match first.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let (dst_width, dst_local, tee) = local_set_tee(second.kind)?;
+    if !matches!(dst_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !same_width(value.width(), dst_width)
+    {
+        return None;
+    }
+
+    Some((
+        2,
+        OptimizedInstruction::ConstSetTee {
+            old_range: first.old_range.start..second.old_range.end,
+            value,
+            dst_local,
+            tee,
+        },
+    ))
+}
+
+fn match_local_imm_scalar_push(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third] = decoded.get(index..index + 3)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 3) {
+        return None;
+    }
+    let (lhs_width, src_local) = local_get(first.kind)?;
+    let imm = match second.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let op = match third.kind {
+        DecodedKind::Scalar(op) => op,
+        _ => return None,
+    };
+
+    if !same_width(lhs_width, ValueSize::Byte4)
+        || !same_width(lhs_width, imm.width())
+        || !same_width(lhs_width, op.width())
+        || !matches!(imm, TypedConst::I32(_))
+        || !matches!(op, TypedScalarOp::I32(_))
+    {
+        return None;
+    }
+
+    Some((
+        3,
+        OptimizedInstruction::LocalImmPush {
+            old_range: first.old_range.start..third.old_range.end,
+            src_local,
+            imm,
+            op,
+        },
+    ))
+}
+
 fn match_local_local_scalar_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
@@ -1031,7 +1270,7 @@ fn match_local_local_scalar_set_tee(
     ))
 }
 
-fn match_local_eqz_br_if(
+fn match_local_local_scalar_push(
     decoded: &[DecodedInstruction],
     index: usize,
     jump_targets: &HashSet<usize>,
@@ -1042,26 +1281,185 @@ fn match_local_eqz_br_if(
     if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 3) {
         return None;
     }
-    let (width, local_addr) = local_get(first.kind)?;
-    let eqz_width = match second.kind {
-        DecodedKind::Eqz(width) => width,
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let (rhs_width, rhs_local_addr) = local_get(second.kind)?;
+    let op = match third.kind {
+        DecodedKind::Scalar(op) => op,
         _ => return None,
     };
-    let target_old = match third.kind {
-        DecodedKind::BrIf(target) => target,
-        _ => return None,
-    };
-    if !same_width(width, eqz_width) || !matches!(width, ValueSize::Byte4 | ValueSize::Byte8) {
+
+    if !same_width(lhs_width, ValueSize::Byte4)
+        || !same_width(lhs_width, rhs_width)
+        || !same_width(lhs_width, op.width())
+        || !matches!(op, TypedScalarOp::I32(_))
+    {
         return None;
     }
 
     Some((
         3,
-        OptimizedInstruction::LocalEqzBrIf {
+        OptimizedInstruction::LocalLocalPush {
             old_range: first.old_range.start..third.old_range.end,
+            lhs_local_addr,
+            rhs_local_addr,
+            op,
+        },
+    ))
+}
+
+fn match_i32_local_and_imm_branch(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    let (width, local_addr) = local_get(first.kind)?;
+    let imm = match second.kind {
+        DecodedKind::Const(TypedConst::I32(value)) => value,
+        _ => return None,
+    };
+    if !same_width(width, ValueSize::Byte4)
+        || !matches!(
+            third.kind,
+            DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::And))
+        )
+    {
+        return None;
+    }
+
+    let (zero_test, branch_kind, target_old, end, consumed) = match fourth.kind {
+        DecodedKind::Eqz(ValueSize::Byte4) => {
+            let fifth = decoded.get(index + 4)?;
+            if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 5) {
+                return None;
+            }
+            match fifth.kind {
+                DecodedKind::BrIf(target) => (
+                    true,
+                    ControlBranchKind::BrIf,
+                    target,
+                    fifth.old_range.end,
+                    5,
+                ),
+                DecodedKind::If(target) => {
+                    (true, ControlBranchKind::If, target, fifth.old_range.end, 5)
+                }
+                _ => return None,
+            }
+        }
+        DecodedKind::BrIf(target) => {
+            if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+                return None;
+            }
+            (
+                false,
+                ControlBranchKind::BrIf,
+                target,
+                fourth.old_range.end,
+                4,
+            )
+        }
+        DecodedKind::If(target) => {
+            if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+                return None;
+            }
+            (
+                false,
+                ControlBranchKind::If,
+                target,
+                fourth.old_range.end,
+                4,
+            )
+        }
+        _ => return None,
+    };
+
+    Some((
+        consumed,
+        OptimizedInstruction::I32LocalAndImmBranch {
+            old_range: first.old_range.start..end,
+            local_addr,
+            imm,
+            target_old,
+            zero_test,
+            branch_kind,
+        },
+    ))
+}
+
+fn match_local_branch(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second] = decoded.get(index..index + 2)? else {
+        return None;
+    };
+    let (width, local_addr) = local_get(first.kind)?;
+    if !matches!(width, ValueSize::Byte4 | ValueSize::Byte8) {
+        return None;
+    }
+
+    let (zero_test, branch_kind, target_old, end, consumed) = match second.kind {
+        DecodedKind::Eqz(eqz_width) => {
+            let third = decoded.get(index + 2)?;
+            if !same_width(width, eqz_width)
+                || sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 3)
+            {
+                return None;
+            }
+            match third.kind {
+                DecodedKind::BrIf(target) => (
+                    true,
+                    ControlBranchKind::BrIf,
+                    target,
+                    third.old_range.end,
+                    3,
+                ),
+                DecodedKind::If(target) => {
+                    (true, ControlBranchKind::If, target, third.old_range.end, 3)
+                }
+                _ => return None,
+            }
+        }
+        DecodedKind::BrIf(target) => {
+            if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 2) {
+                return None;
+            }
+            (
+                false,
+                ControlBranchKind::BrIf,
+                target,
+                second.old_range.end,
+                2,
+            )
+        }
+        DecodedKind::If(target) => {
+            if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 2) {
+                return None;
+            }
+            (
+                false,
+                ControlBranchKind::If,
+                target,
+                second.old_range.end,
+                2,
+            )
+        }
+        _ => return None,
+    };
+
+    Some((
+        consumed,
+        OptimizedInstruction::LocalBranch {
+            old_range: first.old_range.start..end,
             local_addr,
             target_old,
             width,
+            zero_test,
+            branch_kind,
         },
     ))
 }
@@ -1270,6 +1668,86 @@ fn match_local_const_compare_br_if(
     ))
 }
 
+fn match_local_local_compare_select(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+        return None;
+    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let (rhs_width, rhs_local_addr) = local_get(second.kind)?;
+    let op = match third.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let select_width = select_width(fourth.kind)?;
+    if !same_width(lhs_width, rhs_width)
+        || !same_width(lhs_width, op.width())
+        || !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !matches!(select_width, ValueSize::Byte4 | ValueSize::Byte8)
+    {
+        return None;
+    }
+
+    Some((
+        4,
+        OptimizedInstruction::CompareSelectLocal {
+            old_range: first.old_range.start..fourth.old_range.end,
+            lhs_local_addr,
+            rhs_local_addr,
+            select_width,
+            op,
+        },
+    ))
+}
+
+fn match_local_const_compare_select(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+        return None;
+    }
+    let (lhs_width, lhs_local_addr) = local_get(first.kind)?;
+    let rhs_const = match second.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let op = match third.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let select_width = select_width(fourth.kind)?;
+    if !same_width(lhs_width, op.width())
+        || !same_width(lhs_width, rhs_const.width())
+        || !matches!(lhs_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !matches!(select_width, ValueSize::Byte4 | ValueSize::Byte8)
+        || !compare_matches_const(op, rhs_const)
+    {
+        return None;
+    }
+
+    Some((
+        4,
+        OptimizedInstruction::CompareSelectConst {
+            old_range: first.old_range.start..fourth.old_range.end,
+            lhs_local_addr,
+            rhs_const,
+            select_width,
+            op,
+        },
+    ))
+}
+
 fn match_const_load(
     decoded: &[DecodedInstruction],
     index: usize,
@@ -1428,14 +1906,21 @@ fn lower_program(optimized: Vec<OptimizedInstruction>, old_flat_len: usize) -> V
 fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
     match instruction {
         OptimizedInstruction::Raw(decoded) => &decoded.old_range,
-        OptimizedInstruction::LocalImmSetTee { old_range, .. }
+        OptimizedInstruction::ConstSetTee { old_range, .. }
+        | OptimizedInstruction::LocalCopy { old_range, .. }
+        | OptimizedInstruction::LocalImmPush { old_range, .. }
+        | OptimizedInstruction::LocalLocalPush { old_range, .. }
+        | OptimizedInstruction::LocalImmSetTee { old_range, .. }
         | OptimizedInstruction::LocalLocalSetTee { old_range, .. }
-        | OptimizedInstruction::LocalEqzBrIf { old_range, .. }
+        | OptimizedInstruction::LocalBranch { old_range, .. }
+        | OptimizedInstruction::I32LocalAndImmBranch { old_range, .. }
         | OptimizedInstruction::I32LocalLocalGeUBrIf { old_range, .. }
         | OptimizedInstruction::CompareSetTeeLocal { old_range, .. }
         | OptimizedInstruction::CompareSetTeeConst { old_range, .. }
         | OptimizedInstruction::CompareBrIfLocal { old_range, .. }
         | OptimizedInstruction::CompareBrIfConst { old_range, .. }
+        | OptimizedInstruction::CompareSelectLocal { old_range, .. }
+        | OptimizedInstruction::CompareSelectConst { old_range, .. }
         | OptimizedInstruction::LoadConstLocal { old_range, .. }
         | OptimizedInstruction::StoreConstLocal { old_range, .. }
         | OptimizedInstruction::LocalAddrLoad { old_range, .. }
@@ -1446,6 +1931,11 @@ fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
 fn output_len(instruction: &OptimizedInstruction) -> usize {
     match instruction {
         OptimizedInstruction::Raw(decoded) => decoded.raw.len(),
+        OptimizedInstruction::ConstSetTee { .. } => 3,
+        OptimizedInstruction::LocalCopy { .. } => 3,
+        OptimizedInstruction::LocalImmPush { .. } | OptimizedInstruction::LocalLocalPush { .. } => {
+            4
+        }
         OptimizedInstruction::LocalImmSetTee { op, .. } => {
             if is_existing_i32_local_imm_fastpath(*op) {
                 4
@@ -1460,12 +1950,15 @@ fn output_len(instruction: &OptimizedInstruction) -> usize {
                 5
             }
         }
-        OptimizedInstruction::LocalEqzBrIf { .. } => 3,
+        OptimizedInstruction::LocalBranch { .. } => 3,
+        OptimizedInstruction::I32LocalAndImmBranch { .. } => 4,
         OptimizedInstruction::I32LocalLocalGeUBrIf { .. } => 4,
         OptimizedInstruction::CompareSetTeeLocal { .. }
         | OptimizedInstruction::CompareSetTeeConst { .. }
         | OptimizedInstruction::CompareBrIfLocal { .. }
         | OptimizedInstruction::CompareBrIfConst { .. } => 5,
+        OptimizedInstruction::CompareSelectLocal { .. }
+        | OptimizedInstruction::CompareSelectConst { .. } => 4,
         OptimizedInstruction::LoadConstLocal { op, .. } => {
             if op.uses_dedicated_const() {
                 2
@@ -1558,6 +2051,99 @@ fn lower_instruction(
     match instruction {
         OptimizedInstruction::Raw(decoded) => {
             lowered.extend(rewrite_raw_jumps(decoded.raw.as_ref(), old_to_new))
+        }
+        OptimizedInstruction::ConstSetTee {
+            value,
+            dst_local,
+            tee,
+            ..
+        } => {
+            let op = match (value, tee) {
+                (TypedConst::I32(_), false) => vm::op_i32_const_set4,
+                (TypedConst::I32(_), true) => vm::op_i32_const_tee4,
+                (TypedConst::I64(_), false) => vm::op_i64_const_set8,
+                (TypedConst::I64(_), true) => vm::op_i64_const_tee8,
+                (TypedConst::F32(_), false) => vm::op_f32_const_set4,
+                (TypedConst::F32(_), true) => vm::op_f32_const_tee4,
+                (TypedConst::F64(_), false) => vm::op_f64_const_set8,
+                (TypedConst::F64(_), true) => vm::op_f64_const_tee8,
+            };
+            lowered.push(Instr { op });
+            push_const_operand(lowered, value);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: dst_local,
+                },
+            });
+        }
+        OptimizedInstruction::LocalCopy {
+            src_local,
+            dst_local,
+            width,
+            tee,
+            ..
+        } => {
+            let op = match (width, tee) {
+                (ValueSize::Byte4, false) => vm::op_local_copy4,
+                (ValueSize::Byte4, true) => vm::op_local_copy_tee4,
+                (ValueSize::Byte8, false) => vm::op_local_copy8,
+                (ValueSize::Byte8, true) => vm::op_local_copy_tee8,
+                _ => unreachable!("unsupported local copy width"),
+            };
+            lowered.push(Instr { op });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: src_local,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: dst_local,
+                },
+            });
+        }
+        OptimizedInstruction::LocalImmPush {
+            src_local, imm, op, ..
+        } => {
+            lowered.push(Instr {
+                op: vm::op_i32_local_scalar_imm_push4,
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: src_local,
+                },
+            });
+            push_const_operand(lowered, imm);
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: scalar_kind_operand(op),
+                },
+            });
+        }
+        OptimizedInstruction::LocalLocalPush {
+            lhs_local_addr,
+            rhs_local_addr,
+            op,
+            ..
+        } => {
+            lowered.push(Instr {
+                op: vm::op_i32_local_local_scalar_push4,
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: rhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: scalar_kind_operand(op),
+                },
+            });
         }
         OptimizedInstruction::LocalImmSetTee {
             src_local,
@@ -1858,21 +2444,55 @@ fn lower_instruction(
                 });
             }
         },
-        OptimizedInstruction::LocalEqzBrIf {
+        OptimizedInstruction::LocalBranch {
             local_addr,
             target_old,
             width,
+            zero_test,
+            branch_kind,
             ..
         } => {
-            lowered.push(Instr {
-                op: match width {
-                    ValueSize::Byte4 => vm::op_i32_local_eqz_br_if,
-                    ValueSize::Byte8 => vm::op_i64_local_eqz_br_if,
-                    ValueSize::Byte16 => unreachable!(),
-                },
-            });
+            let op = match (width, zero_test, branch_kind) {
+                (ValueSize::Byte4, false, ControlBranchKind::BrIf) => vm::op_i32_local_br_if,
+                (ValueSize::Byte4, true, ControlBranchKind::BrIf) => vm::op_i32_local_eqz_br_if,
+                (ValueSize::Byte8, false, ControlBranchKind::BrIf) => vm::op_i64_local_br_if,
+                (ValueSize::Byte8, true, ControlBranchKind::BrIf) => vm::op_i64_local_eqz_br_if,
+                (ValueSize::Byte4, false, ControlBranchKind::If) => vm::op_i32_local_if,
+                (ValueSize::Byte4, true, ControlBranchKind::If) => vm::op_i32_local_eqz_if,
+                (ValueSize::Byte8, false, ControlBranchKind::If) => vm::op_i64_local_if,
+                (ValueSize::Byte8, true, ControlBranchKind::If) => vm::op_i64_local_eqz_if,
+                (ValueSize::Byte16, _, _) => unreachable!(),
+            };
+            lowered.push(Instr { op });
             lowered.push(Instr {
                 operand: Operand { local_addr },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    jump_addr: remap_jump_target(target_old, old_to_new),
+                },
+            });
+        }
+        OptimizedInstruction::I32LocalAndImmBranch {
+            local_addr,
+            imm,
+            target_old,
+            zero_test,
+            branch_kind,
+            ..
+        } => {
+            let op = match (zero_test, branch_kind) {
+                (false, ControlBranchKind::BrIf) => vm::op_i32_local_and_imm_br_if,
+                (true, ControlBranchKind::BrIf) => vm::op_i32_local_and_imm_eqz_br_if,
+                (false, ControlBranchKind::If) => vm::op_i32_local_and_imm_if,
+                (true, ControlBranchKind::If) => vm::op_i32_local_and_imm_eqz_if,
+            };
+            lowered.push(Instr { op });
+            lowered.push(Instr {
+                operand: Operand { local_addr },
+            });
+            lowered.push(Instr {
+                operand: Operand { i32: imm },
             });
             lowered.push(Instr {
                 operand: Operand {
@@ -2041,6 +2661,104 @@ fn lower_instruction(
                     jump_addr: remap_jump_target(target_old, old_to_new),
                 },
             });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::CompareSelectLocal {
+            lhs_local_addr,
+            rhs_local_addr,
+            select_width,
+            op: compare_op,
+            ..
+        } => {
+            let handler = match (compare_op, select_width) {
+                (TypedCompareOp::I32(_), ValueSize::Byte4) => {
+                    vm::op_i32_local_local_compare_select4
+                }
+                (TypedCompareOp::I32(_), ValueSize::Byte8) => {
+                    vm::op_i32_local_local_compare_select8
+                }
+                (TypedCompareOp::I64(_), ValueSize::Byte4) => {
+                    vm::op_i64_local_local_compare_select4
+                }
+                (TypedCompareOp::I64(_), ValueSize::Byte8) => {
+                    vm::op_i64_local_local_compare_select8
+                }
+                (TypedCompareOp::F32(_), ValueSize::Byte4) => {
+                    vm::op_f32_local_local_compare_select4
+                }
+                (TypedCompareOp::F32(_), ValueSize::Byte8) => {
+                    vm::op_f32_local_local_compare_select8
+                }
+                (TypedCompareOp::F64(_), ValueSize::Byte4) => {
+                    vm::op_f64_local_local_compare_select4
+                }
+                (TypedCompareOp::F64(_), ValueSize::Byte8) => {
+                    vm::op_f64_local_local_compare_select8
+                }
+                (_, ValueSize::Byte16) => unreachable!("select fast path only supports 4/8 byte"),
+            };
+            lowered.push(Instr { op: handler });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: rhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::CompareSelectConst {
+            lhs_local_addr,
+            rhs_const,
+            select_width,
+            op: compare_op,
+            ..
+        } => {
+            let handler = match (compare_op, select_width) {
+                (TypedCompareOp::I32(_), ValueSize::Byte4) => {
+                    vm::op_i32_local_const_compare_select4
+                }
+                (TypedCompareOp::I32(_), ValueSize::Byte8) => {
+                    vm::op_i32_local_const_compare_select8
+                }
+                (TypedCompareOp::I64(_), ValueSize::Byte4) => {
+                    vm::op_i64_local_const_compare_select4
+                }
+                (TypedCompareOp::I64(_), ValueSize::Byte8) => {
+                    vm::op_i64_local_const_compare_select8
+                }
+                (TypedCompareOp::F32(_), ValueSize::Byte4) => {
+                    vm::op_f32_local_const_compare_select4
+                }
+                (TypedCompareOp::F32(_), ValueSize::Byte8) => {
+                    vm::op_f32_local_const_compare_select8
+                }
+                (TypedCompareOp::F64(_), ValueSize::Byte4) => {
+                    vm::op_f64_local_const_compare_select4
+                }
+                (TypedCompareOp::F64(_), ValueSize::Byte8) => {
+                    vm::op_f64_local_const_compare_select8
+                }
+                (_, ValueSize::Byte16) => unreachable!("select fast path only supports 4/8 byte"),
+            };
+            lowered.push(Instr { op: handler });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: lhs_local_addr,
+                },
+            });
+            push_const_operand(lowered, rhs_const);
             lowered.push(Instr {
                 operand: Operand {
                     u32: compare_kind_operand(compare_op),
@@ -2353,6 +3071,83 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             unsafe { optimized[0].op },
             vm::op_local_get8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn optimizer_does_not_fuse_local_imm_push_across_jump_target_boundary() {
+        let optimized = optimize_core_program(InstructionProgram {
+            instr: vec![
+                Instr { op: vm::op_br_if },
+                Instr {
+                    operand: Operand { jump_addr: 4 },
+                },
+                Instr {
+                    op: vm::op_local_get4,
+                },
+                Instr {
+                    operand: Operand { local_addr: 0 },
+                },
+                Instr {
+                    op: vm::op_i32_const,
+                },
+                Instr {
+                    operand: Operand { i32: 7 },
+                },
+                Instr { op: vm::op_i32_add },
+            ],
+            instruction_starts: vec![0, 2, 4, 6],
+        });
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { optimized[2].op },
+            vm::op_local_get4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn optimizer_does_not_fuse_compare_select_across_jump_target_boundary() {
+        let optimized = optimize_core_program(InstructionProgram {
+            instr: vec![
+                Instr { op: vm::op_br_if },
+                Instr {
+                    operand: Operand { jump_addr: 8 },
+                },
+                Instr {
+                    op: vm::op_local_get4,
+                },
+                Instr {
+                    operand: Operand { local_addr: 0 },
+                },
+                Instr {
+                    op: vm::op_local_get4,
+                },
+                Instr {
+                    operand: Operand { local_addr: 4 },
+                },
+                Instr {
+                    op: vm::op_local_get4,
+                },
+                Instr {
+                    operand: Operand { local_addr: 8 },
+                },
+                Instr {
+                    op: vm::op_local_get4,
+                },
+                Instr {
+                    operand: Operand { local_addr: 12 },
+                },
+                Instr {
+                    op: vm::op_i32_lt_u,
+                },
+                Instr { op: vm::op_select4 },
+            ],
+            instruction_starts: vec![0, 2, 4, 6, 8, 10, 11],
+        });
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { optimized[6].op },
+            vm::op_local_get4 as crate::common::Op
         ));
     }
 }

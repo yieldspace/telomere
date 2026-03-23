@@ -1,5 +1,17 @@
 use super::*;
 
+#[inline(always)]
+unsafe fn select4_in_place(ctx: &mut ExecuteContext) {
+    let cond = ctx.stack.pop_u32();
+    ctx.stack.select_top_u32(cond);
+}
+
+#[inline(always)]
+unsafe fn select8_in_place(ctx: &mut ExecuteContext) {
+    let cond = ctx.stack.pop_u32();
+    ctx.stack.select_top_u64(cond);
+}
+
 /// WebAssembly `drop`.
 ///
 /// Spec:
@@ -67,6 +79,46 @@ unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 pub unsafe fn op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     vm_try!(internal_op_select(tail_code, ctx));
     call_next(tail_code, 1, ctx)
+}
+
+/// WebAssembly `select` for validated 4-byte operands.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[lhs, rhs, i32] -> [value]`.
+/// Traps: none.
+/// Notes: Uses the scalar stack cache fast path instead of the generic byte-copy select helper.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_select4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    select4_in_place(ctx);
+    call_next(tail_code, 0, ctx)
+}
+
+/// WebAssembly `select` for validated 8-byte operands.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[lhs, rhs, i32] -> [value]`.
+/// Traps: none.
+/// Notes: Uses the scalar stack cache fast path instead of the generic byte-copy select helper.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_select8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    select8_in_place(ctx);
+    call_next(tail_code, 0, ctx)
 }
 
 /// WebAssembly `local.get`.

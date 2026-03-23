@@ -519,6 +519,54 @@ impl Stack {
             CachedOperandWidth::Four => unreachable!("validated i64 pair expected"),
         }
     }
+    #[inline(always)]
+    pub fn select_top_u32(&mut self, cond: u32) {
+        let (lhs, rhs) = self.pop2_u32();
+        self.replace_top_u32(if cond == 0 { rhs } else { lhs });
+    }
+    #[inline(always)]
+    pub fn select_top_u64(&mut self, cond: u32) {
+        let (lhs, rhs) = self.pop2_u64();
+        self.replace_top_u64(if cond == 0 { rhs } else { lhs });
+    }
+    #[inline(always)]
+    fn block_return4(&mut self, dst: usize) {
+        let src = self.top - 4;
+        if src == dst {
+            self.top = dst + 4;
+            return;
+        }
+        let value = match self.cache.width {
+            CachedOperandWidth::Four => self.cache.bits as u32,
+            CachedOperandWidth::None => trusted_read_u32(&self.memory[src..src + 4]),
+            CachedOperandWidth::Eight => unreachable!("validated 4-byte block return"),
+        };
+        self.top = dst + 4;
+        self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
+    }
+    #[inline(always)]
+    fn block_return8(&mut self, dst: usize) {
+        let src = self.top - 8;
+        if src == dst {
+            self.top = dst + 8;
+            return;
+        }
+        let value = match self.cache.width {
+            CachedOperandWidth::Eight => self.cache.bits,
+            CachedOperandWidth::None => trusted_read_u64(&self.memory[src..src + 8]),
+            CachedOperandWidth::Four => unreachable!("validated 8-byte block return"),
+        };
+        self.top = dst + 8;
+        self.set_cached_operand(CachedOperandWidth::Eight, value);
+    }
+    #[cold]
+    #[inline(never)]
+    fn block_return_generic(&mut self, dst: usize, return_size: usize) {
+        self.flush_cached_operands();
+        self.memory
+            .copy_within(self.top - return_size..self.top, dst);
+        self.top = dst + return_size;
+    }
     pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
         self.flush_cached_operands();
         &mut self.memory[reference.local_top..self.top + reference.local_size as usize]
@@ -829,12 +877,16 @@ impl Stack {
         stack_top: usize,
         return_size: usize,
     ) {
-        self.flush_cached_operands();
-        self.memory.copy_within(
-            self.top - return_size..self.top,
-            reference.local_top + reference.local_size as usize + stack_top,
-        );
-        self.top = reference.local_top + reference.local_size as usize + stack_top + return_size;
+        let dst = reference.local_top + reference.local_size as usize + stack_top;
+        match return_size {
+            0 => {
+                self.cache = OperandCache::EMPTY;
+                self.top = dst;
+            }
+            4 => self.block_return4(dst),
+            8 => self.block_return8(dst),
+            _ => self.block_return_generic(dst, return_size),
+        }
     }
 }
 pub(crate) trait StackOperation<T> {
@@ -1090,6 +1142,7 @@ mod tests {
         assert_eq!(frame_top + 8, stack.top);
 
         stack.block_return(&reference, 4, 4);
+        stack.flush_cached_operands();
 
         assert_eq!(stack.top, frame_top + 8);
         assert_eq!(
@@ -1100,6 +1153,95 @@ mod tests {
             trusted_read_u32(&stack.memory[frame_top + 4..frame_top + 8]),
             0x3333_4444
         );
+    }
+
+    #[test]
+    fn block_return_fast_path_keeps_u32_result_cached() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let reference = stack
+            .function_call(
+                0,
+                4,
+                frame(CachedMemoryKind::Local, 1),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let frame_top = reference.local_top + reference.local_size as usize;
+
+        stack.push_u32(0x1111_2222).unwrap();
+        stack.push_u32(0x3333_4444).unwrap();
+        stack.block_return(&reference, 4, 4);
+
+        assert_eq!(stack.cache.width, CachedOperandWidth::Four);
+        assert_eq!(stack.peek_top_u32(), 0x3333_4444);
+        assert_eq!(stack.pop_u32(), 0x3333_4444);
+        assert_eq!(stack.pop_u32(), 0x1111_2222);
+        assert_eq!(stack.top, frame_top);
+    }
+
+    #[test]
+    fn block_return_fast_path_keeps_u64_result_cached() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let reference = stack
+            .function_call(
+                0,
+                8,
+                frame(CachedMemoryKind::Local, 1),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let frame_top = reference.local_top + reference.local_size as usize;
+
+        stack.push_u64(0x1111_2222_3333_4444).unwrap();
+        stack.push_u64(0x5555_6666_7777_8888).unwrap();
+        stack.block_return(&reference, 8, 8);
+
+        assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
+        assert_eq!(stack.peek_top_u64(), 0x5555_6666_7777_8888);
+        assert_eq!(stack.pop_u64(), 0x5555_6666_7777_8888);
+        assert_eq!(stack.pop_u64(), 0x1111_2222_3333_4444);
+        assert_eq!(stack.top, frame_top);
+    }
+
+    #[test]
+    fn block_return_zero_result_discards_cached_scalar() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let reference = stack
+            .function_call(
+                0,
+                4,
+                frame(CachedMemoryKind::Local, 1),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let frame_top = reference.local_top + reference.local_size as usize;
+
+        stack.push_u32(0xaabb_ccdd).unwrap();
+        stack.block_return(&reference, 0, 0);
+
+        assert_eq!(stack.top, frame_top);
+        assert_eq!(stack.cache.width, CachedOperandWidth::None);
     }
 
     #[test]
