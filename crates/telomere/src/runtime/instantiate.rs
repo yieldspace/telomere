@@ -6,8 +6,8 @@ use crate::{
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
         CodeSection, ConstExpr, ControlFlowMetadataKind, ControlFlowMetadataSite, DataMode,
         DataSection, ElemInit, ElemMode, ElementSection, ExecuteContext, Export, ExportDesc,
-        ExportSection, FuncIdx, FuncType, FunctionBody, FunctionInstanceData, GlobalIdx,
-        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceData,
+        ExportSection, FrameLayoutHeader, FuncIdx, FuncType, FunctionBody, FunctionInstanceData,
+        GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceData,
         InstanceHandle, Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule,
         ObjectRef, Op, Operand, PrecomputedBlockReturn, PrecomputedLoopParam, StablePc, StoreInner,
         TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
@@ -20,6 +20,16 @@ use crate::{
 };
 
 use crate::common::store::{FunctionExecutionMetadata, FunctionKind, WasmExecutionMetadata};
+use crate::common::store::{
+    InstanceId, PrecomputedCallFrame, PrecomputedDirectCallSite, PrecomputedIndirectCallSite,
+};
+
+#[derive(Clone)]
+struct PendingWasmDerivedData {
+    func_addr: ObjectRef,
+    canonical_code: Arc<[Instr]>,
+    control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
+}
 
 fn shape_for_result_type(ty: &crate::common::ResultType) -> crate::common::ReturnShape {
     match (ty.0.first(), ty.0.get(1)) {
@@ -165,11 +175,192 @@ fn rewrite_block_return_op(op: Op) -> Option<Op> {
     })
 }
 
+fn rewrite_direct_call_op(op: Op) -> Option<Op> {
+    Some(if op_eq(op, vm::op_call as Op) {
+        vm::op_call_precomputed
+    } else if op_eq(op, vm::op_return_call as Op) {
+        vm::op_return_call_precomputed
+    } else {
+        return None;
+    })
+}
+
+fn rewrite_indirect_call_op(op: Op) -> Option<Op> {
+    Some(if op_eq(op, vm::op_call_indirect as Op) {
+        vm::op_call_indirect_precomputed
+    } else if op_eq(op, vm::op_return_call_indirect as Op) {
+        vm::op_return_call_indirect_precomputed
+    } else {
+        return None;
+    })
+}
+
+fn build_precomputed_call_sites(
+    canonical: &[Instr],
+    frame_layout: &FrameLayoutHeader,
+    caller_instance: InstanceId,
+    funcs: &[ObjectRef],
+    function_type_identities: &[crate::common::FuncTypeIdentity],
+    gc: &StoreInner,
+    allow_local_direct_precompute: bool,
+) -> (
+    Arc<[PrecomputedDirectCallSite]>,
+    Arc<[PrecomputedIndirectCallSite]>,
+) {
+    let mut direct_sites = Vec::new();
+    let mut indirect_sites = Vec::new();
+
+    for (instruction_ordinal, instr) in canonical.iter().enumerate() {
+        let op = unsafe { instr.op };
+        if rewrite_direct_call_op(op).is_some() {
+            if !allow_local_direct_precompute {
+                continue;
+            }
+            let funcidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 as usize };
+            let funcaddr = funcs[funcidx];
+            let funcinst = gc.get_func(funcaddr);
+            if funcinst.instance != caller_instance || funcinst.wasm_metadata().is_none() {
+                continue;
+            }
+            let memory0 = gc
+                .instance(funcinst.instance)
+                .memory_slots
+                .first()
+                .copied()
+                .and_then(|slot| slot.handle());
+            let (memory0_kind, memory0_raw) =
+                crate::common::stack::CachedMemoryKind::from_memory_handle(memory0);
+            let code_base_addr = {
+                let metadata = funcinst
+                    .wasm_metadata()
+                    .expect("local wasm direct call must expose metadata");
+                let canonical = funcinst
+                    .canonical_code()
+                    .expect("local wasm direct call must expose canonical code");
+                let has_dynamic_rewrite = !metadata.control_flow_metadata.is_empty()
+                    || canonical.iter().any(|instr| {
+                        let op = unsafe { instr.op };
+                        rewrite_direct_call_op(op).is_some()
+                            || rewrite_indirect_call_op(op).is_some()
+                    });
+                if has_dynamic_rewrite {
+                    0
+                } else {
+                    funcinst
+                        .code_pointer()
+                        .expect("stable local wasm direct call must expose code")
+                        as usize
+                }
+            };
+            direct_sites.push(PrecomputedDirectCallSite {
+                instruction_ordinal: instruction_ordinal as u32,
+                frame: PrecomputedCallFrame {
+                    code_addr: funcaddr,
+                    code_base_addr,
+                    instance: funcinst.instance,
+                    memory0_kind,
+                    memory0_raw,
+                },
+                param_bytes: funcinst.execution.param_stack_bytes,
+                param_shape: funcinst.execution.param_shape,
+                callee_layout_addr: funcinst
+                    .frame_layout_header()
+                    .map_or(0, |layout| layout as *const FrameLayoutHeader as usize),
+                stack_map_site_addr: frame_layout
+                    .stack_map_site(instruction_ordinal as u32)
+                    .map_or(0, |site| site as *const _ as usize),
+                unwind_site_addr: frame_layout
+                    .unwind_site(instruction_ordinal as u32)
+                    .map_or(0, |site| site as *const _ as usize),
+            });
+        } else if rewrite_indirect_call_op(op).is_some() {
+            let tableidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 };
+            let expected_typeidx = unsafe { canonical[instruction_ordinal + 2].operand.u32 };
+            indirect_sites.push(PrecomputedIndirectCallSite {
+                instruction_ordinal: instruction_ordinal as u32,
+                tableidx,
+                expected_type_identity_addr: function_type_identities
+                    .get(expected_typeidx as usize)
+                    .expect("validated indirect call type")
+                    as *const crate::common::FuncTypeIdentity
+                    as usize,
+                stack_map_site_addr: frame_layout
+                    .stack_map_site(instruction_ordinal as u32)
+                    .map_or(0, |site| site as *const _ as usize),
+                unwind_site_addr: frame_layout
+                    .unwind_site(instruction_ordinal as u32)
+                    .map_or(0, |site| site as *const _ as usize),
+            });
+        }
+    }
+
+    (direct_sites.into(), indirect_sites.into())
+}
+
+fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut StoreInner) {
+    let (funcs, function_type_identities) = {
+        let instance = unsafe { &*gc.get_instance_unchecked(instance_addr) };
+        let funcs = instance.funcs.clone();
+        let function_type_identities = gc
+            .get_module(instance.module_addr)
+            .function_type_identities
+            .clone();
+        (funcs, function_type_identities)
+    };
+
+    let mut rebuilt = Vec::new();
+    for &funcaddr in &funcs {
+        let func = gc.get_func(funcaddr);
+        let Some(metadata) = func.wasm_metadata() else {
+            continue;
+        };
+        let canonical_code = func
+            .canonical_code_arc()
+            .expect("wasm function must retain canonical code");
+        let (direct_call_sites, indirect_call_sites) = build_precomputed_call_sites(
+            canonical_code.as_ref(),
+            metadata.frame_layout_header(),
+            func.instance,
+            funcs.as_slice(),
+            function_type_identities.as_slice(),
+            gc,
+            false,
+        );
+        let derived_code = build_derived_code(
+            &canonical_code,
+            metadata.control_flow_metadata.as_ref(),
+            direct_call_sites.as_ref(),
+            indirect_call_sites.as_ref(),
+        );
+        rebuilt.push((
+            funcaddr,
+            direct_call_sites,
+            indirect_call_sites,
+            derived_code,
+        ));
+    }
+
+    for (funcaddr, direct_call_sites, indirect_call_sites, derived_code) in rebuilt {
+        let func = gc.get_func_mut(funcaddr);
+        func.set_precomputed_call_sites(direct_call_sites, indirect_call_sites);
+        if let Some(derived_code) = derived_code {
+            func.set_derived_code(derived_code);
+        } else {
+            func.clear_derived_code();
+        }
+    }
+}
+
 fn build_derived_code(
     canonical: &Arc<[Instr]>,
     control_flow_metadata: &[ControlFlowMetadataSite],
+    direct_call_sites: &[PrecomputedDirectCallSite],
+    indirect_call_sites: &[PrecomputedIndirectCallSite],
 ) -> Option<Arc<[Instr]>> {
-    if control_flow_metadata.is_empty() {
+    if control_flow_metadata.is_empty()
+        && direct_call_sites.is_empty()
+        && indirect_call_sites.is_empty()
+    {
         return None;
     }
 
@@ -233,6 +424,30 @@ fn build_derived_code(
                 };
             }
         }
+    }
+
+    for site in direct_call_sites {
+        let start = site.instruction_ordinal as usize;
+        let ptr_op =
+            rewrite_direct_call_op(unsafe { code[start].op }).expect("direct-call rewrite target");
+        code[start] = Instr { op: ptr_op };
+        code[start + 1] = Instr {
+            operand: Operand {
+                code_ptr: site as *const PrecomputedDirectCallSite as usize,
+            },
+        };
+    }
+
+    for site in indirect_call_sites {
+        let start = site.instruction_ordinal as usize;
+        let ptr_op = rewrite_indirect_call_op(unsafe { code[start].op })
+            .expect("indirect-call rewrite target");
+        code[start] = Instr { op: ptr_op };
+        code[start + 1] = Instr {
+            operand: Operand {
+                code_ptr: site as *const PrecomputedIndirectCallSite as usize,
+            },
+        };
     }
 
     Some(derived)
@@ -604,6 +819,7 @@ pub async fn instantiate(
             }
         }
 
+        let mut pending_wasm_functions = Vec::new();
         for func in codes.0.into_iter() {
             let funcidx = funcs.len() as u32;
             let typeidx = functions[funcidx as usize];
@@ -612,21 +828,29 @@ pub async fn instantiate(
             let func_addr = match func {
                 FunctionBody::Wasm(code) => {
                     let code_expr: Arc<[Instr]> = code.expr.into();
-                    let derived_code = build_derived_code(&code_expr, &code.control_flow_metadata);
-                    gc.new_func(&FunctionInstanceData {
+                    let func_addr = gc.new_func(&FunctionInstanceData {
                         instance: inst_id,
                         execution: build_execution_metadata(typeidx, ft, FunctionKind::Wasm),
                         body: RuntimeFunctionBody::Wasm {
                             locals: code.locals.clone(),
                             code: code_expr.clone(),
-                            derived_code,
+                            derived_code: None,
                             metadata: WasmExecutionMetadata {
                                 code_base_addr: code_expr.as_ptr() as usize,
-                                locals_byte_size: code.locals.byte_size() as u32,
+                                frame_layout: code.frame_layout.clone(),
+                                frame_layout_addr: code.frame_layout.header() as *const _ as usize,
+                                control_flow_metadata: code.control_flow_metadata.clone(),
+                                derived_call_metadata: None,
                             },
                         },
                         funcidx,
-                    })
+                    });
+                    pending_wasm_functions.push(PendingWasmDerivedData {
+                        func_addr,
+                        canonical_code: code_expr,
+                        control_flow_metadata: code.control_flow_metadata.clone(),
+                    });
+                    func_addr
                 }
                 FunctionBody::Host(fp) => gc.new_func(&FunctionInstanceData {
                     instance: inst_id,
@@ -709,6 +933,37 @@ pub async fn instantiate(
         unsafe {
             gc.place_instance_unchecked(inst_addr, &instance);
         }
+        for pending in pending_wasm_functions {
+            let pending_func = gc.get_func(pending.func_addr);
+            let caller_instance = pending_func.instance;
+            let frame_layout = pending_func
+                .frame_layout_header()
+                .expect("wasm function must expose frame layout");
+            let function_type_identities = gc
+                .get_module(instance.module_addr)
+                .function_type_identities
+                .as_slice();
+            let (direct_call_sites, indirect_call_sites) = build_precomputed_call_sites(
+                pending.canonical_code.as_ref(),
+                frame_layout,
+                caller_instance,
+                instance.funcs.as_slice(),
+                function_type_identities,
+                &gc,
+                true,
+            );
+            let derived_code = build_derived_code(
+                &pending.canonical_code,
+                pending.control_flow_metadata.as_ref(),
+                direct_call_sites.as_ref(),
+                indirect_call_sites.as_ref(),
+            );
+            let func = gc.get_func_mut(pending.func_addr);
+            func.set_precomputed_call_sites(direct_call_sites, indirect_call_sites);
+            if let Some(derived_code) = derived_code {
+                func.set_derived_code(derived_code);
+            }
+        }
         vm_try!(res);
         let addr = InstanceHandle::new(store, inst_id, instance_id);
 
@@ -717,23 +972,21 @@ pub async fn instantiate(
             let funcaddr = instance.funcs[start.0 as usize];
             let funcinst = gc.get_func(funcaddr);
             let func_instance = gc.instance(funcinst.instance);
+            let frame = CallFrameCache::from_parts(
+                funcaddr,
+                funcinst,
+                func_instance
+                    .memory_slots
+                    .first()
+                    .copied()
+                    .and_then(|slot| slot.handle()),
+            );
             if funcinst.is_host_func() {
-                let local_reference = vm_try!(stack.function_call(
+                let local_reference = vm_try!(stack.function_call_raw(
                     0,
                     0,
-                    CallFrameCache::from_parts(
-                        funcaddr,
-                        funcinst,
-                        func_instance
-                            .memory_slots
-                            .first()
-                            .copied()
-                            .and_then(|slot| slot.handle()),
-                    ),
-                    LocalReference {
-                        local_size: 0,
-                        local_top: 0
-                    },
+                    frame,
+                    LocalReference::empty(),
                     &vm::VM_END,
                     &gc,
                 ));
@@ -742,29 +995,20 @@ pub async fn instantiate(
                     task_id: 0,
                     stack,
                     local_reference,
+                    current_frame: frame,
                     ready_flag: ReadyFlag::Ready,
                     fp: StablePc::from_stable_ptr(vm::START_HOST_FUNCTION_PROGRAM.as_ptr()),
                     pending_effects: 0,
                     terminal_result: None,
                 });
             } else {
-                let locals = funcinst.locals();
-                let local_reference = vm_try!(stack.function_call(
-                    0,
-                    locals.byte_size(),
-                    CallFrameCache::from_parts(
-                        funcaddr,
-                        funcinst,
-                        func_instance
-                            .memory_slots
-                            .first()
-                            .copied()
-                            .and_then(|slot| slot.handle()),
-                    ),
-                    LocalReference {
-                        local_size: 0,
-                        local_top: 0
-                    },
+                let wasm_metadata = funcinst
+                    .wasm_metadata()
+                    .expect("wasm start function must expose metadata");
+                let local_reference = vm_try!(stack.function_call_layout(
+                    wasm_metadata.frame_layout.as_ref(),
+                    frame,
+                    LocalReference::empty(),
                     &vm::VM_END,
                     &gc,
                 ));
@@ -774,6 +1018,7 @@ pub async fn instantiate(
                     task_id: 0,
                     stack,
                     local_reference,
+                    current_frame: frame,
                     ready_flag: ReadyFlag::Ready,
                     pending_effects: 0,
                     terminal_result: None,
@@ -921,10 +1166,13 @@ pub fn link_host_function_with_function_idx(
         tracing::error!("instance handle belongs to another store");
         return;
     };
-    let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
-    let funcaddr = instance.funcs.as_slice()[funcidx as usize];
+    let funcaddr = {
+        let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
+        instance.funcs.as_slice()[funcidx as usize]
+    };
     let func = gc.get_func_mut(funcaddr);
     func.replace_host_code_pointer(f);
+    rebuild_wasm_derived_data_for_instance(object_ref, &mut gc);
 }
 pub fn link_host_function_with_export_name(
     addr: &InstanceHandle,
@@ -971,10 +1219,13 @@ pub fn link_async_host_function_with_function_idx(
         tracing::error!("instance handle belongs to another store");
         return;
     };
-    let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
-    let funcaddr = instance.funcs.as_slice()[funcidx as usize];
+    let funcaddr = {
+        let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
+        instance.funcs.as_slice()[funcidx as usize]
+    };
     let func = gc.get_func_mut(funcaddr);
     func.replace_async_host_code_pointer(f);
+    rebuild_wasm_derived_data_for_instance(object_ref, &mut gc);
 }
 
 pub fn link_async_host_function_with_export_name(
@@ -1142,5 +1393,94 @@ mod tests {
         assert!(active.iter().any(|instr| unsafe {
             std::ptr::fn_addr_eq(instr.op, vm::op_i32_seed_tee_imm_compare_br_if_ptr as Op)
         }));
+    }
+
+    #[tokio::test]
+    async fn instantiate_builds_pointer_bearing_call_site_metadata_for_wasm_calls() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let module = parse_wat_module(
+            r#"
+            (module
+              (type $sig (func (param externref) (result externref)))
+              (table 1 funcref)
+              (elem (i32.const 0) $callee)
+
+              (func $callee (param externref) (result externref)
+                local.get 0)
+
+              (func (export "caller") (param externref) (result externref)
+                local.get 0
+                call $callee)
+
+              (func (export "tailcaller") (param externref) (result externref)
+                local.get 0
+                return_call $callee)
+
+              (func (export "indirect") (param externref i32) (result externref)
+                local.get 0
+                local.get 1
+                call_indirect (type $sig))
+
+              (func (export "tailindirect") (param externref i32) (result externref)
+                local.get 0
+                local.get 1
+                return_call_indirect (type $sig)))
+            "#,
+        );
+
+        let instance = instantiate(module, &store, &registry).await.unwrap();
+        let gc = store.lock_gc();
+        let inst = gc.get_instance(
+            instance
+                .object_ref_for_store(&store)
+                .expect("instance must stay live in store"),
+        );
+
+        let caller = gc.get_func(inst.funcs[1]);
+        let tailcaller = gc.get_func(inst.funcs[2]);
+        let indirect = gc.get_func(inst.funcs[3]);
+        let tailindirect = gc.get_func(inst.funcs[4]);
+
+        assert!(caller
+            .code()
+            .unwrap()
+            .iter()
+            .any(|instr| unsafe { std::ptr::fn_addr_eq(instr.op, vm::op_call_precomputed as Op) }));
+        assert!(tailcaller.code().unwrap().iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_return_call_precomputed as Op)
+        }));
+        assert!(indirect.code().unwrap().iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_call_indirect_precomputed as Op)
+        }));
+        assert!(tailindirect.code().unwrap().iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_return_call_indirect_precomputed as Op)
+        }));
+
+        let direct_site = caller
+            .direct_call_sites()
+            .first()
+            .expect("direct call site");
+        assert!(direct_site.callee_layout_ptr().is_some());
+
+        let return_call_site = tailcaller
+            .direct_call_sites()
+            .first()
+            .expect("return_call site");
+        assert!(return_call_site.callee_layout_ptr().is_some());
+
+        let indirect_site = indirect
+            .indirect_call_sites()
+            .first()
+            .expect("indirect call site");
+        assert_eq!(indirect_site.tableidx, 0);
+        assert!(!indirect_site.expected_type_identity_ptr().is_null());
+
+        let return_indirect_site = tailindirect
+            .indirect_call_sites()
+            .first()
+            .expect("return_call_indirect site");
+        assert_eq!(return_indirect_site.tableidx, 0);
+        assert!(!return_indirect_site.expected_type_identity_ptr().is_null());
     }
 }

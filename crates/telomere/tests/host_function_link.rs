@@ -5,7 +5,7 @@ use std::sync::{
     Mutex,
 };
 use telomere::{
-    common::{ExecuteContext, InstanceHandle, Instr, StoreState},
+    common::{ExecuteContext, InstanceHandle, Instr, StoreState, WasmValue},
     link_host_function_with_export_name, link_host_function_with_function_idx, run_module_function,
     vm_try, Registry, ResultValue, Store, VMResult,
 };
@@ -57,6 +57,14 @@ fn host_instance(ctx: &ExecuteContext) -> InstanceHandle {
 fn print(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     print_counter(ctx).fetch_add(1, Ordering::SeqCst);
     finish_host_call(ctx)
+}
+
+fn return_99(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+    print_counter(ctx).fetch_add(1, Ordering::SeqCst);
+    vm_try!(ctx.stack.push_i32(99));
+    let (prev_local_ref, return_addr) = ctx.stack.function_return(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    VMResult::Success(return_addr)
 }
 
 fn relink_by_function_idx(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
@@ -150,6 +158,47 @@ async fn test_imported_call_stays_dynamic_after_caller_instantiation() {
         run_module_function(&caller, &store, "wasm_print", &ResultValue::new(vec![])).await;
     assert!(matches!(result, VMResult::Success(values) if values.is_empty()));
     assert_eq!(counter.counter.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_local_direct_call_deopts_after_same_instance_relink() {
+    let state = Box::new(LinkState {
+        counter: AtomicUsize::new(0),
+        host: Mutex::new(None),
+    });
+    let store =
+        Store::new_with_state(unsafe { StoreState::from_ptr(state.as_ref() as *const LinkState) });
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+    (module
+      (func $callee (result i32)
+        i32.const 7)
+      (func (export "call_local") (result i32)
+        call $callee))
+    "#,
+        &store,
+        &registry,
+    )
+    .await;
+    *state.host.lock().unwrap() = Some(instance.clone());
+
+    let before =
+        run_module_function(&instance, &store, "call_local", &ResultValue::new(vec![])).await;
+    assert!(matches!(
+        before,
+        VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I32(7)])
+    ));
+
+    link_host_function_with_function_idx(&instance, 0, return_99, &store);
+
+    let after =
+        run_module_function(&instance, &store, "call_local", &ResultValue::new(vec![])).await;
+    assert!(matches!(
+        after,
+        VMResult::Success(ref values) if values == &ResultValue::new(vec![WasmValue::I32(99)])
+    ));
+    assert_eq!(state.counter.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

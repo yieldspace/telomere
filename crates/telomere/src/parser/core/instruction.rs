@@ -21,11 +21,12 @@ use crate::runtime::vm;
 use crate::{
     common::{
         BlockType, ConstExpr, DataCountVerifier, Elem, FuncIdx, FuncType, Instr,
-        LocalReassignTable, MemType, Op, Operand, ReturnShape, TableType, TypeIdx, TypeSection,
-        ValType, ValueSize,
+        LocalReassignTable, MemType, Op, Operand, ReturnShape, StackMapSafepointKind,
+        StackMapSourceSite, TableType, TypeIdx, TypeSection, UnwindSourceSite, ValType, ValueSize,
     },
     WasmParserError,
 };
+use std::sync::Arc;
 use tracing::trace;
 
 macro_rules! simd_instruction {
@@ -41,23 +42,37 @@ fn get_local_addr(
     locals: &LocalReassignTable,
     idx: u32,
 ) -> Result<(ValType, u32)> {
-    let mut param_addr = 0;
-    let mut i = 0;
+    let mut param_addr = 0u32;
+    let mut i = 0u32;
     tracing::trace!("get_local_addr: {locals:?}");
     for t in ty.iter() {
         if idx < i + 1 {
             return Ok((*t, param_addr));
         }
-        param_addr += t.stack_size().u32();
+        param_addr = param_addr
+            .checked_add(t.stack_size().u32())
+            .ok_or(WasmParserError::TooManyLocals)?;
         i += 1;
     }
     let param_len = i;
-    for (n, t, base_addr) in &locals.0 {
-        if idx < param_len + n {
-            let addr = param_addr + *base_addr + (idx - i) * t.stack_size().u32();
-            return Ok((*t, addr));
+    for group in &locals.0 {
+        if idx < param_len + group.local_end_exclusive {
+            let local_index_in_group = idx
+                .checked_sub(i)
+                .ok_or(WasmParserError::InvalidLocalIndex(idx))?;
+            let addr = param_addr
+                .checked_add(group.offset_from_local_top)
+                .and_then(|base| {
+                    local_index_in_group
+                        .checked_mul(group.val_type.stack_size().u32())
+                        .and_then(|delta| base.checked_add(delta))
+                })
+                .ok_or(WasmParserError::TooManyLocals)?;
+            return Ok((group.val_type, addr));
         }
-        i = param_len + n;
+        i = param_len
+            .checked_add(group.local_end_exclusive)
+            .ok_or(WasmParserError::TooManyLocals)?;
     }
     Err(WasmParserError::InvalidLocalIndex(idx))
 }
@@ -169,6 +184,42 @@ impl<R: BinaryReader> WasmBaseParser<R> for InstructionParser<'_, R> {
     }
 }
 impl<'a, R: BinaryReader> InstructionParser<'a, R> {
+    fn record_stack_map_site(
+        &self,
+        instrs: &InstructionGenerator,
+        checker: &TypeChecker,
+        stack_map_sites: &mut Vec<StackMapSourceSite>,
+        kind: StackMapSafepointKind,
+    ) {
+        let Some(operand_bytes) = checker.current_stack_byte_size() else {
+            return;
+        };
+        let Some(ref_offsets_from_operand_base) = checker.current_ref_offsets_from_operand_base()
+        else {
+            return;
+        };
+        stack_map_sites.push(StackMapSourceSite {
+            raw_start: instrs.len(),
+            kind,
+            operand_bytes,
+            ref_offsets_from_operand_base: Arc::from(ref_offsets_from_operand_base),
+        });
+    }
+
+    fn record_unwind_site(
+        &self,
+        instrs: &InstructionGenerator,
+        unwind_sites: &mut Vec<UnwindSourceSite>,
+        kind: StackMapSafepointKind,
+        result_slot_from_local_top: Option<u32>,
+    ) {
+        unwind_sites.push(UnwindSourceSite {
+            raw_start: instrs.len(),
+            kind,
+            result_slot_from_local_top,
+        });
+    }
+
     #[inline(always)]
     fn is_local_direct_call_target(&self, idx: u32) -> bool {
         idx >= self.imported_function_len
@@ -340,6 +391,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
+        stack_map_sites: &mut Vec<StackMapSourceSite>,
+        unwind_sites: &mut Vec<UnwindSourceSite>,
     ) -> Result<(usize, bool)> {
         let v = self.reader.read_exact_one()?;
 
@@ -379,6 +432,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     else_addr,
+                    stack_map_sites,
+                    unwind_sites,
                 )?;
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
@@ -390,6 +445,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         .return_shape(self.types)
                         .ok_or(WasmParserError::InvalidStackValTypeAny)?;
 
+                    self.record_stack_map_site(
+                        instrs,
+                        checker,
+                        stack_map_sites,
+                        StackMapSafepointKind::BlockReturn,
+                    );
+                    self.record_unwind_site(
+                        instrs,
+                        unwind_sites,
+                        StackMapSafepointKind::BlockReturn,
+                        Some(block_base_stack_size),
+                    );
                     instrs.push(Instr {
                         op: block_return_op_for_shape(return_shape),
                     });
@@ -450,6 +517,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let param_shape = blocktype
                     .param_shape(self.types)
                     .ok_or(WasmParserError::InvalidStackValTypeAny)?;
+                self.record_stack_map_site(
+                    instrs,
+                    checker,
+                    stack_map_sites,
+                    StackMapSafepointKind::Loop,
+                );
+                self.record_unwind_site(
+                    instrs,
+                    unwind_sites,
+                    StackMapSafepointKind::Loop,
+                    Some(checker.block_base_stack_size()?),
+                );
                 instrs.push(Instr {
                     op: loop_op_for_shape(param_shape),
                 });
@@ -476,6 +555,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     else_addr,
+                    stack_map_sites,
+                    unwind_sites,
                 )?;
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
@@ -487,6 +568,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         .return_shape(self.types)
                         .ok_or(WasmParserError::InvalidStackValTypeAny)?;
 
+                    self.record_stack_map_site(
+                        instrs,
+                        checker,
+                        stack_map_sites,
+                        StackMapSafepointKind::BlockReturn,
+                    );
+                    self.record_unwind_site(
+                        instrs,
+                        unwind_sites,
+                        StackMapSafepointKind::BlockReturn,
+                        Some(block_base_stack_size),
+                    );
                     instrs.push(Instr {
                         op: block_return_op_for_shape(return_shape),
                     });
@@ -559,6 +652,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     checker,
                     jump_resolver,
                     &mut else_addr,
+                    stack_map_sites,
+                    unwind_sites,
                 )?;
                 if !is_unreachable_if_block {
                     instrs[index].operand = Operand {
@@ -815,6 +910,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x0F => {
                 trace!("parse_op_return");
                 if !instrs.is_unreachable() {
+                    self.record_stack_map_site(
+                        instrs,
+                        checker,
+                        stack_map_sites,
+                        StackMapSafepointKind::Return,
+                    );
+                    self.record_unwind_site(
+                        instrs,
+                        unwind_sites,
+                        StackMapSafepointKind::Return,
+                        Some(0),
+                    );
                     instrs.push(Instr { op: vm::op_return });
                     jump_resolver.push(JumpResolverDSL::Return(instrs.len() as u32));
                     instrs.push(Instr {
@@ -840,6 +947,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .types
                     .get(*typeidx)
                     .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
+                self.record_stack_map_site(
+                    instrs,
+                    checker,
+                    stack_map_sites,
+                    if self.is_local_direct_call_target(idx) {
+                        StackMapSafepointKind::Call
+                    } else {
+                        StackMapSafepointKind::CallImport
+                    },
+                );
                 checker.op_func_type(ty)?;
 
                 instrs.push(Instr {
@@ -865,6 +982,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 if self.tables[tableidx as usize].reftype != RefType::FuncRef {
                     Err(WasmParserError::InvalidTableType(tableidx))?;
                 }
+                self.record_stack_map_site(
+                    instrs,
+                    checker,
+                    stack_map_sites,
+                    StackMapSafepointKind::CallIndirect,
+                );
                 checker.op(&[ValType::I32], &[])?;
                 let ty = self
                     .types
@@ -894,6 +1017,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     .types
                     .get(*typeidx)
                     .ok_or(WasmParserError::InvalidTypeIdx(TypeIdx(idx)))?;
+                let kind = if self.is_local_direct_call_target(idx) {
+                    StackMapSafepointKind::ReturnCall
+                } else {
+                    StackMapSafepointKind::ReturnCallImport
+                };
+                self.record_stack_map_site(instrs, checker, stack_map_sites, kind);
+                self.record_unwind_site(instrs, unwind_sites, kind, Some(0));
                 checker.op_func_type(ty)?;
                 checker.op(&self.functype.1 .0, &[])?;
                 checker.unreachable();
@@ -921,6 +1051,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 if self.tables[tableidx as usize].reftype != RefType::FuncRef {
                     Err(WasmParserError::InvalidTableType(tableidx))?;
                 }
+                self.record_stack_map_site(
+                    instrs,
+                    checker,
+                    stack_map_sites,
+                    StackMapSafepointKind::ReturnCallIndirect,
+                );
+                self.record_unwind_site(
+                    instrs,
+                    unwind_sites,
+                    StackMapSafepointKind::ReturnCallIndirect,
+                    Some(0),
+                );
                 checker.op(&[ValType::I32], &[])?;
                 let ty = self
                     .types
@@ -4082,6 +4224,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
+        stack_map_sites: &mut Vec<StackMapSourceSite>,
+        unwind_sites: &mut Vec<UnwindSourceSite>,
     ) -> Result<usize> {
         let mut read_bytes = 0;
         loop {
@@ -4091,6 +4235,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 checker,
                 jump_resolver,
                 else_addr,
+                stack_map_sites,
+                unwind_sites,
             )?;
             instrs.seal_emitted_instruction();
             trace!("{checker:?}");
@@ -4326,6 +4472,119 @@ mod tests {
             }
             other => panic!("expected jump metadata, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parser_collects_stack_map_and_unwind_metadata_for_safepoints() {
+        let func = func_in_module(
+            r#"
+            (module
+              (func $callee (param externref) (result externref)
+                local.get 0)
+              (func (export "f") (param externref) (result externref)
+                block (result externref)
+                  local.get 0
+                end
+                call $callee))
+            "#,
+            1,
+        );
+
+        let layout = func.frame_layout.as_ref();
+        let stack_sites = layout.cold.stack_map_sites.as_ref();
+        let unwind_sites = layout.cold.unwind_sites.as_ref();
+        assert!(!stack_sites.is_empty());
+        assert!(!unwind_sites.is_empty());
+
+        let call_site = stack_sites
+            .iter()
+            .find(|site| site.kind == StackMapSafepointKind::Call)
+            .expect("call safepoint must exist");
+        assert_eq!(call_site.operand_bytes, 4);
+        assert_eq!(call_site.ref_offsets_from_operand_base.as_ref(), &[0]);
+
+        let block_return_site = stack_sites
+            .iter()
+            .find(|site| site.kind == StackMapSafepointKind::BlockReturn)
+            .expect("block return safepoint must exist");
+        assert_eq!(block_return_site.operand_bytes, 4);
+        assert_eq!(
+            block_return_site.ref_offsets_from_operand_base.as_ref(),
+            &[0]
+        );
+
+        let function_return_site = stack_sites
+            .iter()
+            .find(|site| site.kind == StackMapSafepointKind::FunctionReturn)
+            .expect("function return safepoint must exist");
+        assert_eq!(function_return_site.operand_bytes, 4);
+        assert_eq!(
+            function_return_site.ref_offsets_from_operand_base.as_ref(),
+            &[0]
+        );
+
+        assert!(unwind_sites
+            .iter()
+            .any(|site| site.kind == StackMapSafepointKind::BlockReturn));
+        assert!(unwind_sites
+            .iter()
+            .any(|site| site.kind == StackMapSafepointKind::FunctionReturn));
+        assert!(stack_sites
+            .iter()
+            .all(|site| (site.instruction_ordinal as usize) < func.expr.len()));
+        assert!(unwind_sites
+            .iter()
+            .all(|site| (site.instruction_ordinal as usize) < func.expr.len()));
+    }
+
+    #[test]
+    fn parser_builds_frame_layout_metadata_for_mixed_locals_and_refs() {
+        let func = func_in_module(
+            r#"
+            (module
+              (func (export "f") (param i32 i64)
+                (local externref)
+                (local i32)
+                (local funcref)
+                (local externref)
+                nop))
+            "#,
+            0,
+        );
+
+        let layout = func.frame_layout.as_ref();
+        let slots = layout.cold.local_slots.as_ref();
+        let ref_runs = layout.cold.local_ref_runs.as_ref();
+
+        assert_eq!(slots.len(), 6);
+        assert_eq!(
+            slots
+                .iter()
+                .map(|slot| slot.wasm_local_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            slots.iter().map(|slot| slot.val_type).collect::<Vec<_>>(),
+            vec![
+                ValType::I32,
+                ValType::I64,
+                ValType::ExternRef,
+                ValType::I32,
+                ValType::FuncRef,
+                ValType::ExternRef,
+            ]
+        );
+        assert!(slots
+            .iter()
+            .all(|slot| slot.offset_from_local_top < layout.fixed_frame_bytes));
+        assert_eq!(
+            ref_runs,
+            &[crate::common::RefSlotRun {
+                start_from_local_top: 16,
+                len_bytes: 12,
+            },]
+        );
     }
 
     #[test]

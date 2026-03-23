@@ -1368,10 +1368,7 @@ mod tests {
     ) -> ExecuteContext<'a> {
         ExecuteContext {
             stack,
-            local_reference: LocalReference {
-                local_top: 0,
-                local_size: 0,
-            },
+            local_reference: LocalReference::empty(),
             current_frame: frame(CachedMemoryKind::Local, 1),
             store,
             gc,

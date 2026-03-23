@@ -14,13 +14,17 @@ pub enum MaybeUnreachable {
 pub struct TypeChecker {
     types: Vec<MaybeUnreachable>,
     blocks: VecDeque<(BlockKind, BlockType, usize)>,
+    max_stack_bytes: u32,
 }
 impl TypeChecker {
     pub fn new(typeidx: TypeIdx) -> Self {
-        Self {
+        let mut this = Self {
             types: vec![],
             blocks: VecDeque::from([(BlockKind::Block, BlockType::TypeIdx(typeidx), 0)]),
-        }
+            max_stack_bytes: 0,
+        };
+        this.observe_max_stack_bytes();
+        this
     }
     pub fn get_block(&self, idx: usize) -> Result<(&BlockKind, &BlockType, &usize)> {
         self.blocks
@@ -48,16 +52,20 @@ impl TypeChecker {
         if let MaybeUnreachable::Unreachable(_) = v {
             self.types.push(MaybeUnreachable::Unreachable(false));
         }
+        self.observe_max_stack_bytes();
         Ok(v)
     }
     pub fn push(&mut self, vt: ValType) {
         self.types.push(MaybeUnreachable::Normal(vt));
+        self.observe_max_stack_bytes();
     }
     pub fn unreachable(&mut self) {
         self.types.push(MaybeUnreachable::Unreachable(false));
+        self.observe_max_stack_bytes();
     }
     pub fn push_any(&mut self) {
         self.types.push(MaybeUnreachable::Unreachable(true));
+        self.observe_max_stack_bytes();
     }
     pub fn check(&mut self, input: &[ValType]) -> Result<()> {
         let mut iter = self.types[self.block_base()?..].iter().rev();
@@ -98,6 +106,7 @@ impl TypeChecker {
     }
     pub fn enter_block(&mut self, kind: BlockKind, block_type: BlockType) {
         self.blocks.push_front((kind, block_type, self.types.len()));
+        self.observe_max_stack_bytes();
     }
 
     pub fn leave_block(&mut self) -> Result<()> {
@@ -109,6 +118,7 @@ impl TypeChecker {
             Err(WasmParserError::InvalidStackValTypeAny)?
         }
         self.blocks.pop_front();
+        self.observe_max_stack_bytes();
         Ok(())
     }
     pub fn block_base_stack_size(&self) -> Result<u32> {
@@ -124,6 +134,7 @@ impl TypeChecker {
     }
     pub fn reset_stack(&mut self) -> Result<()> {
         self.types.truncate(self.block_base()?);
+        self.observe_max_stack_bytes();
         Ok(())
     }
     pub fn load_op(&mut self, ty: ValType) -> Result<()> {
@@ -140,5 +151,42 @@ impl TypeChecker {
     }
     pub fn binary_op(&mut self, ty: ValType) -> Result<()> {
         self.op(&[ty], &[ty])
+    }
+
+    pub fn max_stack_byte_size(&self) -> u32 {
+        self.max_stack_bytes
+    }
+
+    pub fn current_stack_byte_size(&self) -> Option<u32> {
+        let mut size = 0u32;
+        for ty in &self.types {
+            match ty {
+                MaybeUnreachable::Normal(v) => size += v.stack_size().u32(),
+                MaybeUnreachable::Unreachable(_) => return None,
+            }
+        }
+        Some(size)
+    }
+
+    pub fn current_ref_offsets_from_operand_base(&self) -> Option<Vec<u32>> {
+        let mut offsets = Vec::new();
+        let mut cursor = 0u32;
+        for ty in &self.types {
+            let ty = match ty {
+                MaybeUnreachable::Normal(v) => *v,
+                MaybeUnreachable::Unreachable(_) => return None,
+            };
+            if matches!(ty, ValType::FuncRef | ValType::ExternRef) {
+                offsets.push(cursor);
+            }
+            cursor += ty.stack_size().u32();
+        }
+        Some(offsets)
+    }
+
+    fn observe_max_stack_bytes(&mut self) {
+        if let Some(size) = self.current_stack_byte_size() {
+            self.max_stack_bytes = self.max_stack_bytes.max(size);
+        }
     }
 }

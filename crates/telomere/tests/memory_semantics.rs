@@ -1297,6 +1297,37 @@ async fn simd_memory_access_roundtrips_for_local_default_memory() {
     assert_simd_memory_roundtrip("1").await;
 }
 
+#[cfg(feature = "simd")]
+#[tokio::test]
+async fn simd_function_return_preserves_footer_for_16_byte_results() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $produce (result v128)
+            v128.const i32x4 0x11223344 0x55667788 0x99aabbcc 0xddeeff00)
+          (func (export "call_produce") (result v128)
+            call $produce))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let value = match call_v128(&instance, &store, "call_produce", vec![]).await {
+        VMResult::Success(value) => value,
+        other => panic!("expected simd return success, got {other:?}"),
+    };
+    assert_eq!(
+        value.to_le_bytes(),
+        [
+            0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55, 0xcc, 0xbb, 0xaa, 0x99, 0x00, 0xff,
+            0xee, 0xdd,
+        ]
+    );
+}
+
 #[cfg(all(feature = "simd", feature = "threads"))]
 #[tokio::test]
 async fn simd_memory_access_roundtrips_for_shared_default_memory() {

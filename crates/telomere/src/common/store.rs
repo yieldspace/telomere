@@ -3,8 +3,10 @@
 use super::{
     memory::{AtomicRmwOp, LocalMemoryObject, SharedMemoryObject},
     object_ref::ObjectRef,
-    AsyncHostFunction, Data, Elem, ExportSection, FuncType, FuncTypeIdentity, GlobalType,
-    HostFunction, Instr, LocalsData, MemType, ReturnShape, Stack, TableType, TypeIdx, VMResult,
+    stack::{CachedMemoryKind, CallFrameCache},
+    AsyncHostFunction, ControlFlowMetadataSite, Data, Elem, ExportSection, FrameLayoutHeader,
+    FrameLayoutMetadata, FuncType, FuncTypeIdentity, GlobalType, HostFunction, Instr, LocalsData,
+    MemType, ReturnShape, Stack, StackMapSite, TableType, TypeIdx, UnwindSiteMetadata, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -138,10 +140,110 @@ pub(crate) struct FunctionExecutionMetadata {
     pub result_shape: ReturnShape,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct WasmExecutionMetadata {
     pub code_base_addr: usize,
-    pub locals_byte_size: u32,
+    pub frame_layout: Arc<FrameLayoutMetadata>,
+    pub frame_layout_addr: usize,
+    pub control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
+    pub derived_call_metadata: Option<Arc<DerivedCallMetadata>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedCallFrame {
+    pub code_addr: ObjectRef,
+    pub code_base_addr: usize,
+    pub instance: InstanceId,
+    pub memory0_kind: CachedMemoryKind,
+    pub memory0_raw: u32,
+}
+
+impl PrecomputedCallFrame {
+    #[inline(always)]
+    pub(crate) fn materialize(self, runtime: &StoreInner) -> CallFrameCache {
+        CallFrameCache {
+            code_addr: self.code_addr,
+            code_base: if self.code_base_addr == 0 {
+                runtime
+                    .get_func(self.code_addr)
+                    .code_pointer()
+                    .unwrap_or(std::ptr::null())
+            } else {
+                self.code_base_addr as *const Instr
+            },
+            instance: self.instance,
+            memory0_kind: self.memory0_kind,
+            memory0_raw: self.memory0_raw,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedDirectCallSite {
+    pub instruction_ordinal: u32,
+    pub frame: PrecomputedCallFrame,
+    pub param_bytes: u32,
+    pub param_shape: ReturnShape,
+    pub callee_layout_addr: usize,
+    pub stack_map_site_addr: usize,
+    pub unwind_site_addr: usize,
+}
+
+impl WasmExecutionMetadata {
+    #[inline(always)]
+    pub(crate) fn frame_layout_header(&self) -> &FrameLayoutHeader {
+        debug_assert_ne!(self.frame_layout_addr, 0);
+        unsafe { &*(self.frame_layout_addr as *const FrameLayoutHeader) }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedIndirectCallSite {
+    pub instruction_ordinal: u32,
+    pub tableidx: u32,
+    pub expected_type_identity_addr: usize,
+    pub stack_map_site_addr: usize,
+    pub unwind_site_addr: usize,
+}
+
+impl PrecomputedDirectCallSite {
+    #[inline(always)]
+    pub(crate) fn callee_layout_ptr(self) -> Option<*const FrameLayoutHeader> {
+        (self.callee_layout_addr != 0).then_some(self.callee_layout_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DerivedCallMetadata {
+    pub direct_call_sites: Arc<[PrecomputedDirectCallSite]>,
+    pub indirect_call_sites: Arc<[PrecomputedIndirectCallSite]>,
+}
+
+impl PrecomputedIndirectCallSite {
+    #[inline(always)]
+    pub(crate) fn expected_type_identity_ptr(self) -> *const FuncTypeIdentity {
+        self.expected_type_identity_addr as *const _
+    }
+
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -183,7 +285,11 @@ impl fmt::Debug for FunctionBody {
                     "derived_code_len",
                     &derived_code.as_ref().map(|code| code.len()),
                 )
-                .field("locals_byte_size", &metadata.locals_byte_size)
+                .field("locals_byte_size", &metadata.frame_layout.locals_bytes)
+                .field(
+                    "fixed_frame_bytes",
+                    &metadata.frame_layout.fixed_frame_bytes,
+                )
                 .finish(),
             Self::Host(_) => f.write_str("Host(..)"),
             Self::AsyncHost(_) => f.write_str("AsyncHost(..)"),
@@ -215,6 +321,13 @@ impl FunctionInstanceData {
         match &self.body {
             FunctionBody::Wasm { locals, .. } => locals.clone(),
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => LocalsData::default(),
+        }
+    }
+
+    pub(crate) fn canonical_code_arc(&self) -> Option<Arc<[Instr]>> {
+        match &self.body {
+            FunctionBody::Wasm { code, .. } => Some(code.clone()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
         }
     }
 
@@ -265,6 +378,36 @@ impl FunctionInstanceData {
         }
     }
 
+    pub(crate) fn frame_layout(&self) -> Option<&FrameLayoutMetadata> {
+        self.wasm_metadata()
+            .map(|metadata| metadata.frame_layout.as_ref())
+    }
+
+    pub(crate) fn frame_layout_header(&self) -> Option<&FrameLayoutHeader> {
+        self.wasm_metadata()
+            .map(|metadata| metadata.frame_layout_header())
+    }
+
+    pub(crate) fn direct_call_sites(&self) -> &[PrecomputedDirectCallSite] {
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => metadata
+                .derived_call_metadata
+                .as_ref()
+                .map_or(&[], |metadata| metadata.direct_call_sites.as_ref()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => &[],
+        }
+    }
+
+    pub(crate) fn indirect_call_sites(&self) -> &[PrecomputedIndirectCallSite] {
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => metadata
+                .derived_call_metadata
+                .as_ref()
+                .map_or(&[], |metadata| metadata.indirect_call_sites.as_ref()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => &[],
+        }
+    }
+
     pub fn host_code_pointer(&self) -> HostFunction {
         match self.body {
             FunctionBody::Host(fp) => fp,
@@ -305,6 +448,27 @@ impl FunctionInstanceData {
     pub(crate) fn clear_derived_code(&mut self) {
         if let FunctionBody::Wasm { derived_code, .. } = &mut self.body {
             *derived_code = None;
+        }
+    }
+
+    pub(crate) fn set_precomputed_call_sites(
+        &mut self,
+        direct_call_sites: Arc<[PrecomputedDirectCallSite]>,
+        indirect_call_sites: Arc<[PrecomputedIndirectCallSite]>,
+    ) {
+        match &mut self.body {
+            FunctionBody::Wasm { metadata, .. } => {
+                metadata.derived_call_metadata =
+                    (!direct_call_sites.is_empty() || !indirect_call_sites.is_empty()).then(|| {
+                        Arc::new(DerivedCallMetadata {
+                            direct_call_sites,
+                            indirect_call_sites,
+                        })
+                    });
+            }
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => {
+                unreachable!("precomputed call-site metadata is only valid for wasm functions")
+            }
         }
     }
 }
@@ -1786,6 +1950,7 @@ mod tests {
         VMResult, WasmExecutionMetadata,
     };
     use crate::common::PAGE_SIZE;
+    use crate::common::{FrameLayoutColdMetadata, FrameLayoutMetadata, ValType};
     use crate::runtime::vm;
     use std::sync::Arc;
 
@@ -1801,6 +1966,22 @@ mod tests {
             MemoryHandle::Shared(id) => id,
             MemoryHandle::Local(_) => panic!("expected shared memory handle"),
         }
+    }
+
+    fn empty_frame_layout() -> Arc<FrameLayoutMetadata> {
+        Arc::new(FrameLayoutMetadata::new(
+            0,
+            0,
+            0,
+            ReturnShape::Empty,
+            ReturnShape::Empty,
+            FrameLayoutColdMetadata {
+                local_slots: Arc::from([]),
+                local_ref_runs: Arc::from([]),
+                stack_map_sites: Arc::from([]),
+                unwind_sites: Arc::from([]),
+            },
+        ))
     }
 
     #[test]
@@ -1830,6 +2011,7 @@ mod tests {
         let func_type = FuncType::new(vec![], vec![]);
         let canonical: Arc<[Instr]> = vec![Instr { op: vm::op_end }].into();
         let derived: Arc<[Instr]> = vec![Instr { op: vm::op_br }].into();
+        let frame_layout = empty_frame_layout();
         let mut func = FunctionInstanceData {
             instance: InstanceId::from_index(0),
             funcidx: 0,
@@ -1848,7 +2030,10 @@ mod tests {
                 derived_code: None,
                 metadata: WasmExecutionMetadata {
                     code_base_addr: canonical.as_ptr() as usize,
-                    locals_byte_size: 0,
+                    frame_layout_addr: frame_layout.header() as *const _ as usize,
+                    frame_layout,
+                    control_flow_metadata: Arc::from([]),
+                    derived_call_metadata: None,
                 },
             },
         };
@@ -1865,6 +2050,121 @@ mod tests {
         func.clear_derived_code();
         assert_eq!(func.code().unwrap().as_ptr(), canonical.as_ptr());
         assert_eq!(func.code_pointer().unwrap(), canonical.as_ptr());
+    }
+
+    #[test]
+    fn wasm_function_exposes_precomputed_frame_layout_metadata() {
+        let func_type = FuncType::new(
+            vec![ValType::ExternRef, ValType::I32],
+            vec![ValType::ExternRef],
+        );
+        let canonical: Arc<[Instr]> = vec![Instr { op: vm::op_end }].into();
+        let frame_layout = Arc::new(FrameLayoutMetadata::new(
+            8,
+            12,
+            4,
+            ReturnShape::Generic,
+            ReturnShape::Scalar4,
+            FrameLayoutColdMetadata {
+                local_slots: Arc::from([
+                    crate::common::LocalSlotLayout {
+                        wasm_local_index: 0,
+                        val_type: ValType::ExternRef,
+                        offset_from_local_top: 0,
+                        size: 4,
+                        is_ref: true,
+                    },
+                    crate::common::LocalSlotLayout {
+                        wasm_local_index: 1,
+                        val_type: ValType::I32,
+                        offset_from_local_top: 4,
+                        size: 4,
+                        is_ref: false,
+                    },
+                    crate::common::LocalSlotLayout {
+                        wasm_local_index: 2,
+                        val_type: ValType::FuncRef,
+                        offset_from_local_top: 8,
+                        size: 4,
+                        is_ref: true,
+                    },
+                    crate::common::LocalSlotLayout {
+                        wasm_local_index: 3,
+                        val_type: ValType::I64,
+                        offset_from_local_top: 12,
+                        size: 8,
+                        is_ref: false,
+                    },
+                ]),
+                local_ref_runs: Arc::from([
+                    crate::common::RefSlotRun {
+                        start_from_local_top: 0,
+                        len_bytes: 4,
+                    },
+                    crate::common::RefSlotRun {
+                        start_from_local_top: 8,
+                        len_bytes: 4,
+                    },
+                ]),
+                stack_map_sites: Arc::from([crate::common::StackMapSite {
+                    instruction_ordinal: 0,
+                    kind: crate::common::StackMapSafepointKind::FunctionReturn,
+                    operand_bytes: 4,
+                    ref_offsets_from_operand_base: Arc::from([0]),
+                }]),
+                unwind_sites: Arc::from([crate::common::UnwindSiteMetadata {
+                    instruction_ordinal: 0,
+                    kind: crate::common::StackMapSafepointKind::FunctionReturn,
+                    result_slot_from_local_top: Some(0),
+                }]),
+            },
+        ));
+        let func = FunctionInstanceData {
+            instance: InstanceId::from_index(0),
+            funcidx: 0,
+            execution: FunctionExecutionMetadata {
+                kind: FunctionKind::Wasm,
+                typeidx: TypeIdx(0),
+                type_identity: func_type.identity(),
+                param_stack_bytes: 8,
+                param_shape: ReturnShape::Generic,
+                result_stack_bytes: 4,
+                result_shape: ReturnShape::Scalar4,
+            },
+            body: FunctionBody::Wasm {
+                locals: LocalsData::default(),
+                code: canonical.clone(),
+                derived_code: None,
+                metadata: WasmExecutionMetadata {
+                    code_base_addr: canonical.as_ptr() as usize,
+                    frame_layout: frame_layout.clone(),
+                    frame_layout_addr: frame_layout.header() as *const _ as usize,
+                    control_flow_metadata: Arc::from([]),
+                    derived_call_metadata: None,
+                },
+            },
+        };
+
+        let metadata = func.frame_layout().expect("wasm frame layout must exist");
+        assert_eq!(metadata.param_bytes, 8);
+        assert_eq!(metadata.locals_bytes, 12);
+        assert_eq!(
+            metadata.fixed_frame_bytes as usize,
+            20 + std::mem::size_of::<crate::common::stack::CallStackInfo>()
+        );
+        assert_eq!(metadata.cold.local_slots.len(), 4);
+        assert_eq!(metadata.cold.local_ref_runs.len(), 2);
+        assert_eq!(metadata.cold.stack_map_sites[0].operand_bytes, 4);
+        assert_eq!(
+            metadata.cold.stack_map_sites[0]
+                .ref_offsets_from_operand_base
+                .as_ref(),
+            &[0]
+        );
+        assert_eq!(
+            metadata.cold.unwind_sites[0].result_slot_from_local_top,
+            Some(0)
+        );
     }
 
     #[test]

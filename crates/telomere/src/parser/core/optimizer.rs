@@ -3,7 +3,7 @@ use std::{collections::HashSet, ops::Range, sync::Arc};
 use crate::{
     common::{
         ControlFlowMetadataKind, ControlFlowMetadataSite, Instr, MemArg, Op, Operand, ReturnShape,
-        ValueSize,
+        StackMapSite, StackMapSourceSite, UnwindSiteMetadata, UnwindSourceSite, ValueSize,
     },
     parser::core::instruction_generator::InstructionProgram,
     runtime::vm::{self, compute_memory_offset},
@@ -13,6 +13,8 @@ use crate::{
 pub(crate) struct OptimizedCoreProgram {
     pub(crate) instr: Vec<Instr>,
     pub(crate) control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
+    pub(crate) stack_map_sites: Arc<[StackMapSite]>,
+    pub(crate) unwind_sites: Arc<[UnwindSiteMetadata]>,
 }
 
 #[derive(Clone)]
@@ -497,18 +499,22 @@ pub(crate) fn optimize_core_program_with_function_index(
     program: InstructionProgram,
     function_index: u32,
 ) -> Vec<Instr> {
-    optimize_core_program_with_metadata(program, function_index, 0).instr
+    optimize_core_program_with_metadata(program, function_index, 0, &[], &[]).instr
 }
 
 pub(crate) fn optimize_core_program_with_metadata(
     program: InstructionProgram,
     function_index: u32,
     frame_stack_base: u32,
+    stack_map_source_sites: &[StackMapSourceSite],
+    unwind_source_sites: &[UnwindSourceSite],
 ) -> OptimizedCoreProgram {
     if program.instruction_starts.is_empty() {
         return OptimizedCoreProgram {
             instr: program.instr,
             control_flow_metadata: Arc::from([]),
+            stack_map_sites: Arc::from([]),
+            unwind_sites: Arc::from([]),
         };
     }
 
@@ -521,9 +527,21 @@ pub(crate) fn optimize_core_program_with_metadata(
         &lowered.instruction_starts,
         frame_stack_base,
     );
+    let stack_map_sites = collect_stack_map_metadata(
+        stack_map_source_sites,
+        &lowered.old_to_new,
+        &lowered.instruction_starts,
+    );
+    let unwind_sites = collect_unwind_metadata(
+        unwind_source_sites,
+        &lowered.old_to_new,
+        &lowered.instruction_starts,
+    );
     OptimizedCoreProgram {
         instr: lowered.instr,
         control_flow_metadata,
+        stack_map_sites,
+        unwind_sites,
     }
 }
 
@@ -2956,6 +2974,7 @@ fn match_local_imm_local_store(
 struct LoweredProgram {
     instr: Vec<Instr>,
     instruction_starts: Vec<usize>,
+    old_to_new: Vec<u32>,
 }
 
 fn lower_program(
@@ -2988,6 +3007,7 @@ fn lower_program(
     LoweredProgram {
         instr: lowered,
         instruction_starts,
+        old_to_new,
     }
 }
 
@@ -3153,6 +3173,59 @@ fn collect_control_flow_metadata(
         }
     }
     Arc::from(metadata)
+}
+
+fn map_raw_start_to_instruction_ordinal(
+    raw_start: usize,
+    old_to_new: &[u32],
+    instruction_starts: &[usize],
+) -> Option<u32> {
+    let new_start = *old_to_new.get(raw_start)? as usize;
+    let ordinal = instruction_starts.binary_search(&new_start).ok()?;
+    Some(ordinal as u32)
+}
+
+fn collect_stack_map_metadata(
+    source_sites: &[StackMapSourceSite],
+    old_to_new: &[u32],
+    instruction_starts: &[usize],
+) -> Arc<[StackMapSite]> {
+    let mut sites = Vec::with_capacity(source_sites.len());
+    for site in source_sites {
+        let Some(instruction_ordinal) =
+            map_raw_start_to_instruction_ordinal(site.raw_start, old_to_new, instruction_starts)
+        else {
+            continue;
+        };
+        sites.push(StackMapSite {
+            instruction_ordinal,
+            kind: site.kind,
+            operand_bytes: site.operand_bytes,
+            ref_offsets_from_operand_base: site.ref_offsets_from_operand_base.clone(),
+        });
+    }
+    Arc::from(sites)
+}
+
+fn collect_unwind_metadata(
+    source_sites: &[UnwindSourceSite],
+    old_to_new: &[u32],
+    instruction_starts: &[usize],
+) -> Arc<[UnwindSiteMetadata]> {
+    let mut sites = Vec::with_capacity(source_sites.len());
+    for site in source_sites {
+        let Some(instruction_ordinal) =
+            map_raw_start_to_instruction_ordinal(site.raw_start, old_to_new, instruction_starts)
+        else {
+            continue;
+        };
+        sites.push(UnwindSiteMetadata {
+            instruction_ordinal,
+            kind: site.kind,
+            result_slot_from_local_top: site.result_slot_from_local_top,
+        });
+    }
+    Arc::from(sites)
 }
 
 fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {

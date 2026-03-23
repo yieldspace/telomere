@@ -2,7 +2,7 @@
 
 #[macro_use]
 mod vm_result;
-use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
+use std::{fmt::Display, future::Future, ops::Deref, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
 
@@ -393,6 +393,7 @@ pub struct Global(pub GlobalType, pub Vec<ConstExpr>);
 pub struct Func {
     pub locals: LocalsData,
     pub expr: Vec<Instr>,
+    pub(crate) frame_layout: Arc<FrameLayoutMetadata>,
     pub(crate) control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
 }
 impl Func {
@@ -527,6 +528,177 @@ pub(crate) enum ReturnShape {
     Scalar4 = 1,
     Scalar8 = 2,
     Generic = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum StackMapSafepointKind {
+    Call = 0,
+    CallImport = 1,
+    CallIndirect = 2,
+    ReturnCall = 3,
+    ReturnCallImport = 4,
+    ReturnCallIndirect = 5,
+    Return = 6,
+    Loop = 7,
+    BlockReturn = 8,
+    FunctionReturn = 9,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalSlotLayout {
+    pub wasm_local_index: u32,
+    pub val_type: ValType,
+    pub offset_from_local_top: u32,
+    pub size: u32,
+    pub is_ref: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RefSlotRun {
+    pub start_from_local_top: u32,
+    pub len_bytes: u32,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct StackMapSite {
+    pub instruction_ordinal: u32,
+    pub kind: StackMapSafepointKind,
+    pub operand_bytes: u32,
+    pub ref_offsets_from_operand_base: Arc<[u32]>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StackMapSourceSite {
+    pub raw_start: usize,
+    pub kind: StackMapSafepointKind,
+    pub operand_bytes: u32,
+    pub ref_offsets_from_operand_base: Arc<[u32]>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct UnwindSiteMetadata {
+    pub instruction_ordinal: u32,
+    pub kind: StackMapSafepointKind,
+    pub result_slot_from_local_top: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UnwindSourceSite {
+    pub raw_start: usize,
+    pub kind: StackMapSafepointKind,
+    pub result_slot_from_local_top: Option<u32>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct FrameLayoutColdMetadata {
+    pub local_slots: Arc<[LocalSlotLayout]>,
+    pub local_ref_runs: Arc<[RefSlotRun]>,
+    pub stack_map_sites: Arc<[StackMapSite]>,
+    pub unwind_sites: Arc<[UnwindSiteMetadata]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub(crate) struct FrameLayoutHeader {
+    pub param_bytes: u32,
+    pub locals_bytes: u32,
+    pub fixed_frame_bytes: u32,
+    pub locals_zero_start_from_local_top: u32,
+    pub footer_from_local_top: u32,
+    pub operand_base_from_local_top: u32,
+    pub max_operand_bytes: u32,
+    pub param_shape: ReturnShape,
+    pub result_shape: ReturnShape,
+    cold_addr: usize,
+}
+
+impl FrameLayoutHeader {
+    #[inline(always)]
+    pub(crate) fn cold(&self) -> &FrameLayoutColdMetadata {
+        debug_assert_ne!(self.cold_addr, 0);
+        unsafe { &*(self.cold_addr as *const FrameLayoutColdMetadata) }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn stack_map_site(&self, instruction_ordinal: u32) -> Option<&StackMapSite> {
+        self.cold()
+            .stack_map_sites
+            .iter()
+            .find(|site| site.instruction_ordinal == instruction_ordinal)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn unwind_site(&self, instruction_ordinal: u32) -> Option<&UnwindSiteMetadata> {
+        self.cold()
+            .unwind_sites
+            .iter()
+            .find(|site| site.instruction_ordinal == instruction_ordinal)
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) struct FrameLayoutMetadata {
+    pub header: FrameLayoutHeader,
+    pub cold: Arc<FrameLayoutColdMetadata>,
+}
+
+impl FrameLayoutMetadata {
+    pub(crate) fn new(
+        param_bytes: u32,
+        locals_bytes: u32,
+        max_operand_bytes: u32,
+        param_shape: ReturnShape,
+        result_shape: ReturnShape,
+        cold: FrameLayoutColdMetadata,
+    ) -> Self {
+        let cold = Arc::new(cold);
+        let footer_from_local_top = param_bytes + locals_bytes;
+        let operand_base_from_local_top = footer_from_local_top
+            + std::mem::size_of::<crate::common::stack::CallStackInfo>() as u32;
+        Self {
+            header: FrameLayoutHeader {
+                param_bytes,
+                locals_bytes,
+                fixed_frame_bytes: operand_base_from_local_top,
+                locals_zero_start_from_local_top: param_bytes,
+                footer_from_local_top,
+                operand_base_from_local_top,
+                max_operand_bytes,
+                param_shape,
+                result_shape,
+                cold_addr: Arc::as_ptr(&cold) as usize,
+            },
+            cold,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn header(&self) -> &FrameLayoutHeader {
+        &self.header
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn stack_map_site(&self, instruction_ordinal: u32) -> Option<&StackMapSite> {
+        self.header.stack_map_site(instruction_ordinal)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn unwind_site(&self, instruction_ordinal: u32) -> Option<&UnwindSiteMetadata> {
+        self.header.unwind_site(instruction_ordinal)
+    }
+}
+
+impl Deref for FrameLayoutMetadata {
+    type Target = FrameLayoutHeader;
+
+    fn deref(&self) -> &Self::Target {
+        &self.header
+    }
 }
 
 impl ReturnShape {
@@ -732,7 +904,7 @@ impl StablePc {
         stack: &Stack,
         local_reference: LocalReference,
     ) -> Option<(*const Instr, usize)> {
-        let frame_size = local_reference.local_size as usize;
+        let frame_size = local_reference.frame_bytes as usize;
         if frame_size < std::mem::size_of::<crate::common::stack::CallStackInfo>() {
             return None;
         }
@@ -858,11 +1030,21 @@ impl ExecuteContext<'_> {
 
     pub fn set_local_reference(&mut self, local_reference: LocalReference) {
         self.local_reference = local_reference;
-        if local_reference.local_size as usize
-            >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
-        {
+        if local_reference.has_call_stack_info() {
             self.current_frame = self.stack.frame_cache(&local_reference);
+        } else {
+            self.current_frame = CallFrameCache::dummy();
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_local_reference_with_frame(
+        &mut self,
+        local_reference: LocalReference,
+        frame: CallFrameCache,
+    ) {
+        self.local_reference = local_reference;
+        self.current_frame = frame;
     }
 
     #[inline(always)]
@@ -1116,9 +1298,10 @@ impl ExecuteContext<'_> {
         }
     }
     pub fn caller_local_reference(&self) -> Option<LocalReference> {
-        (self.local_reference.local_size != 0)
+        self.local_reference
+            .has_call_stack_info()
             .then(|| self.stack.previous_local_reference(&self.local_reference))
-            .filter(|reference| reference.local_size != 0)
+            .filter(|reference| reference.has_call_stack_info())
     }
     pub fn caller_memory_addr(&self) -> Option<MemoryHandle> {
         self.caller_frame_cache()?.memory0_handle()
@@ -1200,8 +1383,16 @@ pub fn execute_elem_init_const_expr(
 pub const fn word_size<T>() -> usize {
     std::mem::size_of::<T>() / std::mem::size_of::<u32>()
 }
-#[derive(Debug)]
-pub(crate) struct LocalReassignTable(pub(crate) Vec<(u32, ValType, u32)>);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalGroupLayout {
+    pub local_end_exclusive: u32,
+    pub local_count: u32,
+    pub val_type: ValType,
+    pub offset_from_local_top: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LocalReassignTable(pub(crate) Vec<LocalGroupLayout>);
 #[derive(Default, Debug, Clone)]
 pub struct LocalsData {
     count_i32: u32,
@@ -1252,58 +1443,66 @@ impl LocalsData {
                 .ok_or(WasmParserError::TooManyLocals)?;
             match t {
                 ValType::I32 => {
-                    res.push((
-                        index,
-                        ValType::I32,
-                        count_i32
+                    res.push(LocalGroupLayout {
+                        local_end_exclusive: index,
+                        local_count: *n,
+                        val_type: ValType::I32,
+                        offset_from_local_top: count_i32
                             .checked_mul(4)
                             .ok_or(WasmParserError::TooManyLocals)?,
-                    ));
+                    });
                     count_i32 = count_i32
                         .checked_add(*n)
                         .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::F32 => {
-                    res.push((
-                        index,
-                        ValType::F32,
-                        (self.count_i32 + count_f32)
+                    res.push(LocalGroupLayout {
+                        local_end_exclusive: index,
+                        local_count: *n,
+                        val_type: ValType::F32,
+                        offset_from_local_top: (self.count_i32 + count_f32)
                             .checked_mul(4)
                             .ok_or(WasmParserError::TooManyLocals)?,
-                    ));
+                    });
                     count_f32 = count_f32
                         .checked_add(*n)
                         .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::FuncRef => {
-                    res.push((
-                        index,
-                        ValType::FuncRef,
-                        (self.count_i32 + self.count_f32 + count_func_ref)
+                    res.push(LocalGroupLayout {
+                        local_end_exclusive: index,
+                        local_count: *n,
+                        val_type: ValType::FuncRef,
+                        offset_from_local_top: (self.count_i32 + self.count_f32 + count_func_ref)
                             .checked_mul(4)
                             .ok_or(WasmParserError::TooManyLocals)?,
-                    ));
+                    });
                     count_func_ref = count_func_ref
                         .checked_add(*n)
                         .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::ExternRef => {
-                    res.push((
-                        index,
-                        ValType::ExternRef,
-                        (self.count_i32 + self.count_f32 + self.count_func_ref + count_extern_ref)
+                    res.push(LocalGroupLayout {
+                        local_end_exclusive: index,
+                        local_count: *n,
+                        val_type: ValType::ExternRef,
+                        offset_from_local_top: (self.count_i32
+                            + self.count_f32
+                            + self.count_func_ref
+                            + count_extern_ref)
                             .checked_mul(4)
                             .ok_or(WasmParserError::TooManyLocals)?,
-                    ));
+                    });
                     count_extern_ref = count_extern_ref
                         .checked_add(*n)
                         .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::I64 => {
-                    res.push((
-                        index,
-                        ValType::I64,
-                        (self.count_i32
+                    res.push(LocalGroupLayout {
+                        local_end_exclusive: index,
+                        local_count: *n,
+                        val_type: ValType::I64,
+                        offset_from_local_top: (self.count_i32
                             + self.count_f32
                             + self.count_func_ref
                             + self.count_extern_ref)
@@ -1312,16 +1511,17 @@ impl LocalsData {
                             + count_i64
                                 .checked_mul(8)
                                 .ok_or(WasmParserError::TooManyLocals)?,
-                    ));
+                    });
                     count_i64 = count_i64
                         .checked_add(*n)
                         .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::F64 => {
-                    res.push((
-                        index,
-                        ValType::F64,
-                        (self.count_i32
+                    res.push(LocalGroupLayout {
+                        local_end_exclusive: index,
+                        local_count: *n,
+                        val_type: ValType::F64,
+                        offset_from_local_top: (self.count_i32
                             + self.count_f32
                             + self.count_func_ref
                             + self.count_extern_ref)
@@ -1330,16 +1530,17 @@ impl LocalsData {
                             + (self.count_i64 + count_f64)
                                 .checked_mul(8)
                                 .ok_or(WasmParserError::TooManyLocals)?,
-                    ));
+                    });
                     count_f64 = count_f64
                         .checked_add(*n)
                         .ok_or(WasmParserError::TooManyLocals)?;
                 }
                 ValType::V128 => {
-                    res.push((
-                        index,
-                        ValType::V128,
-                        (self.count_i32
+                    res.push(LocalGroupLayout {
+                        local_end_exclusive: index,
+                        local_count: *n,
+                        val_type: ValType::V128,
+                        offset_from_local_top: (self.count_i32
                             + self.count_f32
                             + self.count_func_ref
                             + self.count_extern_ref)
@@ -1351,7 +1552,7 @@ impl LocalsData {
                             + count_v128
                                 .checked_mul(16)
                                 .ok_or(WasmParserError::TooManyLocals)?,
-                    ));
+                    });
                     count_v128 = count_v128
                         .checked_add(*n)
                         .ok_or(WasmParserError::TooManyLocals)?;

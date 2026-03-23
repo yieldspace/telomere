@@ -4,7 +4,7 @@
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::VMResult;
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Range, ptr::NonNull};
 
 use super::{
     memory::trusted_copy_from_slice,
@@ -13,7 +13,7 @@ use super::{
         FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId, MemoryHandle,
         SharedMemoryId,
     },
-    Instr, ReturnShape, StablePc, StoreInner,
+    FrameLayoutHeader, Instr, ReturnShape, StablePc, StackMapSite, StoreInner,
 };
 #[inline(always)]
 fn trusted_write_u32(dst: &mut [u8], value: u32) {
@@ -151,7 +151,26 @@ impl Debug for Stack {
 pub(crate) struct CallStackInfo {
     return_pc: StablePc,
     prev_local_reference_top: usize,
-    prev_local_reference_size: u32,
+    prev_local_reference_frame_bytes: u32,
+    prev_local_reference_layout: Option<NonNull<FrameLayoutHeader>>,
+    code_addr: ObjectRef,
+    code_base: *const Instr,
+    instance: InstanceId,
+    memory0_kind: CachedMemoryKind,
+    memory0_raw: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+struct PrevLocalReferenceFooter {
+    local_top: usize,
+    frame_bytes: u32,
+    layout: Option<NonNull<FrameLayoutHeader>>,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+struct CallFrameCacheFooter {
     code_addr: ObjectRef,
     code_base: *const Instr,
     instance: InstanceId,
@@ -177,7 +196,7 @@ pub(crate) struct CallFrameCache {
 }
 
 impl CachedMemoryKind {
-    fn from_memory_handle(handle: Option<MemoryHandle>) -> (Self, u32) {
+    pub(crate) fn from_memory_handle(handle: Option<MemoryHandle>) -> (Self, u32) {
         match handle {
             Some(MemoryHandle::Local(id)) => (Self::Local, id.raw()),
             Some(MemoryHandle::Shared(id)) => (Self::Shared, id.raw()),
@@ -225,6 +244,30 @@ impl CallFrameCache {
     }
 }
 
+impl From<CallFrameCacheFooter> for CallFrameCache {
+    #[inline(always)]
+    fn from(value: CallFrameCacheFooter) -> Self {
+        Self {
+            code_addr: value.code_addr,
+            code_base: value.code_base,
+            instance: value.instance,
+            memory0_kind: value.memory0_kind,
+            memory0_raw: value.memory0_raw,
+        }
+    }
+}
+
+impl From<PrevLocalReferenceFooter> for LocalReference {
+    #[inline(always)]
+    fn from(value: PrevLocalReferenceFooter) -> Self {
+        Self {
+            local_top: value.local_top,
+            frame_bytes: value.frame_bytes,
+            layout: value.layout,
+        }
+    }
+}
+
 pub trait IntoCallFrameCache {
     fn into_call_frame_cache(self, runtime: &StoreInner) -> CallFrameCache;
 }
@@ -252,7 +295,42 @@ impl IntoCallFrameCache for ObjectRef {
 #[repr(C, packed)]
 pub struct LocalReference {
     pub local_top: usize,
-    pub local_size: u32,
+    pub frame_bytes: u32,
+    pub layout: Option<NonNull<FrameLayoutHeader>>,
+}
+
+impl LocalReference {
+    #[inline(always)]
+    pub const fn empty() -> Self {
+        Self {
+            local_top: 0,
+            frame_bytes: 0,
+            layout: None,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn from_raw(local_top: usize, frame_bytes: u32) -> Self {
+        Self {
+            local_top,
+            frame_bytes,
+            layout: None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn from_layout(local_top: usize, layout: &FrameLayoutHeader) -> Self {
+        Self {
+            local_top,
+            frame_bytes: layout.fixed_frame_bytes,
+            layout: Some(NonNull::from(layout)),
+        }
+    }
+
+    #[inline(always)]
+    pub const fn has_call_stack_info(self) -> bool {
+        self.frame_bytes as usize >= std::mem::size_of::<CallStackInfo>()
+    }
 }
 impl Stack {
     pub fn new(size: usize) -> Self {
@@ -586,7 +664,7 @@ impl Stack {
     }
     #[inline(always)]
     fn block_return_dst(reference: &LocalReference, stack_top: usize) -> usize {
-        reference.local_top + reference.local_size as usize + stack_top
+        reference.local_top + reference.frame_bytes as usize + stack_top
     }
     #[inline(always)]
     fn precomputed_block_return_dst(
@@ -597,7 +675,7 @@ impl Stack {
     }
     pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
         self.flush_cached_operands();
-        &mut self.memory[reference.local_top..self.top + reference.local_size as usize]
+        &mut self.memory[reference.local_top..reference.local_top + reference.frame_bytes as usize]
     }
     pub fn local_get(
         &mut self,
@@ -721,55 +799,176 @@ impl Stack {
         let start = reference.local_top + local_addr;
         trusted_write_u128(&mut self.memory[start..start + 16], value);
     }
-    fn call_stack_info(&self, reference: &LocalReference) -> CallStackInfo {
-        let info_top = reference.local_top + reference.local_size as usize
-            - std::mem::size_of::<CallStackInfo>();
-
-        unsafe {
-            std::ptr::read_unaligned(
-                self.memory[info_top..info_top + std::mem::size_of::<CallStackInfo>()]
-                    .as_ptr()
-                    .cast::<CallStackInfo>(),
-            )
+    #[inline(always)]
+    fn frame_footer_offset(reference: &LocalReference) -> usize {
+        if let Some(layout) = reference.layout {
+            let layout = unsafe { layout.as_ref() };
+            reference.local_top + layout.footer_from_local_top as usize
+        } else {
+            reference.local_top + reference.frame_bytes as usize
+                - std::mem::size_of::<CallStackInfo>()
         }
     }
+
+    #[inline(always)]
+    pub(crate) fn frame_footer_ptr(&self, reference: &LocalReference) -> *const CallStackInfo {
+        debug_assert!(reference.has_call_stack_info());
+        unsafe {
+            self.memory
+                .as_ptr()
+                .add(Self::frame_footer_offset(reference))
+                .cast::<CallStackInfo>()
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn call_stack_info_ptr(&self, reference: &LocalReference) -> *const CallStackInfo {
+        self.frame_footer_ptr(reference)
+    }
+
+    #[inline(always)]
+    #[allow(dead_code)]
+    fn call_stack_info(&self, reference: &LocalReference) -> CallStackInfo {
+        unsafe { std::ptr::read_unaligned(self.call_stack_info_ptr(reference)) }
+    }
+
+    #[inline(always)]
+    #[allow(dead_code)]
+    pub(crate) fn operand_base(&self, reference: &LocalReference) -> usize {
+        if let Some(layout) = reference.layout {
+            let layout = unsafe { layout.as_ref() };
+            reference.local_top + layout.operand_base_from_local_top as usize
+        } else {
+            reference.local_top + reference.frame_bytes as usize
+        }
+    }
+
+    #[inline(always)]
+    fn return_pc(&self, reference: &LocalReference) -> StablePc {
+        unsafe { std::ptr::read_unaligned(self.call_stack_info_ptr(reference).cast::<StablePc>()) }
+    }
+
+    #[inline(always)]
+    fn prev_local_reference_ptr(
+        &self,
+        reference: &LocalReference,
+    ) -> *const PrevLocalReferenceFooter {
+        unsafe {
+            self.memory
+                .as_ptr()
+                .add(
+                    Self::frame_footer_offset(reference)
+                        + std::mem::offset_of!(CallStackInfo, prev_local_reference_top),
+                )
+                .cast::<PrevLocalReferenceFooter>()
+        }
+    }
+
+    #[inline(always)]
+    fn previous_local_reference_footer(
+        &self,
+        reference: &LocalReference,
+    ) -> PrevLocalReferenceFooter {
+        unsafe { std::ptr::read_unaligned(self.prev_local_reference_ptr(reference)) }
+    }
+
+    #[inline(always)]
+    fn current_frame_cache_ptr(&self, reference: &LocalReference) -> *const CallFrameCacheFooter {
+        unsafe {
+            self.memory
+                .as_ptr()
+                .add(
+                    Self::frame_footer_offset(reference)
+                        + std::mem::offset_of!(CallStackInfo, code_addr),
+                )
+                .cast::<CallFrameCacheFooter>()
+        }
+    }
+
+    #[inline(always)]
+    fn current_frame_cache_footer(&self, reference: &LocalReference) -> CallFrameCacheFooter {
+        unsafe { std::ptr::read_unaligned(self.current_frame_cache_ptr(reference)) }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn visit_local_ref_ranges<F>(&self, reference: &LocalReference, mut visitor: F)
+    where
+        F: FnMut(Range<usize>),
+    {
+        let Some(layout) = reference.layout else {
+            return;
+        };
+        let layout = unsafe { layout.as_ref() };
+        for run in layout.cold().local_ref_runs.iter() {
+            let start = reference.local_top + run.start_from_local_top as usize;
+            visitor(start..start + run.len_bytes as usize);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn visit_operand_ref_ranges<F>(
+        &self,
+        reference: &LocalReference,
+        site: &StackMapSite,
+        mut visitor: F,
+    ) where
+        F: FnMut(Range<usize>),
+    {
+        let base = self.operand_base(reference);
+        for offset in site.ref_offsets_from_operand_base.iter() {
+            let start = base + *offset as usize;
+            visitor(start..start + 4);
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn local_ref_ranges(&self, reference: &LocalReference) -> Vec<Range<usize>> {
+        let mut ranges = Vec::new();
+        self.visit_local_ref_ranges(reference, |range| ranges.push(range));
+        ranges
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn operand_ref_ranges(
+        &self,
+        reference: &LocalReference,
+        site: &StackMapSite,
+    ) -> Vec<Range<usize>> {
+        let mut ranges = Vec::new();
+        self.visit_operand_ref_ranges(reference, site, |range| ranges.push(range));
+        ranges
+    }
+
     fn push_call_stack_info(&mut self, info: CallStackInfo) -> VMResult<()> {
         self.flush_cached_operands();
         let size = std::mem::size_of::<CallStackInfo>();
-        let bytes = unsafe {
-            std::slice::from_raw_parts((&info as *const CallStackInfo).cast::<u8>(), size)
-        };
-        trusted_copy_from_slice(vm_try!(self.get_memory(size)), bytes);
-        self.add_top(size)
+        let end = vm_try!(self.checked_new_top(size));
+        let start = self.top;
+        unsafe {
+            self.memory
+                .as_mut_ptr()
+                .add(start)
+                .cast::<CallStackInfo>()
+                .write_unaligned(info);
+        }
+        self.top = end;
+        VMResult::Success(())
     }
     pub(crate) fn previous_local_reference(&self, reference: &LocalReference) -> LocalReference {
-        let CallStackInfo {
-            prev_local_reference_top,
-            prev_local_reference_size,
-            ..
-        } = self.call_stack_info(reference);
-        LocalReference {
-            local_top: prev_local_reference_top,
-            local_size: prev_local_reference_size,
-        }
+        self.previous_local_reference_footer(reference).into()
     }
     pub fn code_addr(&self, reference: &LocalReference) -> ObjectRef {
-        self.call_stack_info(reference).code_addr
+        self.current_frame_cache_footer(reference).code_addr
     }
     pub fn code_base(&self, reference: &LocalReference) -> *const Instr {
-        self.call_stack_info(reference).code_base
+        self.current_frame_cache_footer(reference).code_base
     }
     pub(crate) fn frame_cache(&self, reference: &LocalReference) -> CallFrameCache {
-        let info = self.call_stack_info(reference);
-        CallFrameCache {
-            code_addr: info.code_addr,
-            code_base: info.code_base,
-            instance: info.instance,
-            memory0_kind: info.memory0_kind,
-            memory0_raw: info.memory0_raw,
-        }
+        self.current_frame_cache_footer(reference).into()
     }
-    pub fn function_call<F: IntoCallFrameCache>(
+    pub fn function_call_raw<F: IntoCallFrameCache>(
         &mut self,
         param_size: usize,
         local_size: usize,
@@ -800,38 +999,128 @@ impl Stack {
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
             prev_local_reference_top: prev_local_reference.local_top,
-            prev_local_reference_size: prev_local_reference.local_size,
+            prev_local_reference_frame_bytes: prev_local_reference.frame_bytes,
+            prev_local_reference_layout: prev_local_reference.layout,
         };
         vm_try!(self.push_call_stack_info(info));
 
-        VMResult::Success(LocalReference {
+        VMResult::Success(LocalReference::from_raw(
             local_top,
-            local_size: (param_size + local_size + std::mem::size_of::<CallStackInfo>()) as u32,
-        })
+            (param_size + local_size + std::mem::size_of::<CallStackInfo>()) as u32,
+        ))
     }
+    pub fn function_call<F: IntoCallFrameCache>(
+        &mut self,
+        param_size: usize,
+        local_size: usize,
+        frame: F,
+        prev_local_reference: LocalReference,
+        return_addr: *const Instr,
+        runtime: &StoreInner,
+    ) -> VMResult<LocalReference> {
+        self.function_call_raw(
+            param_size,
+            local_size,
+            frame,
+            prev_local_reference,
+            return_addr,
+            runtime,
+        )
+    }
+    pub fn function_call_layout<F: IntoCallFrameCache>(
+        &mut self,
+        layout: &FrameLayoutHeader,
+        frame: F,
+        prev_local_reference: LocalReference,
+        return_addr: *const Instr,
+        runtime: &StoreInner,
+    ) -> VMResult<LocalReference> {
+        self.flush_cached_operands();
+        let frame = frame.into_call_frame_cache(runtime);
+        let local_top = vm_try!(VMResult::from_option(
+            self.top.checked_sub(layout.param_bytes as usize),
+            || VMResult::StackOverflow
+        ));
+
+        vm_try!(self.add_top(layout.locals_bytes as usize));
+        vm_try!(self.zero_new_locals(
+            local_top + layout.locals_zero_start_from_local_top as usize,
+            layout.locals_bytes as usize,
+        ));
+        let info = CallStackInfo {
+            return_pc: StablePc::from_raw_in_frame(
+                runtime,
+                self,
+                prev_local_reference,
+                return_addr,
+            ),
+            code_addr: frame.code_addr,
+            code_base: frame.code_base,
+            instance: frame.instance,
+            memory0_kind: frame.memory0_kind,
+            memory0_raw: frame.memory0_raw,
+            prev_local_reference_top: prev_local_reference.local_top,
+            prev_local_reference_frame_bytes: prev_local_reference.frame_bytes,
+            prev_local_reference_layout: prev_local_reference.layout,
+        };
+        vm_try!(self.push_call_stack_info(info));
+
+        VMResult::Success(LocalReference::from_layout(local_top, layout))
+    }
+    pub(crate) fn function_return_with_frame(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+        runtime: &StoreInner,
+    ) -> (LocalReference, CallFrameCache, *const Instr) {
+        self.flush_cached_operands();
+        let prev_local_reference = self.previous_local_reference(reference);
+        let return_pc = self.return_pc(reference);
+
+        self.memory
+            .copy_within(self.top - return_size..self.top, reference.local_top);
+        self.top = reference.local_top + return_size;
+        let prev_frame = if prev_local_reference.has_call_stack_info() {
+            self.frame_cache(&prev_local_reference)
+        } else {
+            CallFrameCache::dummy()
+        };
+        (
+            prev_local_reference,
+            prev_frame,
+            return_pc.resolve(runtime, self, prev_local_reference),
+        )
+    }
+
     pub fn function_return(
         &mut self,
         reference: &LocalReference,
         return_size: usize,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
-        self.flush_cached_operands();
-        let CallStackInfo {
-            return_pc,
-            prev_local_reference_top,
-            prev_local_reference_size,
-            ..
-        } = self.call_stack_info(reference);
-        let prev_local_reference = LocalReference {
-            local_size: prev_local_reference_size,
-            local_top: prev_local_reference_top,
-        };
+        let (prev_local_reference, _prev_frame, tail_code) =
+            self.function_return_with_frame(reference, return_size, runtime);
+        (prev_local_reference, tail_code)
+    }
 
-        self.memory
-            .copy_within(self.top - return_size..self.top, reference.local_top);
-        self.top = reference.local_top + return_size;
+    pub(crate) fn function_return_empty_with_frame(
+        &mut self,
+        reference: &LocalReference,
+        runtime: &StoreInner,
+    ) -> (LocalReference, CallFrameCache, *const Instr) {
+        self.flush_cached_operands();
+        let prev_local_reference = self.previous_local_reference(reference);
+        let return_pc = self.return_pc(reference);
+        self.cache = OperandCache::EMPTY;
+        self.top = reference.local_top;
+        let prev_frame = if prev_local_reference.has_call_stack_info() {
+            self.frame_cache(&prev_local_reference)
+        } else {
+            CallFrameCache::dummy()
+        };
         (
             prev_local_reference,
+            prev_frame,
             return_pc.resolve(runtime, self, prev_local_reference),
         )
     }
@@ -841,21 +1130,33 @@ impl Stack {
         reference: &LocalReference,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
-        self.flush_cached_operands();
-        let CallStackInfo {
-            return_pc,
-            prev_local_reference_top,
-            prev_local_reference_size,
-            ..
-        } = self.call_stack_info(reference);
-        let prev_local_reference = LocalReference {
-            local_size: prev_local_reference_size,
-            local_top: prev_local_reference_top,
+        let (prev_local_reference, _prev_frame, tail_code) =
+            self.function_return_empty_with_frame(reference, runtime);
+        (prev_local_reference, tail_code)
+    }
+
+    pub(crate) fn function_return4_with_frame(
+        &mut self,
+        reference: &LocalReference,
+        runtime: &StoreInner,
+    ) -> (LocalReference, CallFrameCache, *const Instr) {
+        let prev_local_reference = self.previous_local_reference(reference);
+        let return_pc = self.return_pc(reference);
+        let value = match self.cache.width {
+            CachedOperandWidth::Four => self.cache.bits as u32,
+            CachedOperandWidth::None => trusted_read_u32(&self.memory[self.top - 4..self.top]),
+            CachedOperandWidth::Eight => unreachable!("validated 4-byte function return"),
         };
-        self.cache = OperandCache::EMPTY;
-        self.top = reference.local_top;
+        self.top = reference.local_top + 4;
+        self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
+        let prev_frame = if prev_local_reference.has_call_stack_info() {
+            self.frame_cache(&prev_local_reference)
+        } else {
+            CallFrameCache::dummy()
+        };
         (
             prev_local_reference,
+            prev_frame,
             return_pc.resolve(runtime, self, prev_local_reference),
         )
     }
@@ -865,25 +1166,33 @@ impl Stack {
         reference: &LocalReference,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
-        let CallStackInfo {
-            return_pc,
-            prev_local_reference_top,
-            prev_local_reference_size,
-            ..
-        } = self.call_stack_info(reference);
-        let prev_local_reference = LocalReference {
-            local_size: prev_local_reference_size,
-            local_top: prev_local_reference_top,
-        };
+        let (prev_local_reference, _prev_frame, tail_code) =
+            self.function_return4_with_frame(reference, runtime);
+        (prev_local_reference, tail_code)
+    }
+
+    pub(crate) fn function_return8_with_frame(
+        &mut self,
+        reference: &LocalReference,
+        runtime: &StoreInner,
+    ) -> (LocalReference, CallFrameCache, *const Instr) {
+        let prev_local_reference = self.previous_local_reference(reference);
+        let return_pc = self.return_pc(reference);
         let value = match self.cache.width {
-            CachedOperandWidth::Four => self.cache.bits as u32,
-            CachedOperandWidth::None => trusted_read_u32(&self.memory[self.top - 4..self.top]),
-            CachedOperandWidth::Eight => unreachable!("validated 4-byte function return"),
+            CachedOperandWidth::Eight => self.cache.bits,
+            CachedOperandWidth::None => trusted_read_u64(&self.memory[self.top - 8..self.top]),
+            CachedOperandWidth::Four => unreachable!("validated 8-byte function return"),
         };
-        self.top = reference.local_top + 4;
-        self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
+        self.top = reference.local_top + 8;
+        self.set_cached_operand(CachedOperandWidth::Eight, value);
+        let prev_frame = if prev_local_reference.has_call_stack_info() {
+            self.frame_cache(&prev_local_reference)
+        } else {
+            CallFrameCache::dummy()
+        };
         (
             prev_local_reference,
+            prev_frame,
             return_pc.resolve(runtime, self, prev_local_reference),
         )
     }
@@ -893,27 +1202,26 @@ impl Stack {
         reference: &LocalReference,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
-        let CallStackInfo {
-            return_pc,
-            prev_local_reference_top,
-            prev_local_reference_size,
-            ..
-        } = self.call_stack_info(reference);
-        let prev_local_reference = LocalReference {
-            local_size: prev_local_reference_size,
-            local_top: prev_local_reference_top,
-        };
-        let value = match self.cache.width {
-            CachedOperandWidth::Eight => self.cache.bits,
-            CachedOperandWidth::None => trusted_read_u64(&self.memory[self.top - 8..self.top]),
-            CachedOperandWidth::Four => unreachable!("validated 8-byte function return"),
-        };
-        self.top = reference.local_top + 8;
-        self.set_cached_operand(CachedOperandWidth::Eight, value);
-        (
-            prev_local_reference,
-            return_pc.resolve(runtime, self, prev_local_reference),
-        )
+        let (prev_local_reference, _prev_frame, tail_code) =
+            self.function_return8_with_frame(reference, runtime);
+        (prev_local_reference, tail_code)
+    }
+
+    pub(crate) fn function_return_shaped_with_frame(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+        shape: ReturnShape,
+        runtime: &StoreInner,
+    ) -> (LocalReference, CallFrameCache, *const Instr) {
+        match shape {
+            ReturnShape::Empty => self.function_return_empty_with_frame(reference, runtime),
+            ReturnShape::Scalar4 => self.function_return4_with_frame(reference, runtime),
+            ReturnShape::Scalar8 => self.function_return8_with_frame(reference, runtime),
+            ReturnShape::Generic => {
+                self.function_return_with_frame(reference, return_size, runtime)
+            }
+        }
     }
 
     pub fn function_return_shaped(
@@ -923,21 +1231,18 @@ impl Stack {
         shape: ReturnShape,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
-        match shape {
-            ReturnShape::Empty => self.function_return_empty(reference, runtime),
-            ReturnShape::Scalar4 => self.function_return4(reference, runtime),
-            ReturnShape::Scalar8 => self.function_return8(reference, runtime),
-            ReturnShape::Generic => self.function_return(reference, return_size, runtime),
-        }
+        let (prev_local_reference, _prev_frame, tail_code) =
+            self.function_return_shaped_with_frame(reference, return_size, shape, runtime);
+        (prev_local_reference, tail_code)
     }
     /// Like `function_return` but assumes the return data is already written at `local_top`.
-    pub fn function_return_in_place(
+    pub(crate) fn function_return_in_place_with_frame(
         &mut self,
         reference: &LocalReference,
         return_size: usize,
         runtime: &StoreInner,
-    ) -> (LocalReference, *const Instr) {
-        self.function_return_in_place_shaped(
+    ) -> (LocalReference, CallFrameCache, *const Instr) {
+        self.function_return_in_place_shaped_with_frame(
             reference,
             return_size,
             ReturnShape::from_size(return_size as u32),
@@ -945,31 +1250,51 @@ impl Stack {
         )
     }
 
-    pub fn function_return_in_place_shaped(
+    pub fn function_return_in_place(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+        runtime: &StoreInner,
+    ) -> (LocalReference, *const Instr) {
+        let (prev_local_reference, _prev_frame, tail_code) =
+            self.function_return_in_place_with_frame(reference, return_size, runtime);
+        (prev_local_reference, tail_code)
+    }
+
+    pub(crate) fn function_return_in_place_shaped_with_frame(
         &mut self,
         reference: &LocalReference,
         return_size: usize,
         _shape: ReturnShape,
         runtime: &StoreInner,
-    ) -> (LocalReference, *const Instr) {
+    ) -> (LocalReference, CallFrameCache, *const Instr) {
         self.flush_cached_operands();
-        let CallStackInfo {
-            return_pc,
-            prev_local_reference_top,
-            prev_local_reference_size,
-            ..
-        } = self.call_stack_info(reference);
-
-        let prev_local_reference = LocalReference {
-            local_size: prev_local_reference_size,
-            local_top: prev_local_reference_top,
-        };
+        let prev_local_reference = self.previous_local_reference(reference);
+        let return_pc = self.return_pc(reference);
         self.cache = OperandCache::EMPTY;
         self.top = reference.local_top + return_size;
+        let prev_frame = if prev_local_reference.has_call_stack_info() {
+            self.frame_cache(&prev_local_reference)
+        } else {
+            CallFrameCache::dummy()
+        };
         (
             prev_local_reference,
+            prev_frame,
             return_pc.resolve(runtime, self, prev_local_reference),
         )
+    }
+
+    pub fn function_return_in_place_shaped(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+        shape: ReturnShape,
+        runtime: &StoreInner,
+    ) -> (LocalReference, *const Instr) {
+        let (prev_local_reference, _prev_frame, tail_code) =
+            self.function_return_in_place_shaped_with_frame(reference, return_size, shape, runtime);
+        (prev_local_reference, tail_code)
     }
     pub fn function_return_call(
         &mut self,
@@ -979,14 +1304,56 @@ impl Stack {
         local_size: usize,
         frame: CallFrameCache,
     ) -> VMResult<LocalReference> {
+        self.function_return_call_raw(reference, param_size, param_shape, local_size, frame)
+    }
+    pub fn function_return_call_layout(
+        &mut self,
+        reference: &LocalReference,
+        layout: &FrameLayoutHeader,
+        frame: CallFrameCache,
+    ) -> VMResult<LocalReference> {
         self.flush_cached_operands();
         tracing::trace!("function_return_call: {reference:?}");
-        let CallStackInfo {
+        let return_pc = self.return_pc(reference);
+        let prev_local_reference = self.previous_local_reference_footer(reference);
+        self.move_top_value_to_dst(
+            reference.local_top,
+            layout.param_bytes as usize,
+            layout.param_shape,
+        );
+        vm_try!(self.add_top(layout.locals_bytes as usize));
+        vm_try!(self.zero_new_locals(
+            reference.local_top + layout.locals_zero_start_from_local_top as usize,
+            layout.locals_bytes as usize,
+        ));
+
+        let info = CallStackInfo {
             return_pc,
-            prev_local_reference_top,
-            prev_local_reference_size,
-            ..
-        } = self.call_stack_info(reference);
+            code_addr: frame.code_addr,
+            code_base: frame.code_base,
+            instance: frame.instance,
+            memory0_kind: frame.memory0_kind,
+            memory0_raw: frame.memory0_raw,
+            prev_local_reference_top: prev_local_reference.local_top,
+            prev_local_reference_frame_bytes: prev_local_reference.frame_bytes,
+            prev_local_reference_layout: prev_local_reference.layout,
+        };
+        vm_try!(self.push_call_stack_info(info));
+
+        VMResult::Success(LocalReference::from_layout(reference.local_top, layout))
+    }
+    pub fn function_return_call_raw(
+        &mut self,
+        reference: &LocalReference,
+        param_size: usize,
+        param_shape: ReturnShape,
+        local_size: usize,
+        frame: CallFrameCache,
+    ) -> VMResult<LocalReference> {
+        self.flush_cached_operands();
+        tracing::trace!("function_return_call: {reference:?}");
+        let return_pc = self.return_pc(reference);
+        let prev_local_reference = self.previous_local_reference_footer(reference);
         self.move_top_value_to_dst(reference.local_top, param_size, param_shape);
         vm_try!(self.add_top(local_size));
         vm_try!(self.zero_new_locals(reference.local_top + param_size, local_size));
@@ -998,15 +1365,16 @@ impl Stack {
             instance: frame.instance,
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
-            prev_local_reference_top,
-            prev_local_reference_size,
+            prev_local_reference_top: prev_local_reference.local_top,
+            prev_local_reference_frame_bytes: prev_local_reference.frame_bytes,
+            prev_local_reference_layout: prev_local_reference.layout,
         };
         vm_try!(self.push_call_stack_info(info));
 
-        VMResult::Success(LocalReference {
-            local_top: reference.local_top,
-            local_size: (param_size + local_size + std::mem::size_of::<CallStackInfo>()) as u32,
-        })
+        VMResult::Success(LocalReference::from_raw(
+            reference.local_top,
+            (param_size + local_size + std::mem::size_of::<CallStackInfo>()) as u32,
+        ))
     }
     pub fn block_return(
         &mut self,
@@ -1179,6 +1547,8 @@ stack_operation_wide!(u64x2);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::FrameLayoutMetadata;
+    use std::sync::Arc;
 
     fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {
         CallFrameCache {
@@ -1190,18 +1560,186 @@ mod tests {
         }
     }
 
+    fn layout(
+        param_bytes: u32,
+        locals_bytes: u32,
+        param_shape: ReturnShape,
+        result_shape: ReturnShape,
+    ) -> FrameLayoutMetadata {
+        FrameLayoutMetadata::new(
+            param_bytes,
+            locals_bytes,
+            0,
+            param_shape,
+            result_shape,
+            crate::common::FrameLayoutColdMetadata {
+                local_slots: Arc::from([]),
+                local_ref_runs: Arc::from([]),
+                stack_map_sites: Arc::from([]),
+                unwind_sites: Arc::from([]),
+            },
+        )
+    }
+
+    fn layout_with_cold(
+        param_bytes: u32,
+        locals_bytes: u32,
+        param_shape: ReturnShape,
+        result_shape: ReturnShape,
+        cold: crate::common::FrameLayoutColdMetadata,
+    ) -> FrameLayoutMetadata {
+        FrameLayoutMetadata::new(
+            param_bytes,
+            locals_bytes,
+            0,
+            param_shape,
+            result_shape,
+            cold,
+        )
+    }
+
+    #[test]
+    fn local_reference_tracks_layout_for_wasm_and_raw_frames() {
+        let frame_layout = layout(4, 8, ReturnShape::Scalar4, ReturnShape::Scalar4);
+        let raw = LocalReference::from_raw(12, 24);
+        let wasm = LocalReference::from_layout(16, &frame_layout);
+        let raw_layout = raw.layout;
+        let raw_frame_bytes = raw.frame_bytes;
+        let wasm_layout = wasm.layout;
+        let wasm_frame_bytes = wasm.frame_bytes;
+
+        assert!(raw_layout.is_none());
+        assert_eq!(raw_frame_bytes, 24);
+        assert!(wasm_layout.is_some());
+        assert_eq!(wasm_frame_bytes, frame_layout.fixed_frame_bytes);
+    }
+
+    #[test]
+    fn local_and_operand_ref_ranges_follow_precomputed_layout_metadata() {
+        let stack = Stack::new(128);
+        let frame_layout = layout_with_cold(
+            4,
+            8,
+            ReturnShape::Scalar4,
+            ReturnShape::Scalar4,
+            crate::common::FrameLayoutColdMetadata {
+                local_slots: Arc::from([]),
+                local_ref_runs: Arc::from([
+                    crate::common::RefSlotRun {
+                        start_from_local_top: 0,
+                        len_bytes: 4,
+                    },
+                    crate::common::RefSlotRun {
+                        start_from_local_top: 12,
+                        len_bytes: 4,
+                    },
+                ]),
+                stack_map_sites: Arc::from([crate::common::StackMapSite {
+                    instruction_ordinal: 7,
+                    kind: crate::common::StackMapSafepointKind::Call,
+                    operand_bytes: 8,
+                    ref_offsets_from_operand_base: Arc::from([0, 4]),
+                }]),
+                unwind_sites: Arc::from([crate::common::UnwindSiteMetadata {
+                    instruction_ordinal: 7,
+                    kind: crate::common::StackMapSafepointKind::Call,
+                    result_slot_from_local_top: Some(20),
+                }]),
+            },
+        );
+        let reference = LocalReference::from_layout(32, &frame_layout);
+
+        let mut local_ranges = Vec::new();
+        stack.visit_local_ref_ranges(&reference, |range| local_ranges.push(range));
+        assert_eq!(local_ranges, vec![32..36, 44..48]);
+
+        let stack_map_site = frame_layout.stack_map_site(7).unwrap();
+        let operand_base = reference.local_top + frame_layout.operand_base_from_local_top as usize;
+        let mut operand_ranges = Vec::new();
+        stack.visit_operand_ref_ranges(&reference, stack_map_site, |range| {
+            operand_ranges.push(range)
+        });
+        assert_eq!(
+            operand_ranges,
+            vec![
+                operand_base..operand_base + 4,
+                operand_base + 4..operand_base + 8
+            ]
+        );
+
+        let unwind_site = frame_layout.unwind_site(7).unwrap();
+        assert_eq!(unwind_site.result_slot_from_local_top, Some(20));
+    }
+
+    #[test]
+    fn function_return_with_frame_restores_caller_layout_and_frame_cache() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let caller_layout = layout(0, 4, ReturnShape::Empty, ReturnShape::Empty);
+        let callee_layout = layout(0, 4, ReturnShape::Empty, ReturnShape::Scalar4);
+        let caller = stack
+            .function_call_layout(
+                &caller_layout,
+                frame(CachedMemoryKind::Local, 1),
+                LocalReference::empty(),
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let callee = stack
+            .function_call_layout(
+                &callee_layout,
+                frame(CachedMemoryKind::Shared, 2),
+                caller,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        let previous_local_ref = stack.previous_local_reference(&callee);
+        let caller_local_top = caller.local_top;
+        let caller_frame_bytes = caller.frame_bytes;
+        let caller_layout = caller.layout.map(|layout| layout.as_ptr());
+        assert_eq!(
+            stack.frame_cache(&callee).memory0_handle(),
+            Some(MemoryHandle::Shared(SharedMemoryId::from_raw(2)))
+        );
+        let previous_local_top = previous_local_ref.local_top;
+        let previous_frame_bytes = previous_local_ref.frame_bytes;
+        let previous_layout = previous_local_ref.layout.map(|layout| layout.as_ptr());
+        assert_eq!(previous_local_top, caller_local_top);
+        assert_eq!(previous_frame_bytes, caller_frame_bytes);
+        assert_eq!(previous_layout, caller_layout);
+
+        stack.push_u32(0xaabb_ccdd).unwrap();
+        let (restored, prev_frame, return_pc) =
+            stack.function_return4_with_frame(&callee, &runtime);
+        let restored_local_top = restored.local_top;
+        let restored_frame_bytes = restored.frame_bytes;
+        let restored_layout = restored.layout.map(|layout| layout.as_ptr());
+        let caller_local_top = caller.local_top;
+        let caller_frame_bytes = caller.frame_bytes;
+        let caller_layout_ptr = caller.layout.map(|layout| layout.as_ptr());
+
+        assert!(return_pc.is_null());
+        assert_eq!(restored_local_top, caller_local_top);
+        assert_eq!(restored_frame_bytes, caller_frame_bytes);
+        assert_eq!(restored_layout, caller_layout_ptr);
+        assert_eq!(
+            prev_frame.memory0_handle(),
+            Some(MemoryHandle::Local(LocalMemoryId::from_raw(1)))
+        );
+    }
+
     #[test]
     fn function_call_and_return_roundtrip_result_bytes() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
-        let prev = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
+        let prev = LocalReference::empty();
 
         stack.push_u32(0x1122_3344).unwrap();
         let reference = stack
-            .function_call(
+            .function_call_raw(
                 4,
                 8,
                 frame(CachedMemoryKind::Local, 9),
@@ -1212,10 +1750,10 @@ mod tests {
             .unwrap();
 
         let reference_local_top = reference.local_top;
-        let reference_local_size = reference.local_size;
+        let reference_frame_bytes = reference.frame_bytes;
         assert_eq!(reference_local_top, 0);
         assert_eq!(
-            reference_local_size as usize,
+            reference_frame_bytes as usize,
             4 + 8 + std::mem::size_of::<CallStackInfo>()
         );
         assert_eq!(trusted_read_u32(&stack.memory[0..4]), 0x1122_3344);
@@ -1228,25 +1766,91 @@ mod tests {
         stack.push_u32(0xaabb_ccdd).unwrap();
         let (restored, return_pc) = stack.function_return4(&reference, &runtime);
         let restored_local_top = restored.local_top;
-        let restored_local_size = restored.local_size;
+        let restored_frame_bytes = restored.frame_bytes;
         assert_eq!(restored_local_top, 0);
-        assert_eq!(restored_local_size, 0);
+        assert_eq!(restored_frame_bytes, 0);
         assert!(return_pc.is_null());
         assert_eq!(stack.top, 4);
         assert_eq!(stack.pop_u32(), 0xaabb_ccdd);
     }
 
     #[test]
+    fn function_call_layout_uses_precomputed_offsets() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let prev = LocalReference::empty();
+        let frame_layout = layout(4, 8, ReturnShape::Scalar4, ReturnShape::Scalar4);
+
+        stack.push_u32(0x1122_3344).unwrap();
+        let reference = stack
+            .function_call_layout(
+                &frame_layout,
+                frame(CachedMemoryKind::Local, 9),
+                prev,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        let reference_local_top = reference.local_top;
+        let reference_frame_bytes = reference.frame_bytes;
+        assert_eq!(reference_local_top, 0);
+        assert_eq!(reference_frame_bytes, frame_layout.fixed_frame_bytes);
+        assert_eq!(trusted_read_u32(&stack.memory[0..4]), 0x1122_3344);
+        assert!(stack.memory[4..12].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn minimal_footer_views_restore_previous_local_reference_and_current_frame() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let caller_layout = layout(0, 4, ReturnShape::Empty, ReturnShape::Empty);
+        let callee_layout = layout(4, 8, ReturnShape::Scalar4, ReturnShape::Scalar4);
+        let caller = stack
+            .function_call_layout(
+                &caller_layout,
+                frame(CachedMemoryKind::Local, 7),
+                LocalReference::empty(),
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        stack.push_u32(0x1234_5678).unwrap();
+        let callee = stack
+            .function_call_layout(
+                &callee_layout,
+                frame(CachedMemoryKind::Shared, 9),
+                caller,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        let previous = stack.previous_local_reference(&callee);
+        let caller_local_top = caller.local_top;
+        let caller_frame_bytes = caller.frame_bytes;
+        let caller_layout = caller.layout.map(|layout| layout.as_ptr());
+        let previous_local_top = previous.local_top;
+        let previous_frame_bytes = previous.frame_bytes;
+        let previous_layout = previous.layout.map(|layout| layout.as_ptr());
+        assert_eq!(previous_local_top, caller_local_top);
+        assert_eq!(previous_frame_bytes, caller_frame_bytes);
+        assert_eq!(previous_layout, caller_layout);
+        assert_eq!(
+            stack.frame_cache(&callee).memory0_handle(),
+            Some(MemoryHandle::Shared(SharedMemoryId::from_raw(9)))
+        );
+    }
+
+    #[test]
     fn function_return_in_place_uses_local_area_as_result_slot() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
-        let prev = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
+        let prev = LocalReference::empty();
 
         let reference = stack
-            .function_call(
+            .function_call_raw(
                 0,
                 8,
                 frame(CachedMemoryKind::Shared, 5),
@@ -1262,9 +1866,9 @@ mod tests {
         );
         let (restored, return_pc) = stack.function_return_in_place(&reference, 4, &runtime);
         let restored_local_top = restored.local_top;
-        let restored_local_size = restored.local_size;
+        let restored_frame_bytes = restored.frame_bytes;
         assert_eq!(restored_local_top, 0);
-        assert_eq!(restored_local_size, 0);
+        assert_eq!(restored_frame_bytes, 0);
         assert!(return_pc.is_null());
         assert_eq!(stack.top, 4);
         assert_eq!(stack.pop_u32(), 0x5566_7788);
@@ -1274,14 +1878,11 @@ mod tests {
     fn function_return_fast_path_keeps_u32_result_cached() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
-        let prev = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
+        let prev = LocalReference::empty();
 
         stack.push_u32(0x0102_0304).unwrap();
         let reference = stack
-            .function_call(
+            .function_call_raw(
                 4,
                 8,
                 frame(CachedMemoryKind::Local, 9),
@@ -1294,9 +1895,9 @@ mod tests {
         stack.push_u32(0xaabb_ccdd).unwrap();
         let (restored, return_pc) = stack.function_return(&reference, 4, &runtime);
         let restored_local_top = restored.local_top;
-        let restored_local_size = restored.local_size;
+        let restored_frame_bytes = restored.frame_bytes;
         assert_eq!(restored_local_top, 0);
-        assert_eq!(restored_local_size, 0);
+        assert_eq!(restored_frame_bytes, 0);
         assert!(return_pc.is_null());
         assert_eq!(stack.pop_u32(), 0xaabb_ccdd);
     }
@@ -1305,12 +1906,9 @@ mod tests {
     fn function_return_call_reuses_frame_slot_and_zeroes_new_locals() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
-        let empty = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
+        let empty = LocalReference::empty();
         let caller = stack
-            .function_call(
+            .function_call_raw(
                 0,
                 4,
                 frame(CachedMemoryKind::Local, 1),
@@ -1322,7 +1920,7 @@ mod tests {
 
         stack.push_u32(0x0102_0304).unwrap();
         let callee = stack
-            .function_call(
+            .function_call_raw(
                 4,
                 4,
                 frame(CachedMemoryKind::Shared, 2),
@@ -1335,7 +1933,7 @@ mod tests {
         stack.push_u32(0xa1a2_a3a4).unwrap();
         stack.push_u32(0xb1b2_b3b4).unwrap();
         let tail = stack
-            .function_return_call(
+            .function_return_call_raw(
                 &callee,
                 8,
                 ReturnShape::Generic,
@@ -1348,7 +1946,7 @@ mod tests {
         let callee_local_top = callee.local_top;
         assert_eq!(tail_local_top, callee_local_top);
         assert_eq!(
-            tail.local_size as usize,
+            tail.frame_bytes as usize,
             8 + 8 + std::mem::size_of::<CallStackInfo>()
         );
         assert_eq!(
@@ -1369,15 +1967,71 @@ mod tests {
     }
 
     #[test]
+    fn function_return_call_layout_reuses_precomputed_frame_bytes() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference::empty();
+        let caller_layout = layout(0, 4, ReturnShape::Empty, ReturnShape::Empty);
+        let callee_layout = layout(4, 4, ReturnShape::Scalar4, ReturnShape::Scalar4);
+        let tail_layout = layout(8, 8, ReturnShape::Generic, ReturnShape::Generic);
+        let caller = stack
+            .function_call_layout(
+                &caller_layout,
+                frame(CachedMemoryKind::Local, 1),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        stack.push_u32(0x0102_0304).unwrap();
+        let callee = stack
+            .function_call_layout(
+                &callee_layout,
+                frame(CachedMemoryKind::Shared, 2),
+                caller,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        stack.push_u32(0xa1a2_a3a4).unwrap();
+        stack.push_u32(0xb1b2_b3b4).unwrap();
+        let tail = stack
+            .function_return_call_layout(&callee, &tail_layout, frame(CachedMemoryKind::Local, 3))
+            .unwrap();
+        let previous_local_ref = stack.previous_local_reference(&tail);
+        let caller_local_top = caller.local_top;
+        let caller_frame_bytes = caller.frame_bytes;
+        let caller_layout = caller.layout.map(|layout| layout.as_ptr());
+
+        let tail_local_top = tail.local_top;
+        let tail_frame_bytes = tail.frame_bytes;
+        let callee_local_top = callee.local_top;
+        assert_eq!(tail_local_top, callee_local_top);
+        assert_eq!(tail_frame_bytes, tail_layout.fixed_frame_bytes);
+        assert_eq!(
+            stack.frame_cache(&tail).memory0_handle(),
+            Some(MemoryHandle::Local(LocalMemoryId::from_raw(3)))
+        );
+        let previous_local_top = previous_local_ref.local_top;
+        let previous_frame_bytes = previous_local_ref.frame_bytes;
+        let previous_layout = previous_local_ref.layout.map(|layout| layout.as_ptr());
+        assert_eq!(previous_local_top, caller_local_top);
+        assert_eq!(previous_frame_bytes, caller_frame_bytes);
+        assert_eq!(previous_layout, caller_layout);
+        assert!(stack.memory[tail_local_top + 8..tail_local_top + 16]
+            .iter()
+            .all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn block_return_moves_result_to_block_stack_top() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
-        let empty = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
+        let empty = LocalReference::empty();
         let reference = stack
-            .function_call(
+            .function_call_raw(
                 0,
                 4,
                 frame(CachedMemoryKind::Local, 1),
@@ -1386,7 +2040,7 @@ mod tests {
                 &runtime,
             )
             .unwrap();
-        let frame_top = reference.local_top + reference.local_size as usize;
+        let frame_top = reference.local_top + reference.frame_bytes as usize;
         stack.push_u32(0x1111_2222).unwrap();
         stack.push_u32(0x3333_4444).unwrap();
         assert_eq!(frame_top + 8, stack.top);
@@ -1409,12 +2063,9 @@ mod tests {
     fn block_return_fast_path_keeps_u32_result_cached() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
-        let empty = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
+        let empty = LocalReference::empty();
         let reference = stack
-            .function_call(
+            .function_call_raw(
                 0,
                 4,
                 frame(CachedMemoryKind::Local, 1),
@@ -1423,7 +2074,7 @@ mod tests {
                 &runtime,
             )
             .unwrap();
-        let frame_top = reference.local_top + reference.local_size as usize;
+        let frame_top = reference.local_top + reference.frame_bytes as usize;
 
         stack.push_u32(0x1111_2222).unwrap();
         stack.push_u32(0x3333_4444).unwrap();
@@ -1440,12 +2091,9 @@ mod tests {
     fn block_return_fast_path_keeps_u64_result_cached() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
-        let empty = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
+        let empty = LocalReference::empty();
         let reference = stack
-            .function_call(
+            .function_call_raw(
                 0,
                 8,
                 frame(CachedMemoryKind::Local, 1),
@@ -1454,7 +2102,7 @@ mod tests {
                 &runtime,
             )
             .unwrap();
-        let frame_top = reference.local_top + reference.local_size as usize;
+        let frame_top = reference.local_top + reference.frame_bytes as usize;
 
         stack.push_u64(0x1111_2222_3333_4444).unwrap();
         stack.push_u64(0x5555_6666_7777_8888).unwrap();
@@ -1471,12 +2119,9 @@ mod tests {
     fn block_return_zero_result_discards_cached_scalar() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
-        let empty = LocalReference {
-            local_top: 0,
-            local_size: 0,
-        };
+        let empty = LocalReference::empty();
         let reference = stack
-            .function_call(
+            .function_call_raw(
                 0,
                 4,
                 frame(CachedMemoryKind::Local, 1),
@@ -1485,7 +2130,7 @@ mod tests {
                 &runtime,
             )
             .unwrap();
-        let frame_top = reference.local_top + reference.local_size as usize;
+        let frame_top = reference.local_top + reference.frame_bytes as usize;
 
         stack.push_u32(0xaabb_ccdd).unwrap();
         stack.block_return(&reference, 0, 0);
@@ -1497,10 +2142,7 @@ mod tests {
     #[test]
     fn generic_local_get_copies_bytes_to_operand_stack() {
         let mut stack = Stack::new(64);
-        let reference = LocalReference {
-            local_top: 0,
-            local_size: 8,
-        };
+        let reference = LocalReference::from_raw(0, 8);
 
         stack
             .push_slice(&[0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80])
@@ -1514,10 +2156,7 @@ mod tests {
     #[test]
     fn generic_local_set_moves_top_bytes_into_local_slot() {
         let mut stack = Stack::new(64);
-        let reference = LocalReference {
-            local_top: 0,
-            local_size: 8,
-        };
+        let reference = LocalReference::from_raw(0, 8);
 
         stack.push_slice(&[0; 8]).unwrap();
         stack.push_slice(&[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
@@ -1530,10 +2169,7 @@ mod tests {
     #[test]
     fn generic_local_tee_keeps_operand_stack_and_updates_local_slot() {
         let mut stack = Stack::new(64);
-        let reference = LocalReference {
-            local_top: 0,
-            local_size: 8,
-        };
+        let reference = LocalReference::from_raw(0, 8);
 
         stack.push_slice(&[0; 8]).unwrap();
         stack.push_slice(&[1, 2, 3, 4]).unwrap();
@@ -1578,10 +2214,7 @@ mod tests {
     #[test]
     fn typed_local_ops_roundtrip_with_cached_top_slots() {
         let mut stack = Stack::new(64);
-        let reference = LocalReference {
-            local_top: 0,
-            local_size: 16,
-        };
+        let reference = LocalReference::from_raw(0, 16);
 
         stack.push_slice(&[0; 16]).unwrap();
         stack.push_u64(0x1122_3344_5566_7788).unwrap();

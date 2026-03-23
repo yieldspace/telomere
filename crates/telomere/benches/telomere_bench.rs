@@ -4,8 +4,12 @@ use std::time::{Duration, Instant};
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use telomere::{
-    common::{ExecuteContext, FuncType, HostFunctionDefinition, Instr, NativeModule, ValType},
-    instantiate, IoReadBinaryReader, Registry, ResultValue, Store, VMResult, WasmParser, WasmValue,
+    common::{
+        AsyncHostFunctionDefinition, AsyncHostFuture, AsyncNativeModule, ExecuteContext, FuncType,
+        HostFunctionDefinition, Instr, NativeModule, ValType,
+    },
+    instantiate, instantiate_native_async_module, IoReadBinaryReader, Registry, ResultValue, Store,
+    VMResult, WasmParser, WasmValue,
 };
 use tokio::runtime::Runtime;
 
@@ -41,6 +45,25 @@ fn bench_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
             .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
     ctx.set_local_reference(prev_local_ref);
     VMResult::Success(return_addr)
+}
+
+fn bench_async_add_one(ctx: &mut ExecuteContext<'_>) -> AsyncHostFuture {
+    let value = i32::from_le_bytes(
+        ctx.stack
+            .local_bytes(&ctx.local_reference(), 0, 4)
+            .try_into()
+            .unwrap(),
+    );
+    let slot = ctx.return_slot();
+    let (prev_local_ref, return_addr) =
+        ctx.stack
+            .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+    ctx.set_local_reference(prev_local_ref);
+    Box::pin(async move {
+        tokio::task::yield_now().await;
+        slot.write(&(value + 1).to_le_bytes());
+        VMResult::Success(return_addr)
+    })
 }
 
 pub fn criterion_benchmark(c: &mut Criterion) {
@@ -1968,6 +1991,262 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                     )
                     .unwrap(),
                     ResultValue::new(vec![WasmValue::I32(2050)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("call_frame_setup_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func $leaf (param i32 i32 i32 i32) (result i32)
+                    local.get 0
+                    i32.const 1
+                    i32.add)
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        local.get $i
+                        local.get $n
+                        local.get $acc
+                        call $leaf
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(512)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(512)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("function_return_restore_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func $leaf (param i32) (result i32)
+                    (local i32 i64 externref)
+                    local.get 0
+                    i32.const 1
+                    i32.add)
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        call $leaf
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(512)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(512)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("tail_return_call_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func $leaf (param i32) (result i32)
+                    local.get 0
+                    i32.const 1
+                    i32.add)
+                  (func $step2 (param i32) (result i32)
+                    local.get 0
+                    return_call $leaf)
+                  (func $step1 (param i32) (result i32)
+                    local.get 0
+                    return_call $step2)
+                  (func $bounce (param i32) (result i32)
+                    local.get 0
+                    return_call $step1)
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        call $bounce
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(512)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(512)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("async_suspend_resume_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let mut registry = Registry::new();
+            let host = instantiate_native_async_module(
+                AsyncNativeModule {
+                    functions: vec![AsyncHostFunctionDefinition {
+                        name: Some("add-one".to_owned()),
+                        signature: FuncType::new(vec![ValType::I32], vec![ValType::I32]),
+                        fp: bench_async_add_one,
+                    }],
+                },
+                &store,
+                &registry,
+            )
+            .await
+            .unwrap();
+            registry.register("host", host);
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (import "host" "add-one" (func $add-one (param i32) (result i32)))
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        call $add-one
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(64)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(64)])
                 );
                 duration += start.elapsed();
             }

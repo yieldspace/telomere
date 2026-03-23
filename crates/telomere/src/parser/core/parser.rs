@@ -1,8 +1,12 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 use tracing::trace;
 
 use crate::common::custom_section::NameSubSection;
-use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, LocalsData, Operand};
+use crate::common::{
+    ConstExpr, ElemInit, FrameLayoutColdMetadata, FrameLayoutMetadata, Func, FunctionBody, Instr,
+    LocalSlotLayout, Locals, LocalsData, Operand, RefSlotRun, ReturnShape, StackMapSafepointKind,
+    StackMapSourceSite, UnwindSourceSite, ValType,
+};
 use crate::parser::core::instruction_generator::InstructionGenerator;
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
 use crate::parser::core::optimizer::optimize_core_program_with_metadata;
@@ -16,7 +20,7 @@ use crate::{
         CodeSection, Data, DataCountVerifier, DataMode, DataSection, Elem, ElemMode,
         ElementSection, Export, ExportDesc, ExportSection, FuncIdx, FuncType, FunctionSection,
         Global, GlobalIdx, GlobalType, Import, ImportDesc, ImportSection, MemIdx, MemType, Mut,
-        RefType, ResultType, Table, TableIdx, TableType, TypeIdx, TypeSection, ValType,
+        RefType, ResultType, Table, TableIdx, TableType, TypeIdx, TypeSection,
     },
     Module,
 };
@@ -49,6 +53,105 @@ fn function_return_op_and_operand(
             }),
         ),
     }
+}
+
+fn shape_for_result_type(result_type: &ResultType) -> ReturnShape {
+    let mut values = result_type.iter();
+    match (values.next(), values.next()) {
+        (None, _) => ReturnShape::Empty,
+        (Some(ty), None) => ReturnShape::from_size(ty.stack_size().u32()),
+        _ => ReturnShape::Generic,
+    }
+}
+
+fn build_local_slot_layouts(
+    functype: &FuncType,
+    local_reassign: &crate::common::LocalReassignTable,
+) -> Result<Vec<LocalSlotLayout>> {
+    let param_count = functype.0.iter().count();
+    let total_local_count = local_reassign.0.iter().try_fold(0u32, |acc, group| {
+        acc.checked_add(group.local_count)
+            .ok_or(WasmParserError::TooManyLocals)
+    })?;
+    let total_slot_count = param_count
+        .checked_add(total_local_count as usize)
+        .ok_or(WasmParserError::TooManyLocals)?;
+    let mut slots = Vec::with_capacity(total_slot_count);
+    let mut param_offset = 0u32;
+    for (wasm_local_index, ty) in functype.0.iter().enumerate() {
+        let size = ty.stack_size().u32();
+        slots.push(LocalSlotLayout {
+            wasm_local_index: wasm_local_index as u32,
+            val_type: *ty,
+            offset_from_local_top: param_offset,
+            size,
+            is_ref: matches!(ty, ValType::FuncRef | ValType::ExternRef),
+        });
+        param_offset = param_offset
+            .checked_add(size)
+            .ok_or(WasmParserError::TooManyLocals)?;
+    }
+
+    let mut running_local_count = 0u32;
+    let param_count_u32 = param_count as u32;
+    for group in &local_reassign.0 {
+        let size = group.val_type.stack_size().u32();
+        let wasm_local_base = param_count_u32
+            .checked_add(running_local_count)
+            .ok_or(WasmParserError::TooManyLocals)?;
+        let group_base_offset = param_offset
+            .checked_add(group.offset_from_local_top)
+            .ok_or(WasmParserError::TooManyLocals)?;
+        for i in 0..group.local_count {
+            slots.push(LocalSlotLayout {
+                wasm_local_index: wasm_local_base
+                    .checked_add(i)
+                    .ok_or(WasmParserError::TooManyLocals)?,
+                val_type: group.val_type,
+                offset_from_local_top: group_base_offset
+                    .checked_add(i.checked_mul(size).ok_or(WasmParserError::TooManyLocals)?)
+                    .ok_or(WasmParserError::TooManyLocals)?,
+                size,
+                is_ref: matches!(group.val_type, ValType::FuncRef | ValType::ExternRef),
+            });
+        }
+        running_local_count = running_local_count
+            .checked_add(group.local_count)
+            .ok_or(WasmParserError::TooManyLocals)?;
+    }
+
+    Ok(slots)
+}
+
+fn build_local_ref_runs(local_slots: &[LocalSlotLayout]) -> Result<Vec<RefSlotRun>> {
+    let mut refs: Vec<_> = local_slots
+        .iter()
+        .copied()
+        .filter(|slot| slot.is_ref)
+        .collect();
+    refs.sort_by_key(|slot| slot.offset_from_local_top);
+    let mut runs: Vec<RefSlotRun> = Vec::new();
+    for slot in refs {
+        match runs.last_mut() {
+            Some(run)
+                if run
+                    .start_from_local_top
+                    .checked_add(run.len_bytes)
+                    .ok_or(WasmParserError::TooManyLocals)?
+                    == slot.offset_from_local_top =>
+            {
+                run.len_bytes = run
+                    .len_bytes
+                    .checked_add(slot.size)
+                    .ok_or(WasmParserError::TooManyLocals)?;
+            }
+            _ => runs.push(RefSlotRun {
+                start_from_local_top: slot.offset_from_local_top,
+                len_bytes: slot.size,
+            }),
+        }
+    }
+    Ok(runs)
 }
 
 fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
@@ -767,6 +870,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let mut checker = TypeChecker::new(typeidx);
         let mut jump_resolver = JumpResolver::new();
         let mut else_addr = None;
+        let mut stack_map_sites = Vec::<StackMapSourceSite>::new();
+        let mut unwind_sites = Vec::<UnwindSourceSite>::new();
         let mut parser = InstructionParser::new(
             self.reader(),
             type_section,
@@ -788,6 +893,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             &mut checker,
             &mut jump_resolver,
             &mut else_addr,
+            &mut stack_map_sites,
+            &mut unwind_sites,
         )?;
         trace!("function return");
 
@@ -803,6 +910,26 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         }
         instrs.leave_block();
         let (return_op, operand) = function_return_op_and_operand(&functype.1);
+        let return_start = instrs.len();
+        let mut return_offset = 0u32;
+        let mut return_ref_offsets = Vec::new();
+        for ty in functype.1.iter() {
+            if matches!(ty, ValType::FuncRef | ValType::ExternRef) {
+                return_ref_offsets.push(return_offset);
+            }
+            return_offset += ty.stack_size().u32();
+        }
+        stack_map_sites.push(StackMapSourceSite {
+            raw_start: return_start,
+            kind: StackMapSafepointKind::FunctionReturn,
+            operand_bytes: functype.result_stack_byte_size(),
+            ref_offsets_from_operand_base: Arc::from(return_ref_offsets),
+        });
+        unwind_sites.push(UnwindSourceSite {
+            raw_start: return_start,
+            kind: StackMapSafepointKind::FunctionReturn,
+            result_slot_from_local_top: Some(0),
+        });
         instrs.push(Instr { op: return_op });
         if let Some(operand) = operand {
             instrs.push(Instr { operand });
@@ -813,10 +940,32 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let frame_stack_base = functype.param_stack_byte_size()
             + locals_data.byte_size() as u32
             + std::mem::size_of::<crate::common::stack::CallStackInfo>() as u32;
-        let optimized = optimize_core_program_with_metadata(program, funcidx.0, frame_stack_base);
+        let optimized = optimize_core_program_with_metadata(
+            program,
+            funcidx.0,
+            frame_stack_base,
+            &stack_map_sites,
+            &unwind_sites,
+        );
+        let local_slots = build_local_slot_layouts(functype, &local_reassign)?;
+        let local_ref_runs = build_local_ref_runs(&local_slots)?;
+        let frame_layout = Arc::new(FrameLayoutMetadata::new(
+            functype.param_stack_byte_size(),
+            locals_data.byte_size() as u32,
+            checker.max_stack_byte_size(),
+            shape_for_result_type(&functype.0),
+            shape_for_result_type(&functype.1),
+            FrameLayoutColdMetadata {
+                local_slots: Arc::from(local_slots),
+                local_ref_runs: Arc::from(local_ref_runs),
+                stack_map_sites: optimized.stack_map_sites,
+                unwind_sites: optimized.unwind_sites,
+            },
+        ));
         Ok(Func {
             locals: locals_data,
             expr: optimized.instr,
+            frame_layout,
             control_flow_metadata: optimized.control_flow_metadata,
         })
     }
@@ -1082,5 +1231,131 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_local_ref_runs, build_local_slot_layouts};
+    use crate::common::{
+        FuncType, LocalGroupLayout, LocalReassignTable, Locals, LocalsData, RefSlotRun, ResultType,
+        ValType,
+    };
+    use crate::parser::core::WasmParserError;
+
+    fn func_type(params: Vec<ValType>, results: Vec<ValType>) -> FuncType {
+        FuncType(ResultType(params), ResultType(results))
+    }
+
+    #[test]
+    fn build_local_slot_layouts_handles_param_count_greater_than_first_local_group() {
+        let functype = func_type(vec![ValType::I32, ValType::I64], vec![]);
+        let locals = vec![Locals {
+            n: 1,
+            t: ValType::ExternRef,
+        }];
+        let locals_data = LocalsData::from(locals.as_slice());
+        let local_reassign = locals_data
+            .create_reassignment_table(&locals)
+            .expect("local reassignment table must build");
+
+        let slots =
+            build_local_slot_layouts(&functype, &local_reassign).expect("slot layout must build");
+
+        assert_eq!(slots.len(), 3);
+        assert_eq!(slots[2].wasm_local_index, 2);
+        assert_eq!(slots[2].val_type, ValType::ExternRef);
+        assert_eq!(slots[2].offset_from_local_top, 12);
+    }
+
+    #[test]
+    fn build_local_slot_layouts_supports_mixed_locals_and_refs() {
+        let functype = func_type(vec![ValType::I32, ValType::ExternRef], vec![]);
+        let locals = vec![
+            Locals {
+                n: 1,
+                t: ValType::I64,
+            },
+            Locals {
+                n: 1,
+                t: ValType::FuncRef,
+            },
+            Locals {
+                n: 2,
+                t: ValType::ExternRef,
+            },
+        ];
+        let locals_data = LocalsData::from(locals.as_slice());
+        let local_reassign = locals_data
+            .create_reassignment_table(&locals)
+            .expect("local reassignment table must build");
+
+        let slots =
+            build_local_slot_layouts(&functype, &local_reassign).expect("slot layout must build");
+        let ref_runs = build_local_ref_runs(&slots).expect("ref runs must build");
+
+        assert_eq!(slots.len(), 6);
+        assert_eq!(
+            slots
+                .iter()
+                .map(|slot| slot.wasm_local_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            slots.iter().map(|slot| slot.val_type).collect::<Vec<_>>(),
+            vec![
+                ValType::I32,
+                ValType::ExternRef,
+                ValType::I64,
+                ValType::FuncRef,
+                ValType::ExternRef,
+                ValType::ExternRef,
+            ]
+        );
+        assert_eq!(
+            ref_runs,
+            vec![RefSlotRun {
+                start_from_local_top: 4,
+                len_bytes: 16,
+            }]
+        );
+    }
+
+    #[test]
+    fn build_local_slot_layouts_fail_closes_on_slot_count_overflow() {
+        let functype = func_type(vec![ValType::I32], vec![]);
+        let local_reassign = LocalReassignTable(vec![LocalGroupLayout {
+            local_end_exclusive: u32::MAX,
+            local_count: u32::MAX,
+            val_type: ValType::I32,
+            offset_from_local_top: 0,
+        }]);
+
+        let result = build_local_slot_layouts(&functype, &local_reassign);
+
+        assert!(matches!(result, Err(WasmParserError::TooManyLocals)));
+    }
+
+    #[test]
+    fn build_local_ref_runs_fail_closes_on_offset_overflow() {
+        let result = build_local_ref_runs(&[
+            crate::common::LocalSlotLayout {
+                wasm_local_index: 0,
+                val_type: ValType::ExternRef,
+                offset_from_local_top: u32::MAX - 1,
+                size: 4,
+                is_ref: true,
+            },
+            crate::common::LocalSlotLayout {
+                wasm_local_index: 1,
+                val_type: ValType::FuncRef,
+                offset_from_local_top: u32::MAX,
+                size: 4,
+                is_ref: true,
+            },
+        ]);
+
+        assert!(matches!(result, Err(WasmParserError::TooManyLocals)));
     }
 }

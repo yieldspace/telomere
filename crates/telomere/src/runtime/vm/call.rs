@@ -1,4 +1,5 @@
 use super::*;
+use crate::common::store::{PrecomputedDirectCallSite, PrecomputedIndirectCallSite};
 
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
@@ -39,16 +40,16 @@ unsafe fn internal_op_call(
     let is_host_func = funcinst.is_host_func();
     if is_host_func {
         if is_return_call {
-            let local_reference = vm_try!(ctx.stack.function_return_call(
+            let local_reference = vm_try!(ctx.stack.function_return_call_raw(
                 &ctx.local_reference,
                 param_size,
                 funcinst.execution.param_shape,
                 0,
                 frame,
             ));
-            ctx.set_local_reference(local_reference);
+            ctx.set_local_reference_with_frame(local_reference, frame);
         } else {
-            let local_reference = vm_try!(ctx.stack.function_call(
+            let local_reference = vm_try!(ctx.stack.function_call_raw(
                 param_size,
                 0,
                 frame,
@@ -56,33 +57,29 @@ unsafe fn internal_op_call(
                 return_addr,
                 ctx.gc,
             ));
-            ctx.set_local_reference(local_reference);
+            ctx.set_local_reference_with_frame(local_reference, frame);
         }
         invoke_host_function(return_addr, ctx)
     } else {
         let wasm_metadata = funcinst
             .wasm_metadata()
             .expect("wasm function must expose execution metadata");
-        let locals_size = wasm_metadata.locals_byte_size as usize;
         if is_return_call {
-            let local_reference = vm_try!(ctx.stack.function_return_call(
+            let local_reference = vm_try!(ctx.stack.function_return_call_layout(
                 &ctx.local_reference,
-                param_size,
-                funcinst.execution.param_shape,
-                locals_size,
+                wasm_metadata.frame_layout_header(),
                 frame,
             ));
-            ctx.set_local_reference(local_reference);
+            ctx.set_local_reference_with_frame(local_reference, frame);
         } else {
-            let local_reference = vm_try!(ctx.stack.function_call(
-                param_size,
-                locals_size,
+            let local_reference = vm_try!(ctx.stack.function_call_layout(
+                wasm_metadata.frame_layout_header(),
                 frame,
                 ctx.local_reference,
                 return_addr,
                 ctx.gc,
             ));
-            ctx.set_local_reference(local_reference);
+            ctx.set_local_reference_with_frame(local_reference, frame);
         }
 
         let ptr = funcinst
@@ -90,6 +87,72 @@ unsafe fn internal_op_call(
             .expect("wasm function must expose a code pointer");
         debug_assert!(!is_host_func);
         VMResult::Success(CallOutcome::Immediate(ptr))
+    }
+}
+
+#[inline(always)]
+unsafe fn direct_call_site_unchecked(tail_code: *const Instr) -> *const PrecomputedDirectCallSite {
+    (*tail_code).operand.code_ptr as *const PrecomputedDirectCallSite
+}
+
+#[inline(always)]
+unsafe fn indirect_call_site_unchecked(
+    tail_code: *const Instr,
+) -> *const PrecomputedIndirectCallSite {
+    (*tail_code).operand.code_ptr as *const PrecomputedIndirectCallSite
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_precomputed(
+    return_addr: *const Instr,
+    site: &PrecomputedDirectCallSite,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<CallOutcome> {
+    let frame = site.frame.materialize(ctx.gc);
+    trace!("op_call_precomputed: {:?}", frame.code_addr);
+    if let Some(layout) = site.callee_layout_ptr() {
+        let layout = &*layout;
+        if is_return_call {
+            let local_reference =
+                vm_try!(ctx
+                    .stack
+                    .function_return_call_layout(&ctx.local_reference, layout, frame,));
+            ctx.set_local_reference_with_frame(local_reference, frame);
+        } else {
+            let local_reference = vm_try!(ctx.stack.function_call_layout(
+                layout,
+                frame,
+                ctx.local_reference,
+                return_addr,
+                ctx.gc,
+            ));
+            ctx.set_local_reference_with_frame(local_reference, frame);
+        }
+        debug_assert!(!frame.code_base.is_null(), "wasm callee must expose code");
+        VMResult::Success(CallOutcome::Immediate(frame.code_base))
+    } else {
+        if is_return_call {
+            let local_reference = vm_try!(ctx.stack.function_return_call_raw(
+                &ctx.local_reference,
+                site.param_bytes as usize,
+                site.param_shape,
+                0,
+                frame,
+            ));
+            ctx.set_local_reference_with_frame(local_reference, frame);
+        } else {
+            let local_reference = vm_try!(ctx.stack.function_call_raw(
+                site.param_bytes as usize,
+                0,
+                frame,
+                ctx.local_reference,
+                return_addr,
+                ctx.gc,
+            ));
+            ctx.set_local_reference_with_frame(local_reference, frame);
+        }
+        invoke_host_function(return_addr, ctx)
     }
 }
 
@@ -124,6 +187,28 @@ unsafe fn op_direct_call(
     }
 }
 
+#[inline(always)]
+unsafe fn op_precomputed_direct_call(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<()> {
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let site = &*direct_call_site_unchecked(tail_code);
+    match vm_try!(internal_op_call_precomputed(
+        tail_code.offset(1),
+        site,
+        ctx,
+        is_return_call
+    )) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
 /// WebAssembly `call`.
 ///
 /// Spec:
@@ -141,6 +226,31 @@ unsafe fn op_direct_call(
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     op_direct_call(tail_code, ctx, false)
+}
+
+/// WebAssembly `call` with precomputed direct-call metadata.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[params] -> [results]`.
+/// Traps: traps if the target function cannot be invoked.
+/// Notes: Uses instantiate-time precomputed metadata for local direct callees to avoid repeated
+/// callee/frame lookups on the hot path.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operand for this handler in the active
+///   instruction stream.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and
+///   default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_precomputed_direct_call(tail_code, ctx, false)
 }
 
 /// WebAssembly `call` for imported or otherwise generic direct callees.
@@ -177,6 +287,29 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     op_direct_call(tail_code, ctx, true)
+}
+
+/// WebAssembly `return_call` with precomputed direct-call metadata.
+///
+/// Related spec:
+/// - Tail-call: https://webassembly.github.io/tail-call/core/
+///
+/// Stack effect: `[params] -> [results]`.
+/// Traps: traps if the target function cannot be invoked.
+/// Notes: Uses instantiate-time precomputed metadata for local direct callees while preserving
+/// tail-dispatch semantics.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operand for this handler in the active
+///   instruction stream.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and
+///   default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_return_call_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_precomputed_direct_call(tail_code, ctx, true)
 }
 
 /// WebAssembly `return_call` for imported or otherwise generic direct callees.
@@ -253,6 +386,45 @@ unsafe fn internal_op_call_indirect(
     VMResult::Success(outcome)
 }
 
+#[inline(never)]
+unsafe fn internal_op_call_indirect_precomputed(
+    return_addr: *const Instr,
+    site: &PrecomputedIndirectCallSite,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<CallOutcome> {
+    let i = ctx.stack.pop_u32();
+    let table_addr = *ctx
+        .instance()
+        .tables
+        .as_slice()
+        .get_unchecked(site.tableidx as usize);
+    let table = ctx.gc.get_table(table_addr);
+    let func_addr = *vm_try!(VMResult::from_option(table.1.get(i as usize), || {
+        VMResult::TableIndexOutOfRange
+    }));
+    trace!(
+        "internal_op_call_indirect_precomputed: {} {table_addr:?} {func_addr} {table:?}",
+        site.tableidx
+    );
+    if func_addr == TABLE_UNINITIALIZED {
+        return VMResult::TableUninitialized;
+    }
+    let func_addr = ObjectRef(func_addr);
+    let funcinst = ctx.gc.get_func(func_addr);
+    let expected_type_identity = &*site.expected_type_identity_ptr();
+    if &funcinst.execution.type_identity != expected_type_identity {
+        return VMResult::CallIndirectInvalidType;
+    }
+    let outcome = vm_try!(internal_op_call(
+        return_addr,
+        func_addr,
+        ctx,
+        is_return_call
+    ));
+    VMResult::Success(outcome)
+}
+
 /// WebAssembly `call_indirect`.
 ///
 /// Spec:
@@ -274,6 +446,44 @@ pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext
         return VMResult::Success(());
     }
     match vm_try!(internal_op_call_indirect(tail_code, ctx, false)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+/// WebAssembly `call_indirect` with precomputed type metadata.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[params, i32] -> [results]`.
+/// Traps: traps on null or type-mismatched table entries.
+/// Notes: Uses instantiate-time precomputed table/type metadata to reduce lookup work before
+/// delegating to the regular call path.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operands for this handler in the active
+///   instruction stream.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and
+///   default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_indirect_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let site = &*indirect_call_site_unchecked(tail_code);
+    match vm_try!(internal_op_call_indirect_precomputed(
+        tail_code.offset(2),
+        site,
+        ctx,
+        false
+    )) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -301,6 +511,42 @@ pub unsafe fn op_return_call_indirect(
         return VMResult::Success(());
     }
     match vm_try!(internal_op_call_indirect(tail_code, ctx, true)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+/// WebAssembly `return_call_indirect` with precomputed type metadata.
+///
+/// Related spec:
+/// - Tail-call: https://webassembly.github.io/tail-call/core/
+///
+/// Stack effect: `[params, i32] -> [results]`.
+/// Traps: traps on null or type-mismatched table entries.
+/// Notes: Uses instantiate-time precomputed table/type metadata while preserving tail-dispatch
+/// semantics.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operands for this handler in the active
+///   instruction stream.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and
+///   default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_return_call_indirect_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let site = &*indirect_call_site_unchecked(tail_code);
+    match vm_try!(internal_op_call_indirect_precomputed(
+        tail_code.offset(2),
+        site,
+        ctx,
+        true
+    )) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }

@@ -683,7 +683,7 @@ fn host_proc_exit(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     preview1_state(ctx.store).set_exit_code(exit_code);
 
     let mut local_reference = ctx.local_reference;
-    while local_reference.local_size != 0 {
+    while local_reference.has_call_stack_info() {
         let (prev_local_ref, _return_addr) =
             ctx.stack
                 .function_return_in_place(&local_reference, 0, ctx.gc);

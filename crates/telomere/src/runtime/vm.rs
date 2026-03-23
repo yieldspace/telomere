@@ -257,8 +257,9 @@ pub(crate) use bulk_memory::{
     op_mem_init_shared,
 };
 pub(crate) use call::{
-    op_call, op_call_import, op_call_indirect, op_return_call, op_return_call_import,
-    op_return_call_indirect, special_start_function_call,
+    op_call, op_call_import, op_call_indirect, op_call_indirect_precomputed, op_call_precomputed,
+    op_return_call, op_return_call_import, op_return_call_indirect,
+    op_return_call_indirect_precomputed, op_return_call_precomputed, special_start_function_call,
 };
 pub use control::special_function_return;
 pub(crate) use control::*;
@@ -463,28 +464,37 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
             .clone();
             let param_size = result_type_size(&ft.0);
 
-            let locals_data = funcinst.locals();
-            let local_size = locals_data.byte_size();
             vm_try!(push_result_values(&mut stack, &ft.0, args));
 
-            tracing::trace!("run_module_function: {name} {local_size}");
-            let local_reference = vm_try!(stack.function_call(
-                param_size,
-                local_size,
-                frame,
-                LocalReference {
-                    local_size: 0,
-                    local_top: 0,
-                },
-                &VM_END as *const Instr,
-                &gc,
-            ));
+            tracing::trace!("run_module_function: {name} {param_size}");
+            let local_reference = if funcinst.is_host_func() {
+                vm_try!(stack.function_call_raw(
+                    param_size,
+                    0,
+                    frame,
+                    LocalReference::empty(),
+                    &VM_END as *const Instr,
+                    &gc,
+                ))
+            } else {
+                let wasm_metadata = funcinst
+                    .wasm_metadata()
+                    .expect("wasm function must expose execution metadata");
+                vm_try!(stack.function_call_layout(
+                    wasm_metadata.frame_layout.as_ref(),
+                    frame,
+                    LocalReference::empty(),
+                    &VM_END as *const Instr,
+                    &gc,
+                ))
+            };
 
             scheduler.push(Task {
                 fp: StablePc::from_relative_index(0),
                 task_id: 0,
                 stack,
                 local_reference,
+                current_frame: frame,
                 ready_flag: ReadyFlag::Ready,
                 pending_effects: 0,
                 terminal_result: None,
@@ -545,25 +555,33 @@ pub(crate) fn run_module_function_sync_with_gc(
             };
             let param_size = result_type_size(&ft.0);
 
-            let locals_data = funcinst.locals();
-            let local_size = locals_data.byte_size();
             let push_result = push_result_values(&mut stack, &ft.0, args);
             if !matches!(push_result, VMResult::Success(())) {
                 return Ok(vm_result_err_into_result_value(push_result));
             }
 
-            tracing::trace!("run_module_function: {name} {local_size}");
-            let local_reference = match stack.function_call(
-                param_size,
-                local_size,
-                frame,
-                LocalReference {
-                    local_size: 0,
-                    local_top: 0,
-                },
-                &VM_END as *const Instr,
-                gc,
-            ) {
+            tracing::trace!("run_module_function: {name} {param_size}");
+            let local_reference = match if funcinst.is_host_func() {
+                stack.function_call_raw(
+                    param_size,
+                    0,
+                    frame,
+                    LocalReference::empty(),
+                    &VM_END as *const Instr,
+                    gc,
+                )
+            } else {
+                let wasm_metadata = funcinst
+                    .wasm_metadata()
+                    .expect("wasm function must expose execution metadata");
+                stack.function_call_layout(
+                    wasm_metadata.frame_layout.as_ref(),
+                    frame,
+                    LocalReference::empty(),
+                    &VM_END as *const Instr,
+                    gc,
+                )
+            } {
                 VMResult::Success(local_reference) => local_reference,
                 other => return Ok(vm_result_err_into_result_value(other)),
             };
@@ -573,6 +591,7 @@ pub(crate) fn run_module_function_sync_with_gc(
                 task_id: 0,
                 stack,
                 local_reference,
+                current_frame: frame,
                 ready_flag: ReadyFlag::Ready,
                 pending_effects: 0,
                 terminal_result: None,

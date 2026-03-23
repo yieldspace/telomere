@@ -34,6 +34,7 @@ pub(crate) struct Task {
     pub task_id: u32,
     pub stack: Stack,
     pub local_reference: LocalReference,
+    pub current_frame: CallFrameCache,
     pub pending_effects: u32,
     pub ready_flag: ReadyFlag,
     pub fp: StablePc,
@@ -299,6 +300,7 @@ impl<'a> Scheduler<'a> {
             self.ready_count -= 1;
             let Task {
                 local_reference,
+                current_frame,
                 fp: pc,
                 mut stack,
                 task_id,
@@ -307,14 +309,7 @@ impl<'a> Scheduler<'a> {
             } = task;
             let fp = pc.resolve(gc, &stack, local_reference);
 
-            let (res, cont, local_reference) = {
-                let current_frame = if local_reference.local_size as usize
-                    >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
-                {
-                    stack.frame_cache(&local_reference)
-                } else {
-                    CallFrameCache::dummy()
-                };
+            let (res, cont, local_reference, current_frame) = {
                 let mut ec = ExecuteContext {
                     gc,
                     local_reference,
@@ -330,13 +325,14 @@ impl<'a> Scheduler<'a> {
                     task_id,
                 };
                 let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
-                (res, ec.cont, ec.local_reference)
+                (res, ec.cont, ec.local_reference, ec.current_frame)
             };
             match res {
                 VMResult::Success(()) => {
                     if !cont.is_null() {
                         self.tasks.push_back(Task {
                             local_reference,
+                            current_frame,
                             fp: StablePc::from_raw_in_frame(gc, &stack, local_reference, cont),
                             ready_flag: if pending_effects == 0 {
                                 ReadyFlag::Ready
@@ -359,6 +355,7 @@ impl<'a> Scheduler<'a> {
                     } else {
                         self.tasks.push_back(Task {
                             local_reference,
+                            current_frame,
                             fp: pc,
                             ready_flag: ReadyFlag::NonReady,
                             task_id,
@@ -377,6 +374,7 @@ impl<'a> Scheduler<'a> {
                     } else {
                         self.tasks.push_back(Task {
                             local_reference,
+                            current_frame,
                             fp: pc,
                             ready_flag: ReadyFlag::NonReady,
                             task_id,
