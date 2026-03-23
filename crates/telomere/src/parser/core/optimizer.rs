@@ -267,9 +267,24 @@ enum OptimizedInstruction {
         memarg: MemArg,
         op: TypedLoadOp,
     },
+    LocalImmAddrLoad {
+        old_range: Range<usize>,
+        local_addr: u32,
+        imm: i32,
+        memarg: MemArg,
+        op: TypedLoadOp,
+    },
     LocalLocalStore {
         old_range: Range<usize>,
         addr_local_addr: u32,
+        value_local_addr: u32,
+        memarg: MemArg,
+        op: TypedStoreOp,
+    },
+    LocalImmLocalStore {
+        old_range: Range<usize>,
+        addr_local_addr: u32,
+        imm: i32,
         value_local_addr: u32,
         memarg: MemArg,
         op: TypedStoreOp,
@@ -301,10 +316,19 @@ const BRANCH_MATCHERS: &[Matcher] = &[
     match_local_const_compare_br_if,
 ];
 const CONST_ADDR_MATCHERS: &[Matcher] = &[match_const_load, match_const_local_store];
-const LOCAL_ADDR_LOAD_MATCHERS: &[Matcher] = &[match_local_addr_load];
-const LOCAL_LOCAL_STORE_MATCHERS: &[Matcher] = &[match_local_local_store];
+const LOCAL_ADDR_LOAD_MATCHERS: &[Matcher] = &[match_local_imm_addr_load, match_local_addr_load];
+const LOCAL_LOCAL_STORE_MATCHERS: &[Matcher] =
+    &[match_local_imm_local_store, match_local_local_store];
 
+#[cfg(test)]
 pub(crate) fn optimize_core_program(program: InstructionProgram) -> Vec<Instr> {
+    optimize_core_program_with_function_index(program, 0)
+}
+
+pub(crate) fn optimize_core_program_with_function_index(
+    program: InstructionProgram,
+    function_index: u32,
+) -> Vec<Instr> {
     if program.instruction_starts.is_empty() {
         return program.instr;
     }
@@ -312,7 +336,7 @@ pub(crate) fn optimize_core_program(program: InstructionProgram) -> Vec<Instr> {
     let decoded = decode_instructions(&program.instr, &program.instruction_starts);
     let jump_targets = collect_jump_targets(&decoded);
     let optimized = fuse_superinstructions(decoded, &jump_targets);
-    lower_program(optimized, program.instr.len())
+    lower_program(optimized, program.instr.len(), function_index)
 }
 
 fn decode_instructions(instrs: &[Instr], starts: &[usize]) -> Vec<DecodedInstruction> {
@@ -934,26 +958,6 @@ fn fuse_superinstructions(
             index += consumed;
             continue;
         }
-        if let Some((consumed, fused)) = try_matchers(
-            LOCAL_IMM_PUSH_MATCHERS,
-            decoded.as_slice(),
-            index,
-            jump_targets,
-        ) {
-            optimized.push(fused);
-            index += consumed;
-            continue;
-        }
-        if let Some((consumed, fused)) = try_matchers(
-            LOCAL_LOCAL_PUSH_MATCHERS,
-            decoded.as_slice(),
-            index,
-            jump_targets,
-        ) {
-            optimized.push(fused);
-            index += consumed;
-            continue;
-        }
         if let Some((consumed, fused)) =
             try_matchers(CONST_ADDR_MATCHERS, decoded.as_slice(), index, jump_targets)
         {
@@ -973,6 +977,26 @@ fn fuse_superinstructions(
         }
         if let Some((consumed, fused)) = try_matchers(
             LOCAL_LOCAL_STORE_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            LOCAL_IMM_PUSH_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
+            LOCAL_LOCAL_PUSH_MATCHERS,
             decoded.as_slice(),
             index,
             jump_targets,
@@ -1852,6 +1876,48 @@ fn match_local_addr_load(
     ))
 }
 
+fn match_local_imm_addr_load(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 4) {
+        return None;
+    }
+    let (addr_width, local_addr) = local_get(first.kind)?;
+    let imm = match second.kind {
+        DecodedKind::Const(TypedConst::I32(value)) => value,
+        _ => return None,
+    };
+    if !matches!(
+        third.kind,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+    ) {
+        return None;
+    }
+    let (op, memarg) = match fourth.kind {
+        DecodedKind::Load(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    if !same_width(addr_width, ValueSize::Byte4) || !op.uses_dedicated_local_addr() {
+        return None;
+    }
+
+    Some((
+        4,
+        OptimizedInstruction::LocalImmAddrLoad {
+            old_range: first.old_range.start..fourth.old_range.end,
+            local_addr,
+            imm,
+            memarg,
+            op,
+        },
+    ))
+}
+
 fn match_local_local_store(
     decoded: &[DecodedInstruction],
     index: usize,
@@ -1885,7 +1951,58 @@ fn match_local_local_store(
     ))
 }
 
-fn lower_program(optimized: Vec<OptimizedInstruction>, old_flat_len: usize) -> Vec<Instr> {
+fn match_local_imm_local_store(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &HashSet<usize>,
+) -> Option<MatchOutcome> {
+    let [first, second, third, fourth, fifth] = decoded.get(index..index + 5)? else {
+        return None;
+    };
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..index + 5) {
+        return None;
+    }
+    let (addr_width, addr_local_addr) = local_get(first.kind)?;
+    let imm = match second.kind {
+        DecodedKind::Const(TypedConst::I32(value)) => value,
+        _ => return None,
+    };
+    if !matches!(
+        third.kind,
+        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+    ) {
+        return None;
+    }
+    let (value_width, value_local_addr) = local_get(fourth.kind)?;
+    let (op, memarg) = match fifth.kind {
+        DecodedKind::Store(op, memarg) => (op, memarg),
+        _ => return None,
+    };
+    if !same_width(addr_width, ValueSize::Byte4)
+        || !same_width(value_width, op.value_width())
+        || !op.uses_dedicated_local_local()
+    {
+        return None;
+    }
+
+    Some((
+        5,
+        OptimizedInstruction::LocalImmLocalStore {
+            old_range: first.old_range.start..fifth.old_range.end,
+            addr_local_addr,
+            imm,
+            value_local_addr,
+            memarg,
+            op,
+        },
+    ))
+}
+
+fn lower_program(
+    optimized: Vec<OptimizedInstruction>,
+    old_flat_len: usize,
+    function_index: u32,
+) -> Vec<Instr> {
     let mut old_to_new = vec![0u32; old_flat_len];
     let mut new_len = 0usize;
     for instruction in &optimized {
@@ -1897,8 +2014,14 @@ fn lower_program(optimized: Vec<OptimizedInstruction>, old_flat_len: usize) -> V
     }
 
     let mut lowered = Vec::with_capacity(new_len);
-    for instruction in optimized {
-        lower_instruction(instruction, &old_to_new, &mut lowered);
+    for (instruction_ordinal, instruction) in optimized.into_iter().enumerate() {
+        lower_instruction(
+            instruction,
+            &old_to_new,
+            &mut lowered,
+            function_index,
+            instruction_ordinal as u32,
+        );
     }
     lowered
 }
@@ -1924,7 +2047,9 @@ fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
         | OptimizedInstruction::LoadConstLocal { old_range, .. }
         | OptimizedInstruction::StoreConstLocal { old_range, .. }
         | OptimizedInstruction::LocalAddrLoad { old_range, .. }
-        | OptimizedInstruction::LocalLocalStore { old_range, .. } => old_range,
+        | OptimizedInstruction::LocalImmAddrLoad { old_range, .. }
+        | OptimizedInstruction::LocalLocalStore { old_range, .. }
+        | OptimizedInstruction::LocalImmLocalStore { old_range, .. } => old_range,
     }
 }
 
@@ -1980,6 +2105,7 @@ fn output_len(instruction: &OptimizedInstruction) -> usize {
                 4
             }
         }
+        OptimizedInstruction::LocalImmAddrLoad { .. } => 4,
         OptimizedInstruction::LocalLocalStore { op, .. } => {
             if op.uses_dedicated_local_local() {
                 4
@@ -1987,6 +2113,7 @@ fn output_len(instruction: &OptimizedInstruction) -> usize {
                 5
             }
         }
+        OptimizedInstruction::LocalImmLocalStore { .. } => 5,
     }
 }
 
@@ -2047,7 +2174,10 @@ fn lower_instruction(
     instruction: OptimizedInstruction,
     old_to_new: &[u32],
     lowered: &mut Vec<Instr>,
+    function_index: u32,
+    instruction_ordinal: u32,
 ) {
+    let start = lowered.len();
     match instruction {
         OptimizedInstruction::Raw(decoded) => {
             lowered.extend(rewrite_raw_jumps(decoded.raw.as_ref(), old_to_new))
@@ -2872,6 +3002,32 @@ fn lower_instruction(
                 });
             }
         }
+        OptimizedInstruction::LocalImmAddrLoad {
+            local_addr,
+            imm,
+            memarg,
+            op,
+            ..
+        } => {
+            let op = match op {
+                TypedLoadOp::Bits4(vm::Load4Kind::I32) => vm::op_i32_local_imm_addr_load,
+                TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U) => vm::op_i32_local_imm_addr_load8_u,
+                TypedLoadOp::Bits4(vm::Load4Kind::I32Load16S) => vm::op_i32_local_imm_addr_load16_s,
+                TypedLoadOp::Bits4(vm::Load4Kind::I32Load16U) => vm::op_i32_local_imm_addr_load16_u,
+                TypedLoadOp::Bits4(vm::Load4Kind::F32) => vm::op_f32_local_imm_addr_load,
+                _ => unreachable!(),
+            };
+            lowered.push(Instr { op });
+            lowered.push(Instr {
+                operand: Operand { local_addr },
+            });
+            lowered.push(Instr {
+                operand: Operand { i32: imm },
+            });
+            lowered.push(Instr {
+                operand: Operand { memarg },
+            });
+        }
         OptimizedInstruction::LocalLocalStore {
             addr_local_addr,
             value_local_addr,
@@ -2929,6 +3085,46 @@ fn lower_instruction(
                 });
             }
         }
+        OptimizedInstruction::LocalImmLocalStore {
+            addr_local_addr,
+            imm,
+            value_local_addr,
+            memarg,
+            op,
+            ..
+        } => {
+            let op = match op {
+                TypedStoreOp::Bits4(vm::Store4Kind::I32) => vm::op_i32_local_imm_local_store,
+                TypedStoreOp::Bits4(vm::Store4Kind::I32Store8) => vm::op_i32_local_imm_local_store8,
+                TypedStoreOp::Bits4(vm::Store4Kind::I32Store16) => {
+                    vm::op_i32_local_imm_local_store16
+                }
+                _ => unreachable!(),
+            };
+            lowered.push(Instr { op });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: addr_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand { i32: imm },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: value_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand { memarg },
+            });
+        }
+    }
+    if start < lowered.len() {
+        let op = unsafe { lowered[start].op };
+        lowered[start] = Instr {
+            op: vm::select_replicated_op(op, function_index, instruction_ordinal),
+        };
     }
 }
 
@@ -2973,6 +3169,26 @@ fn remap_jump_target(target_old: u32, old_to_new: &[u32]) -> u32 {
 mod tests {
     use super::*;
 
+    fn op_is_any(op: crate::common::Op, candidates: &[crate::common::Op]) -> bool {
+        candidates
+            .iter()
+            .copied()
+            .any(|candidate| std::ptr::fn_addr_eq(op, candidate))
+    }
+
+    fn is_local_get4_family(op: crate::common::Op) -> bool {
+        op_is_any(
+            op,
+            &[
+                vm::op_local_get4 as crate::common::Op,
+                vm::op_local_get4_r0 as crate::common::Op,
+                vm::op_local_get4_r1 as crate::common::Op,
+                vm::op_local_get4_r2 as crate::common::Op,
+                vm::op_local_get4_r3 as crate::common::Op,
+            ],
+        )
+    }
+
     #[test]
     fn optimizer_does_not_fuse_across_jump_target_boundary() {
         let optimized = optimize_core_program(InstructionProgram {
@@ -3002,10 +3218,7 @@ mod tests {
             instruction_starts: vec![0, 2, 4],
         });
 
-        assert!(std::ptr::fn_addr_eq(
-            unsafe { optimized[2].op },
-            vm::op_local_get4 as crate::common::Op
-        ));
+        assert!(is_local_get4_family(unsafe { optimized[2].op }));
     }
 
     #[test]
@@ -3099,10 +3312,7 @@ mod tests {
             instruction_starts: vec![0, 2, 4, 6],
         });
 
-        assert!(std::ptr::fn_addr_eq(
-            unsafe { optimized[2].op },
-            vm::op_local_get4 as crate::common::Op
-        ));
+        assert!(is_local_get4_family(unsafe { optimized[2].op }));
     }
 
     #[test]
@@ -3145,9 +3355,121 @@ mod tests {
             instruction_starts: vec![0, 2, 4, 6, 8, 10, 11],
         });
 
-        assert!(std::ptr::fn_addr_eq(
-            unsafe { optimized[6].op },
+        assert!(is_local_get4_family(unsafe { optimized[6].op }));
+    }
+
+    #[test]
+    fn optimizer_replicates_hot_raw_local_get4_handler() {
+        let optimized = optimize_core_program_with_function_index(
+            InstructionProgram {
+                instr: vec![
+                    Instr {
+                        op: vm::op_local_get4,
+                    },
+                    Instr {
+                        operand: Operand { local_addr: 12 },
+                    },
+                ],
+                instruction_starts: vec![0],
+            },
+            7,
+        );
+
+        let op = unsafe { optimized[0].op };
+        assert!(!std::ptr::fn_addr_eq(
+            op,
             vm::op_local_get4 as crate::common::Op
+        ));
+        assert!(op_is_any(
+            op,
+            &[
+                vm::op_local_get4_r0 as crate::common::Op,
+                vm::op_local_get4_r1 as crate::common::Op,
+                vm::op_local_get4_r2 as crate::common::Op,
+                vm::op_local_get4_r3 as crate::common::Op,
+            ],
+        ));
+    }
+
+    #[test]
+    fn optimizer_replicates_hot_raw_br_if_handler_without_changing_jump_operand() {
+        let optimized = optimize_core_program_with_function_index(
+            InstructionProgram {
+                instr: vec![
+                    Instr { op: vm::op_br_if },
+                    Instr {
+                        operand: Operand { jump_addr: 0 },
+                    },
+                ],
+                instruction_starts: vec![0],
+            },
+            11,
+        );
+
+        let op = unsafe { optimized[0].op };
+        assert!(!std::ptr::fn_addr_eq(op, vm::op_br_if as crate::common::Op));
+        assert!(op_is_any(
+            op,
+            &[
+                vm::op_br_if_r0 as crate::common::Op,
+                vm::op_br_if_r1 as crate::common::Op,
+                vm::op_br_if_r2 as crate::common::Op,
+                vm::op_br_if_r3 as crate::common::Op,
+            ],
+        ));
+        assert_eq!(unsafe { optimized[1].operand.jump_addr }, 0);
+    }
+
+    #[test]
+    fn optimizer_leaves_non_selected_raw_handlers_unreplicated() {
+        let const_program = optimize_core_program_with_function_index(
+            InstructionProgram {
+                instr: vec![
+                    Instr {
+                        op: vm::op_i32_const,
+                    },
+                    Instr {
+                        operand: Operand { i32: 7 },
+                    },
+                ],
+                instruction_starts: vec![0],
+            },
+            3,
+        );
+        let eqz_program = optimize_core_program_with_function_index(
+            InstructionProgram {
+                instr: vec![Instr { op: vm::op_i32_eqz }],
+                instruction_starts: vec![0],
+            },
+            5,
+        );
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { const_program[0].op },
+            vm::op_i32_const as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { eqz_program[0].op },
+            vm::op_i32_eqz as crate::common::Op
+        ));
+
+        let tee_program = optimize_core_program_with_function_index(
+            InstructionProgram {
+                instr: vec![
+                    Instr {
+                        op: vm::op_local_tee4,
+                    },
+                    Instr {
+                        operand: Operand { local_addr: 0 },
+                    },
+                ],
+                instruction_starts: vec![0],
+            },
+            7,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { tee_program[0].op },
+            vm::op_local_tee4 as crate::common::Op
         ));
     }
 }

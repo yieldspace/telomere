@@ -18,6 +18,14 @@ use crate::{
 
 use crate::common::store::{FunctionExecutionMetadata, FunctionKind, WasmExecutionMetadata};
 
+fn shape_for_result_type(ty: &crate::common::ResultType) -> crate::common::ReturnShape {
+    match (ty.0.first(), ty.0.get(1)) {
+        (None, _) => crate::common::ReturnShape::Empty,
+        (Some(value), None) => crate::common::ReturnShape::from_size(value.stack_size().u32()),
+        _ => crate::common::ReturnShape::Generic,
+    }
+}
+
 fn build_execution_metadata(
     typeidx: TypeIdx,
     ft: &FuncType,
@@ -28,7 +36,9 @@ fn build_execution_metadata(
         typeidx,
         type_identity: ft.identity(),
         param_stack_bytes: ft.param_stack_byte_size(),
+        param_shape: shape_for_result_type(&ft.0),
         result_stack_bytes: ft.result_stack_byte_size(),
+        result_shape: shape_for_result_type(&ft.1),
     }
 }
 
@@ -412,6 +422,7 @@ pub async fn instantiate(
                         body: RuntimeFunctionBody::Wasm {
                             locals: code.locals.clone(),
                             code: code_expr.clone(),
+                            derived_code: None,
                             metadata: WasmExecutionMetadata {
                                 code_base_addr: code_expr.as_ptr() as usize,
                                 locals_byte_size: code.locals.byte_size() as u32,

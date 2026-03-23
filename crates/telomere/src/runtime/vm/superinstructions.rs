@@ -998,6 +998,20 @@ unsafe fn local_addr_mem_start(
     )
 }
 
+#[inline(always)]
+unsafe fn local_imm_addr_mem_start(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<usize> {
+    let local_addr = (*tail_code).operand.local_addr;
+    let imm = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    compute_memory_offset(
+        memarg,
+        local_u32(ctx.stack, &ctx.local_reference(), local_addr).wrapping_add(imm),
+    )
+}
+
 pub unsafe fn op_i32_local_addr_load(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1008,6 +1022,18 @@ pub unsafe fn op_i32_local_addr_load(
         .local_read_u32_at(ctx.default_local_memory_id_unchecked(), start));
     vm_try!(ctx.stack.push_u32(value));
     call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_i32_local_imm_addr_load(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let start = vm_try!(local_imm_addr_mem_start(tail_code, ctx));
+    let value = vm_try!(ctx
+        .gc
+        .local_read_u32_at(ctx.default_local_memory_id_unchecked(), start));
+    vm_try!(ctx.stack.push_u32(value));
+    call_next(tail_code, 3, ctx)
 }
 
 pub unsafe fn op_i32_local_addr_load8_u(
@@ -1022,6 +1048,18 @@ pub unsafe fn op_i32_local_addr_load8_u(
     call_next(tail_code, 2, ctx)
 }
 
+pub unsafe fn op_i32_local_imm_addr_load8_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let start = vm_try!(local_imm_addr_mem_start(tail_code, ctx));
+    let value = vm_try!(ctx
+        .gc
+        .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start));
+    vm_try!(ctx.stack.push_u32(u32::from(value)));
+    call_next(tail_code, 3, ctx)
+}
+
 pub unsafe fn op_i32_local_addr_load16_s(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1032,6 +1070,18 @@ pub unsafe fn op_i32_local_addr_load16_s(
         .local_read_i16_at(ctx.default_local_memory_id_unchecked(), start));
     vm_try!(ctx.stack.push_i32(i32::from(value)));
     call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_i32_local_imm_addr_load16_s(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let start = vm_try!(local_imm_addr_mem_start(tail_code, ctx));
+    let value = vm_try!(ctx
+        .gc
+        .local_read_i16_at(ctx.default_local_memory_id_unchecked(), start));
+    vm_try!(ctx.stack.push_i32(i32::from(value)));
+    call_next(tail_code, 3, ctx)
 }
 
 pub unsafe fn op_i32_local_addr_load16_u(
@@ -1046,6 +1096,18 @@ pub unsafe fn op_i32_local_addr_load16_u(
     call_next(tail_code, 2, ctx)
 }
 
+pub unsafe fn op_i32_local_imm_addr_load16_u(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let start = vm_try!(local_imm_addr_mem_start(tail_code, ctx));
+    let value = vm_try!(ctx
+        .gc
+        .local_read_u16_at(ctx.default_local_memory_id_unchecked(), start));
+    vm_try!(ctx.stack.push_u32(u32::from(value)));
+    call_next(tail_code, 3, ctx)
+}
+
 pub unsafe fn op_f32_local_addr_load(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1058,6 +1120,18 @@ pub unsafe fn op_f32_local_addr_load(
     call_next(tail_code, 2, ctx)
 }
 
+pub unsafe fn op_f32_local_imm_addr_load(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let start = vm_try!(local_imm_addr_mem_start(tail_code, ctx));
+    let value = vm_try!(ctx
+        .gc
+        .local_read_u32_at(ctx.default_local_memory_id_unchecked(), start));
+    vm_try!(ctx.stack.push_u32(value));
+    call_next(tail_code, 3, ctx)
+}
+
 #[inline(always)]
 unsafe fn local_local_store_start(
     tail_code: *const Instr,
@@ -1068,6 +1142,20 @@ unsafe fn local_local_store_start(
     compute_memory_offset(
         memarg,
         local_u32(ctx.stack, &ctx.local_reference(), addr_local),
+    )
+}
+
+#[inline(always)]
+unsafe fn local_imm_local_store_start(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<usize> {
+    let addr_local = (*tail_code).operand.local_addr;
+    let imm = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(3)).operand.memarg;
+    compute_memory_offset(
+        memarg,
+        local_u32(ctx.stack, &ctx.local_reference(), addr_local).wrapping_add(imm),
     )
 }
 
@@ -1084,6 +1172,19 @@ pub unsafe fn op_i32_local_local_store(
     call_next(tail_code, 3, ctx)
 }
 
+pub unsafe fn op_i32_local_imm_local_store(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let start = vm_try!(local_imm_local_store_start(tail_code, ctx));
+    let value_local = (*tail_code.add(2)).operand.local_addr;
+    let bytes = local_u32(ctx.stack, &ctx.local_reference(), value_local).to_le_bytes();
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, &bytes));
+    call_next(tail_code, 4, ctx)
+}
+
 pub unsafe fn op_i32_local_local_store8(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -1095,6 +1196,19 @@ pub unsafe fn op_i32_local_local_store8(
         .gc
         .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, &bytes));
     call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_local_imm_local_store8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let start = vm_try!(local_imm_local_store_start(tail_code, ctx));
+    let value_local = (*tail_code.add(2)).operand.local_addr;
+    let bytes = [(local_u32(ctx.stack, &ctx.local_reference(), value_local) & 0xff) as u8];
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, &bytes));
+    call_next(tail_code, 4, ctx)
 }
 
 pub unsafe fn op_i32_local_local_store16(
@@ -1109,6 +1223,20 @@ pub unsafe fn op_i32_local_local_store16(
         .gc
         .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, &bytes));
     call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_local_imm_local_store16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let start = vm_try!(local_imm_local_store_start(tail_code, ctx));
+    let value_local = (*tail_code.add(2)).operand.local_addr;
+    let value = local_u32(ctx.stack, &ctx.local_reference(), value_local);
+    let bytes = [(value & 0xff) as u8, ((value >> 8) & 0xff) as u8];
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, &bytes));
+    call_next(tail_code, 4, ctx)
 }
 
 pub unsafe fn op_i32_local_scalar_imm_push4(

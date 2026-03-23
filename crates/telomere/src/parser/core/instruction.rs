@@ -21,8 +21,8 @@ use crate::runtime::vm;
 use crate::{
     common::{
         BlockType, ConstExpr, DataCountVerifier, Elem, FuncIdx, FuncType, Instr,
-        LocalReassignTable, MemType, Op, Operand, TableType, TypeIdx, TypeSection, ValType,
-        ValueSize,
+        LocalReassignTable, MemType, Op, Operand, ReturnShape, TableType, TypeIdx, TypeSection,
+        ValType, ValueSize,
     },
     WasmParserError,
 };
@@ -61,6 +61,7 @@ fn get_local_addr(
     }
     Err(WasmParserError::InvalidLocalIndex(idx))
 }
+
 fn validate_br_table_types(
     idx: u32,
     type_section: &TypeSection,
@@ -99,6 +100,24 @@ fn validate_br_table_types(
         }
     };
     Ok(result_len)
+}
+
+const fn loop_op_for_shape(shape: ReturnShape) -> Op {
+    match shape {
+        ReturnShape::Empty => vm::op_loop_empty,
+        ReturnShape::Scalar4 => vm::op_loop4,
+        ReturnShape::Scalar8 => vm::op_loop8,
+        ReturnShape::Generic => vm::op_loop_generic,
+    }
+}
+
+const fn block_return_op_for_shape(shape: ReturnShape) -> Op {
+    match shape {
+        ReturnShape::Empty => vm::special_block_return_empty,
+        ReturnShape::Scalar4 => vm::special_block_return4,
+        ReturnShape::Scalar8 => vm::special_block_return8,
+        ReturnShape::Generic => vm::special_block_return_generic,
+    }
 }
 fn assert_data_idx(idx: u32, dcv: &mut DataCountVerifier) -> Result<()> {
     match dcv {
@@ -364,18 +383,23 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
+                    let return_size = blocktype
+                        .return_size(self.types)
+                        .ok_or(WasmParserError::InvalidStackValTypeAny)?;
+                    let return_shape = blocktype
+                        .return_shape(self.types)
+                        .ok_or(WasmParserError::InvalidStackValTypeAny)?;
 
                     instrs.push(Instr {
-                        op: vm::special_block_return,
+                        op: block_return_op_for_shape(return_shape),
                     });
                     instrs.push(Instr {
                         operand: Operand {
-                            block_return: BlockReturn {
-                                stack_top: block_base_stack_size,
-                                return_size: blocktype
-                                    .return_size(self.types)
-                                    .ok_or(WasmParserError::InvalidStackValTypeAny)?,
-                            },
+                            block_return: BlockReturn::with_shape(
+                                block_base_stack_size,
+                                return_size,
+                                return_shape,
+                            ),
                         },
                     });
                 }
@@ -423,17 +447,24 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 jump_resolver.push(JumpResolverDSL::EnterBackwardJumpBlock(instrs.len() as u32));
 
-                instrs.push(Instr { op: vm::op_loop });
+                let param_shape = blocktype
+                    .param_shape(self.types)
+                    .ok_or(WasmParserError::InvalidStackValTypeAny)?;
+                instrs.push(Instr {
+                    op: loop_op_for_shape(param_shape),
+                });
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
+                    let param_size = blocktype
+                        .param_size(self.types)
+                        .ok_or(WasmParserError::InvalidStackValTypeAny)?;
                     instrs.push(Instr {
                         operand: Operand {
-                            loop_param: LoopParam {
-                                stack_top: block_base_stack_size,
-                                param_size: blocktype
-                                    .param_size(self.types)
-                                    .ok_or(WasmParserError::InvalidStackValTypeAny)?,
-                            },
+                            loop_param: LoopParam::with_shape(
+                                block_base_stack_size,
+                                param_size,
+                                param_shape,
+                            ),
                         },
                     });
                 }
@@ -449,18 +480,23 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
+                    let return_size = blocktype
+                        .return_size(self.types)
+                        .ok_or(WasmParserError::InvalidStackValTypeAny)?;
+                    let return_shape = blocktype
+                        .return_shape(self.types)
+                        .ok_or(WasmParserError::InvalidStackValTypeAny)?;
 
                     instrs.push(Instr {
-                        op: vm::special_block_return,
+                        op: block_return_op_for_shape(return_shape),
                     });
                     instrs.push(Instr {
                         operand: Operand {
-                            block_return: BlockReturn {
-                                stack_top: block_base_stack_size,
-                                return_size: blocktype
-                                    .return_size(self.types)
-                                    .ok_or(WasmParserError::InvalidStackValTypeAny)?,
-                            },
+                            block_return: BlockReturn::with_shape(
+                                block_base_stack_size,
+                                return_size,
+                                return_shape,
+                            ),
                         },
                     });
                 }
@@ -4128,6 +4164,12 @@ mod tests {
         func.expr.iter().map(|instr| unsafe { instr.op }).collect()
     }
 
+    fn contains_op(ops: &[crate::common::Op], expected: crate::common::Op) -> bool {
+        ops.iter()
+            .copied()
+            .any(|op| std::ptr::fn_addr_eq(op, expected))
+    }
+
     fn operand_at(wat: &str, index: usize) -> Operand {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
@@ -4141,13 +4183,13 @@ mod tests {
 
     #[test]
     fn parser_specializes_default_memory_load_handler() {
-        let local = op_at(
+        let ops = ops_in_func(
             r#"(module (memory 1) (func (export "f") (param i32) (result i32) local.get 0 i32.const 0 i32.add i32.load))"#,
-            4,
+            0,
         );
-        assert!(std::ptr::fn_addr_eq(
-            local,
-            vm::op_i32_load_local as crate::common::Op
+        assert!(contains_op(
+            &ops,
+            vm::op_i32_local_imm_addr_load as crate::common::Op
         ));
     }
 
@@ -4686,6 +4728,26 @@ mod tests {
     }
 
     #[test]
+    fn parser_specializes_i32_local_imm_addr_load_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.const 4
+                i32.add
+                i32.load))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_imm_addr_load as crate::common::Op
+        ));
+    }
+
+    #[test]
     fn parser_specializes_i32_local_addr_load8_u_superinstruction() {
         let op = op_at(
             r#"
@@ -4773,6 +4835,27 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             op,
             vm::op_i32_local_local_store as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_i32_local_imm_local_store_superinstruction() {
+        let op = op_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param i32 i32)
+                local.get 0
+                i32.const 4
+                i32.add
+                local.get 1
+                i32.store))
+            "#,
+            0,
+        );
+        assert!(std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_local_imm_local_store as crate::common::Op
         ));
     }
 
@@ -4889,6 +4972,80 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             op,
             vm::op_i64_local_local_scalar_set8 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_function_return_internal_ops_by_result_shape() {
+        let ops_scalar4 = ops_in_func(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                i32.const 1))
+            "#,
+            0,
+        );
+        let ops_generic = ops_in_func(
+            r#"
+            (module
+              (func (export "f") (result i32 i32)
+                i32.const 1
+                i32.const 2))
+            "#,
+            0,
+        );
+
+        assert!(contains_op(
+            &ops_scalar4,
+            vm::special_function_return4 as crate::common::Op
+        ));
+        assert!(!contains_op(
+            &ops_scalar4,
+            vm::special_function_return_generic as crate::common::Op
+        ));
+        assert!(contains_op(
+            &ops_generic,
+            vm::special_function_return_generic as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_loop_internal_ops_by_param_shape() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                loop (param i32) (result i32)
+                end))
+            "#,
+            0,
+        );
+
+        assert!(contains_op(&ops, vm::op_loop4 as crate::common::Op));
+        assert!(!contains_op(&ops, vm::op_loop as crate::common::Op));
+    }
+
+    #[test]
+    fn parser_specializes_block_return_internal_ops_by_result_shape() {
+        let ops = ops_in_func(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                block (result i32)
+                  i32.const 1
+                end))
+            "#,
+            0,
+        );
+
+        assert!(contains_op(
+            &ops,
+            vm::special_block_return4 as crate::common::Op
+        ));
+        assert!(!contains_op(
+            &ops,
+            vm::special_block_return as crate::common::Op
         ));
     }
 

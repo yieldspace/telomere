@@ -1,5 +1,21 @@
 use super::*;
 
+macro_rules! replicated_local_get4 {
+    ($name:ident) => {
+        #[inline(never)]
+        pub(crate) unsafe fn $name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            let addr = (*tail_code).operand.local_addr as usize;
+            vm_try!(ctx.stack.local_get4(&ctx.local_reference(), addr));
+            trace!("op_local_get4: {addr}");
+
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
 #[inline(always)]
 unsafe fn select4_in_place(ctx: &mut ExecuteContext) {
     let cond = ctx.stack.pop_u32();
@@ -143,6 +159,11 @@ pub unsafe fn op_local_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 
     call_next(tail_code, 1, ctx)
 }
+
+replicated_local_get4!(op_local_get4_r0);
+replicated_local_get4!(op_local_get4_r1);
+replicated_local_get4!(op_local_get4_r2);
+replicated_local_get4!(op_local_get4_r3);
 
 /// WebAssembly `local.get`.
 ///

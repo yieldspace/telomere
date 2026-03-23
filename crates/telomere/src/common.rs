@@ -416,6 +416,17 @@ pub enum BlockType {
     TypeIdx(TypeIdx),
 }
 impl BlockType {
+    pub fn return_shape(&self, types: &TypeSection) -> Option<ReturnShape> {
+        match self {
+            BlockType::TypeIdx(idx) => {
+                let ty = types.get(*idx)?;
+                Some(shape_for_types(ty.1.iter().copied()))
+            }
+            BlockType::ValType(ty) => Some(ReturnShape::from_size(ty.stack_size().u32())),
+            BlockType::Void => Some(ReturnShape::Empty),
+        }
+    }
+
     pub fn return_size(&self, types: &TypeSection) -> Option<u32> {
         let return_size = match self {
             BlockType::TypeIdx(idx) => {
@@ -428,6 +439,18 @@ impl BlockType {
         };
         Some(return_size)
     }
+
+    pub fn param_shape(&self, types: &TypeSection) -> Option<ReturnShape> {
+        match self {
+            BlockType::TypeIdx(idx) => {
+                let ty = types.get(*idx)?;
+                Some(shape_for_types(ty.0.iter().copied()))
+            }
+            BlockType::ValType(_ty) => Some(ReturnShape::Empty),
+            BlockType::Void => Some(ReturnShape::Empty),
+        }
+    }
+
     pub fn param_size(&self, types: &TypeSection) -> Option<u32> {
         let param_size = match self {
             BlockType::TypeIdx(idx) => {
@@ -441,15 +464,102 @@ impl BlockType {
         Some(param_size)
     }
 }
+
+fn shape_for_types(values: impl IntoIterator<Item = ValType>) -> ReturnShape {
+    let mut iter = values.into_iter();
+    match (iter.next(), iter.next()) {
+        (None, _) => ReturnShape::Empty,
+        (Some(first), None) => ReturnShape::from_size(first.stack_size().u32()),
+        _ => ReturnShape::Generic,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct LoopParam {
     pub stack_top: u32,
-    pub param_size: u32,
+    meta: u32,
 }
 #[derive(Debug, Clone, Copy)]
 pub struct BlockReturn {
     pub stack_top: u32,
-    pub return_size: u32,
+    meta: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum ReturnShape {
+    Empty = 0,
+    Scalar4 = 1,
+    Scalar8 = 2,
+    Generic = 3,
+}
+
+impl ReturnShape {
+    const SHAPE_SHIFT: u32 = 30;
+    const SIZE_MASK: u32 = (1 << Self::SHAPE_SHIFT) - 1;
+
+    pub(crate) const fn from_size(size: u32) -> Self {
+        match size {
+            0 => Self::Empty,
+            4 => Self::Scalar4,
+            8 => Self::Scalar8,
+            _ => Self::Generic,
+        }
+    }
+
+    pub(crate) const fn encode_meta(size: u32, shape: ReturnShape) -> u32 {
+        (size & Self::SIZE_MASK) | ((shape as u32) << Self::SHAPE_SHIFT)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn decode_meta(meta: u32) -> Self {
+        match meta >> Self::SHAPE_SHIFT {
+            0 => Self::Empty,
+            1 => Self::Scalar4,
+            2 => Self::Scalar8,
+            _ => Self::Generic,
+        }
+    }
+
+    pub(crate) const fn size_from_meta(meta: u32) -> u32 {
+        meta & Self::SIZE_MASK
+    }
+}
+
+impl LoopParam {
+    pub(crate) const fn with_shape(stack_top: u32, param_size: u32, shape: ReturnShape) -> Self {
+        Self {
+            stack_top,
+            meta: ReturnShape::encode_meta(param_size, shape),
+        }
+    }
+
+    pub(crate) const fn param_size(self) -> u32 {
+        ReturnShape::size_from_meta(self.meta)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn param_shape(self) -> ReturnShape {
+        ReturnShape::decode_meta(self.meta)
+    }
+}
+
+impl BlockReturn {
+    pub(crate) const fn with_shape(stack_top: u32, return_size: u32, shape: ReturnShape) -> Self {
+        Self {
+            stack_top,
+            meta: ReturnShape::encode_meta(return_size, shape),
+        }
+    }
+
+    pub(crate) const fn return_size(self) -> u32 {
+        ReturnShape::size_from_meta(self.meta)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn return_shape(self) -> ReturnShape {
+        ReturnShape::decode_meta(self.meta)
+    }
 }
 #[derive(Clone, Copy)]
 pub union Operand {
@@ -551,7 +661,7 @@ impl StablePc {
         }
         let code_addr = stack.code_addr(&local_reference);
         let funcinst = runtime.get_func(code_addr);
-        let code = funcinst.code()?;
+        let code = funcinst.canonical_code()?;
         Some((code_base, code.len()))
     }
 

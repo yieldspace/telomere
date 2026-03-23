@@ -5,7 +5,7 @@ use crate::common::custom_section::NameSubSection;
 use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, LocalsData, Operand};
 use crate::parser::core::instruction_generator::InstructionGenerator;
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
-use crate::parser::core::optimizer::optimize_core_program;
+use crate::parser::core::optimizer::optimize_core_program_with_function_index;
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::validate::validate_locals;
 use crate::parser::core::InstructionParser;
@@ -27,6 +27,29 @@ use super::custom_section::CustomSectionParser;
 use super::simd_instruction::v128_const;
 use super::validate::{assert_memory, assert_valtype, validate_active_elem};
 use super::{Result, WasmParserError};
+
+fn function_return_op_and_operand(
+    result_type: &ResultType,
+) -> (crate::common::Op, Option<Operand>) {
+    let mut values = result_type.iter();
+    match (values.next(), values.next()) {
+        (None, _) => (vm::special_function_return_empty, None),
+        (Some(ty), None) => match ty.stack_size().u32() {
+            4 => (vm::special_function_return4, None),
+            8 => (vm::special_function_return8, None),
+            size => (
+                vm::special_function_return_generic,
+                Some(Operand { drop_size: size }),
+            ),
+        },
+        _ => (
+            vm::special_function_return_generic,
+            Some(Operand {
+                drop_size: result_type.iter().map(|v| v.stack_size().u32()).sum(),
+            }),
+        ),
+    }
+}
 
 fn validate_table(tables: &[TableType], idx: u32) -> Result<()> {
     if idx as usize >= tables.len() {
@@ -779,20 +802,17 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             ))?
         }
         instrs.leave_block();
-        instrs.push(Instr {
-            op: vm::special_function_return,
-        });
-        instrs.push(Instr {
-            operand: Operand {
-                drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
-            },
-        });
+        let (return_op, operand) = function_return_op_and_operand(&functype.1);
+        instrs.push(Instr { op: return_op });
+        if let Some(operand) = operand {
+            instrs.push(Instr { operand });
+        }
         instrs.seal_emitted_instruction();
         jump_resolver.evaluate(&mut instrs);
         let program = instrs.build();
         Ok(Func {
             locals: locals_data,
-            expr: optimize_core_program(program),
+            expr: optimize_core_program_with_function_index(program, funcidx.0),
         })
     }
     #[allow(clippy::too_many_arguments)]

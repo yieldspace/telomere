@@ -295,40 +295,50 @@ async fn local_address_load_superinstructions_match_unfused_semantics() {
             local.get 0
             i32.load)
           (func (export "baseline_i32_load") (param i32) (result i32)
-            local.get 0
             i32.const 0
+            local.get 0
+            i32.add
+            i32.load)
+          (func (export "fused_i32_load_offset") (param i32) (result i32)
+            local.get 0
+            i32.const 4
+            i32.add
+            i32.load)
+          (func (export "baseline_i32_load_offset") (param i32) (result i32)
+            i32.const 4
+            local.get 0
             i32.add
             i32.load)
           (func (export "fused_i32_load8_u") (param i32) (result i32)
             local.get 0
             i32.load8_u)
           (func (export "baseline_i32_load8_u") (param i32) (result i32)
-            local.get 0
             i32.const 0
+            local.get 0
             i32.add
             i32.load8_u)
           (func (export "fused_i32_load16_s") (param i32) (result i32)
             local.get 0
             i32.load16_s)
           (func (export "baseline_i32_load16_s") (param i32) (result i32)
-            local.get 0
             i32.const 0
+            local.get 0
             i32.add
             i32.load16_s)
           (func (export "fused_i32_load16_u") (param i32) (result i32)
             local.get 0
             i32.load16_u)
           (func (export "baseline_i32_load16_u") (param i32) (result i32)
-            local.get 0
             i32.const 0
+            local.get 0
             i32.add
             i32.load16_u)
           (func (export "fused_f32_load") (param i32) (result f32)
             local.get 0
             f32.load)
           (func (export "baseline_f32_load") (param i32) (result f32)
-            local.get 0
             i32.const 0
+            local.get 0
             i32.add
             f32.load))
         "#,
@@ -352,6 +362,27 @@ async fn local_address_load_superinstructions_match_unfused_semantics() {
             expected,
         );
     }
+
+    assert_success_i32(
+        call_i32(
+            &instance,
+            &store,
+            "fused_i32_load_offset",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        0xffff_1234_u32 as i32,
+    );
+    assert_success_i32(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_i32_load_offset",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        0xffff_1234_u32 as i32,
+    );
 
     let fused_bits =
         call_f32_bits(&instance, &store, "fused_f32_load", vec![WasmValue::I32(8)]).await;
@@ -384,8 +415,20 @@ async fn local_local_store_superinstructions_match_unfused_semantics() {
             local.get 1
             i32.store)
           (func (export "baseline_store32") (param i32 i32)
-            local.get 0
             i32.const 0
+            local.get 0
+            i32.add
+            local.get 1
+            i32.store)
+          (func (export "fused_store32_offset") (param i32 i32)
+            local.get 0
+            i32.const 4
+            i32.add
+            local.get 1
+            i32.store)
+          (func (export "baseline_store32_offset") (param i32 i32)
+            i32.const 4
+            local.get 0
             i32.add
             local.get 1
             i32.store)
@@ -394,8 +437,8 @@ async fn local_local_store_superinstructions_match_unfused_semantics() {
             local.get 1
             i32.store8)
           (func (export "baseline_store8") (param i32 i32)
-            local.get 0
             i32.const 0
+            local.get 0
             i32.add
             local.get 1
             i32.store8)
@@ -404,8 +447,8 @@ async fn local_local_store_superinstructions_match_unfused_semantics() {
             local.get 1
             i32.store16)
           (func (export "baseline_store16") (param i32 i32)
-            local.get 0
             i32.const 0
+            local.get 0
             i32.add
             local.get 1
             i32.store16)
@@ -482,6 +525,40 @@ async fn local_local_store_superinstructions_match_unfused_semantics() {
     assert_success_i32(
         call_i32(&instance, &store, "load16", vec![WasmValue::I32(12)]).await,
         0xcdef,
+    );
+    assert!(
+        matches!(
+            run_module_function(
+                &instance,
+                &store,
+                "fused_store32_offset",
+                &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0x1122_3344)]),
+            )
+            .await,
+            VMResult::Success(_)
+        ),
+        "fused_store32_offset must succeed"
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "load32", vec![WasmValue::I32(4)]).await,
+        0x1122_3344,
+    );
+    assert!(
+        matches!(
+            run_module_function(
+                &instance,
+                &store,
+                "baseline_store32_offset",
+                &ResultValue::new(vec![WasmValue::I32(8), WasmValue::I32(0x5566_7788)]),
+            )
+            .await,
+            VMResult::Success(_)
+        ),
+        "baseline_store32_offset must succeed"
+    );
+    assert_success_i32(
+        call_i32(&instance, &store, "load32", vec![WasmValue::I32(12)]).await,
+        0x5566_7788,
     );
 }
 

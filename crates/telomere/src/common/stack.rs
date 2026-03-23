@@ -13,7 +13,7 @@ use super::{
         FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId, MemoryHandle,
         SharedMemoryId,
     },
-    Instr, StablePc, StoreInner,
+    Instr, ReturnShape, StablePc, StoreInner,
 };
 #[inline(always)]
 fn trusted_write_u32(dst: &mut [u8], value: u32) {
@@ -205,7 +205,7 @@ impl CallFrameCache {
         let (memory0_kind, memory0_raw) = CachedMemoryKind::from_memory_handle(memory0);
         Self {
             code_addr,
-            code_base: func.code_pointer().unwrap_or(std::ptr::null()),
+            code_base: func.canonical_code_pointer().unwrap_or(std::ptr::null()),
             instance: func.instance,
             memory0_kind,
             memory0_raw,
@@ -530,7 +530,7 @@ impl Stack {
         self.replace_top_u64(if cond == 0 { rhs } else { lhs });
     }
     #[inline(always)]
-    fn block_return4(&mut self, dst: usize) {
+    fn move_top_scalar4_to(&mut self, dst: usize) {
         let src = self.top - 4;
         if src == dst {
             self.top = dst + 4;
@@ -545,7 +545,7 @@ impl Stack {
         self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
     }
     #[inline(always)]
-    fn block_return8(&mut self, dst: usize) {
+    fn move_top_scalar8_to(&mut self, dst: usize) {
         let src = self.top - 8;
         if src == dst {
             self.top = dst + 8;
@@ -561,11 +561,32 @@ impl Stack {
     }
     #[cold]
     #[inline(never)]
-    fn block_return_generic(&mut self, dst: usize, return_size: usize) {
+    fn move_top_generic_to(&mut self, dst: usize, return_size: usize) {
+        let src = self.top - return_size;
+        if src == dst {
+            self.cache = OperandCache::EMPTY;
+            self.top = dst + return_size;
+            return;
+        }
         self.flush_cached_operands();
-        self.memory
-            .copy_within(self.top - return_size..self.top, dst);
+        self.memory.copy_within(src..self.top, dst);
         self.top = dst + return_size;
+    }
+    #[inline(always)]
+    fn move_top_value_to_dst(&mut self, dst: usize, size: usize, shape: ReturnShape) {
+        match shape {
+            ReturnShape::Empty => {
+                self.cache = OperandCache::EMPTY;
+                self.top = dst;
+            }
+            ReturnShape::Scalar4 => self.move_top_scalar4_to(dst),
+            ReturnShape::Scalar8 => self.move_top_scalar8_to(dst),
+            ReturnShape::Generic => self.move_top_generic_to(dst, size),
+        }
+    }
+    #[inline(always)]
+    fn block_return_dst(reference: &LocalReference, stack_top: usize) -> usize {
+        reference.local_top + reference.local_size as usize + stack_top
     }
     pub fn access_locals(&mut self, reference: &LocalReference) -> &mut [u8] {
         self.flush_cached_operands();
@@ -807,11 +828,121 @@ impl Stack {
             return_pc.resolve(runtime, self, prev_local_reference),
         )
     }
+
+    pub fn function_return_empty(
+        &mut self,
+        reference: &LocalReference,
+        runtime: &StoreInner,
+    ) -> (LocalReference, *const Instr) {
+        self.flush_cached_operands();
+        let CallStackInfo {
+            return_pc,
+            prev_local_reference_top,
+            prev_local_reference_size,
+            ..
+        } = self.call_stack_info(reference);
+        let prev_local_reference = LocalReference {
+            local_size: prev_local_reference_size,
+            local_top: prev_local_reference_top,
+        };
+        self.cache = OperandCache::EMPTY;
+        self.top = reference.local_top;
+        (
+            prev_local_reference,
+            return_pc.resolve(runtime, self, prev_local_reference),
+        )
+    }
+
+    pub fn function_return4(
+        &mut self,
+        reference: &LocalReference,
+        runtime: &StoreInner,
+    ) -> (LocalReference, *const Instr) {
+        let CallStackInfo {
+            return_pc,
+            prev_local_reference_top,
+            prev_local_reference_size,
+            ..
+        } = self.call_stack_info(reference);
+        let prev_local_reference = LocalReference {
+            local_size: prev_local_reference_size,
+            local_top: prev_local_reference_top,
+        };
+        let value = match self.cache.width {
+            CachedOperandWidth::Four => self.cache.bits as u32,
+            CachedOperandWidth::None => trusted_read_u32(&self.memory[self.top - 4..self.top]),
+            CachedOperandWidth::Eight => unreachable!("validated 4-byte function return"),
+        };
+        self.top = reference.local_top + 4;
+        self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
+        (
+            prev_local_reference,
+            return_pc.resolve(runtime, self, prev_local_reference),
+        )
+    }
+
+    pub fn function_return8(
+        &mut self,
+        reference: &LocalReference,
+        runtime: &StoreInner,
+    ) -> (LocalReference, *const Instr) {
+        let CallStackInfo {
+            return_pc,
+            prev_local_reference_top,
+            prev_local_reference_size,
+            ..
+        } = self.call_stack_info(reference);
+        let prev_local_reference = LocalReference {
+            local_size: prev_local_reference_size,
+            local_top: prev_local_reference_top,
+        };
+        let value = match self.cache.width {
+            CachedOperandWidth::Eight => self.cache.bits,
+            CachedOperandWidth::None => trusted_read_u64(&self.memory[self.top - 8..self.top]),
+            CachedOperandWidth::Four => unreachable!("validated 8-byte function return"),
+        };
+        self.top = reference.local_top + 8;
+        self.set_cached_operand(CachedOperandWidth::Eight, value);
+        (
+            prev_local_reference,
+            return_pc.resolve(runtime, self, prev_local_reference),
+        )
+    }
+
+    pub fn function_return_shaped(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+        shape: ReturnShape,
+        runtime: &StoreInner,
+    ) -> (LocalReference, *const Instr) {
+        match shape {
+            ReturnShape::Empty => self.function_return_empty(reference, runtime),
+            ReturnShape::Scalar4 => self.function_return4(reference, runtime),
+            ReturnShape::Scalar8 => self.function_return8(reference, runtime),
+            ReturnShape::Generic => self.function_return(reference, return_size, runtime),
+        }
+    }
     /// Like `function_return` but assumes the return data is already written at `local_top`.
     pub fn function_return_in_place(
         &mut self,
         reference: &LocalReference,
         return_size: usize,
+        runtime: &StoreInner,
+    ) -> (LocalReference, *const Instr) {
+        self.function_return_in_place_shaped(
+            reference,
+            return_size,
+            ReturnShape::from_size(return_size as u32),
+            runtime,
+        )
+    }
+
+    pub fn function_return_in_place_shaped(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+        _shape: ReturnShape,
         runtime: &StoreInner,
     ) -> (LocalReference, *const Instr) {
         self.flush_cached_operands();
@@ -826,6 +957,7 @@ impl Stack {
             local_size: prev_local_reference_size,
             local_top: prev_local_reference_top,
         };
+        self.cache = OperandCache::EMPTY;
         self.top = reference.local_top + return_size;
         (
             prev_local_reference,
@@ -836,6 +968,7 @@ impl Stack {
         &mut self,
         reference: &LocalReference,
         param_size: usize,
+        param_shape: ReturnShape,
         local_size: usize,
         frame: CallFrameCache,
     ) -> VMResult<LocalReference> {
@@ -847,10 +980,7 @@ impl Stack {
             prev_local_reference_size,
             ..
         } = self.call_stack_info(reference);
-        self.memory
-            .copy_within(self.top - param_size..self.top, reference.local_top);
-        self.top = reference.local_top;
-        vm_try!(self.add_top(param_size));
+        self.move_top_value_to_dst(reference.local_top, param_size, param_shape);
         vm_try!(self.add_top(local_size));
         vm_try!(self.zero_new_locals(reference.local_top + param_size, local_size));
 
@@ -877,15 +1007,48 @@ impl Stack {
         stack_top: usize,
         return_size: usize,
     ) {
-        let dst = reference.local_top + reference.local_size as usize + stack_top;
-        match return_size {
-            0 => {
-                self.cache = OperandCache::EMPTY;
-                self.top = dst;
-            }
-            4 => self.block_return4(dst),
-            8 => self.block_return8(dst),
-            _ => self.block_return_generic(dst, return_size),
+        match ReturnShape::from_size(return_size as u32) {
+            ReturnShape::Empty => self.block_return_empty(reference, stack_top),
+            ReturnShape::Scalar4 => self.block_return4(reference, stack_top),
+            ReturnShape::Scalar8 => self.block_return8(reference, stack_top),
+            ReturnShape::Generic => self.block_return_generic(reference, stack_top, return_size),
+        }
+    }
+
+    pub fn block_return_empty(&mut self, reference: &LocalReference, stack_top: usize) {
+        self.cache = OperandCache::EMPTY;
+        self.top = Self::block_return_dst(reference, stack_top);
+    }
+
+    pub fn block_return4(&mut self, reference: &LocalReference, stack_top: usize) {
+        self.move_top_scalar4_to(Self::block_return_dst(reference, stack_top));
+    }
+
+    pub fn block_return8(&mut self, reference: &LocalReference, stack_top: usize) {
+        self.move_top_scalar8_to(Self::block_return_dst(reference, stack_top));
+    }
+
+    pub fn block_return_generic(
+        &mut self,
+        reference: &LocalReference,
+        stack_top: usize,
+        return_size: usize,
+    ) {
+        self.move_top_generic_to(Self::block_return_dst(reference, stack_top), return_size);
+    }
+
+    pub fn block_return_shaped(
+        &mut self,
+        reference: &LocalReference,
+        stack_top: usize,
+        return_size: usize,
+        shape: ReturnShape,
+    ) {
+        match shape {
+            ReturnShape::Empty => self.block_return_empty(reference, stack_top),
+            ReturnShape::Scalar4 => self.block_return4(reference, stack_top),
+            ReturnShape::Scalar8 => self.block_return8(reference, stack_top),
+            ReturnShape::Generic => self.block_return_generic(reference, stack_top, return_size),
         }
     }
 }
@@ -1013,7 +1176,7 @@ mod tests {
         );
 
         stack.push_u32(0xaabb_ccdd).unwrap();
-        let (restored, return_pc) = stack.function_return(&reference, 4, &runtime);
+        let (restored, return_pc) = stack.function_return4(&reference, &runtime);
         let restored_local_top = restored.local_top;
         let restored_local_size = restored.local_size;
         assert_eq!(restored_local_top, 0);
@@ -1058,6 +1221,37 @@ mod tests {
     }
 
     #[test]
+    fn function_return_fast_path_keeps_u32_result_cached() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let prev = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+
+        stack.push_u32(0x0102_0304).unwrap();
+        let reference = stack
+            .function_call(
+                4,
+                8,
+                frame(CachedMemoryKind::Local, 9),
+                prev,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+
+        stack.push_u32(0xaabb_ccdd).unwrap();
+        let (restored, return_pc) = stack.function_return(&reference, 4, &runtime);
+        let restored_local_top = restored.local_top;
+        let restored_local_size = restored.local_size;
+        assert_eq!(restored_local_top, 0);
+        assert_eq!(restored_local_size, 0);
+        assert!(return_pc.is_null());
+        assert_eq!(stack.pop_u32(), 0xaabb_ccdd);
+    }
+
+    #[test]
     fn function_return_call_reuses_frame_slot_and_zeroes_new_locals() {
         let mut stack = Stack::new(256);
         let runtime = StoreInner::new();
@@ -1091,7 +1285,13 @@ mod tests {
         stack.push_u32(0xa1a2_a3a4).unwrap();
         stack.push_u32(0xb1b2_b3b4).unwrap();
         let tail = stack
-            .function_return_call(&callee, 8, 8, frame(CachedMemoryKind::Local, 3))
+            .function_return_call(
+                &callee,
+                8,
+                ReturnShape::Generic,
+                8,
+                frame(CachedMemoryKind::Local, 3),
+            )
             .unwrap();
 
         let tail_local_top = tail.local_top;
@@ -1141,7 +1341,7 @@ mod tests {
         stack.push_u32(0x3333_4444).unwrap();
         assert_eq!(frame_top + 8, stack.top);
 
-        stack.block_return(&reference, 4, 4);
+        stack.block_return4(&reference, 4);
         stack.flush_cached_operands();
 
         assert_eq!(stack.top, frame_top + 8);

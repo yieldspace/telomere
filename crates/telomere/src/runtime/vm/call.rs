@@ -39,10 +39,13 @@ unsafe fn internal_op_call(
     let is_host_func = funcinst.is_host_func();
     if is_host_func {
         if is_return_call {
-            let local_reference =
-                vm_try!(ctx
-                    .stack
-                    .function_return_call(&ctx.local_reference, param_size, 0, frame));
+            let local_reference = vm_try!(ctx.stack.function_return_call(
+                &ctx.local_reference,
+                param_size,
+                funcinst.execution.param_shape,
+                0,
+                frame,
+            ));
             ctx.set_local_reference(local_reference);
         } else {
             let local_reference = vm_try!(ctx.stack.function_call(
@@ -65,6 +68,7 @@ unsafe fn internal_op_call(
             let local_reference = vm_try!(ctx.stack.function_return_call(
                 &ctx.local_reference,
                 param_size,
+                funcinst.execution.param_shape,
                 locals_size,
                 frame,
             ));
@@ -82,7 +86,7 @@ unsafe fn internal_op_call(
         }
 
         let ptr = funcinst
-            .code_pointer()
+            .canonical_code_pointer()
             .expect("wasm function must expose a code pointer");
         debug_assert!(!is_host_func);
         VMResult::Success(CallOutcome::Immediate(ptr))

@@ -4,7 +4,7 @@ use super::{
     memory::{AtomicRmwOp, LocalMemoryObject, SharedMemoryObject},
     object_ref::ObjectRef,
     AsyncHostFunction, Data, Elem, ExportSection, FuncType, FuncTypeIdentity, GlobalType,
-    HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
+    HostFunction, Instr, LocalsData, MemType, ReturnShape, Stack, TableType, TypeIdx, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -132,8 +132,10 @@ pub(crate) struct FunctionExecutionMetadata {
     pub typeidx: TypeIdx,
     pub type_identity: FuncTypeIdentity,
     pub param_stack_bytes: u32,
+    pub param_shape: ReturnShape,
     #[allow(dead_code)]
     pub result_stack_bytes: u32,
+    pub result_shape: ReturnShape,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -158,6 +160,7 @@ pub(crate) enum FunctionBody {
     Wasm {
         locals: LocalsData,
         code: Arc<[Instr]>,
+        derived_code: Option<Arc<[Instr]>>,
         metadata: WasmExecutionMetadata,
     },
     Host(HostFunction),
@@ -170,11 +173,16 @@ impl fmt::Debug for FunctionBody {
             Self::Wasm {
                 locals,
                 code,
+                derived_code,
                 metadata,
             } => f
                 .debug_struct("Wasm")
                 .field("locals", locals)
                 .field("code_len", &code.len())
+                .field(
+                    "derived_code_len",
+                    &derived_code.as_ref().map(|code| code.len()),
+                )
                 .field("locals_byte_size", &metadata.locals_byte_size)
                 .finish(),
             Self::Host(_) => f.write_str("Host(..)"),
@@ -210,14 +218,40 @@ impl FunctionInstanceData {
         }
     }
 
-    pub(crate) fn code(&self) -> Option<&[Instr]> {
+    pub(crate) fn canonical_code(&self) -> Option<&[Instr]> {
         match &self.body {
             FunctionBody::Wasm { code, .. } => Some(code.as_ref()),
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
         }
     }
 
+    pub(crate) fn code(&self) -> Option<&[Instr]> {
+        match &self.body {
+            FunctionBody::Wasm {
+                code, derived_code, ..
+            } => Some(derived_code.as_deref().unwrap_or_else(|| code.as_ref())),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
+        }
+    }
+
     pub fn code_pointer(&self) -> Option<*const Instr> {
+        match &self.body {
+            FunctionBody::Wasm {
+                metadata,
+                derived_code,
+                ..
+            } => Some(
+                derived_code
+                    .as_ref()
+                    .map_or(metadata.code_base_addr as *const Instr, |code| {
+                        code.as_ptr()
+                    }),
+            ),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
+        }
+    }
+
+    pub(crate) fn canonical_code_pointer(&self) -> Option<*const Instr> {
         match &self.body {
             FunctionBody::Wasm { metadata, .. } => Some(metadata.code_base_addr as *const Instr),
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
@@ -257,6 +291,21 @@ impl FunctionInstanceData {
     pub(crate) fn replace_async_host_code_pointer(&mut self, fp: AsyncHostFunction) {
         self.execution.kind = FunctionKind::AsyncHost;
         self.body = FunctionBody::AsyncHost(fp);
+    }
+
+    pub(crate) fn set_derived_code(&mut self, code: Arc<[Instr]>) {
+        match &mut self.body {
+            FunctionBody::Wasm { derived_code, .. } => *derived_code = Some(code),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => {
+                unreachable!("derived code is only valid for wasm functions")
+            }
+        }
+    }
+
+    pub(crate) fn clear_derived_code(&mut self) {
+        if let FunctionBody::Wasm { derived_code, .. } = &mut self.body {
+            *derived_code = None;
+        }
     }
 }
 
@@ -1731,10 +1780,14 @@ impl StoreState {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalMemoryObject, MemoryHandle, SharedMemoryId, SharedMemoryObject, Stack, Store,
-        StoreInner, StoreState, VMResult,
+        FuncType, FunctionBody, FunctionExecutionMetadata, FunctionInstanceData, FunctionKind,
+        InstanceId, Instr, LocalMemoryObject, LocalsData, MemoryHandle, ReturnShape,
+        SharedMemoryId, SharedMemoryObject, Stack, Store, StoreInner, StoreState, TypeIdx,
+        VMResult, WasmExecutionMetadata,
     };
     use crate::common::PAGE_SIZE;
+    use crate::runtime::vm;
+    use std::sync::Arc;
 
     fn local_id(handle: MemoryHandle) -> super::LocalMemoryId {
         match handle {
@@ -1770,6 +1823,48 @@ mod tests {
             err.to_string(),
             "lock_runtime is unsupported while the same store execution is already active on this thread"
         );
+    }
+
+    #[test]
+    fn wasm_function_prefers_derived_code_without_losing_canonical_code() {
+        let func_type = FuncType::new(vec![], vec![]);
+        let canonical: Arc<[Instr]> = vec![Instr { op: vm::op_end }].into();
+        let derived: Arc<[Instr]> = vec![Instr { op: vm::op_br }].into();
+        let mut func = FunctionInstanceData {
+            instance: InstanceId::from_index(0),
+            funcidx: 0,
+            execution: FunctionExecutionMetadata {
+                kind: FunctionKind::Wasm,
+                typeidx: TypeIdx(0),
+                type_identity: func_type.identity(),
+                param_stack_bytes: 0,
+                param_shape: ReturnShape::Empty,
+                result_stack_bytes: 0,
+                result_shape: ReturnShape::Empty,
+            },
+            body: FunctionBody::Wasm {
+                locals: LocalsData::default(),
+                code: canonical.clone(),
+                derived_code: None,
+                metadata: WasmExecutionMetadata {
+                    code_base_addr: canonical.as_ptr() as usize,
+                    locals_byte_size: 0,
+                },
+            },
+        };
+
+        assert_eq!(func.code().unwrap().as_ptr(), canonical.as_ptr());
+        assert_eq!(func.canonical_code().unwrap().as_ptr(), canonical.as_ptr());
+        assert_eq!(func.code_pointer().unwrap(), canonical.as_ptr());
+
+        func.set_derived_code(derived.clone());
+        assert_eq!(func.code().unwrap().as_ptr(), derived.as_ptr());
+        assert_eq!(func.canonical_code().unwrap().as_ptr(), canonical.as_ptr());
+        assert_eq!(func.code_pointer().unwrap(), derived.as_ptr());
+
+        func.clear_derived_code();
+        assert_eq!(func.code().unwrap().as_ptr(), canonical.as_ptr());
+        assert_eq!(func.code_pointer().unwrap(), canonical.as_ptr());
     }
 
     #[test]

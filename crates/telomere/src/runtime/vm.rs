@@ -18,7 +18,7 @@ mod tables;
 use crate::{
     common::{
         execute_elem_init_const_expr, CallFrameCache, ElemInit, ExecuteContext, ExportDesc,
-        InstanceHandle, Instr, LocalReference, MemArg, ObjectRef, ResultType, ResultValue,
+        InstanceHandle, Instr, LocalReference, MemArg, ObjectRef, Op, ResultType, ResultValue,
         StablePc, Stack, VMResult, ValType, WasmValue, TABLE_UNINITIALIZED,
     },
     runtime::{
@@ -66,6 +66,38 @@ fn wasm_i64_shr_s(lhs: i64, rhs: i64) -> i64 {
 #[inline(always)]
 fn wasm_i64_shr_u(lhs: u64, rhs: u64) -> u64 {
     lhs.wrapping_shr(wasm_shift_mask64(rhs as u32))
+}
+
+#[inline(always)]
+fn stable_dispatch_hash(function_index: u32, instruction_ordinal: u32) -> usize {
+    let mut x = ((function_index as u64) << 32) | u64::from(instruction_ordinal);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    x ^= x >> 33;
+    x as usize
+}
+
+pub(crate) fn select_replicated_op(base: Op, function_index: u32, instruction_ordinal: u32) -> Op {
+    let hash = stable_dispatch_hash(function_index, instruction_ordinal);
+    if std::ptr::fn_addr_eq(base, locals::op_local_get4 as Op) {
+        return [
+            locals::op_local_get4_r0,
+            locals::op_local_get4_r1,
+            locals::op_local_get4_r2,
+            locals::op_local_get4_r3,
+        ][hash & 3];
+    }
+    if std::ptr::fn_addr_eq(base, control::op_br_if as Op) {
+        return [
+            control::op_br_if_r0,
+            control::op_br_if_r1,
+            control::op_br_if_r2,
+            control::op_br_if_r3,
+        ][hash & 3];
+    }
+    base
 }
 
 pub(crate) enum StoreBytes {
