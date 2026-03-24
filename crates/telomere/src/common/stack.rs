@@ -88,23 +88,14 @@ impl CachedOperandWidth {
 #[derive(Clone, Copy, Debug)]
 struct OperandCache {
     width: CachedOperandWidth,
-    len: u8,
-    lower_bits: u64,
-    top_bits: u64,
+    bits: u64,
 }
 
 impl OperandCache {
     const EMPTY: Self = Self {
         width: CachedOperandWidth::None,
-        len: 0,
-        lower_bits: 0,
-        top_bits: 0,
+        bits: 0,
     };
-
-    #[inline(always)]
-    const fn cached_bytes(self) -> usize {
-        self.width.bytes() * self.len as usize
-    }
 
     #[inline(always)]
     fn clear(&mut self) {
@@ -239,61 +230,30 @@ impl Stack {
     }
     #[inline(always)]
     fn committed_top(&self) -> usize {
-        self.top - self.cache.cached_bytes()
+        self.top - self.cache.width.bytes()
     }
     #[inline(always)]
     fn flush_cached_operands(&mut self) {
-        match (self.cache.width, self.cache.len) {
-            (CachedOperandWidth::None, 0) => {}
-            (CachedOperandWidth::Four, 1) => {
+        match self.cache.width {
+            CachedOperandWidth::None => {}
+            CachedOperandWidth::Four => {
                 let start = self.top - 4;
-                trusted_write_u32(
-                    &mut self.memory[start..self.top],
-                    self.cache.top_bits as u32,
-                );
+                trusted_write_u32(&mut self.memory[start..self.top], self.cache.bits as u32);
             }
-            (CachedOperandWidth::Four, 2) => {
-                let lower_start = self.top - 8;
-                trusted_write_u32(
-                    &mut self.memory[lower_start..lower_start + 4],
-                    self.cache.lower_bits as u32,
-                );
-                trusted_write_u32(
-                    &mut self.memory[lower_start + 4..self.top],
-                    self.cache.top_bits as u32,
-                );
-            }
-            (CachedOperandWidth::Eight, 1) => {
+            CachedOperandWidth::Eight => {
                 let start = self.top - 8;
-                trusted_write_u64(&mut self.memory[start..self.top], self.cache.top_bits);
+                trusted_write_u64(&mut self.memory[start..self.top], self.cache.bits);
             }
-            (CachedOperandWidth::Eight, 2) => {
-                let lower_start = self.top - 16;
-                trusted_write_u64(
-                    &mut self.memory[lower_start..lower_start + 8],
-                    self.cache.lower_bits,
-                );
-                trusted_write_u64(
-                    &mut self.memory[lower_start + 8..self.top],
-                    self.cache.top_bits,
-                );
-            }
-            _ => unreachable!("invalid operand cache state"),
         }
         self.cache.clear();
     }
     #[inline(always)]
     fn set_cached_operand(&mut self, width: CachedOperandWidth, bits: u64) {
-        self.cache = OperandCache {
-            width,
-            len: 1,
-            lower_bits: 0,
-            top_bits: bits,
-        };
+        self.cache = OperandCache { width, bits };
     }
     #[inline(always)]
     fn peek_cached_operand(&self, width: CachedOperandWidth) -> Option<u64> {
-        (self.cache.width == width && self.cache.len > 0).then_some(self.cache.top_bits)
+        (self.cache.width == width).then_some(self.cache.bits)
     }
     #[inline(always)]
     fn checked_new_top(&self, n: usize) -> VMResult<usize> {
@@ -308,33 +268,21 @@ impl Stack {
     #[inline(always)]
     fn push_cached_u32(&mut self, v: u32) -> VMResult<()> {
         let new_top = vm_try!(self.checked_new_top(4));
-        if !(self.cache.width == CachedOperandWidth::Four && self.cache.len < 2) {
+        if self.cache.width != CachedOperandWidth::None {
             self.flush_cached_operands();
         }
         self.top = new_top;
-        if self.cache.width == CachedOperandWidth::Four && self.cache.len == 1 {
-            self.cache.lower_bits = self.cache.top_bits;
-            self.cache.top_bits = u64::from(v);
-            self.cache.len = 2;
-        } else {
-            self.set_cached_operand(CachedOperandWidth::Four, u64::from(v));
-        }
+        self.set_cached_operand(CachedOperandWidth::Four, u64::from(v));
         VMResult::Success(())
     }
     #[inline(always)]
     fn push_cached_u64(&mut self, v: u64) -> VMResult<()> {
         let new_top = vm_try!(self.checked_new_top(8));
-        if !(self.cache.width == CachedOperandWidth::Eight && self.cache.len < 2) {
+        if self.cache.width != CachedOperandWidth::None {
             self.flush_cached_operands();
         }
         self.top = new_top;
-        if self.cache.width == CachedOperandWidth::Eight && self.cache.len == 1 {
-            self.cache.lower_bits = self.cache.top_bits;
-            self.cache.top_bits = v;
-            self.cache.len = 2;
-        } else {
-            self.set_cached_operand(CachedOperandWidth::Eight, v);
-        }
+        self.set_cached_operand(CachedOperandWidth::Eight, v);
         VMResult::Success(())
     }
     fn add_top(&mut self, n: usize) -> VMResult<()> {
@@ -393,18 +341,10 @@ impl Stack {
     }
     #[inline(always)]
     pub fn pop_u32(&mut self) -> u32 {
-        if self.cache.width == CachedOperandWidth::Four && self.cache.len > 0 {
-            let bits = self.cache.top_bits as u32;
+        if self.cache.width == CachedOperandWidth::Four {
+            let bits = self.cache.bits as u32;
             self.top -= 4;
-            match self.cache.len {
-                1 => self.cache.clear(),
-                2 => {
-                    self.cache.top_bits = self.cache.lower_bits;
-                    self.cache.lower_bits = 0;
-                    self.cache.len = 1;
-                }
-                _ => unreachable!("invalid cached u32 depth"),
-            }
+            self.cache.clear();
             return bits;
         }
         self.sub_top(4);
@@ -433,18 +373,10 @@ impl Stack {
     }
     #[inline(always)]
     pub fn pop_u64(&mut self) -> u64 {
-        if self.cache.width == CachedOperandWidth::Eight && self.cache.len > 0 {
-            let bits = self.cache.top_bits;
+        if self.cache.width == CachedOperandWidth::Eight {
+            let bits = self.cache.bits;
             self.top -= 8;
-            match self.cache.len {
-                1 => self.cache.clear(),
-                2 => {
-                    self.cache.top_bits = self.cache.lower_bits;
-                    self.cache.lower_bits = 0;
-                    self.cache.len = 1;
-                }
-                _ => unreachable!("invalid cached u64 depth"),
-            }
+            self.cache.clear();
             return bits;
         }
         self.pop_u64_slow()
@@ -499,8 +431,8 @@ impl Stack {
             self.cache.width,
             CachedOperandWidth::None | CachedOperandWidth::Four
         ));
-        if self.cache.width == CachedOperandWidth::Four && self.cache.len > 0 {
-            self.cache.top_bits = u64::from(value);
+        if self.cache.width == CachedOperandWidth::Four {
+            self.cache.bits = u64::from(value);
         } else {
             self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
         }
@@ -512,8 +444,8 @@ impl Stack {
             self.cache.width,
             CachedOperandWidth::None | CachedOperandWidth::Eight
         ));
-        if self.cache.width == CachedOperandWidth::Eight && self.cache.len > 0 {
-            self.cache.top_bits = value;
+        if self.cache.width == CachedOperandWidth::Eight {
+            self.cache.bits = value;
         } else {
             self.set_cached_operand(CachedOperandWidth::Eight, value);
         }
@@ -525,62 +457,45 @@ impl Stack {
             self.cache.width,
             CachedOperandWidth::None | CachedOperandWidth::Eight
         ));
-        debug_assert!(self.cache.len <= 1);
         self.top -= 4;
         self.set_cached_operand(CachedOperandWidth::Four, u64::from(value));
     }
     #[inline(always)]
     pub fn pop2_u32(&mut self) -> (u32, u32) {
-        match (self.cache.width, self.cache.len) {
-            (CachedOperandWidth::Four, 2) => {
-                let lhs = self.cache.lower_bits as u32;
-                let rhs = self.cache.top_bits as u32;
-                self.cache.clear();
-                self.top -= 4;
-                (lhs, rhs)
-            }
-            (CachedOperandWidth::Four, 1) => {
-                let rhs = self.cache.top_bits as u32;
+        match self.cache.width {
+            CachedOperandWidth::Four => {
+                let rhs = self.cache.bits as u32;
                 self.cache.clear();
                 self.top -= 4;
                 let lhs = trusted_read_u32(&self.memory[self.top - 4..self.top]);
                 (lhs, rhs)
             }
-            (CachedOperandWidth::None, 0) => {
+            CachedOperandWidth::None => {
                 let rhs = trusted_read_u32(&self.memory[self.top - 4..self.top]);
                 let lhs = trusted_read_u32(&self.memory[self.top - 8..self.top - 4]);
                 self.top -= 4;
                 (lhs, rhs)
             }
-            (CachedOperandWidth::Eight, _) => unreachable!("validated i32 pair expected"),
-            _ => unreachable!("invalid cached u32 pair state"),
+            CachedOperandWidth::Eight => unreachable!("validated i32 pair expected"),
         }
     }
     #[inline(always)]
     pub fn pop2_u64(&mut self) -> (u64, u64) {
-        match (self.cache.width, self.cache.len) {
-            (CachedOperandWidth::Eight, 2) => {
-                let lhs = self.cache.lower_bits;
-                let rhs = self.cache.top_bits;
-                self.cache.clear();
-                self.top -= 8;
-                (lhs, rhs)
-            }
-            (CachedOperandWidth::Eight, 1) => {
-                let rhs = self.cache.top_bits;
+        match self.cache.width {
+            CachedOperandWidth::Eight => {
+                let rhs = self.cache.bits;
                 self.cache.clear();
                 self.top -= 8;
                 let lhs = trusted_read_u64(&self.memory[self.top - 8..self.top]);
                 (lhs, rhs)
             }
-            (CachedOperandWidth::None, 0) => {
+            CachedOperandWidth::None => {
                 let rhs = trusted_read_u64(&self.memory[self.top - 8..self.top]);
                 let lhs = trusted_read_u64(&self.memory[self.top - 16..self.top - 8]);
                 self.top -= 8;
                 (lhs, rhs)
             }
-            (CachedOperandWidth::Four, _) => unreachable!("validated i64 pair expected"),
-            _ => unreachable!("invalid cached u64 pair state"),
+            CachedOperandWidth::Four => unreachable!("validated i64 pair expected"),
         }
     }
     #[inline(always)]
@@ -601,7 +516,7 @@ impl Stack {
             return;
         }
         let value = match self.cache.width {
-            CachedOperandWidth::Four => self.cache.top_bits as u32,
+            CachedOperandWidth::Four => self.cache.bits as u32,
             CachedOperandWidth::None => trusted_read_u32(&self.memory[src..src + 4]),
             CachedOperandWidth::Eight => unreachable!("validated 4-byte block return"),
         };
@@ -616,7 +531,7 @@ impl Stack {
             return;
         }
         let value = match self.cache.width {
-            CachedOperandWidth::Eight => self.cache.top_bits,
+            CachedOperandWidth::Eight => self.cache.bits,
             CachedOperandWidth::None => trusted_read_u64(&self.memory[src..src + 8]),
             CachedOperandWidth::Four => unreachable!("validated 8-byte block return"),
         };
@@ -988,7 +903,7 @@ impl Stack {
         let prev_local_reference = self.previous_local_reference(reference);
         let return_pc = self.return_pc(reference);
         let value = match self.cache.width {
-            CachedOperandWidth::Four => self.cache.top_bits as u32,
+            CachedOperandWidth::Four => self.cache.bits as u32,
             CachedOperandWidth::None => trusted_read_u32(&self.memory[self.top - 4..self.top]),
             CachedOperandWidth::Eight => unreachable!("validated 4-byte function return"),
         };
@@ -1024,7 +939,7 @@ impl Stack {
         let prev_local_reference = self.previous_local_reference(reference);
         let return_pc = self.return_pc(reference);
         let value = match self.cache.width {
-            CachedOperandWidth::Eight => self.cache.top_bits,
+            CachedOperandWidth::Eight => self.cache.bits,
             CachedOperandWidth::None => trusted_read_u64(&self.memory[self.top - 8..self.top]),
             CachedOperandWidth::Four => unreachable!("validated 8-byte function return"),
         };
@@ -2174,23 +2089,20 @@ mod tests {
         let mut stack = Stack::new(64);
         stack.push_u64(0x1122_3344_5566_7788).unwrap();
         assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
-        assert_eq!(stack.cache.len, 1);
         assert_eq!(stack.committed_top(), 0);
         assert_eq!(stack.peek_top_u64(), 0x1122_3344_5566_7788);
 
         stack.push_u64(0x99aa_bbcc_ddee_ff00).unwrap();
 
         assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
-        assert_eq!(stack.cache.len, 2);
-        assert_eq!(stack.committed_top(), 0);
-        assert_eq!(trusted_read_u64(&stack.memory[0..8]), 0);
+        assert_eq!(stack.committed_top(), 8);
+        assert_eq!(trusted_read_u64(&stack.memory[0..8]), 0x1122_3344_5566_7788);
+        assert_eq!(stack.peek_top_u64(), 0x99aa_bbcc_ddee_ff00);
 
         stack.push_u64(0x0102_0304_0506_0708).unwrap();
 
         assert_eq!(stack.cache.width, CachedOperandWidth::Eight);
-        assert_eq!(stack.cache.len, 1);
         assert_eq!(stack.committed_top(), 16);
-        assert_eq!(trusted_read_u64(&stack.memory[0..8]), 0x1122_3344_5566_7788);
         assert_eq!(
             trusted_read_u64(&stack.memory[8..16]),
             0x99aa_bbcc_ddee_ff00
@@ -2252,6 +2164,30 @@ mod tests {
         assert_eq!(stack.cache.width, CachedOperandWidth::Four);
         assert_eq!(stack.peek_top_u32(), 30);
         assert_eq!(stack.pop_u32(), 30);
+    }
+
+    #[test]
+    fn pop2_u64_reads_cached_top_and_committed_lower_slot() {
+        let mut stack = Stack::new(64);
+        stack.push_u64(0x1111_2222_3333_4444).unwrap();
+        stack.push_u64(0x5555_6666_7777_8888).unwrap();
+
+        let (lhs, rhs) = stack.pop2_u64();
+        assert_eq!((lhs, rhs), (0x1111_2222_3333_4444, 0x5555_6666_7777_8888));
+        assert_eq!(stack.top, 8);
+        assert_eq!(stack.cache.width, CachedOperandWidth::None);
+    }
+
+    #[test]
+    fn select_top_u32_works_with_cached_top_and_committed_lower_slot() {
+        let mut stack = Stack::new(64);
+        stack.push_u32(10).unwrap();
+        stack.push_u32(20).unwrap();
+
+        stack.select_top_u32(1);
+        assert_eq!(stack.cache.width, CachedOperandWidth::Four);
+        assert_eq!(stack.peek_top_u32(), 10);
+        assert_eq!(stack.pop_u32(), 10);
     }
 
     #[test]
