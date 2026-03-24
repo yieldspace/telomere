@@ -1,6 +1,7 @@
 use super::base::WasmBaseParser;
 use super::instruction_generator::InstructionGenerator;
 use super::jump_resolver::JumpResolver;
+use super::optimizer::InstructionMeta;
 use super::type_checker::TypeChecker;
 use super::validate::*;
 use super::values;
@@ -313,11 +314,31 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
     fn parse_atomic_memarg(&mut self, natural_align_log2: u32) -> Result<(usize, u32, MemArg)> {
         values::parse_memarg_exact(self.reader, natural_align_log2)
     }
+
+    fn push_instruction_meta(
+        meta: &mut Vec<InstructionMeta>,
+        start: usize,
+        end: usize,
+        stack_before: crate::parser::core::type_checker::StackSnapshot,
+        stack_after: crate::parser::core::type_checker::StackSnapshot,
+    ) {
+        if end > start {
+            meta.push(InstructionMeta {
+                start,
+                len: end - start,
+                stack_before,
+                stack_after,
+            });
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn parse_inst(
         &mut self,
         data_count_section: &mut DataCountVerifier,
         instrs: &mut InstructionGenerator,
+        meta: &mut Vec<InstructionMeta>,
+        record_meta: &mut bool,
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
@@ -338,6 +359,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x01 => (1, false),
             0x02 => {
+                *record_meta = false;
                 let (len, blocktype) = self.parse_block_type()?;
                 trace!("parse_op_block: {blocktype:?}");
 
@@ -357,6 +379,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
+                    meta,
                     checker,
                     jump_resolver,
                     else_addr,
@@ -364,6 +387,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
+                    let stack_snapshot = checker.snapshot_stack();
+                    let meta_start = instrs.len();
 
                     instrs.push(Instr {
                         op: vm::special_block_return,
@@ -378,6 +403,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             },
                         },
                     });
+                    Self::push_instruction_meta(
+                        meta,
+                        meta_start,
+                        instrs.len(),
+                        stack_snapshot.clone(),
+                        stack_snapshot,
+                    );
                 }
 
                 trace!("parse_op_block(2): {checker:?}");
@@ -407,6 +439,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1 + len + len2, false)
             }
             0x03 => {
+                *record_meta = false;
                 let (len, blocktype) = self.parse_block_type()?;
                 trace!("parse_op_loop: {blocktype:?}");
 
@@ -423,6 +456,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 jump_resolver.push(JumpResolverDSL::EnterBackwardJumpBlock(instrs.len() as u32));
 
+                let loop_snapshot = checker.snapshot_stack();
+                let loop_meta_start = instrs.len();
                 instrs.push(Instr { op: vm::op_loop });
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
@@ -437,11 +472,19 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         },
                     });
                 }
+                Self::push_instruction_meta(
+                    meta,
+                    loop_meta_start,
+                    instrs.len(),
+                    loop_snapshot.clone(),
+                    loop_snapshot,
+                );
 
                 instrs.enter_block();
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
+                    meta,
                     checker,
                     jump_resolver,
                     else_addr,
@@ -449,6 +492,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
+                    let stack_snapshot = checker.snapshot_stack();
+                    let meta_start = instrs.len();
 
                     instrs.push(Instr {
                         op: vm::special_block_return,
@@ -463,6 +508,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             },
                         },
                     });
+                    Self::push_instruction_meta(
+                        meta,
+                        meta_start,
+                        instrs.len(),
+                        stack_snapshot.clone(),
+                        stack_snapshot,
+                    );
                 }
 
                 match blocktype {
@@ -489,9 +541,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1 + len + len2, false)
             }
             0x04 => {
+                *record_meta = false;
                 trace!("parse_op_if");
                 let (len, blocktype) = self.parse_block_type()?;
                 let is_unreachable_if_block = instrs.is_unreachable();
+                let if_stack_before = checker.snapshot_stack();
+                let if_meta_start = instrs.len();
                 instrs.push(Instr { op: vm::op_if });
                 instrs.push(Instr {
                     operand: Operand {
@@ -512,6 +567,13 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 } else {
                     checker.enter_block(BlockKind::If, blocktype);
                 }
+                Self::push_instruction_meta(
+                    meta,
+                    if_meta_start,
+                    instrs.len(),
+                    if_stack_before,
+                    checker.snapshot_stack(),
+                );
                 jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
 
                 let index = instrs.len() - 1;
@@ -520,6 +582,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
+                    meta,
                     checker,
                     jump_resolver,
                     &mut else_addr,
@@ -4013,21 +4076,35 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         &mut self,
         data_count_section: &mut DataCountVerifier,
         instrs: &mut InstructionGenerator,
+        meta: &mut Vec<InstructionMeta>,
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
     ) -> Result<usize> {
         let mut read_bytes = 0;
         loop {
+            let start = instrs.len();
+            let stack_before = checker.snapshot_stack();
+            let mut record_meta = true;
             let (len, end) = self.parse_inst(
                 data_count_section,
                 instrs,
+                meta,
+                &mut record_meta,
                 checker,
                 jump_resolver,
                 else_addr,
             )?;
             trace!("{checker:?}");
             read_bytes += len;
+            if record_meta && instrs.len() > start {
+                meta.push(InstructionMeta {
+                    start,
+                    len: instrs.len() - start,
+                    stack_before,
+                    stack_after: checker.snapshot_stack(),
+                });
+            }
             if end {
                 return Ok(read_bytes);
             }

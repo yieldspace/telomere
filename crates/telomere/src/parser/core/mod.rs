@@ -3,6 +3,7 @@ mod custom_section;
 mod error;
 mod instruction;
 mod jump_resolver;
+mod optimizer;
 mod parser;
 mod type_checker;
 mod types;

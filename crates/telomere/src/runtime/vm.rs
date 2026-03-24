@@ -12,6 +12,7 @@ mod numeric;
 mod refs;
 #[cfg(feature = "simd")]
 pub(crate) mod simd;
+mod superinstructions;
 mod tables;
 
 use crate::{
@@ -234,6 +235,7 @@ pub(crate) use locals::*;
 pub(crate) use memory::*;
 pub(crate) use numeric::*;
 pub(crate) use refs::*;
+pub(crate) use superinstructions::*;
 pub(crate) use tables::*;
 
 /// Telomere runtime helper `store_internal_local`.
