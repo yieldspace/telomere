@@ -2,9 +2,11 @@ use std::{collections::HashSet, ops::Range, sync::Arc};
 
 use crate::{
     common::{
-        structured_jump_rewrite, ControlFlowMetadataKind, ControlFlowMetadataSite, Instr, MemArg,
-        Op, Operand, ReturnShape, StackMapSite, StackMapSourceSite, StructuredJumpRewriteKind,
-        UnwindSiteMetadata, UnwindSourceSite, ValueSize,
+        structured_jump_rewrite, ControlFlowMetadataKind, ControlFlowMetadataSite,
+        FloatCompareKind, FloatScalarKind, I32ScalarKind, I64ScalarKind, Instr, IntCompareKind,
+        Load4Kind, Load8Kind, MemArg, Op, Operand, ReturnShape, StackMapSite, StackMapSourceSite,
+        Store4Kind, Store8Kind, StructuredJumpRewriteKind, UnwindSiteMetadata, UnwindSourceSite,
+        ValueSize,
     },
     parser::core::instruction_generator::InstructionProgram,
     runtime::vm::{self, compute_memory_offset},
@@ -45,10 +47,10 @@ impl TypedConst {
 
 #[derive(Clone, Copy, Debug)]
 enum TypedScalarOp {
-    I32(vm::I32ScalarKind),
-    I64(vm::I64ScalarKind),
-    F32(vm::FloatScalarKind),
-    F64(vm::FloatScalarKind),
+    I32(I32ScalarKind),
+    I64(I64ScalarKind),
+    F32(FloatScalarKind),
+    F64(FloatScalarKind),
 }
 
 impl TypedScalarOp {
@@ -62,10 +64,10 @@ impl TypedScalarOp {
 
 #[derive(Clone, Copy, Debug)]
 enum TypedCompareOp {
-    I32(vm::IntCompareKind),
-    I64(vm::IntCompareKind),
-    F32(vm::FloatCompareKind),
-    F64(vm::FloatCompareKind),
+    I32(IntCompareKind),
+    I64(IntCompareKind),
+    F32(FloatCompareKind),
+    F64(FloatCompareKind),
 }
 
 impl TypedCompareOp {
@@ -79,8 +81,8 @@ impl TypedCompareOp {
 
 #[derive(Clone, Copy, Debug)]
 enum TypedLoadOp {
-    Bits4(vm::Load4Kind),
-    Bits8(vm::Load8Kind),
+    Bits4(Load4Kind),
+    Bits8(Load8Kind),
 }
 
 impl TypedLoadOp {
@@ -92,18 +94,18 @@ impl TypedLoadOp {
     }
 
     fn uses_dedicated_const(self) -> bool {
-        matches!(self, Self::Bits4(vm::Load4Kind::I32))
+        matches!(self, Self::Bits4(Load4Kind::I32))
     }
 
     fn uses_dedicated_local_addr(self) -> bool {
         matches!(
             self,
             Self::Bits4(
-                vm::Load4Kind::I32
-                    | vm::Load4Kind::I32Load8U
-                    | vm::Load4Kind::I32Load16S
-                    | vm::Load4Kind::I32Load16U
-                    | vm::Load4Kind::F32
+                Load4Kind::I32
+                    | Load4Kind::I32Load8U
+                    | Load4Kind::I32Load16S
+                    | Load4Kind::I32Load16U
+                    | Load4Kind::F32
             )
         )
     }
@@ -111,8 +113,8 @@ impl TypedLoadOp {
 
 #[derive(Clone, Copy, Debug)]
 enum TypedStoreOp {
-    Bits4(vm::Store4Kind),
-    Bits8(vm::Store8Kind),
+    Bits4(Store4Kind),
+    Bits8(Store8Kind),
 }
 
 impl TypedStoreOp {
@@ -124,15 +126,13 @@ impl TypedStoreOp {
     }
 
     fn uses_dedicated_const(self) -> bool {
-        matches!(self, Self::Bits4(vm::Store4Kind::I32))
+        matches!(self, Self::Bits4(Store4Kind::I32))
     }
 
     fn uses_dedicated_local_local(self) -> bool {
         matches!(
             self,
-            Self::Bits4(
-                vm::Store4Kind::I32 | vm::Store4Kind::I32Store8 | vm::Store4Kind::I32Store16
-            )
+            Self::Bits4(Store4Kind::I32 | Store4Kind::I32Store8 | Store4Kind::I32Store16)
         )
     }
 }
@@ -707,410 +707,410 @@ fn decode_kind(raw: &[Instr]) -> DecodedKind {
 
     decode1!(
         vm::op_i32_add,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Add))
     );
     decode1!(
         vm::op_i32_sub,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Sub))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Sub))
     );
     decode1!(
         vm::op_i32_mul,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Mul))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Mul))
     );
     decode1!(
         vm::op_i32_and,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::And))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::And))
     );
     decode1!(
         vm::op_i32_or,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Or))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Or))
     );
     decode1!(
         vm::op_i32_xor,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Xor))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Xor))
     );
     decode1!(
         vm::op_i32_shl,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Shl))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Shl))
     );
     decode1!(
         vm::op_i32_shr_s,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::ShrS))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::ShrS))
     );
     decode1!(
         vm::op_i32_shr_u,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::ShrU))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::ShrU))
     );
     decode1!(
         vm::op_i32_div_s,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::DivS))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::DivS))
     );
     decode1!(
         vm::op_i32_div_u,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::DivU))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::DivU))
     );
     decode1!(
         vm::op_i32_rem_s,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::RemS))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::RemS))
     );
     decode1!(
         vm::op_i32_rem_u,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::RemU))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::RemU))
     );
 
     decode1!(
         vm::op_i64_add,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Add))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::Add))
     );
     decode1!(
         vm::op_i64_sub,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Sub))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::Sub))
     );
     decode1!(
         vm::op_i64_mul,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Mul))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::Mul))
     );
     decode1!(
         vm::op_i64_and,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::And))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::And))
     );
     decode1!(
         vm::op_i64_or,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Or))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::Or))
     );
     decode1!(
         vm::op_i64_xor,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Xor))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::Xor))
     );
     decode1!(
         vm::op_i64_shl,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::Shl))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::Shl))
     );
     decode1!(
         vm::op_i64_shr_s,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::ShrS))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::ShrS))
     );
     decode1!(
         vm::op_i64_shr_u,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::ShrU))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::ShrU))
     );
     decode1!(
         vm::op_i64_div_s,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::DivS))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::DivS))
     );
     decode1!(
         vm::op_i64_div_u,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::DivU))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::DivU))
     );
     decode1!(
         vm::op_i64_rem_s,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::RemS))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::RemS))
     );
     decode1!(
         vm::op_i64_rem_u,
-        DecodedKind::Scalar(TypedScalarOp::I64(vm::I64ScalarKind::RemU))
+        DecodedKind::Scalar(TypedScalarOp::I64(I64ScalarKind::RemU))
     );
 
     decode1!(
         vm::op_f32_add,
-        DecodedKind::Scalar(TypedScalarOp::F32(vm::FloatScalarKind::Add))
+        DecodedKind::Scalar(TypedScalarOp::F32(FloatScalarKind::Add))
     );
     decode1!(
         vm::op_f32_sub,
-        DecodedKind::Scalar(TypedScalarOp::F32(vm::FloatScalarKind::Sub))
+        DecodedKind::Scalar(TypedScalarOp::F32(FloatScalarKind::Sub))
     );
     decode1!(
         vm::op_f32_mul,
-        DecodedKind::Scalar(TypedScalarOp::F32(vm::FloatScalarKind::Mul))
+        DecodedKind::Scalar(TypedScalarOp::F32(FloatScalarKind::Mul))
     );
     decode1!(
         vm::op_f32_div,
-        DecodedKind::Scalar(TypedScalarOp::F32(vm::FloatScalarKind::Div))
+        DecodedKind::Scalar(TypedScalarOp::F32(FloatScalarKind::Div))
     );
     decode1!(
         vm::op_f64_add,
-        DecodedKind::Scalar(TypedScalarOp::F64(vm::FloatScalarKind::Add))
+        DecodedKind::Scalar(TypedScalarOp::F64(FloatScalarKind::Add))
     );
     decode1!(
         vm::op_f64_sub,
-        DecodedKind::Scalar(TypedScalarOp::F64(vm::FloatScalarKind::Sub))
+        DecodedKind::Scalar(TypedScalarOp::F64(FloatScalarKind::Sub))
     );
     decode1!(
         vm::op_f64_mul,
-        DecodedKind::Scalar(TypedScalarOp::F64(vm::FloatScalarKind::Mul))
+        DecodedKind::Scalar(TypedScalarOp::F64(FloatScalarKind::Mul))
     );
     decode1!(
         vm::op_f64_div,
-        DecodedKind::Scalar(TypedScalarOp::F64(vm::FloatScalarKind::Div))
+        DecodedKind::Scalar(TypedScalarOp::F64(FloatScalarKind::Div))
     );
 
     decode1!(
         vm::op_i32_eq,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::Eq))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::Eq))
     );
     decode1!(
         vm::op_i32_ne,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::Ne))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::Ne))
     );
     decode1!(
         vm::op_i32_lt_s,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::LtS))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::LtS))
     );
     decode1!(
         vm::op_i32_lt_u,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::LtU))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::LtU))
     );
     decode1!(
         vm::op_i32_gt_s,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GtS))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::GtS))
     );
     decode1!(
         vm::op_i32_gt_u,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GtU))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::GtU))
     );
     decode1!(
         vm::op_i32_le_s,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::LeS))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::LeS))
     );
     decode1!(
         vm::op_i32_le_u,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::LeU))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::LeU))
     );
     decode1!(
         vm::op_i32_ge_s,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GeS))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::GeS))
     );
     decode1!(
         vm::op_i32_ge_u,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GeU))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::GeU))
     );
 
     decode1!(
         vm::op_i64_eq,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::Eq))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::Eq))
     );
     decode1!(
         vm::op_i64_ne,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::Ne))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::Ne))
     );
     decode1!(
         vm::op_i64_lt_s,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::LtS))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::LtS))
     );
     decode1!(
         vm::op_i64_lt_u,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::LtU))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::LtU))
     );
     decode1!(
         vm::op_i64_gt_s,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::GtS))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::GtS))
     );
     decode1!(
         vm::op_i64_gt_u,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::GtU))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::GtU))
     );
     decode1!(
         vm::op_i64_le_s,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::LeS))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::LeS))
     );
     decode1!(
         vm::op_i64_le_u,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::LeU))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::LeU))
     );
     decode1!(
         vm::op_i64_ge_s,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::GeS))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::GeS))
     );
     decode1!(
         vm::op_i64_ge_u,
-        DecodedKind::Compare(TypedCompareOp::I64(vm::IntCompareKind::GeU))
+        DecodedKind::Compare(TypedCompareOp::I64(IntCompareKind::GeU))
     );
 
     decode1!(
         vm::op_f32_eq,
-        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Eq))
+        DecodedKind::Compare(TypedCompareOp::F32(FloatCompareKind::Eq))
     );
     decode1!(
         vm::op_f32_ne,
-        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Ne))
+        DecodedKind::Compare(TypedCompareOp::F32(FloatCompareKind::Ne))
     );
     decode1!(
         vm::op_f32_lt,
-        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Lt))
+        DecodedKind::Compare(TypedCompareOp::F32(FloatCompareKind::Lt))
     );
     decode1!(
         vm::op_f32_gt,
-        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Gt))
+        DecodedKind::Compare(TypedCompareOp::F32(FloatCompareKind::Gt))
     );
     decode1!(
         vm::op_f32_le,
-        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Le))
+        DecodedKind::Compare(TypedCompareOp::F32(FloatCompareKind::Le))
     );
     decode1!(
         vm::op_f32_ge,
-        DecodedKind::Compare(TypedCompareOp::F32(vm::FloatCompareKind::Ge))
+        DecodedKind::Compare(TypedCompareOp::F32(FloatCompareKind::Ge))
     );
     decode1!(
         vm::op_f64_eq,
-        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Eq))
+        DecodedKind::Compare(TypedCompareOp::F64(FloatCompareKind::Eq))
     );
     decode1!(
         vm::op_f64_ne,
-        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Ne))
+        DecodedKind::Compare(TypedCompareOp::F64(FloatCompareKind::Ne))
     );
     decode1!(
         vm::op_f64_lt,
-        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Lt))
+        DecodedKind::Compare(TypedCompareOp::F64(FloatCompareKind::Lt))
     );
     decode1!(
         vm::op_f64_gt,
-        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Gt))
+        DecodedKind::Compare(TypedCompareOp::F64(FloatCompareKind::Gt))
     );
     decode1!(
         vm::op_f64_le,
-        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Le))
+        DecodedKind::Compare(TypedCompareOp::F64(FloatCompareKind::Le))
     );
     decode1!(
         vm::op_f64_ge,
-        DecodedKind::Compare(TypedCompareOp::F64(vm::FloatCompareKind::Ge))
+        DecodedKind::Compare(TypedCompareOp::F64(FloatCompareKind::Ge))
     );
 
     decode2!(
         vm::op_i32_load_local,
-        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits4(Load4Kind::I32), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i32_load8_s_local,
-        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32Load8S), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits4(Load4Kind::I32Load8S), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i32_load8_u_local,
-        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits4(Load4Kind::I32Load8U), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i32_load16_s_local,
-        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32Load16S), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits4(Load4Kind::I32Load16S), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i32_load16_u_local,
-        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::I32Load16U), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits4(Load4Kind::I32Load16U), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_load_local,
-        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits8(Load8Kind::I64), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_load8_s_local,
-        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load8S), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits8(Load8Kind::I64Load8S), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_load8_u_local,
-        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load8U), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits8(Load8Kind::I64Load8U), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_load16_s_local,
-        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load16S), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits8(Load8Kind::I64Load16S), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_load16_u_local,
-        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load16U), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits8(Load8Kind::I64Load16U), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_load32_s_local,
-        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load32S), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits8(Load8Kind::I64Load32S), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_load32_u_local,
-        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::I64Load32U), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits8(Load8Kind::I64Load32U), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_f32_load_local,
-        DecodedKind::Load(TypedLoadOp::Bits4(vm::Load4Kind::F32), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits4(Load4Kind::F32), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_f64_load_local,
-        DecodedKind::Load(TypedLoadOp::Bits8(vm::Load8Kind::F64), unsafe {
+        DecodedKind::Load(TypedLoadOp::Bits8(Load8Kind::F64), unsafe {
             raw[1].operand.memarg
         })
     );
 
     decode2!(
         vm::op_i32_store_local,
-        DecodedKind::Store(TypedStoreOp::Bits4(vm::Store4Kind::I32), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits4(Store4Kind::I32), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i32_store8_local,
-        DecodedKind::Store(TypedStoreOp::Bits4(vm::Store4Kind::I32Store8), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits4(Store4Kind::I32Store8), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i32_store16_local,
-        DecodedKind::Store(TypedStoreOp::Bits4(vm::Store4Kind::I32Store16), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits4(Store4Kind::I32Store16), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_store_local,
-        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::I64), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits8(Store8Kind::I64), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_store8_local,
-        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::I64Store8), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits8(Store8Kind::I64Store8), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_store16_local,
-        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::I64Store16), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits8(Store8Kind::I64Store16), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_i64_store32_local,
-        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::I64Store32), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits8(Store8Kind::I64Store32), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_f32_store_local,
-        DecodedKind::Store(TypedStoreOp::Bits4(vm::Store4Kind::F32), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits4(Store4Kind::F32), unsafe {
             raw[1].operand.memarg
         })
     );
     decode2!(
         vm::op_f64_store_local,
-        DecodedKind::Store(TypedStoreOp::Bits8(vm::Store8Kind::F64), unsafe {
+        DecodedKind::Store(TypedStoreOp::Bits8(Store8Kind::F64), unsafe {
             raw[1].operand.memarg
         })
     );
@@ -1457,17 +1457,17 @@ fn is_existing_i32_local_imm_fastpath(op: TypedScalarOp) -> bool {
     matches!(
         op,
         TypedScalarOp::I32(
-            vm::I32ScalarKind::Add
-                | vm::I32ScalarKind::Sub
-                | vm::I32ScalarKind::And
-                | vm::I32ScalarKind::Shl
-                | vm::I32ScalarKind::ShrU
+            I32ScalarKind::Add
+                | I32ScalarKind::Sub
+                | I32ScalarKind::And
+                | I32ScalarKind::Shl
+                | I32ScalarKind::ShrU
         )
     )
 }
 
 fn is_existing_i32_local_local_fastpath(op: TypedScalarOp) -> bool {
-    matches!(op, TypedScalarOp::I32(vm::I32ScalarKind::Add))
+    matches!(op, TypedScalarOp::I32(I32ScalarKind::Add))
 }
 
 fn is_integer_scalar(op: TypedScalarOp) -> bool {
@@ -1478,23 +1478,23 @@ fn is_supported_tee_consumer_scalar(op: TypedScalarOp) -> bool {
     matches!(
         op,
         TypedScalarOp::I32(
-            vm::I32ScalarKind::Add
-                | vm::I32ScalarKind::Sub
-                | vm::I32ScalarKind::And
-                | vm::I32ScalarKind::Or
-                | vm::I32ScalarKind::Xor
-                | vm::I32ScalarKind::Shl
-                | vm::I32ScalarKind::ShrS
-                | vm::I32ScalarKind::ShrU
+            I32ScalarKind::Add
+                | I32ScalarKind::Sub
+                | I32ScalarKind::And
+                | I32ScalarKind::Or
+                | I32ScalarKind::Xor
+                | I32ScalarKind::Shl
+                | I32ScalarKind::ShrS
+                | I32ScalarKind::ShrU
         ) | TypedScalarOp::I64(
-            vm::I64ScalarKind::Add
-                | vm::I64ScalarKind::Sub
-                | vm::I64ScalarKind::And
-                | vm::I64ScalarKind::Or
-                | vm::I64ScalarKind::Xor
-                | vm::I64ScalarKind::Shl
-                | vm::I64ScalarKind::ShrS
-                | vm::I64ScalarKind::ShrU
+            I64ScalarKind::Add
+                | I64ScalarKind::Sub
+                | I64ScalarKind::And
+                | I64ScalarKind::Or
+                | I64ScalarKind::Xor
+                | I64ScalarKind::Shl
+                | I64ScalarKind::ShrS
+                | I64ScalarKind::ShrU
         )
     )
 }
@@ -1507,21 +1507,21 @@ fn is_seed_load(op: TypedLoadOp) -> bool {
     matches!(
         op,
         TypedLoadOp::Bits4(
-            vm::Load4Kind::I32
-                | vm::Load4Kind::I32Load8S
-                | vm::Load4Kind::I32Load8U
-                | vm::Load4Kind::I32Load16S
-                | vm::Load4Kind::I32Load16U
-                | vm::Load4Kind::F32
+            Load4Kind::I32
+                | Load4Kind::I32Load8S
+                | Load4Kind::I32Load8U
+                | Load4Kind::I32Load16S
+                | Load4Kind::I32Load16U
+                | Load4Kind::F32
         ) | TypedLoadOp::Bits8(
-            vm::Load8Kind::I64
-                | vm::Load8Kind::I64Load8S
-                | vm::Load8Kind::I64Load8U
-                | vm::Load8Kind::I64Load16S
-                | vm::Load8Kind::I64Load16U
-                | vm::Load8Kind::I64Load32S
-                | vm::Load8Kind::I64Load32U
-                | vm::Load8Kind::F64
+            Load8Kind::I64
+                | Load8Kind::I64Load8S
+                | Load8Kind::I64Load8U
+                | Load8Kind::I64Load16S
+                | Load8Kind::I64Load16U
+                | Load8Kind::I64Load32S
+                | Load8Kind::I64Load32U
+                | Load8Kind::F64
         )
     )
 }
@@ -1535,25 +1535,25 @@ fn is_float_load_seed_for_compare(seed: ProducerSeed, compare_op: TypedCompareOp
         (seed, compare_op),
         (
             ProducerSeed::LocalAddrLoad {
-                op: TypedLoadOp::Bits4(vm::Load4Kind::F32),
+                op: TypedLoadOp::Bits4(Load4Kind::F32),
                 ..
             } | ProducerSeed::LocalImmAddrLoad {
-                op: TypedLoadOp::Bits4(vm::Load4Kind::F32),
+                op: TypedLoadOp::Bits4(Load4Kind::F32),
                 ..
             } | ProducerSeed::ConstAddrLoad {
-                op: TypedLoadOp::Bits4(vm::Load4Kind::F32),
+                op: TypedLoadOp::Bits4(Load4Kind::F32),
                 ..
             },
             TypedCompareOp::F32(_),
         ) | (
             ProducerSeed::LocalAddrLoad {
-                op: TypedLoadOp::Bits8(vm::Load8Kind::F64),
+                op: TypedLoadOp::Bits8(Load8Kind::F64),
                 ..
             } | ProducerSeed::LocalImmAddrLoad {
-                op: TypedLoadOp::Bits8(vm::Load8Kind::F64),
+                op: TypedLoadOp::Bits8(Load8Kind::F64),
                 ..
             } | ProducerSeed::ConstAddrLoad {
-                op: TypedLoadOp::Bits8(vm::Load8Kind::F64),
+                op: TypedLoadOp::Bits8(Load8Kind::F64),
                 ..
             },
             TypedCompareOp::F64(_),
@@ -1688,7 +1688,7 @@ fn match_local_imm_addr_load_seed(
     };
     if !matches!(
         third.kind,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Add))
     ) {
         return None;
     }
@@ -1773,7 +1773,7 @@ fn match_producer_imm_and_branch(
         || !scalar_matches_const(scalar_op, rhs_const)
         || !matches!(
             scalar_op,
-            TypedScalarOp::I32(vm::I32ScalarKind::And) | TypedScalarOp::I64(vm::I64ScalarKind::And)
+            TypedScalarOp::I32(I32ScalarKind::And) | TypedScalarOp::I64(I64ScalarKind::And)
         )
     {
         return None;
@@ -2483,7 +2483,7 @@ fn match_i32_local_and_imm_branch(
     if !same_width(width, ValueSize::Byte4)
         || !matches!(
             third.kind,
-            DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::And))
+            DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::And))
         )
     {
         return None;
@@ -2570,10 +2570,10 @@ fn match_i32_local_addr_load8_u_and_imm_eqz_branch(
         _ => return None,
     };
     if !same_width(addr_width, ValueSize::Byte4)
-        || !matches!(load_op, TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U))
+        || !matches!(load_op, TypedLoadOp::Bits4(Load4Kind::I32Load8U))
         || !matches!(
             fourth.kind,
-            DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::And))
+            DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::And))
         )
         || !matches!(fifth.kind, DecodedKind::Eqz(ValueSize::Byte4))
     {
@@ -2695,7 +2695,7 @@ fn match_local_local_ge_u_br_if(
     }
     if !matches!(
         third.kind,
-        DecodedKind::Compare(TypedCompareOp::I32(vm::IntCompareKind::GeU))
+        DecodedKind::Compare(TypedCompareOp::I32(IntCompareKind::GeU))
     ) {
         return None;
     }
@@ -3079,7 +3079,7 @@ fn match_local_imm_addr_load(
     };
     if !matches!(
         third.kind,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Add))
     ) {
         return None;
     }
@@ -3132,14 +3132,14 @@ fn match_i32_local_local_load_tee_add_imm_store(
     };
     if !same_width(store_addr_width, ValueSize::Byte4)
         || !same_width(load_addr_width, ValueSize::Byte4)
-        || !matches!(load_op, TypedLoadOp::Bits4(vm::Load4Kind::I32))
+        || !matches!(load_op, TypedLoadOp::Bits4(Load4Kind::I32))
         || !same_width(tee_width, ValueSize::Byte4)
         || !tee
         || !matches!(
             sixth.kind,
-            DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+            DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Add))
         )
-        || !matches!(store_op, TypedStoreOp::Bits4(vm::Store4Kind::I32))
+        || !matches!(store_op, TypedStoreOp::Bits4(Store4Kind::I32))
     {
         return None;
     }
@@ -3234,12 +3234,12 @@ fn match_i32_local_local_narrow_copy(
         (kind, load_op, store_op),
         (
             NarrowCopyKind::Load8Store8,
-            TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U),
-            TypedStoreOp::Bits4(vm::Store4Kind::I32Store8),
+            TypedLoadOp::Bits4(Load4Kind::I32Load8U),
+            TypedStoreOp::Bits4(Store4Kind::I32Store8),
         ) | (
             NarrowCopyKind::Load16Store16,
-            TypedLoadOp::Bits4(vm::Load4Kind::I32Load16U),
-            TypedStoreOp::Bits4(vm::Store4Kind::I32Store16),
+            TypedLoadOp::Bits4(Load4Kind::I32Load16U),
+            TypedStoreOp::Bits4(Store4Kind::I32Store16),
         )
     );
 
@@ -3281,7 +3281,7 @@ fn match_local_imm_local_store(
     };
     if !matches!(
         third.kind,
-        DecodedKind::Scalar(TypedScalarOp::I32(vm::I32ScalarKind::Add))
+        DecodedKind::Scalar(TypedScalarOp::I32(I32ScalarKind::Add))
     ) {
         return None;
     }
@@ -3920,24 +3920,24 @@ fn lower_instruction(
             TypedScalarOp::I32(kind)
                 if matches!(
                     kind,
-                    vm::I32ScalarKind::Add
-                        | vm::I32ScalarKind::Sub
-                        | vm::I32ScalarKind::And
-                        | vm::I32ScalarKind::Shl
-                        | vm::I32ScalarKind::ShrU
+                    I32ScalarKind::Add
+                        | I32ScalarKind::Sub
+                        | I32ScalarKind::And
+                        | I32ScalarKind::Shl
+                        | I32ScalarKind::ShrU
                 ) =>
             {
                 let op = match (kind, tee) {
-                    (vm::I32ScalarKind::Add, false) => vm::op_i32_local_add_imm_set4,
-                    (vm::I32ScalarKind::Add, true) => vm::op_i32_local_add_imm_tee4,
-                    (vm::I32ScalarKind::Sub, false) => vm::op_i32_local_sub_imm_set4,
-                    (vm::I32ScalarKind::Sub, true) => vm::op_i32_local_sub_imm_tee4,
-                    (vm::I32ScalarKind::And, false) => vm::op_i32_local_and_imm_set4,
-                    (vm::I32ScalarKind::And, true) => vm::op_i32_local_and_imm_tee4,
-                    (vm::I32ScalarKind::Shl, false) => vm::op_i32_local_shl_imm_set4,
-                    (vm::I32ScalarKind::Shl, true) => vm::op_i32_local_shl_imm_tee4,
-                    (vm::I32ScalarKind::ShrU, false) => vm::op_i32_local_shr_u_imm_set4,
-                    (vm::I32ScalarKind::ShrU, true) => vm::op_i32_local_shr_u_imm_tee4,
+                    (I32ScalarKind::Add, false) => vm::op_i32_local_add_imm_set4,
+                    (I32ScalarKind::Add, true) => vm::op_i32_local_add_imm_tee4,
+                    (I32ScalarKind::Sub, false) => vm::op_i32_local_sub_imm_set4,
+                    (I32ScalarKind::Sub, true) => vm::op_i32_local_sub_imm_tee4,
+                    (I32ScalarKind::And, false) => vm::op_i32_local_and_imm_set4,
+                    (I32ScalarKind::And, true) => vm::op_i32_local_and_imm_tee4,
+                    (I32ScalarKind::Shl, false) => vm::op_i32_local_shl_imm_set4,
+                    (I32ScalarKind::Shl, true) => vm::op_i32_local_shl_imm_tee4,
+                    (I32ScalarKind::ShrU, false) => vm::op_i32_local_shr_u_imm_set4,
+                    (I32ScalarKind::ShrU, true) => vm::op_i32_local_shr_u_imm_tee4,
                     _ => unreachable!(),
                 };
                 lowered.push(Instr { op });
@@ -4067,7 +4067,7 @@ fn lower_instruction(
             op,
             ..
         } => match op {
-            TypedScalarOp::I32(vm::I32ScalarKind::Add) => {
+            TypedScalarOp::I32(I32ScalarKind::Add) => {
                 lowered.push(Instr {
                     op: if tee {
                         vm::op_i32_local_local_add_tee4
@@ -4965,11 +4965,11 @@ fn lower_instruction(
         } => {
             if op.uses_dedicated_local_addr() {
                 let op = match op {
-                    TypedLoadOp::Bits4(vm::Load4Kind::I32) => vm::op_i32_local_addr_load,
-                    TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U) => vm::op_i32_local_addr_load8_u,
-                    TypedLoadOp::Bits4(vm::Load4Kind::I32Load16S) => vm::op_i32_local_addr_load16_s,
-                    TypedLoadOp::Bits4(vm::Load4Kind::I32Load16U) => vm::op_i32_local_addr_load16_u,
-                    TypedLoadOp::Bits4(vm::Load4Kind::F32) => vm::op_f32_local_addr_load,
+                    TypedLoadOp::Bits4(Load4Kind::I32) => vm::op_i32_local_addr_load,
+                    TypedLoadOp::Bits4(Load4Kind::I32Load8U) => vm::op_i32_local_addr_load8_u,
+                    TypedLoadOp::Bits4(Load4Kind::I32Load16S) => vm::op_i32_local_addr_load16_s,
+                    TypedLoadOp::Bits4(Load4Kind::I32Load16U) => vm::op_i32_local_addr_load16_u,
+                    TypedLoadOp::Bits4(Load4Kind::F32) => vm::op_f32_local_addr_load,
                     _ => unreachable!(),
                 };
                 lowered.push(Instr { op });
@@ -5007,11 +5007,11 @@ fn lower_instruction(
             ..
         } => {
             let op = match op {
-                TypedLoadOp::Bits4(vm::Load4Kind::I32) => vm::op_i32_local_imm_addr_load,
-                TypedLoadOp::Bits4(vm::Load4Kind::I32Load8U) => vm::op_i32_local_imm_addr_load8_u,
-                TypedLoadOp::Bits4(vm::Load4Kind::I32Load16S) => vm::op_i32_local_imm_addr_load16_s,
-                TypedLoadOp::Bits4(vm::Load4Kind::I32Load16U) => vm::op_i32_local_imm_addr_load16_u,
-                TypedLoadOp::Bits4(vm::Load4Kind::F32) => vm::op_f32_local_imm_addr_load,
+                TypedLoadOp::Bits4(Load4Kind::I32) => vm::op_i32_local_imm_addr_load,
+                TypedLoadOp::Bits4(Load4Kind::I32Load8U) => vm::op_i32_local_imm_addr_load8_u,
+                TypedLoadOp::Bits4(Load4Kind::I32Load16S) => vm::op_i32_local_imm_addr_load16_s,
+                TypedLoadOp::Bits4(Load4Kind::I32Load16U) => vm::op_i32_local_imm_addr_load16_u,
+                TypedLoadOp::Bits4(Load4Kind::F32) => vm::op_f32_local_imm_addr_load,
                 _ => unreachable!(),
             };
             lowered.push(Instr { op });
@@ -5075,11 +5075,9 @@ fn lower_instruction(
         } => {
             if op.uses_dedicated_local_local() {
                 let op = match op {
-                    TypedStoreOp::Bits4(vm::Store4Kind::I32) => vm::op_i32_local_local_store,
-                    TypedStoreOp::Bits4(vm::Store4Kind::I32Store8) => vm::op_i32_local_local_store8,
-                    TypedStoreOp::Bits4(vm::Store4Kind::I32Store16) => {
-                        vm::op_i32_local_local_store16
-                    }
+                    TypedStoreOp::Bits4(Store4Kind::I32) => vm::op_i32_local_local_store,
+                    TypedStoreOp::Bits4(Store4Kind::I32Store8) => vm::op_i32_local_local_store8,
+                    TypedStoreOp::Bits4(Store4Kind::I32Store16) => vm::op_i32_local_local_store16,
                     _ => unreachable!(),
                 };
                 lowered.push(Instr { op });
@@ -5132,11 +5130,9 @@ fn lower_instruction(
             ..
         } => {
             let op = match op {
-                TypedStoreOp::Bits4(vm::Store4Kind::I32) => vm::op_i32_local_imm_local_store,
-                TypedStoreOp::Bits4(vm::Store4Kind::I32Store8) => vm::op_i32_local_imm_local_store8,
-                TypedStoreOp::Bits4(vm::Store4Kind::I32Store16) => {
-                    vm::op_i32_local_imm_local_store16
-                }
+                TypedStoreOp::Bits4(Store4Kind::I32) => vm::op_i32_local_imm_local_store,
+                TypedStoreOp::Bits4(Store4Kind::I32Store8) => vm::op_i32_local_imm_local_store8,
+                TypedStoreOp::Bits4(Store4Kind::I32Store16) => vm::op_i32_local_imm_local_store16,
                 _ => unreachable!(),
             };
             lowered.push(Instr { op });
@@ -5773,11 +5769,11 @@ mod tests {
                         align: 4,
                         offset: 0,
                     },
-                    op: TypedLoadOp::Bits4(vm::Load4Kind::F32),
+                    op: TypedLoadOp::Bits4(Load4Kind::F32),
                 },
                 rhs_const: TypedConst::F32(0.0f32.to_bits()),
                 select_width: ValueSize::Byte4,
-                op: TypedCompareOp::F32(vm::FloatCompareKind::Gt),
+                op: TypedCompareOp::F32(FloatCompareKind::Gt),
             }],
             5,
             0,

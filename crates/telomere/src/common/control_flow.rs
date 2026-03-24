@@ -85,6 +85,7 @@ impl SafepointMetadataCache {
         self.stack_map_site_addr == 0 && self.unwind_site_addr == 0
     }
 
+    #[cfg(any(test, debug_assertions))]
     #[inline(always)]
     pub(crate) const fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
         if self.stack_map_site_addr != 0 {

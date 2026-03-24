@@ -1,9 +1,10 @@
 use super::*;
 
 impl Stack {
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn visit_local_ref_ranges<F>(&self, reference: &LocalReference, mut visitor: F)
     where
-        F: FnMut(Range<usize>),
+        F: FnMut(std::ops::Range<usize>),
     {
         let Some(layout) = reference.layout else {
             return;
@@ -15,13 +16,14 @@ impl Stack {
         }
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn visit_operand_ref_ranges<F>(
         &self,
         reference: &LocalReference,
-        site: &StackMapSite,
+        site: &crate::common::StackMapSite,
         mut visitor: F,
     ) where
-        F: FnMut(Range<usize>),
+        F: FnMut(std::ops::Range<usize>),
     {
         let base = self.operand_base(reference);
         for offset in site.ref_offsets_from_operand_base.iter() {
@@ -30,13 +32,14 @@ impl Stack {
         }
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn visit_operand_ref_ranges_ptr<F>(
         &self,
         reference: &LocalReference,
-        stack_map_site_ptr: Option<*const StackMapSite>,
+        stack_map_site_ptr: Option<*const crate::common::StackMapSite>,
         visitor: F,
     ) where
-        F: FnMut(Range<usize>),
+        F: FnMut(std::ops::Range<usize>),
     {
         let Some(site) = stack_map_site_ptr else {
             return;
@@ -44,13 +47,14 @@ impl Stack {
         self.visit_operand_ref_ranges(reference, unsafe { &*site }, visitor);
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(crate) fn visit_local_and_operand_ref_ranges<F>(
         &self,
         reference: &LocalReference,
-        safepoint: SafepointMetadataCache,
+        safepoint: crate::common::SafepointMetadataCache,
         mut visitor: F,
     ) where
-        F: FnMut(Range<usize>),
+        F: FnMut(std::ops::Range<usize>),
     {
         self.visit_local_ref_ranges(reference, &mut visitor);
         self.visit_operand_ref_ranges_ptr(reference, safepoint.stack_map_site_ptr(), visitor);
@@ -73,7 +77,10 @@ impl Stack {
 
     #[cfg(test)]
     #[allow(dead_code)]
-    pub(crate) fn local_ref_ranges(&self, reference: &LocalReference) -> Vec<Range<usize>> {
+    pub(crate) fn local_ref_ranges(
+        &self,
+        reference: &LocalReference,
+    ) -> Vec<std::ops::Range<usize>> {
         let mut ranges = Vec::new();
         self.visit_local_ref_ranges(reference, |range| ranges.push(range));
         ranges
@@ -84,8 +91,8 @@ impl Stack {
     pub(crate) fn operand_ref_ranges(
         &self,
         reference: &LocalReference,
-        site: &StackMapSite,
-    ) -> Vec<Range<usize>> {
+        site: &crate::common::StackMapSite,
+    ) -> Vec<std::ops::Range<usize>> {
         let mut ranges = Vec::new();
         self.visit_operand_ref_ranges(reference, site, |range| ranges.push(range));
         ranges

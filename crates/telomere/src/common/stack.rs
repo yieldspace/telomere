@@ -7,7 +7,7 @@ mod ref_scan;
 use wide::{f32x4, f64x2, i16x8, i32x4, i64x2, i8x16, u16x8, u32x4, u64x2, u8x16};
 
 use crate::VMResult;
-use std::{fmt::Debug, ops::Range, ptr::NonNull};
+use std::{fmt::Debug, ptr::NonNull};
 
 use super::{
     memory::trusted_copy_from_slice,
@@ -16,8 +16,7 @@ use super::{
         FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId, MemoryHandle,
         PrecomputedFunctionReturnSite, SharedMemoryId,
     },
-    FrameLayoutHeader, Instr, ReturnShape, SafepointMetadataCache, StablePc, StackMapSite,
-    StoreInner, UnwindSiteMetadata,
+    FrameLayoutHeader, Instr, ReturnShape, StablePc, StoreInner, UnwindSiteMetadata,
 };
 pub(crate) use footer::{CachedMemoryKind, CallFrameCache, CallStackInfo};
 #[inline(always)]
@@ -1293,7 +1292,7 @@ stack_operation_wide!(u64x2);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{FrameLayoutMetadata, Operand};
+    use crate::common::{FrameLayoutMetadata, Operand, SafepointMetadataCache};
     use std::sync::Arc;
 
     fn frame(kind: CachedMemoryKind, raw: u32) -> CallFrameCache {

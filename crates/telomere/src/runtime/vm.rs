@@ -28,6 +28,11 @@ use crate::{
     Store,
 };
 
+pub(crate) use crate::common::{
+    FloatCompareKind, FloatScalarKind, I32ScalarKind, I64ScalarKind, IntCompareKind, Load4Kind,
+    Load8Kind, Store4Kind, Store8Kind,
+};
+
 #[inline(always)]
 fn wasm_shift_mask32(rhs: u32) -> u32 {
     rhs & 31
@@ -240,7 +245,8 @@ fn pop_result_values(stack: &mut Stack, ty: &ResultType) -> ResultValue {
 #[inline(always)]
 fn touch_current_ref_ranges(_ctx: &ExecuteContext) {
     #[cfg(debug_assertions)]
-    _ctx.visit_current_ref_ranges(|_| {});
+    _ctx.stack
+        .visit_local_and_operand_ref_ranges(&_ctx.local_reference, _ctx.safepoint, |_| {});
 }
 
 fn start_async_host_call(

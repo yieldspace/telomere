@@ -1,3 +1,5 @@
+extern crate telomere_component;
+
 mod provider;
 mod state;
 

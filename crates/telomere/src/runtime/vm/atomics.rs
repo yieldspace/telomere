@@ -2249,7 +2249,8 @@ unsafe fn push_wait_effect(
 ) {
     let task_id = ctx.task_id;
     #[cfg(debug_assertions)]
-    ctx.visit_current_ref_ranges(|_| {});
+    ctx.stack
+        .visit_local_and_operand_ref_ranges(&ctx.local_reference, ctx.safepoint, |_| {});
     let fp = StablePc::from_raw_in_call_frame(ctx.current_frame, resume_pc);
     ctx.effect
         .push_pending(PendingOp::MemoryWait(MemoryWaitPending {
@@ -2300,7 +2301,8 @@ unsafe fn push_wait_effect_precomputed(
 ) {
     let task_id = ctx.task_id;
     #[cfg(debug_assertions)]
-    ctx.visit_current_ref_ranges(|_| {});
+    ctx.stack
+        .visit_local_and_operand_ref_ranges(&ctx.local_reference, ctx.safepoint, |_| {});
     ctx.effect
         .push_pending(PendingOp::MemoryWait(MemoryWaitPending {
             task_id,
