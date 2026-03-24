@@ -116,6 +116,300 @@ pub(crate) fn select_replicated_op(base: Op, function_index: u32, instruction_or
     base
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StructuredJumpRewriteKind {
+    Single { jump_slot: u8 },
+    BrTable,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StructuredJumpRewrite {
+    pub(crate) ptr_op: Op,
+    pub(crate) kind: StructuredJumpRewriteKind,
+}
+
+pub(crate) fn structured_jump_rewrite(op: Op) -> Option<StructuredJumpRewrite> {
+    Some(if std::ptr::fn_addr_eq(op, control::op_br as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_br_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 1 },
+        }
+    } else if std::ptr::fn_addr_eq(op, control::op_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 1 },
+        }
+    } else if std::ptr::fn_addr_eq(op, control::op_br_if_r0 as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_br_if_ptr_r0,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 1 },
+        }
+    } else if std::ptr::fn_addr_eq(op, control::op_br_if_r1 as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_br_if_ptr_r1,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 1 },
+        }
+    } else if std::ptr::fn_addr_eq(op, control::op_br_if_r2 as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_br_if_ptr_r2,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 1 },
+        }
+    } else if std::ptr::fn_addr_eq(op, control::op_br_if_r3 as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_br_if_ptr_r3,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 1 },
+        }
+    } else if std::ptr::fn_addr_eq(op, control::op_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 1 },
+        }
+    } else if std::ptr::fn_addr_eq(op, control::op_else as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_else_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 1 },
+        }
+    } else if std::ptr::fn_addr_eq(op, control::op_br_table as Op) {
+        StructuredJumpRewrite {
+            ptr_op: control::op_br_table_ptr,
+            kind: StructuredJumpRewriteKind::BrTable,
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 2 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_eqz_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_eqz_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 2 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 2 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_eqz_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_eqz_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 2 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_local_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_local_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 2 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_local_eqz_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_local_eqz_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 2 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_local_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_local_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 2 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_local_eqz_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_local_eqz_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 2 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_and_imm_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_and_imm_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_and_imm_eqz_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_and_imm_eqz_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_and_imm_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_and_imm_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_and_imm_eqz_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_and_imm_eqz_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_i32_local_addr_load8_u_and_imm_eqz_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_addr_load8_u_and_imm_eqz_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 4 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_i32_local_addr_load8_u_and_imm_eqz_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_addr_load8_u_and_imm_eqz_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 4 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_seed_tee_eqz_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_seed_tee_eqz_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_seed_tee_eqz_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_seed_tee_eqz_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_seed_tee_eqz_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_seed_tee_eqz_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_seed_tee_eqz_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_seed_tee_eqz_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_i32_seed_tee_imm_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_seed_tee_imm_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 8 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_seed_tee_imm_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_seed_tee_imm_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 8 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_i64_seed_tee_imm_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_seed_tee_imm_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 8 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_seed_tee_imm_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_seed_tee_imm_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 8 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_seed_imm_and_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_seed_imm_and_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_seed_imm_and_eqz_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_seed_imm_and_eqz_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_seed_imm_and_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_seed_imm_and_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_seed_imm_and_eqz_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_seed_imm_and_eqz_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_seed_imm_and_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_seed_imm_and_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_seed_imm_and_eqz_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_seed_imm_and_eqz_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_seed_imm_and_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_seed_imm_and_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i64_seed_imm_and_eqz_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_seed_imm_and_eqz_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, superinstructions::op_i32_local_local_ge_u_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_local_ge_u_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_i32_local_local_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_local_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_i32_local_const_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i32_local_const_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_i64_local_local_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_local_local_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_i64_local_const_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_i64_local_const_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_f32_local_local_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_f32_local_local_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_f32_local_const_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_f32_local_const_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_f64_local_local_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_f64_local_local_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else if std::ptr::fn_addr_eq(
+        op,
+        superinstructions::op_f64_local_const_compare_br_if as Op,
+    ) {
+        StructuredJumpRewrite {
+            ptr_op: superinstructions::op_f64_local_const_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 3 },
+        }
+    } else {
+        return None;
+    })
+}
+
 pub(crate) enum StoreBytes {
     Write1([u8; 1]),
     Write2([u8; 2]),

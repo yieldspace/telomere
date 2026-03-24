@@ -3353,82 +3353,6 @@ fn op_eq(op: Op, expected: Op) -> bool {
     std::ptr::fn_addr_eq(op, expected)
 }
 
-fn single_jump_operand_slot(op: Op) -> Option<u8> {
-    if op_eq(op, vm::op_br as Op)
-        || op_eq(op, vm::op_br_if as Op)
-        || op_eq(op, vm::op_br_if_r0 as Op)
-        || op_eq(op, vm::op_br_if_r1 as Op)
-        || op_eq(op, vm::op_br_if_r2 as Op)
-        || op_eq(op, vm::op_br_if_r3 as Op)
-        || op_eq(op, vm::op_if as Op)
-        || op_eq(op, vm::op_else as Op)
-    {
-        return Some(1);
-    }
-    if op_eq(op, vm::op_i32_local_br_if as Op)
-        || op_eq(op, vm::op_i32_local_eqz_br_if as Op)
-        || op_eq(op, vm::op_i32_local_if as Op)
-        || op_eq(op, vm::op_i32_local_eqz_if as Op)
-        || op_eq(op, vm::op_i64_local_br_if as Op)
-        || op_eq(op, vm::op_i64_local_eqz_br_if as Op)
-        || op_eq(op, vm::op_i64_local_if as Op)
-        || op_eq(op, vm::op_i64_local_eqz_if as Op)
-    {
-        return Some(2);
-    }
-    if op_eq(op, vm::op_i32_local_and_imm_br_if as Op)
-        || op_eq(op, vm::op_i32_local_and_imm_eqz_br_if as Op)
-        || op_eq(op, vm::op_i32_local_and_imm_if as Op)
-        || op_eq(op, vm::op_i32_local_and_imm_eqz_if as Op)
-        || op_eq(op, vm::op_i32_local_local_ge_u_br_if as Op)
-        || op_eq(op, vm::op_i32_local_local_compare_br_if as Op)
-        || op_eq(op, vm::op_i32_local_const_compare_br_if as Op)
-        || op_eq(op, vm::op_i64_local_local_compare_br_if as Op)
-        || op_eq(op, vm::op_i64_local_const_compare_br_if as Op)
-        || op_eq(op, vm::op_f32_local_local_compare_br_if as Op)
-        || op_eq(op, vm::op_f32_local_const_compare_br_if as Op)
-        || op_eq(op, vm::op_f64_local_local_compare_br_if as Op)
-        || op_eq(op, vm::op_f64_local_const_compare_br_if as Op)
-    {
-        return Some(3);
-    }
-    if op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if as Op)
-        || op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_if as Op)
-    {
-        return Some(4);
-    }
-    if op_eq(op, vm::op_i32_seed_tee_eqz_br_if as Op)
-        || op_eq(op, vm::op_i32_seed_tee_eqz_if as Op)
-        || op_eq(op, vm::op_i64_seed_tee_eqz_br_if as Op)
-        || op_eq(op, vm::op_i64_seed_tee_eqz_if as Op)
-    {
-        return Some(7);
-    }
-    if op_eq(op, vm::op_i32_seed_tee_imm_compare_br_if as Op)
-        || op_eq(op, vm::op_i32_seed_tee_imm_compare_if as Op)
-        || op_eq(op, vm::op_i64_seed_tee_imm_compare_br_if as Op)
-        || op_eq(op, vm::op_i64_seed_tee_imm_compare_if as Op)
-    {
-        return Some(8);
-    }
-    if op_eq(op, vm::op_i32_seed_imm_and_br_if as Op)
-        || op_eq(op, vm::op_i32_seed_imm_and_eqz_br_if as Op)
-        || op_eq(op, vm::op_i32_seed_imm_and_if as Op)
-        || op_eq(op, vm::op_i32_seed_imm_and_eqz_if as Op)
-        || op_eq(op, vm::op_i64_seed_imm_and_br_if as Op)
-        || op_eq(op, vm::op_i64_seed_imm_and_eqz_br_if as Op)
-        || op_eq(op, vm::op_i64_seed_imm_and_if as Op)
-        || op_eq(op, vm::op_i64_seed_imm_and_eqz_if as Op)
-    {
-        return Some(7);
-    }
-    None
-}
-
-fn is_br_table(op: Op) -> bool {
-    op_eq(op, vm::op_br_table as Op)
-}
-
 fn loop_shape_op(op: Op) -> Option<ReturnShape> {
     if op_eq(op, vm::op_loop_empty as Op) {
         Some(ReturnShape::Empty)
@@ -3467,34 +3391,39 @@ fn collect_control_flow_metadata(
     let mut metadata = Vec::new();
     for &start in instruction_starts {
         let op = unsafe { code[start].op };
-        if let Some(jump_slot) = single_jump_operand_slot(op) {
-            let target = unsafe { code[start + jump_slot as usize].operand.jump_addr };
-            metadata.push(ControlFlowMetadataSite {
-                instruction_ordinal: start as u32,
-                kind: ControlFlowMetadataKind::Jump {
-                    jump_operand_slots: Arc::from([jump_slot]),
-                    target_ordinals: Arc::from([target]),
-                },
-            });
-            continue;
-        }
-        if is_br_table(op) {
-            let table_size = unsafe { code[start + 1].operand.u32 as usize };
-            let mut jump_slots = Vec::with_capacity(table_size + 1);
-            let mut target_ordinals = Vec::with_capacity(table_size + 1);
-            for slot in 0..=table_size {
-                let jump_slot = u8::try_from(slot + 2).expect("br_table jump slot exceeds u8");
-                jump_slots.push(jump_slot);
-                target_ordinals
-                    .push(unsafe { code[start + usize::from(jump_slot)].operand.jump_addr });
+        if let Some(rewrite) = vm::structured_jump_rewrite(op) {
+            match rewrite.kind {
+                vm::StructuredJumpRewriteKind::Single { jump_slot } => {
+                    let target = unsafe { code[start + jump_slot as usize].operand.jump_addr };
+                    metadata.push(ControlFlowMetadataSite {
+                        instruction_ordinal: start as u32,
+                        kind: ControlFlowMetadataKind::Jump {
+                            jump_operand_slots: Arc::from([jump_slot]),
+                            target_ordinals: Arc::from([target]),
+                        },
+                    });
+                }
+                vm::StructuredJumpRewriteKind::BrTable => {
+                    let table_size = unsafe { code[start + 1].operand.u32 as usize };
+                    let mut jump_slots = Vec::with_capacity(table_size + 1);
+                    let mut target_ordinals = Vec::with_capacity(table_size + 1);
+                    for slot in 0..=table_size {
+                        let jump_slot =
+                            u8::try_from(slot + 2).expect("br_table jump slot exceeds u8");
+                        jump_slots.push(jump_slot);
+                        target_ordinals.push(unsafe {
+                            code[start + usize::from(jump_slot)].operand.jump_addr
+                        });
+                    }
+                    metadata.push(ControlFlowMetadataSite {
+                        instruction_ordinal: start as u32,
+                        kind: ControlFlowMetadataKind::Jump {
+                            jump_operand_slots: Arc::from(jump_slots),
+                            target_ordinals: Arc::from(target_ordinals),
+                        },
+                    });
+                }
             }
-            metadata.push(ControlFlowMetadataSite {
-                instruction_ordinal: start as u32,
-                kind: ControlFlowMetadataKind::Jump {
-                    jump_operand_slots: Arc::from(jump_slots),
-                    target_ordinals: Arc::from(target_ordinals),
-                },
-            });
             continue;
         }
         if let Some(shape) = loop_shape_op(op) {

@@ -82,105 +82,7 @@ fn op_eq(op: Op, expected: Op) -> bool {
 }
 
 fn rewrite_jump_op(op: Op) -> Option<Op> {
-    Some(if op_eq(op, vm::op_br as Op) {
-        vm::op_br_ptr
-    } else if op_eq(op, vm::op_br_if as Op) {
-        vm::op_br_if_ptr
-    } else if op_eq(op, vm::op_br_if_r0 as Op) {
-        vm::op_br_if_ptr_r0
-    } else if op_eq(op, vm::op_br_if_r1 as Op) {
-        vm::op_br_if_ptr_r1
-    } else if op_eq(op, vm::op_br_if_r2 as Op) {
-        vm::op_br_if_ptr_r2
-    } else if op_eq(op, vm::op_br_if_r3 as Op) {
-        vm::op_br_if_ptr_r3
-    } else if op_eq(op, vm::op_if as Op) {
-        vm::op_if_ptr
-    } else if op_eq(op, vm::op_else as Op) {
-        vm::op_else_ptr
-    } else if op_eq(op, vm::op_br_table as Op) {
-        vm::op_br_table_ptr
-    } else if op_eq(op, vm::op_i32_local_br_if as Op) {
-        vm::op_i32_local_br_if_ptr
-    } else if op_eq(op, vm::op_i32_local_eqz_br_if as Op) {
-        vm::op_i32_local_eqz_br_if_ptr
-    } else if op_eq(op, vm::op_i32_local_if as Op) {
-        vm::op_i32_local_if_ptr
-    } else if op_eq(op, vm::op_i32_local_eqz_if as Op) {
-        vm::op_i32_local_eqz_if_ptr
-    } else if op_eq(op, vm::op_i64_local_br_if as Op) {
-        vm::op_i64_local_br_if_ptr
-    } else if op_eq(op, vm::op_i64_local_eqz_br_if as Op) {
-        vm::op_i64_local_eqz_br_if_ptr
-    } else if op_eq(op, vm::op_i64_local_if as Op) {
-        vm::op_i64_local_if_ptr
-    } else if op_eq(op, vm::op_i64_local_eqz_if as Op) {
-        vm::op_i64_local_eqz_if_ptr
-    } else if op_eq(op, vm::op_i32_local_and_imm_br_if as Op) {
-        vm::op_i32_local_and_imm_br_if_ptr
-    } else if op_eq(op, vm::op_i32_local_and_imm_eqz_br_if as Op) {
-        vm::op_i32_local_and_imm_eqz_br_if_ptr
-    } else if op_eq(op, vm::op_i32_local_and_imm_if as Op) {
-        vm::op_i32_local_and_imm_if_ptr
-    } else if op_eq(op, vm::op_i32_local_and_imm_eqz_if as Op) {
-        vm::op_i32_local_and_imm_eqz_if_ptr
-    } else if op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if as Op) {
-        vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if_ptr
-    } else if op_eq(op, vm::op_i32_local_addr_load8_u_and_imm_eqz_if as Op) {
-        vm::op_i32_local_addr_load8_u_and_imm_eqz_if_ptr
-    } else if op_eq(op, vm::op_i32_seed_tee_eqz_br_if as Op) {
-        vm::op_i32_seed_tee_eqz_br_if_ptr
-    } else if op_eq(op, vm::op_i32_seed_tee_eqz_if as Op) {
-        vm::op_i32_seed_tee_eqz_if_ptr
-    } else if op_eq(op, vm::op_i64_seed_tee_eqz_br_if as Op) {
-        vm::op_i64_seed_tee_eqz_br_if_ptr
-    } else if op_eq(op, vm::op_i64_seed_tee_eqz_if as Op) {
-        vm::op_i64_seed_tee_eqz_if_ptr
-    } else if op_eq(op, vm::op_i32_seed_tee_imm_compare_br_if as Op) {
-        vm::op_i32_seed_tee_imm_compare_br_if_ptr
-    } else if op_eq(op, vm::op_i32_seed_tee_imm_compare_if as Op) {
-        vm::op_i32_seed_tee_imm_compare_if_ptr
-    } else if op_eq(op, vm::op_i64_seed_tee_imm_compare_br_if as Op) {
-        vm::op_i64_seed_tee_imm_compare_br_if_ptr
-    } else if op_eq(op, vm::op_i64_seed_tee_imm_compare_if as Op) {
-        vm::op_i64_seed_tee_imm_compare_if_ptr
-    } else if op_eq(op, vm::op_i32_seed_imm_and_br_if as Op) {
-        vm::op_i32_seed_imm_and_br_if_ptr
-    } else if op_eq(op, vm::op_i32_seed_imm_and_eqz_br_if as Op) {
-        vm::op_i32_seed_imm_and_eqz_br_if_ptr
-    } else if op_eq(op, vm::op_i32_seed_imm_and_if as Op) {
-        vm::op_i32_seed_imm_and_if_ptr
-    } else if op_eq(op, vm::op_i32_seed_imm_and_eqz_if as Op) {
-        vm::op_i32_seed_imm_and_eqz_if_ptr
-    } else if op_eq(op, vm::op_i64_seed_imm_and_br_if as Op) {
-        vm::op_i64_seed_imm_and_br_if_ptr
-    } else if op_eq(op, vm::op_i64_seed_imm_and_eqz_br_if as Op) {
-        vm::op_i64_seed_imm_and_eqz_br_if_ptr
-    } else if op_eq(op, vm::op_i64_seed_imm_and_if as Op) {
-        vm::op_i64_seed_imm_and_if_ptr
-    } else if op_eq(op, vm::op_i64_seed_imm_and_eqz_if as Op) {
-        vm::op_i64_seed_imm_and_eqz_if_ptr
-    } else if op_eq(op, vm::op_i32_local_local_ge_u_br_if as Op) {
-        vm::op_i32_local_local_ge_u_br_if_ptr
-    } else if op_eq(op, vm::op_i32_local_local_compare_br_if as Op) {
-        vm::op_i32_local_local_compare_br_if_ptr
-    } else if op_eq(op, vm::op_i32_local_const_compare_br_if as Op) {
-        vm::op_i32_local_const_compare_br_if_ptr
-    } else if op_eq(op, vm::op_i64_local_local_compare_br_if as Op) {
-        vm::op_i64_local_local_compare_br_if_ptr
-    } else if op_eq(op, vm::op_i64_local_const_compare_br_if as Op) {
-        vm::op_i64_local_const_compare_br_if_ptr
-    } else if op_eq(op, vm::op_f32_local_local_compare_br_if as Op) {
-        vm::op_f32_local_local_compare_br_if_ptr
-    } else if op_eq(op, vm::op_f32_local_const_compare_br_if as Op) {
-        vm::op_f32_local_const_compare_br_if_ptr
-    } else if op_eq(op, vm::op_f64_local_local_compare_br_if as Op) {
-        vm::op_f64_local_local_compare_br_if_ptr
-    } else if op_eq(op, vm::op_f64_local_const_compare_br_if as Op) {
-        vm::op_f64_local_const_compare_br_if_ptr
-    } else {
-        return None;
-    })
+    vm::structured_jump_rewrite(op).map(|rewrite| rewrite.ptr_op)
 }
 
 fn rewrite_loop_op(op: Op) -> Option<Op> {
@@ -1750,6 +1652,97 @@ mod tests {
         assert!(active.iter().any(|instr| unsafe {
             std::ptr::fn_addr_eq(instr.op, vm::op_i32_seed_tee_imm_compare_br_if_ptr as Op)
         }));
+    }
+
+    #[tokio::test]
+    async fn instantiate_rewrites_all_structured_jump_sites_to_pointer_bearing_handlers() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let module = parse_wat_module(
+            r#"
+            (module
+              (memory 1)
+              (func (export "raw") (param i32 i32) (result i32)
+                block (result i32)
+                  local.get 0
+                  if (result i32)
+                    local.get 1
+                    i32.const 1
+                    br_table 0 0
+                  else
+                    i32.const 7
+                  end
+                end)
+              (func (export "specialized") (param i32) (result i32)
+                (local i32)
+                block $exit
+                  local.get 0
+                  i32.load8_u
+                  local.tee 1
+                  i32.const 32
+                  i32.gt_u
+                  br_if $exit
+                  i32.const 0
+                  return
+                end
+                local.get 1))
+            "#,
+        );
+
+        let parsed_funcs: Vec<_> = module
+            .codes
+            .0
+            .iter()
+            .filter_map(|body| match body {
+                ParsedFunctionBody::Wasm(func) => Some(func.clone()),
+                ParsedFunctionBody::Host(_) => None,
+            })
+            .collect();
+
+        let instance = instantiate(module, &store, &registry).await.unwrap();
+        let gc = store.lock_gc();
+        let inst = gc.get_instance(
+            instance
+                .object_ref_for_store(&store)
+                .expect("instance must stay live in store"),
+        );
+
+        for (func_index, parsed) in parsed_funcs.iter().enumerate() {
+            let func = gc.get_func(inst.funcs[func_index]);
+            let active = func.code().expect("active wasm code");
+            let active_base = active.as_ptr();
+            for site in parsed.control_flow_metadata.iter() {
+                let ControlFlowMetadataKind::Jump {
+                    jump_operand_slots,
+                    target_ordinals,
+                } = &site.kind
+                else {
+                    continue;
+                };
+                let canonical_op = unsafe { parsed.expr[site.instruction_ordinal as usize].op };
+                let rewrite =
+                    vm::structured_jump_rewrite(canonical_op).expect("jump metadata must rewrite");
+                let active_op = unsafe { active[site.instruction_ordinal as usize].op };
+                assert!(
+                    std::ptr::fn_addr_eq(active_op, rewrite.ptr_op),
+                    "func {func_index} site {} must rewrite to direct-target handler",
+                    site.instruction_ordinal
+                );
+                for (&slot, &target) in jump_operand_slots.iter().zip(target_ordinals.iter()) {
+                    let actual_ptr = unsafe {
+                        active[site.instruction_ordinal as usize + usize::from(slot)]
+                            .operand
+                            .code_ptr as *const Instr
+                    };
+                    let expected_ptr = unsafe { active_base.add(target as usize) };
+                    assert_eq!(
+                        actual_ptr, expected_ptr,
+                        "func {func_index} site {} slot {slot} must point at direct target",
+                        site.instruction_ordinal
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]

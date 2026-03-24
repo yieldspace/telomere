@@ -1341,11 +1341,10 @@ pub unsafe fn op_i32_local_addr_load8_u_and_imm_eqz_if_ptr(
 }
 
 #[inline(always)]
-unsafe fn op_seed_tee_eqz_branch_u32(
+unsafe fn op_seed_tee_eqz_branch_u32<const PTR_TARGET: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
     branch_kind: ControlBranchKind,
-    pointer_bearing: bool,
 ) -> VMResult<()> {
     let value = vm_try!(producer_seed_u32(tail_code, ctx));
     write_local_u32(
@@ -1354,7 +1353,7 @@ unsafe fn op_seed_tee_eqz_branch_u32(
         (*tail_code.add(5)).operand.local_addr,
         value,
     );
-    let ptr = if pointer_bearing {
+    let ptr = if PTR_TARGET {
         branch_target_ptr(tail_code, 6, 7, branch_kind, value == 0)
     } else {
         branch_target_relative(tail_code, ctx, 6, 7, branch_kind, value == 0)
@@ -1363,11 +1362,10 @@ unsafe fn op_seed_tee_eqz_branch_u32(
 }
 
 #[inline(always)]
-unsafe fn op_seed_tee_eqz_branch_u64(
+unsafe fn op_seed_tee_eqz_branch_u64<const PTR_TARGET: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
     branch_kind: ControlBranchKind,
-    pointer_bearing: bool,
 ) -> VMResult<()> {
     let value = vm_try!(producer_seed_u64(tail_code, ctx));
     write_local_u64(
@@ -1376,7 +1374,7 @@ unsafe fn op_seed_tee_eqz_branch_u64(
         (*tail_code.add(5)).operand.local_addr,
         value,
     );
-    let ptr = if pointer_bearing {
+    let ptr = if PTR_TARGET {
         branch_target_ptr(tail_code, 6, 7, branch_kind, value == 0)
     } else {
         branch_target_relative(tail_code, ctx, 6, 7, branch_kind, value == 0)
@@ -1385,11 +1383,10 @@ unsafe fn op_seed_tee_eqz_branch_u64(
 }
 
 #[inline(always)]
-unsafe fn op_seed_tee_imm_compare_branch_u32(
+unsafe fn op_seed_tee_imm_compare_branch_u32<const PTR_TARGET: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
     branch_kind: ControlBranchKind,
-    pointer_bearing: bool,
 ) -> VMResult<()> {
     let value = vm_try!(producer_seed_u32(tail_code, ctx));
     write_local_u32(
@@ -1403,7 +1400,7 @@ unsafe fn op_seed_tee_imm_compare_branch_u32(
         (*tail_code.add(6)).operand.u32,
         IntCompareKind::from_raw((*tail_code.add(8)).operand.u32),
     ) != 0;
-    let ptr = if pointer_bearing {
+    let ptr = if PTR_TARGET {
         branch_target_ptr(tail_code, 7, 9, branch_kind, taken)
     } else {
         branch_target_relative(tail_code, ctx, 7, 9, branch_kind, taken)
@@ -1412,11 +1409,10 @@ unsafe fn op_seed_tee_imm_compare_branch_u32(
 }
 
 #[inline(always)]
-unsafe fn op_seed_tee_imm_compare_branch_u64(
+unsafe fn op_seed_tee_imm_compare_branch_u64<const PTR_TARGET: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
     branch_kind: ControlBranchKind,
-    pointer_bearing: bool,
 ) -> VMResult<()> {
     let value = vm_try!(producer_seed_u64(tail_code, ctx));
     write_local_u64(
@@ -1430,7 +1426,7 @@ unsafe fn op_seed_tee_imm_compare_branch_u64(
         (*tail_code.add(6)).operand.u64,
         IntCompareKind::from_raw((*tail_code.add(8)).operand.u32),
     ) != 0;
-    let ptr = if pointer_bearing {
+    let ptr = if PTR_TARGET {
         branch_target_ptr(tail_code, 7, 9, branch_kind, taken)
     } else {
         branch_target_relative(tail_code, ctx, 7, 9, branch_kind, taken)
@@ -1442,127 +1438,125 @@ pub unsafe fn op_i32_seed_tee_eqz_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_eqz_branch_u32(tail_code, ctx, ControlBranchKind::BrIf, false)
+    op_seed_tee_eqz_branch_u32::<false>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i32_seed_tee_eqz_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_eqz_branch_u32(tail_code, ctx, ControlBranchKind::If, false)
+    op_seed_tee_eqz_branch_u32::<false>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i32_seed_tee_eqz_br_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_eqz_branch_u32(tail_code, ctx, ControlBranchKind::BrIf, true)
+    op_seed_tee_eqz_branch_u32::<true>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i32_seed_tee_eqz_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_eqz_branch_u32(tail_code, ctx, ControlBranchKind::If, true)
+    op_seed_tee_eqz_branch_u32::<true>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i64_seed_tee_eqz_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_eqz_branch_u64(tail_code, ctx, ControlBranchKind::BrIf, false)
+    op_seed_tee_eqz_branch_u64::<false>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i64_seed_tee_eqz_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_eqz_branch_u64(tail_code, ctx, ControlBranchKind::If, false)
+    op_seed_tee_eqz_branch_u64::<false>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i64_seed_tee_eqz_br_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_eqz_branch_u64(tail_code, ctx, ControlBranchKind::BrIf, true)
+    op_seed_tee_eqz_branch_u64::<true>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i64_seed_tee_eqz_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_eqz_branch_u64(tail_code, ctx, ControlBranchKind::If, true)
+    op_seed_tee_eqz_branch_u64::<true>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i32_seed_tee_imm_compare_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_imm_compare_branch_u32(tail_code, ctx, ControlBranchKind::BrIf, false)
+    op_seed_tee_imm_compare_branch_u32::<false>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i32_seed_tee_imm_compare_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_imm_compare_branch_u32(tail_code, ctx, ControlBranchKind::If, false)
+    op_seed_tee_imm_compare_branch_u32::<false>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i32_seed_tee_imm_compare_br_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_imm_compare_branch_u32(tail_code, ctx, ControlBranchKind::BrIf, true)
+    op_seed_tee_imm_compare_branch_u32::<true>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i32_seed_tee_imm_compare_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_imm_compare_branch_u32(tail_code, ctx, ControlBranchKind::If, true)
+    op_seed_tee_imm_compare_branch_u32::<true>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i64_seed_tee_imm_compare_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_imm_compare_branch_u64(tail_code, ctx, ControlBranchKind::BrIf, false)
+    op_seed_tee_imm_compare_branch_u64::<false>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i64_seed_tee_imm_compare_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_imm_compare_branch_u64(tail_code, ctx, ControlBranchKind::If, false)
+    op_seed_tee_imm_compare_branch_u64::<false>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i64_seed_tee_imm_compare_br_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_imm_compare_branch_u64(tail_code, ctx, ControlBranchKind::BrIf, true)
+    op_seed_tee_imm_compare_branch_u64::<true>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i64_seed_tee_imm_compare_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_tee_imm_compare_branch_u64(tail_code, ctx, ControlBranchKind::If, true)
+    op_seed_tee_imm_compare_branch_u64::<true>(tail_code, ctx, ControlBranchKind::If)
 }
 
 #[inline(always)]
-unsafe fn op_seed_imm_and_branch_u32(
+unsafe fn op_seed_imm_and_branch_u32<const ZERO_TEST: bool, const PTR_TARGET: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    zero_test: bool,
     branch_kind: ControlBranchKind,
-    pointer_bearing: bool,
 ) -> VMResult<()> {
     let value = vm_try!(producer_seed_u32(tail_code, ctx));
     let imm = (*tail_code.add(5)).operand.u32;
     let cond = (value & imm) == 0;
-    let taken = if zero_test { cond } else { !cond };
-    let ptr = if pointer_bearing {
+    let taken = if ZERO_TEST { cond } else { !cond };
+    let ptr = if PTR_TARGET {
         branch_target_ptr(tail_code, 6, 7, branch_kind, taken)
     } else {
         branch_target_relative(tail_code, ctx, 6, 7, branch_kind, taken)
@@ -1571,18 +1565,16 @@ unsafe fn op_seed_imm_and_branch_u32(
 }
 
 #[inline(always)]
-unsafe fn op_seed_imm_and_branch_u64(
+unsafe fn op_seed_imm_and_branch_u64<const ZERO_TEST: bool, const PTR_TARGET: bool>(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    zero_test: bool,
     branch_kind: ControlBranchKind,
-    pointer_bearing: bool,
 ) -> VMResult<()> {
     let value = vm_try!(producer_seed_u64(tail_code, ctx));
     let imm = (*tail_code.add(5)).operand.u64;
     let cond = (value & imm) == 0;
-    let taken = if zero_test { cond } else { !cond };
-    let ptr = if pointer_bearing {
+    let taken = if ZERO_TEST { cond } else { !cond };
+    let ptr = if PTR_TARGET {
         branch_target_ptr(tail_code, 6, 7, branch_kind, taken)
     } else {
         branch_target_relative(tail_code, ctx, 6, 7, branch_kind, taken)
@@ -1594,28 +1586,28 @@ pub unsafe fn op_i32_seed_imm_and_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u32(tail_code, ctx, false, ControlBranchKind::BrIf, false)
+    op_seed_imm_and_branch_u32::<false, false>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i32_seed_imm_and_eqz_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u32(tail_code, ctx, true, ControlBranchKind::BrIf, false)
+    op_seed_imm_and_branch_u32::<true, false>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i32_seed_imm_and_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u32(tail_code, ctx, false, ControlBranchKind::If, false)
+    op_seed_imm_and_branch_u32::<false, false>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i32_seed_imm_and_eqz_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u32(tail_code, ctx, true, ControlBranchKind::If, false)
+    op_seed_imm_and_branch_u32::<true, false>(tail_code, ctx, ControlBranchKind::If)
 }
 
 /// Telomere runtime helper `op_i32_seed_imm_and_br_if_ptr`.
@@ -1628,7 +1620,7 @@ pub unsafe fn op_i32_seed_imm_and_br_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u32(tail_code, ctx, false, ControlBranchKind::BrIf, true)
+    op_seed_imm_and_branch_u32::<false, true>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 /// Telomere runtime helper `op_i32_seed_imm_and_eqz_br_if_ptr`.
@@ -1641,7 +1633,7 @@ pub unsafe fn op_i32_seed_imm_and_eqz_br_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u32(tail_code, ctx, true, ControlBranchKind::BrIf, true)
+    op_seed_imm_and_branch_u32::<true, true>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 /// Telomere runtime helper `op_i32_seed_imm_and_if_ptr`.
@@ -1654,7 +1646,7 @@ pub unsafe fn op_i32_seed_imm_and_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u32(tail_code, ctx, false, ControlBranchKind::If, true)
+    op_seed_imm_and_branch_u32::<false, true>(tail_code, ctx, ControlBranchKind::If)
 }
 
 /// Telomere runtime helper `op_i32_seed_imm_and_eqz_if_ptr`.
@@ -1667,35 +1659,35 @@ pub unsafe fn op_i32_seed_imm_and_eqz_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u32(tail_code, ctx, true, ControlBranchKind::If, true)
+    op_seed_imm_and_branch_u32::<true, true>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i64_seed_imm_and_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u64(tail_code, ctx, false, ControlBranchKind::BrIf, false)
+    op_seed_imm_and_branch_u64::<false, false>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i64_seed_imm_and_eqz_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u64(tail_code, ctx, true, ControlBranchKind::BrIf, false)
+    op_seed_imm_and_branch_u64::<true, false>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 pub unsafe fn op_i64_seed_imm_and_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u64(tail_code, ctx, false, ControlBranchKind::If, false)
+    op_seed_imm_and_branch_u64::<false, false>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i64_seed_imm_and_eqz_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u64(tail_code, ctx, true, ControlBranchKind::If, false)
+    op_seed_imm_and_branch_u64::<true, false>(tail_code, ctx, ControlBranchKind::If)
 }
 
 /// Telomere runtime helper `op_i64_seed_imm_and_br_if_ptr`.
@@ -1708,7 +1700,7 @@ pub unsafe fn op_i64_seed_imm_and_br_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u64(tail_code, ctx, false, ControlBranchKind::BrIf, true)
+    op_seed_imm_and_branch_u64::<false, true>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 /// Telomere runtime helper `op_i64_seed_imm_and_eqz_br_if_ptr`.
@@ -1721,7 +1713,7 @@ pub unsafe fn op_i64_seed_imm_and_eqz_br_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u64(tail_code, ctx, true, ControlBranchKind::BrIf, true)
+    op_seed_imm_and_branch_u64::<true, true>(tail_code, ctx, ControlBranchKind::BrIf)
 }
 
 /// Telomere runtime helper `op_i64_seed_imm_and_if_ptr`.
@@ -1734,7 +1726,7 @@ pub unsafe fn op_i64_seed_imm_and_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u64(tail_code, ctx, false, ControlBranchKind::If, true)
+    op_seed_imm_and_branch_u64::<false, true>(tail_code, ctx, ControlBranchKind::If)
 }
 
 /// Telomere runtime helper `op_i64_seed_imm_and_eqz_if_ptr`.
@@ -1747,7 +1739,7 @@ pub unsafe fn op_i64_seed_imm_and_eqz_if_ptr(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    op_seed_imm_and_branch_u64(tail_code, ctx, true, ControlBranchKind::If, true)
+    op_seed_imm_and_branch_u64::<true, true>(tail_code, ctx, ControlBranchKind::If)
 }
 
 pub unsafe fn op_i32_local_local_ge_u_br_if(
