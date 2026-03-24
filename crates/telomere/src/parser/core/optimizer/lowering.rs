@@ -1,4 +1,5 @@
 use super::*;
+use smallvec::SmallVec;
 
 pub(super) struct LoweredProgram {
     pub(super) instr: Vec<Instr>,
@@ -10,15 +11,17 @@ pub(super) fn lower_program(
     optimized: Vec<OptimizedInstruction>,
     old_flat_len: usize,
     function_index: u32,
+    source_instrs: &[Instr],
 ) -> LoweredProgram {
     let mut old_to_new = vec![0u32; old_flat_len];
     let mut new_len = 0usize;
     for instruction in &optimized {
-        for old_index in old_range(instruction).clone() {
-            old_to_new[old_index] =
-                u32::try_from(new_len).expect("optimized program grew too large");
+        let span = old_span(*instruction);
+        let lowered_start = u32::try_from(new_len).expect("optimized program grew too large");
+        for entry in old_to_new.iter_mut().take(span.end()).skip(span.start()) {
+            *entry = lowered_start;
         }
-        new_len += output_len(instruction);
+        new_len += output_len(*instruction);
     }
 
     let mut lowered = Vec::with_capacity(new_len);
@@ -31,6 +34,7 @@ pub(super) fn lower_program(
             &mut lowered,
             function_index,
             instruction_ordinal as u32,
+            source_instrs,
         );
     }
     LoweredProgram {
@@ -74,63 +78,63 @@ pub(super) fn block_return_shape_op(op: Op) -> Option<ReturnShape> {
     }
 }
 
-fn old_range(instruction: &OptimizedInstruction) -> &Range<usize> {
+fn old_span(instruction: OptimizedInstruction) -> InstructionSpan {
     match instruction {
-        OptimizedInstruction::Raw(decoded) => &decoded.old_range,
-        OptimizedInstruction::ConstSetTee { old_range, .. }
-        | OptimizedInstruction::LocalCopy { old_range, .. }
-        | OptimizedInstruction::LocalImmPush { old_range, .. }
-        | OptimizedInstruction::LocalLocalPush { old_range, .. }
-        | OptimizedInstruction::LocalImmSetTee { old_range, .. }
-        | OptimizedInstruction::LocalLocalSetTee { old_range, .. }
-        | OptimizedInstruction::LocalBranch { old_range, .. }
-        | OptimizedInstruction::I32LocalAndImmBranch { old_range, .. }
-        | OptimizedInstruction::ProducerImmAndBranch { old_range, .. }
-        | OptimizedInstruction::I32LocalAddrLoad8UAndImmEqzBranch { old_range, .. }
-        | OptimizedInstruction::I32LocalLocalGeUBrIf { old_range, .. }
-        | OptimizedInstruction::CompareSetTeeLocal { old_range, .. }
-        | OptimizedInstruction::CompareSetTeeConst { old_range, .. }
-        | OptimizedInstruction::CompareBrIfLocal { old_range, .. }
-        | OptimizedInstruction::CompareBrIfConst { old_range, .. }
-        | OptimizedInstruction::CompareSelectLocal { old_range, .. }
-        | OptimizedInstruction::CompareSelectConst { old_range, .. }
-        | OptimizedInstruction::LoadConstLocal { old_range, .. }
-        | OptimizedInstruction::StoreConstLocal { old_range, .. }
-        | OptimizedInstruction::LocalAddrLoad { old_range, .. }
-        | OptimizedInstruction::LocalImmAddrLoad { old_range, .. }
-        | OptimizedInstruction::I32LocalLocalLoadTeeAddImmStore { old_range, .. }
-        | OptimizedInstruction::LocalLocalStore { old_range, .. }
-        | OptimizedInstruction::LocalImmLocalStore { old_range, .. }
-        | OptimizedInstruction::I32LocalLocalNarrowCopy { old_range, .. }
-        | OptimizedInstruction::ProducerTeeEqzBranch { old_range, .. }
-        | OptimizedInstruction::ProducerTeeImmCompareBranch { old_range, .. }
-        | OptimizedInstruction::ProducerTeeImmScalarSetTee { old_range, .. }
-        | OptimizedInstruction::ProducerImmScalarSetTee { old_range, .. }
-        | OptimizedInstruction::ProducerTeeConstSelfSelect { old_range, .. }
-        | OptimizedInstruction::ProducerCompareSelectLocal { old_range, .. }
-        | OptimizedInstruction::ProducerCompareSelectConst { old_range, .. }
-        | OptimizedInstruction::CompareTeeSelectLocal { old_range, .. }
-        | OptimizedInstruction::CompareTeeSelectConst { old_range, .. } => old_range,
+        OptimizedInstruction::Raw(span)
+        | OptimizedInstruction::ConstSetTee { span, .. }
+        | OptimizedInstruction::LocalCopy { span, .. }
+        | OptimizedInstruction::LocalImmPush { span, .. }
+        | OptimizedInstruction::LocalLocalPush { span, .. }
+        | OptimizedInstruction::LocalImmSetTee { span, .. }
+        | OptimizedInstruction::LocalLocalSetTee { span, .. }
+        | OptimizedInstruction::LocalBranch { span, .. }
+        | OptimizedInstruction::I32LocalAndImmBranch { span, .. }
+        | OptimizedInstruction::ProducerImmAndBranch { span, .. }
+        | OptimizedInstruction::I32LocalAddrLoad8UAndImmEqzBranch { span, .. }
+        | OptimizedInstruction::I32LocalLocalGeUBrIf { span, .. }
+        | OptimizedInstruction::CompareSetTeeLocal { span, .. }
+        | OptimizedInstruction::CompareSetTeeConst { span, .. }
+        | OptimizedInstruction::CompareBrIfLocal { span, .. }
+        | OptimizedInstruction::CompareBrIfConst { span, .. }
+        | OptimizedInstruction::CompareSelectLocal { span, .. }
+        | OptimizedInstruction::CompareSelectConst { span, .. }
+        | OptimizedInstruction::LoadConstLocal { span, .. }
+        | OptimizedInstruction::StoreConstLocal { span, .. }
+        | OptimizedInstruction::LocalAddrLoad { span, .. }
+        | OptimizedInstruction::LocalImmAddrLoad { span, .. }
+        | OptimizedInstruction::I32LocalLocalLoadTeeAddImmStore { span, .. }
+        | OptimizedInstruction::LocalLocalStore { span, .. }
+        | OptimizedInstruction::LocalImmLocalStore { span, .. }
+        | OptimizedInstruction::I32LocalLocalNarrowCopy { span, .. }
+        | OptimizedInstruction::ProducerTeeEqzBranch { span, .. }
+        | OptimizedInstruction::ProducerTeeImmCompareBranch { span, .. }
+        | OptimizedInstruction::ProducerTeeImmScalarSetTee { span, .. }
+        | OptimizedInstruction::ProducerImmScalarSetTee { span, .. }
+        | OptimizedInstruction::ProducerTeeConstSelfSelect { span, .. }
+        | OptimizedInstruction::ProducerCompareSelectLocal { span, .. }
+        | OptimizedInstruction::ProducerCompareSelectConst { span, .. }
+        | OptimizedInstruction::CompareTeeSelectLocal { span, .. }
+        | OptimizedInstruction::CompareTeeSelectConst { span, .. } => span,
     }
 }
 
-fn output_len(instruction: &OptimizedInstruction) -> usize {
+fn output_len(instruction: OptimizedInstruction) -> usize {
     match instruction {
-        OptimizedInstruction::Raw(decoded) => decoded.raw.len(),
+        OptimizedInstruction::Raw(span) => span.len(),
         OptimizedInstruction::ConstSetTee { .. } => 3,
         OptimizedInstruction::LocalCopy { .. } => 3,
         OptimizedInstruction::LocalImmPush { .. } | OptimizedInstruction::LocalLocalPush { .. } => {
             4
         }
         OptimizedInstruction::LocalImmSetTee { op, .. } => {
-            if is_existing_i32_local_imm_fastpath(*op) {
+            if is_existing_i32_local_imm_fastpath(op) {
                 4
             } else {
                 5
             }
         }
         OptimizedInstruction::LocalLocalSetTee { op, .. } => {
-            if is_existing_i32_local_local_fastpath(*op) {
+            if is_existing_i32_local_local_fastpath(op) {
                 4
             } else {
                 5
@@ -377,11 +381,16 @@ fn lower_instruction(
     lowered: &mut Vec<Instr>,
     function_index: u32,
     instruction_ordinal: u32,
+    source_instrs: &[Instr],
 ) {
     let start = lowered.len();
     match instruction {
-        OptimizedInstruction::Raw(decoded) => {
-            lowered.extend(rewrite_raw_jumps(decoded.raw.as_ref(), old_to_new))
+        OptimizedInstruction::Raw(span) => {
+            rewrite_raw_jumps_into(
+                &source_instrs[span.start()..span.end()],
+                old_to_new,
+                lowered,
+            );
         }
         OptimizedInstruction::ConstSetTee {
             value,
@@ -1764,8 +1773,8 @@ fn lower_instruction(
     }
 }
 
-fn rewrite_raw_jumps(raw: &[Instr], old_to_new: &[u32]) -> Vec<Instr> {
-    let mut rewritten = raw.to_vec();
+fn rewrite_raw_jumps_into(raw: &[Instr], old_to_new: &[u32], lowered: &mut Vec<Instr>) {
+    let mut rewritten: SmallVec<[Instr; 8]> = SmallVec::from_slice(raw);
     let op = unsafe { raw[0].op };
     if raw.len() >= 2
         && (std::ptr::fn_addr_eq(op, vm::op_br as crate::common::Op)
@@ -1780,7 +1789,8 @@ fn rewrite_raw_jumps(raw: &[Instr], old_to_new: &[u32]) -> Vec<Instr> {
                 jump_addr: remap_jump_target(target, old_to_new),
             },
         };
-        return rewritten;
+        lowered.extend(rewritten);
+        return;
     }
     if raw.len() >= 3 && std::ptr::fn_addr_eq(op, vm::op_br_table as crate::common::Op) {
         let table_size = unsafe { raw[1].operand.u32 as usize };
@@ -1794,7 +1804,7 @@ fn rewrite_raw_jumps(raw: &[Instr], old_to_new: &[u32]) -> Vec<Instr> {
             };
         }
     }
-    rewritten
+    lowered.extend(rewritten);
 }
 
 fn remap_jump_target(target_old: u32, old_to_new: &[u32]) -> u32 {

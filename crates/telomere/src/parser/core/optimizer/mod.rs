@@ -1,4 +1,4 @@
-use std::{collections::HashSet, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use crate::{
     common::{
@@ -29,35 +29,104 @@ pub(crate) struct OptimizedCoreProgram {
     pub(crate) instruction_ordinal_by_raw_start: Arc<[u32]>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct InstructionSpan {
+    start_raw: u32,
+    len_raw: u32,
+}
+
+impl InstructionSpan {
+    pub(super) fn new(start_raw: usize, end_raw: usize) -> Self {
+        let start_raw = u32::try_from(start_raw).expect("instruction span start overflowed u32");
+        let end_raw = u32::try_from(end_raw).expect("instruction span end overflowed u32");
+        Self::from_bounds(start_raw, end_raw)
+    }
+
+    pub(super) fn from_bounds(start_raw: u32, end_raw: u32) -> Self {
+        Self {
+            start_raw,
+            len_raw: end_raw - start_raw,
+        }
+    }
+
+    pub(super) fn from_old_range(range: &std::ops::Range<usize>) -> Self {
+        Self::new(range.start, range.end)
+    }
+
+    pub(super) fn start(self) -> usize {
+        self.start_raw as usize
+    }
+
+    pub(super) fn end(self) -> usize {
+        (self.start_raw + self.len_raw) as usize
+    }
+
+    pub(super) fn len(self) -> usize {
+        self.len_raw as usize
+    }
+}
+
+pub(super) struct JumpTargetBitmap {
+    bits: Box<[u64]>,
+}
+
+impl JumpTargetBitmap {
+    pub(super) fn with_raw_len(raw_len: usize) -> Self {
+        let word_len = raw_len.div_ceil(u64::BITS as usize);
+        Self {
+            bits: vec![0u64; word_len].into_boxed_slice(),
+        }
+    }
+
+    pub(super) fn mark(&mut self, raw_index: usize) {
+        let word_index = raw_index / u64::BITS as usize;
+        let bit_index = raw_index % u64::BITS as usize;
+        if let Some(word) = self.bits.get_mut(word_index) {
+            *word |= 1u64 << bit_index;
+        }
+    }
+
+    pub(super) fn contains_raw(&self, raw_index: u32) -> bool {
+        let raw_index = raw_index as usize;
+        let word_index = raw_index / u64::BITS as usize;
+        let bit_index = raw_index % u64::BITS as usize;
+        self.bits
+            .get(word_index)
+            .map(|word| (word & (1u64 << bit_index)) != 0)
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Clone, Copy)]
 enum OptimizedInstruction {
-    Raw(DecodedInstruction),
+    Raw(InstructionSpan),
     ConstSetTee {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         value: TypedConst,
         dst_local: u32,
         tee: bool,
     },
     LocalCopy {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         src_local: u32,
         dst_local: u32,
         width: ValueSize,
         tee: bool,
     },
     LocalImmPush {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         src_local: u32,
         imm: TypedConst,
         op: TypedScalarOp,
     },
     LocalLocalPush {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_local_addr: u32,
         op: TypedScalarOp,
     },
     LocalImmSetTee {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         src_local: u32,
         imm: TypedConst,
         dst_local: u32,
@@ -65,7 +134,7 @@ enum OptimizedInstruction {
         op: TypedScalarOp,
     },
     LocalLocalSetTee {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_local_addr: u32,
         dst_local: u32,
@@ -73,7 +142,7 @@ enum OptimizedInstruction {
         op: TypedScalarOp,
     },
     LocalBranch {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         local_addr: u32,
         target_old: u32,
         width: ValueSize,
@@ -81,7 +150,7 @@ enum OptimizedInstruction {
         branch_kind: ControlBranchKind,
     },
     I32LocalAndImmBranch {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         local_addr: u32,
         imm: i32,
         target_old: u32,
@@ -89,7 +158,7 @@ enum OptimizedInstruction {
         branch_kind: ControlBranchKind,
     },
     ProducerImmAndBranch {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         seed: ProducerSeed,
         rhs_const: TypedConst,
         width: ValueSize,
@@ -98,7 +167,7 @@ enum OptimizedInstruction {
         branch_kind: ControlBranchKind,
     },
     I32LocalAddrLoad8UAndImmEqzBranch {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         local_addr: u32,
         memarg: MemArg,
         imm: i32,
@@ -106,13 +175,13 @@ enum OptimizedInstruction {
         branch_kind: ControlBranchKind,
     },
     I32LocalLocalGeUBrIf {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_local_addr: u32,
         target_old: u32,
     },
     CompareSetTeeLocal {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_local_addr: u32,
         dst_local: u32,
@@ -120,7 +189,7 @@ enum OptimizedInstruction {
         op: TypedCompareOp,
     },
     CompareSetTeeConst {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_const: TypedConst,
         dst_local: u32,
@@ -128,59 +197,59 @@ enum OptimizedInstruction {
         op: TypedCompareOp,
     },
     CompareBrIfLocal {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_local_addr: u32,
         target_old: u32,
         op: TypedCompareOp,
     },
     CompareBrIfConst {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_const: TypedConst,
         target_old: u32,
         op: TypedCompareOp,
     },
     CompareSelectLocal {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_local_addr: u32,
         select_width: ValueSize,
         op: TypedCompareOp,
     },
     CompareSelectConst {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_const: TypedConst,
         select_width: ValueSize,
         op: TypedCompareOp,
     },
     LoadConstLocal {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         start: u32,
         op: TypedLoadOp,
     },
     StoreConstLocal {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         start: u32,
         value_local_addr: u32,
         op: TypedStoreOp,
     },
     LocalAddrLoad {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         local_addr: u32,
         memarg: MemArg,
         op: TypedLoadOp,
     },
     LocalImmAddrLoad {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         local_addr: u32,
         imm: i32,
         memarg: MemArg,
         op: TypedLoadOp,
     },
     I32LocalLocalLoadTeeAddImmStore {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         store_addr_local_addr: u32,
         load_addr_local_addr: u32,
         tee_local_addr: u32,
@@ -189,14 +258,14 @@ enum OptimizedInstruction {
         store_memarg: MemArg,
     },
     LocalLocalStore {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         addr_local_addr: u32,
         value_local_addr: u32,
         memarg: MemArg,
         op: TypedStoreOp,
     },
     LocalImmLocalStore {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         addr_local_addr: u32,
         imm: i32,
         value_local_addr: u32,
@@ -204,7 +273,7 @@ enum OptimizedInstruction {
         op: TypedStoreOp,
     },
     I32LocalLocalNarrowCopy {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         dst_local_addr: u32,
         src_local_addr: u32,
         load_memarg: MemArg,
@@ -212,7 +281,7 @@ enum OptimizedInstruction {
         kind: NarrowCopyKind,
     },
     ProducerTeeEqzBranch {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         seed: ProducerSeed,
         tee_local_addr: u32,
         target_old: u32,
@@ -220,7 +289,7 @@ enum OptimizedInstruction {
         branch_kind: ControlBranchKind,
     },
     ProducerTeeImmCompareBranch {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         seed: ProducerSeed,
         tee_local_addr: u32,
         rhs_const: TypedConst,
@@ -229,7 +298,7 @@ enum OptimizedInstruction {
         branch_kind: ControlBranchKind,
     },
     ProducerTeeImmScalarSetTee {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         seed: ProducerSeed,
         tee_local_addr: u32,
         rhs_const: TypedConst,
@@ -238,7 +307,7 @@ enum OptimizedInstruction {
         op: TypedScalarOp,
     },
     ProducerImmScalarSetTee {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         seed: ProducerSeed,
         rhs_const: TypedConst,
         dst_local: u32,
@@ -246,28 +315,28 @@ enum OptimizedInstruction {
         op: TypedScalarOp,
     },
     ProducerTeeConstSelfSelect {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         seed: ProducerSeed,
         tee_local_addr: u32,
         rhs_const: TypedConst,
         width: ValueSize,
     },
     ProducerCompareSelectLocal {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         seed: ProducerSeed,
         rhs_local_addr: u32,
         select_width: ValueSize,
         op: TypedCompareOp,
     },
     ProducerCompareSelectConst {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         seed: ProducerSeed,
         rhs_const: TypedConst,
         select_width: ValueSize,
         op: TypedCompareOp,
     },
     CompareTeeSelectLocal {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_local_addr: u32,
         tee_local_addr: u32,
@@ -275,7 +344,7 @@ enum OptimizedInstruction {
         op: TypedCompareOp,
     },
     CompareTeeSelectConst {
-        old_range: Range<usize>,
+        span: InstructionSpan,
         lhs_local_addr: u32,
         rhs_const: TypedConst,
         tee_local_addr: u32,
@@ -284,8 +353,14 @@ enum OptimizedInstruction {
     },
 }
 
+impl OptimizedInstruction {
+    fn raw(span: InstructionSpan) -> Self {
+        Self::Raw(span)
+    }
+}
+
 type MatchOutcome = (usize, OptimizedInstruction);
-type Matcher = fn(&[DecodedInstruction], usize, &HashSet<usize>) -> Option<MatchOutcome>;
+type Matcher = fn(&[DecodedInstruction], usize, &JumpTargetBitmap) -> Option<MatchOutcome>;
 
 const LOCAL_COPY_MATCHERS: &[Matcher] = &[match_local_copy];
 const CONST_SET_TEE_MATCHERS: &[Matcher] = &[match_const_set_tee];
@@ -366,9 +441,14 @@ pub(crate) fn optimize_core_program_with_metadata(
     }
 
     let decoded = decode_instructions(&program.instr, &program.instruction_starts);
-    let jump_targets = collect_jump_targets(&decoded);
+    let jump_targets = collect_jump_targets(&decoded, program.instr.len(), &program.instr);
     let optimized = fuse_superinstructions(decoded, &jump_targets);
-    let lowered = lower_program(optimized, program.instr.len(), function_index);
+    let lowered = lower_program(
+        optimized,
+        program.instr.len(),
+        function_index,
+        &program.instr,
+    );
     let control_flow_metadata = collect_control_flow_metadata(
         &lowered.instr,
         &lowered.instruction_starts,
@@ -922,7 +1002,7 @@ mod tests {
     fn optimizer_lowers_float_load_compare_select_superinstruction() {
         let lowered = lower_program(
             vec![OptimizedInstruction::ProducerCompareSelectConst {
-                old_range: 0..5,
+                span: InstructionSpan::new(0, 5),
                 seed: ProducerSeed::LocalAddrLoad {
                     width: ValueSize::Byte4,
                     local_addr: 0,
@@ -938,11 +1018,35 @@ mod tests {
             }],
             5,
             0,
+            &[],
         );
 
         assert!(std::ptr::fn_addr_eq(
             unsafe { lowered.instr[0].op },
             vm::op_f32_seed_const_compare_select4 as crate::common::Op
         ));
+    }
+
+    #[test]
+    fn optimizer_ir_stays_compact_after_span_backed_raw_refactor() {
+        use std::mem::{needs_drop, size_of};
+
+        type OldDecodedOwned = (Range<usize>, DecodedKind, Box<[Instr]>);
+        type OldHeavyPayload = (
+            Range<usize>,
+            ProducerSeed,
+            TypedConst,
+            TypedCompareOp,
+            ValueSize,
+            u32,
+            bool,
+            ControlBranchKind,
+        );
+
+        assert!(size_of::<InstructionSpan>() < size_of::<Range<usize>>());
+        assert!(size_of::<DecodedInstruction>() < size_of::<OldDecodedOwned>());
+        assert!(size_of::<OptimizedInstruction>() <= size_of::<OldHeavyPayload>());
+        assert!(!needs_drop::<DecodedInstruction>());
+        assert!(!needs_drop::<OptimizedInstruction>());
     }
 }

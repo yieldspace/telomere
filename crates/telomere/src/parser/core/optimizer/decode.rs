@@ -2,9 +2,14 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct DecodedInstruction {
-    pub(super) old_range: Range<usize>,
+    pub(super) old_range: std::ops::Range<usize>,
     pub(super) kind: DecodedKind,
-    pub(super) raw: Box<[Instr]>,
+}
+
+impl DecodedInstruction {
+    pub(super) fn raw<'a>(&self, instrs: &'a [Instr]) -> &'a [Instr] {
+        &instrs[self.old_range.clone()]
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,12 +142,10 @@ pub(super) fn decode_instructions(instrs: &[Instr], starts: &[usize]) -> Vec<Dec
     let mut decoded = Vec::with_capacity(starts.len());
     for (index, &start) in starts.iter().enumerate() {
         let end = starts.get(index + 1).copied().unwrap_or(instrs.len());
-        let raw = instrs[start..end].to_vec().into_boxed_slice();
-        let kind = decode_kind(&raw);
+        let kind = decode_kind(&instrs[start..end]);
         decoded.push(DecodedInstruction {
             old_range: start..end,
             kind,
-            raw,
         });
     }
     decoded

@@ -969,6 +969,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "regex",
+ "smallvec",
  "syn",
  "telomere-macros",
  "thiserror",

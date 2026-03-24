@@ -1,5 +1,6 @@
 use super::*;
 
+#[derive(Clone, Copy)]
 pub(super) enum ControlBranchKind {
     BrIf,
     If,
@@ -11,10 +12,14 @@ pub(super) enum NarrowCopyKind {
     Load16Store16,
 }
 
-pub(super) fn collect_jump_targets(decoded: &[DecodedInstruction]) -> HashSet<usize> {
-    let mut targets = HashSet::new();
+pub(super) fn collect_jump_targets(
+    decoded: &[DecodedInstruction],
+    raw_len: usize,
+    raw_instrs: &[Instr],
+) -> JumpTargetBitmap {
+    let mut targets = JumpTargetBitmap::with_raw_len(raw_len);
     for instruction in decoded {
-        let raw = instruction.raw.as_ref();
+        let raw = instruction.raw(raw_instrs);
         let op = unsafe { raw[0].op };
         if raw.len() >= 2
             && (std::ptr::fn_addr_eq(op, vm::op_br as crate::common::Op)
@@ -23,13 +28,13 @@ pub(super) fn collect_jump_targets(decoded: &[DecodedInstruction]) -> HashSet<us
                 || std::ptr::fn_addr_eq(op, vm::op_else as crate::common::Op)
                 || std::ptr::fn_addr_eq(op, vm::op_return as crate::common::Op))
         {
-            targets.insert(unsafe { raw[1].operand.jump_addr as usize });
+            targets.mark(unsafe { raw[1].operand.jump_addr as usize });
             continue;
         }
         if raw.len() >= 3 && std::ptr::fn_addr_eq(op, vm::op_br_table as crate::common::Op) {
             let table_size = unsafe { raw[1].operand.u32 as usize };
             for target in &raw[2..=table_size + 2] {
-                targets.insert(unsafe { target.operand.jump_addr as usize });
+                targets.mark(unsafe { target.operand.jump_addr as usize });
             }
         }
     }
@@ -38,7 +43,7 @@ pub(super) fn collect_jump_targets(decoded: &[DecodedInstruction]) -> HashSet<us
 
 pub(super) fn fuse_superinstructions(
     decoded: Vec<DecodedInstruction>,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Vec<OptimizedInstruction> {
     let mut optimized = Vec::with_capacity(decoded.len());
     let mut index = 0;
@@ -266,7 +271,9 @@ pub(super) fn fuse_superinstructions(
             continue;
         }
 
-        optimized.push(OptimizedInstruction::Raw(decoded[index].clone()));
+        optimized.push(OptimizedInstruction::raw(InstructionSpan::from_old_range(
+            &decoded[index].old_range,
+        )));
         index += 1;
     }
 
@@ -277,7 +284,7 @@ fn try_matchers(
     matchers: &[Matcher],
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     for matcher in matchers {
         if let Some(outcome) = matcher(decoded, index, jump_targets) {
@@ -289,10 +296,10 @@ fn try_matchers(
 
 fn sequence_crosses_jump_targets(
     decoded: &[DecodedInstruction],
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
     mut range: Range<usize>,
 ) -> bool {
-    range.any(|idx| jump_targets.contains(&decoded[idx].old_range.start))
+    range.any(|idx| jump_targets.contains_raw(decoded[idx].old_range.start as u32))
 }
 
 pub(super) fn same_width(lhs: ValueSize, rhs: ValueSize) -> bool {
@@ -399,7 +406,7 @@ fn is_integer_compare(op: TypedCompareOp) -> bool {
 pub(super) fn match_producer_imm_and_branch(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let seed_match = match_producer_seed(decoded, index)?;
     if !has_nontrivial_seed(&seed_match) {
@@ -469,7 +476,7 @@ pub(super) fn match_producer_imm_and_branch(
     Some((
         branch_index - index + 1,
         OptimizedInstruction::ProducerImmAndBranch {
-            old_range: decoded[index].old_range.start..end,
+            span: InstructionSpan::new(decoded[index].old_range.start, end),
             seed: seed_match.seed,
             rhs_const,
             width,
@@ -483,7 +490,7 @@ pub(super) fn match_producer_imm_and_branch(
 pub(super) fn match_producer_imm_scalar_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let seed_match = match_producer_seed(decoded, index)?;
     if !has_nontrivial_seed(&seed_match) {
@@ -517,7 +524,7 @@ pub(super) fn match_producer_imm_scalar_set_tee(
     Some((
         set_tee_index - index + 1,
         OptimizedInstruction::ProducerImmScalarSetTee {
-            old_range: decoded[index].old_range.start..set_tee.old_range.end,
+            span: InstructionSpan::new(decoded[index].old_range.start, set_tee.old_range.end),
             seed: seed_match.seed,
             rhs_const,
             dst_local,
@@ -530,7 +537,7 @@ pub(super) fn match_producer_imm_scalar_set_tee(
 pub(super) fn match_producer_local_compare_select(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let seed_match = match_producer_seed(decoded, index)?;
     if !has_nontrivial_seed(&seed_match) {
@@ -559,7 +566,10 @@ pub(super) fn match_producer_local_compare_select(
     Some((
         select_index - index + 1,
         OptimizedInstruction::ProducerCompareSelectLocal {
-            old_range: decoded[index].old_range.start..decoded[select_index].old_range.end,
+            span: InstructionSpan::new(
+                decoded[index].old_range.start,
+                decoded[select_index].old_range.end,
+            ),
             seed,
             rhs_local_addr,
             select_width,
@@ -571,7 +581,7 @@ pub(super) fn match_producer_local_compare_select(
 pub(super) fn match_producer_const_compare_select(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let seed_match = match_producer_seed(decoded, index)?;
     if !has_nontrivial_seed(&seed_match) {
@@ -604,7 +614,10 @@ pub(super) fn match_producer_const_compare_select(
     Some((
         select_index - index + 1,
         OptimizedInstruction::ProducerCompareSelectConst {
-            old_range: decoded[index].old_range.start..decoded[select_index].old_range.end,
+            span: InstructionSpan::new(
+                decoded[index].old_range.start,
+                decoded[select_index].old_range.end,
+            ),
             seed,
             rhs_const,
             select_width,
@@ -616,7 +629,7 @@ pub(super) fn match_producer_const_compare_select(
 pub(super) fn match_producer_tee_eqz_branch(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let seed_match = match_producer_seed(decoded, index)?;
     let tee_index = index + seed_match.consumed;
@@ -647,7 +660,7 @@ pub(super) fn match_producer_tee_eqz_branch(
     Some((
         seed_match.consumed + 3,
         OptimizedInstruction::ProducerTeeEqzBranch {
-            old_range: decoded[index].old_range.start..branch.old_range.end,
+            span: InstructionSpan::new(decoded[index].old_range.start, branch.old_range.end),
             seed: seed_match.seed,
             tee_local_addr,
             target_old,
@@ -660,7 +673,7 @@ pub(super) fn match_producer_tee_eqz_branch(
 pub(super) fn match_producer_tee_imm_compare_branch(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let seed_match = match_producer_seed(decoded, index)?;
     let tee_index = index + seed_match.consumed;
@@ -698,7 +711,7 @@ pub(super) fn match_producer_tee_imm_compare_branch(
     Some((
         seed_match.consumed + 4,
         OptimizedInstruction::ProducerTeeImmCompareBranch {
-            old_range: decoded[index].old_range.start..branch.old_range.end,
+            span: InstructionSpan::new(decoded[index].old_range.start, branch.old_range.end),
             seed: seed_match.seed,
             tee_local_addr,
             rhs_const,
@@ -712,7 +725,7 @@ pub(super) fn match_producer_tee_imm_compare_branch(
 pub(super) fn match_producer_tee_imm_scalar_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let seed_match = match_producer_seed(decoded, index)?;
     let tee_index = index + seed_match.consumed;
@@ -747,7 +760,10 @@ pub(super) fn match_producer_tee_imm_scalar_set_tee(
     Some((
         seed_match.consumed + 4,
         OptimizedInstruction::ProducerTeeImmScalarSetTee {
-            old_range: decoded[index].old_range.start..decoded[set_tee_index].old_range.end,
+            span: InstructionSpan::new(
+                decoded[index].old_range.start,
+                decoded[set_tee_index].old_range.end,
+            ),
             seed: seed_match.seed,
             tee_local_addr,
             rhs_const,
@@ -761,7 +777,7 @@ pub(super) fn match_producer_tee_imm_scalar_set_tee(
 pub(super) fn match_producer_tee_const_self_select(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let seed_match = match_producer_seed(decoded, index)?;
     let tee_index = index + seed_match.consumed;
@@ -791,7 +807,10 @@ pub(super) fn match_producer_tee_const_self_select(
     Some((
         seed_match.consumed + 4,
         OptimizedInstruction::ProducerTeeConstSelfSelect {
-            old_range: decoded[index].old_range.start..decoded[select_index].old_range.end,
+            span: InstructionSpan::new(
+                decoded[index].old_range.start,
+                decoded[select_index].old_range.end,
+            ),
             seed: seed_match.seed,
             tee_local_addr,
             rhs_const,
@@ -803,7 +822,7 @@ pub(super) fn match_producer_tee_const_self_select(
 pub(super) fn match_local_local_compare_tee_select(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth, fifth] = decoded.get(index..index + 5)? else {
         return None;
@@ -832,7 +851,7 @@ pub(super) fn match_local_local_compare_tee_select(
     Some((
         5,
         OptimizedInstruction::CompareTeeSelectLocal {
-            old_range: first.old_range.start..fifth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fifth.old_range.end),
             lhs_local_addr,
             rhs_local_addr,
             tee_local_addr,
@@ -845,7 +864,7 @@ pub(super) fn match_local_local_compare_tee_select(
 pub(super) fn match_local_const_compare_tee_select(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth, fifth] = decoded.get(index..index + 5)? else {
         return None;
@@ -878,7 +897,7 @@ pub(super) fn match_local_const_compare_tee_select(
     Some((
         5,
         OptimizedInstruction::CompareTeeSelectConst {
-            old_range: first.old_range.start..fifth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fifth.old_range.end),
             lhs_local_addr,
             rhs_const,
             tee_local_addr,
@@ -891,7 +910,7 @@ pub(super) fn match_local_const_compare_tee_select(
 pub(super) fn match_local_imm_scalar_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -924,7 +943,7 @@ pub(super) fn match_local_imm_scalar_set_tee(
     Some((
         4,
         OptimizedInstruction::LocalImmSetTee {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             src_local,
             imm,
             dst_local,
@@ -937,7 +956,7 @@ pub(super) fn match_local_imm_scalar_set_tee(
 pub(super) fn match_local_copy(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second] = decoded.get(index..index + 2)? else {
         return None;
@@ -956,7 +975,7 @@ pub(super) fn match_local_copy(
     Some((
         2,
         OptimizedInstruction::LocalCopy {
-            old_range: first.old_range.start..second.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, second.old_range.end),
             src_local,
             dst_local,
             width: src_width,
@@ -968,7 +987,7 @@ pub(super) fn match_local_copy(
 pub(super) fn match_const_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second] = decoded.get(index..index + 2)? else {
         return None;
@@ -990,7 +1009,7 @@ pub(super) fn match_const_set_tee(
     Some((
         2,
         OptimizedInstruction::ConstSetTee {
-            old_range: first.old_range.start..second.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, second.old_range.end),
             value,
             dst_local,
             tee,
@@ -1001,7 +1020,7 @@ pub(super) fn match_const_set_tee(
 pub(super) fn match_local_imm_scalar_push(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third] = decoded.get(index..index + 3)? else {
         return None;
@@ -1031,7 +1050,7 @@ pub(super) fn match_local_imm_scalar_push(
     Some((
         3,
         OptimizedInstruction::LocalImmPush {
-            old_range: first.old_range.start..third.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, third.old_range.end),
             src_local,
             imm,
             op,
@@ -1042,7 +1061,7 @@ pub(super) fn match_local_imm_scalar_push(
 pub(super) fn match_local_local_scalar_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1069,7 +1088,7 @@ pub(super) fn match_local_local_scalar_set_tee(
     Some((
         4,
         OptimizedInstruction::LocalLocalSetTee {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             lhs_local_addr,
             rhs_local_addr,
             dst_local,
@@ -1082,7 +1101,7 @@ pub(super) fn match_local_local_scalar_set_tee(
 pub(super) fn match_local_local_scalar_push(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third] = decoded.get(index..index + 3)? else {
         return None;
@@ -1108,7 +1127,7 @@ pub(super) fn match_local_local_scalar_push(
     Some((
         3,
         OptimizedInstruction::LocalLocalPush {
-            old_range: first.old_range.start..third.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, third.old_range.end),
             lhs_local_addr,
             rhs_local_addr,
             op,
@@ -1119,7 +1138,7 @@ pub(super) fn match_local_local_scalar_push(
 pub(super) fn match_i32_local_and_imm_branch(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1188,7 +1207,7 @@ pub(super) fn match_i32_local_and_imm_branch(
     Some((
         consumed,
         OptimizedInstruction::I32LocalAndImmBranch {
-            old_range: first.old_range.start..end,
+            span: InstructionSpan::new(first.old_range.start, end),
             local_addr,
             imm,
             target_old,
@@ -1201,7 +1220,7 @@ pub(super) fn match_i32_local_and_imm_branch(
 pub(super) fn match_i32_local_addr_load8_u_and_imm_eqz_branch(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth, fifth, sixth] = decoded.get(index..index + 6)? else {
         return None;
@@ -1237,7 +1256,7 @@ pub(super) fn match_i32_local_addr_load8_u_and_imm_eqz_branch(
     Some((
         6,
         OptimizedInstruction::I32LocalAddrLoad8UAndImmEqzBranch {
-            old_range: first.old_range.start..sixth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, sixth.old_range.end),
             local_addr,
             memarg,
             imm,
@@ -1250,7 +1269,7 @@ pub(super) fn match_i32_local_addr_load8_u_and_imm_eqz_branch(
 pub(super) fn match_local_branch(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second] = decoded.get(index..index + 2)? else {
         return None;
@@ -1312,7 +1331,7 @@ pub(super) fn match_local_branch(
     Some((
         consumed,
         OptimizedInstruction::LocalBranch {
-            old_range: first.old_range.start..end,
+            span: InstructionSpan::new(first.old_range.start, end),
             local_addr,
             target_old,
             width,
@@ -1325,7 +1344,7 @@ pub(super) fn match_local_branch(
 pub(super) fn match_local_local_ge_u_br_if(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1352,7 +1371,7 @@ pub(super) fn match_local_local_ge_u_br_if(
     Some((
         4,
         OptimizedInstruction::I32LocalLocalGeUBrIf {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             lhs_local_addr,
             rhs_local_addr,
             target_old,
@@ -1363,7 +1382,7 @@ pub(super) fn match_local_local_ge_u_br_if(
 pub(super) fn match_local_local_compare_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1389,7 +1408,7 @@ pub(super) fn match_local_local_compare_set_tee(
     Some((
         4,
         OptimizedInstruction::CompareSetTeeLocal {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             lhs_local_addr,
             rhs_local_addr,
             dst_local,
@@ -1402,7 +1421,7 @@ pub(super) fn match_local_local_compare_set_tee(
 pub(super) fn match_local_const_compare_set_tee(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1432,7 +1451,7 @@ pub(super) fn match_local_const_compare_set_tee(
     Some((
         4,
         OptimizedInstruction::CompareSetTeeConst {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             lhs_local_addr,
             rhs_const,
             dst_local,
@@ -1445,7 +1464,7 @@ pub(super) fn match_local_const_compare_set_tee(
 pub(super) fn match_local_local_compare_br_if(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1473,7 +1492,7 @@ pub(super) fn match_local_local_compare_br_if(
     Some((
         4,
         OptimizedInstruction::CompareBrIfLocal {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             lhs_local_addr,
             rhs_local_addr,
             target_old,
@@ -1485,7 +1504,7 @@ pub(super) fn match_local_local_compare_br_if(
 pub(super) fn match_local_const_compare_br_if(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1517,7 +1536,7 @@ pub(super) fn match_local_const_compare_br_if(
     Some((
         4,
         OptimizedInstruction::CompareBrIfConst {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             lhs_local_addr,
             rhs_const,
             target_old,
@@ -1529,7 +1548,7 @@ pub(super) fn match_local_const_compare_br_if(
 pub(super) fn match_local_local_compare_select(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1555,7 +1574,7 @@ pub(super) fn match_local_local_compare_select(
     Some((
         4,
         OptimizedInstruction::CompareSelectLocal {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             lhs_local_addr,
             rhs_local_addr,
             select_width,
@@ -1567,7 +1586,7 @@ pub(super) fn match_local_local_compare_select(
 pub(super) fn match_local_const_compare_select(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1597,7 +1616,7 @@ pub(super) fn match_local_const_compare_select(
     Some((
         4,
         OptimizedInstruction::CompareSelectConst {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             lhs_local_addr,
             rhs_const,
             select_width,
@@ -1609,7 +1628,7 @@ pub(super) fn match_local_const_compare_select(
 pub(super) fn match_const_load(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second] = decoded.get(index..index + 2)? else {
         return None;
@@ -1633,7 +1652,7 @@ pub(super) fn match_const_load(
     Some((
         2,
         OptimizedInstruction::LoadConstLocal {
-            old_range: first.old_range.start..second.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, second.old_range.end),
             start,
             op,
         },
@@ -1643,7 +1662,7 @@ pub(super) fn match_const_load(
 pub(super) fn match_const_local_store(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third] = decoded.get(index..index + 3)? else {
         return None;
@@ -1671,7 +1690,7 @@ pub(super) fn match_const_local_store(
     Some((
         3,
         OptimizedInstruction::StoreConstLocal {
-            old_range: first.old_range.start..third.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, third.old_range.end),
             start,
             value_local_addr,
             op,
@@ -1682,7 +1701,7 @@ pub(super) fn match_const_local_store(
 pub(super) fn match_local_addr_load(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second] = decoded.get(index..index + 2)? else {
         return None;
@@ -1702,7 +1721,7 @@ pub(super) fn match_local_addr_load(
     Some((
         2,
         OptimizedInstruction::LocalAddrLoad {
-            old_range: first.old_range.start..second.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, second.old_range.end),
             local_addr,
             memarg,
             op,
@@ -1713,7 +1732,7 @@ pub(super) fn match_local_addr_load(
 pub(super) fn match_local_imm_addr_load(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
         return None;
@@ -1743,7 +1762,7 @@ pub(super) fn match_local_imm_addr_load(
     Some((
         4,
         OptimizedInstruction::LocalImmAddrLoad {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             local_addr,
             imm,
             memarg,
@@ -1755,7 +1774,7 @@ pub(super) fn match_local_imm_addr_load(
 pub(super) fn match_i32_local_local_load_tee_add_imm_store(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth, fifth, sixth, seventh] = decoded.get(index..index + 7)?
     else {
@@ -1796,7 +1815,7 @@ pub(super) fn match_i32_local_local_load_tee_add_imm_store(
     Some((
         7,
         OptimizedInstruction::I32LocalLocalLoadTeeAddImmStore {
-            old_range: first.old_range.start..seventh.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, seventh.old_range.end),
             store_addr_local_addr,
             load_addr_local_addr,
             tee_local_addr,
@@ -1810,7 +1829,7 @@ pub(super) fn match_i32_local_local_load_tee_add_imm_store(
 pub(super) fn match_local_local_store(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third] = decoded.get(index..index + 3)? else {
         return None;
@@ -1831,7 +1850,7 @@ pub(super) fn match_local_local_store(
     Some((
         3,
         OptimizedInstruction::LocalLocalStore {
-            old_range: first.old_range.start..third.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, third.old_range.end),
             addr_local_addr,
             value_local_addr,
             memarg,
@@ -1843,7 +1862,7 @@ pub(super) fn match_local_local_store(
 pub(super) fn match_i32_local_local_load8_u_store8_copy(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     match_i32_local_local_narrow_copy(decoded, index, jump_targets, NarrowCopyKind::Load8Store8)
 }
@@ -1851,7 +1870,7 @@ pub(super) fn match_i32_local_local_load8_u_store8_copy(
 pub(super) fn match_i32_local_local_load16_u_store16_copy(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     match_i32_local_local_narrow_copy(decoded, index, jump_targets, NarrowCopyKind::Load16Store16)
 }
@@ -1859,7 +1878,7 @@ pub(super) fn match_i32_local_local_load16_u_store16_copy(
 pub(super) fn match_i32_local_local_narrow_copy(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
     kind: NarrowCopyKind,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth] = decoded.get(index..index + 4)? else {
@@ -1902,7 +1921,7 @@ pub(super) fn match_i32_local_local_narrow_copy(
     Some((
         4,
         OptimizedInstruction::I32LocalLocalNarrowCopy {
-            old_range: first.old_range.start..fourth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fourth.old_range.end),
             dst_local_addr,
             src_local_addr,
             load_memarg,
@@ -1915,7 +1934,7 @@ pub(super) fn match_i32_local_local_narrow_copy(
 pub(super) fn match_local_imm_local_store(
     decoded: &[DecodedInstruction],
     index: usize,
-    jump_targets: &HashSet<usize>,
+    jump_targets: &JumpTargetBitmap,
 ) -> Option<MatchOutcome> {
     let [first, second, third, fourth, fifth] = decoded.get(index..index + 5)? else {
         return None;
@@ -1949,7 +1968,7 @@ pub(super) fn match_local_imm_local_store(
     Some((
         5,
         OptimizedInstruction::LocalImmLocalStore {
-            old_range: first.old_range.start..fifth.old_range.end,
+            span: InstructionSpan::new(first.old_range.start, fifth.old_range.end),
             addr_local_addr,
             imm,
             value_local_addr,
