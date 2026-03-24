@@ -486,11 +486,13 @@ pub struct BlockReturn {
     pub stack_top: u32,
     meta: u32,
 }
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedLoopParam {
     pub dst_from_local_top: u32,
     meta: u32,
 }
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedBlockReturn {
     pub dst_from_local_top: u32,
@@ -503,6 +505,7 @@ pub(crate) struct ControlFlowMetadataSite {
     pub kind: ControlFlowMetadataKind,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) enum ControlFlowMetadataKind {
     Jump {
@@ -543,6 +546,7 @@ pub(crate) enum StackMapSafepointKind {
     Loop = 7,
     BlockReturn = 8,
     FunctionReturn = 9,
+    MemoryWait = 10,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -592,6 +596,51 @@ pub(crate) struct UnwindSourceSite {
     pub result_slot_from_local_top: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SafepointMetadataCache {
+    pub stack_map_site_addr: usize,
+    pub unwind_site_addr: usize,
+}
+
+impl SafepointMetadataCache {
+    pub(crate) const EMPTY: Self = Self {
+        stack_map_site_addr: 0,
+        unwind_site_addr: 0,
+    };
+
+    #[inline(always)]
+    pub(crate) const fn new(stack_map_site_addr: usize, unwind_site_addr: usize) -> Self {
+        Self {
+            stack_map_site_addr,
+            unwind_site_addr,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn is_empty(self) -> bool {
+        self.stack_map_site_addr == 0 && self.unwind_site_addr == 0
+    }
+
+    #[inline(always)]
+    pub(crate) const fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        if self.stack_map_site_addr != 0 {
+            Some(self.stack_map_site_addr as *const _)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    #[allow(dead_code)]
+    pub(crate) const fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        if self.unwind_site_addr != 0 {
+            Some(self.unwind_site_addr as *const _)
+        } else {
+            None
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct FrameLayoutColdMetadata {
@@ -599,6 +648,7 @@ pub(crate) struct FrameLayoutColdMetadata {
     pub local_ref_runs: Arc<[RefSlotRun]>,
     pub stack_map_sites: Arc<[StackMapSite]>,
     pub unwind_sites: Arc<[UnwindSiteMetadata]>,
+    pub instruction_ordinal_by_raw_start: Arc<[u32]>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -637,6 +687,15 @@ impl FrameLayoutHeader {
             .unwind_sites
             .iter()
             .find(|site| site.instruction_ordinal == instruction_ordinal)
+    }
+
+    #[inline(always)]
+    pub(crate) fn instruction_ordinal_for_raw_start(&self, raw_start: usize) -> Option<u32> {
+        self.cold()
+            .instruction_ordinal_by_raw_start
+            .get(raw_start)
+            .copied()
+            .filter(|ordinal| *ordinal != u32::MAX)
     }
 }
 
@@ -751,6 +810,7 @@ impl LoopParam {
     }
 }
 
+#[allow(dead_code)]
 impl PrecomputedLoopParam {
     pub(crate) const fn with_shape(
         dst_from_local_top: u32,
@@ -790,6 +850,7 @@ impl BlockReturn {
     }
 }
 
+#[allow(dead_code)]
 impl PrecomputedBlockReturn {
     pub(crate) const fn with_shape(
         dst_from_local_top: u32,
@@ -878,6 +939,12 @@ impl StablePc {
             .unwrap_or_else(|| Self::from_stable_ptr(ptr))
     }
 
+    pub(crate) fn from_raw_in_call_frame(frame: CallFrameCache, ptr: *const Instr) -> Self {
+        Self::relative_index_for_code_range(frame.code_base, frame.code_len, ptr)
+            .map(Self::from_relative_index)
+            .unwrap_or_else(|| Self::from_stable_ptr(ptr))
+    }
+
     pub(crate) fn resolve(
         self,
         _runtime: &StoreInner,
@@ -895,7 +962,19 @@ impl StablePc {
         }
     }
 
-    fn relative_index(self) -> Option<usize> {
+    pub(crate) fn resolve_in_call_frame(self, frame: CallFrameCache) -> *const Instr {
+        match self.relative_index() {
+            Some(index) => {
+                let (base, len) = Self::code_range(frame.code_base, frame.code_len)
+                    .expect("relative continuation must resolve against a wasm frame");
+                debug_assert!(index < len);
+                unsafe { base.add(index) }
+            }
+            None => self.0 as *const Instr,
+        }
+    }
+
+    pub(crate) fn relative_index(self) -> Option<usize> {
         (self.0 & Self::RELATIVE_TAG == Self::RELATIVE_TAG).then_some(self.0 >> 1)
     }
 
@@ -918,12 +997,36 @@ impl StablePc {
         Some((code_base, code_len))
     }
 
+    fn code_range(code_base: *const Instr, code_len: u32) -> Option<(*const Instr, usize)> {
+        if code_base.is_null() || code_len == 0 {
+            return None;
+        }
+        Some((code_base, code_len as usize))
+    }
+
     fn relative_index_for_ptr(
         stack: &Stack,
         local_reference: LocalReference,
         ptr: *const Instr,
     ) -> Option<usize> {
         let (base, instr_len) = Self::current_frame_code_range(stack, local_reference)?;
+        Self::relative_index_for_range(base, instr_len, ptr)
+    }
+
+    fn relative_index_for_code_range(
+        code_base: *const Instr,
+        code_len: u32,
+        ptr: *const Instr,
+    ) -> Option<usize> {
+        let (base, instr_len) = Self::code_range(code_base, code_len)?;
+        Self::relative_index_for_range(base, instr_len, ptr)
+    }
+
+    fn relative_index_for_range(
+        base: *const Instr,
+        instr_len: usize,
+        ptr: *const Instr,
+    ) -> Option<usize> {
         let instr_size = std::mem::size_of::<Instr>();
         let base_addr = base as usize;
         let ptr_addr = ptr as usize;
@@ -976,6 +1079,7 @@ pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     pub local_reference: LocalReference,
     pub(crate) current_frame: CallFrameCache,
+    pub(crate) safepoint: SafepointMetadataCache,
     pub store: &'a Store,
     pub gc: &'a mut StoreInner,
     pub effect: EffectSupplier<'a>,
@@ -1044,6 +1148,40 @@ impl ExecuteContext<'_> {
     ) {
         self.local_reference = local_reference;
         self.current_frame = frame;
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_safepoint(&mut self, safepoint: SafepointMetadataCache) {
+        self.safepoint = safepoint;
+    }
+
+    #[inline(always)]
+    #[allow(dead_code)]
+    pub(crate) fn stack_map_site(&self) -> Option<&StackMapSite> {
+        self.safepoint
+            .stack_map_site_ptr()
+            .map(|site| unsafe { &*site })
+    }
+
+    #[inline(always)]
+    #[allow(dead_code)]
+    pub(crate) fn unwind_site(&self) -> Option<&UnwindSiteMetadata> {
+        self.safepoint
+            .unwind_site_ptr()
+            .map(|site| unsafe { &*site })
+    }
+
+    #[inline(always)]
+    #[allow(dead_code)]
+    pub(crate) fn visit_current_ref_ranges<F>(&self, visitor: F)
+    where
+        F: FnMut(std::ops::Range<usize>),
+    {
+        self.stack.visit_local_and_operand_ref_ranges(
+            &self.local_reference,
+            self.safepoint,
+            visitor,
+        );
     }
 
     #[inline(always)]

@@ -11,9 +11,10 @@ use super::{
     object_ref::ObjectRef,
     store::{
         FunctionInstanceData, InstanceId, InstanceMemorySlot, LocalMemoryId, MemoryHandle,
-        SharedMemoryId,
+        PrecomputedFunctionReturnSite, SharedMemoryId,
     },
-    FrameLayoutHeader, Instr, ReturnShape, StablePc, StackMapSite, StoreInner,
+    FrameLayoutHeader, Instr, ReturnShape, SafepointMetadataCache, StablePc, StackMapSite,
+    StoreInner, UnwindSiteMetadata,
 };
 #[inline(always)]
 fn trusted_write_u32(dst: &mut [u8], value: u32) {
@@ -156,6 +157,7 @@ pub(crate) struct CallStackInfo {
     code_addr: ObjectRef,
     code_base: *const Instr,
     code_len: u32,
+    function_return_site_addr: usize,
     instance: InstanceId,
     memory0_kind: CachedMemoryKind,
     memory0_raw: u32,
@@ -175,6 +177,7 @@ struct CallFrameCacheFooter {
     code_addr: ObjectRef,
     code_base: *const Instr,
     code_len: u32,
+    function_return_site_addr: usize,
     instance: InstanceId,
     memory0_kind: CachedMemoryKind,
     memory0_raw: u32,
@@ -193,6 +196,7 @@ pub(crate) struct CallFrameCache {
     pub(crate) code_addr: ObjectRef,
     pub(crate) code_base: *const Instr,
     pub(crate) code_len: u32,
+    pub(crate) function_return_site_addr: usize,
     pub(crate) instance: InstanceId,
     pub(crate) memory0_kind: CachedMemoryKind,
     pub(crate) memory0_raw: u32,
@@ -214,6 +218,7 @@ impl CallFrameCache {
             code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
             code_len: 0,
+            function_return_site_addr: 0,
             instance: InstanceId::from_index(0),
             memory0_kind: CachedMemoryKind::None,
             memory0_raw: 0,
@@ -232,6 +237,9 @@ impl CallFrameCache {
             code_len: func.code().map_or(0, |code| {
                 u32::try_from(code.len()).expect("code length overflow")
             }),
+            function_return_site_addr: func
+                .wasm_metadata()
+                .map_or(0, |metadata| metadata.function_return_site_addr),
             instance: func.instance,
             memory0_kind,
             memory0_raw,
@@ -249,6 +257,11 @@ impl CallFrameCache {
             ))),
         }
     }
+
+    #[inline(always)]
+    pub(crate) fn function_return_site_ptr(self) -> Option<*const PrecomputedFunctionReturnSite> {
+        (self.function_return_site_addr != 0).then_some(self.function_return_site_addr as *const _)
+    }
 }
 
 impl From<CallFrameCacheFooter> for CallFrameCache {
@@ -258,6 +271,7 @@ impl From<CallFrameCacheFooter> for CallFrameCache {
             code_addr: value.code_addr,
             code_base: value.code_base,
             code_len: value.code_len,
+            function_return_site_addr: value.function_return_site_addr,
             instance: value.instance,
             memory0_kind: value.memory0_kind,
             memory0_raw: value.memory0_raw,
@@ -929,6 +943,50 @@ impl Stack {
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn visit_operand_ref_ranges_ptr<F>(
+        &self,
+        reference: &LocalReference,
+        stack_map_site_ptr: Option<*const StackMapSite>,
+        visitor: F,
+    ) where
+        F: FnMut(Range<usize>),
+    {
+        let Some(site) = stack_map_site_ptr else {
+            return;
+        };
+        self.visit_operand_ref_ranges(reference, unsafe { &*site }, visitor);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn visit_local_and_operand_ref_ranges<F>(
+        &self,
+        reference: &LocalReference,
+        safepoint: SafepointMetadataCache,
+        mut visitor: F,
+    ) where
+        F: FnMut(Range<usize>),
+    {
+        self.visit_local_ref_ranges(reference, &mut visitor);
+        self.visit_operand_ref_ranges_ptr(reference, safepoint.stack_map_site_ptr(), visitor);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn result_slot_from_unwind_site(
+        &self,
+        reference: &LocalReference,
+        unwind_site_ptr: Option<*const UnwindSiteMetadata>,
+    ) -> Option<usize> {
+        let site = unsafe { unwind_site_ptr.map(|site| &*site)? };
+        site.result_slot_from_local_top.map(|slot| match site.kind {
+            crate::common::StackMapSafepointKind::Loop
+            | crate::common::StackMapSafepointKind::BlockReturn => {
+                self.operand_base(reference) - reference.local_top + slot as usize
+            }
+            _ => slot as usize,
+        })
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn local_ref_ranges(&self, reference: &LocalReference) -> Vec<Range<usize>> {
@@ -1002,6 +1060,7 @@ impl Stack {
             code_addr: frame.code_addr,
             code_base: frame.code_base,
             code_len: frame.code_len,
+            function_return_site_addr: frame.function_return_site_addr,
             instance: frame.instance,
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
@@ -1059,6 +1118,7 @@ impl Stack {
             code_addr: frame.code_addr,
             code_base: frame.code_base,
             code_len: frame.code_len,
+            function_return_site_addr: frame.function_return_site_addr,
             instance: frame.instance,
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
@@ -1369,6 +1429,7 @@ impl Stack {
             code_addr: frame.code_addr,
             code_base: frame.code_base,
             code_len: frame.code_len,
+            function_return_site_addr: frame.function_return_site_addr,
             instance: frame.instance,
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
@@ -1401,6 +1462,7 @@ impl Stack {
             code_addr: frame.code_addr,
             code_base: frame.code_base,
             code_len: frame.code_len,
+            function_return_site_addr: frame.function_return_site_addr,
             instance: frame.instance,
             memory0_kind: frame.memory0_kind,
             memory0_raw: frame.memory0_raw,
@@ -1594,6 +1656,7 @@ mod tests {
             code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
             code_len: 0,
+            function_return_site_addr: 0,
             instance: InstanceId::from_index(0),
             memory0_kind: kind,
             memory0_raw: raw,
@@ -1605,6 +1668,7 @@ mod tests {
             code_addr: ObjectRef(1),
             code_base: code.as_ptr(),
             code_len: u32::try_from(code.len()).unwrap(),
+            function_return_site_addr: 0,
             instance: InstanceId::from_index(0),
             memory0_kind: kind,
             memory0_raw: raw,
@@ -1628,6 +1692,7 @@ mod tests {
                 local_ref_runs: Arc::from([]),
                 stack_map_sites: Arc::from([]),
                 unwind_sites: Arc::from([]),
+                instruction_ordinal_by_raw_start: Arc::from([]),
             },
         )
     }
@@ -1696,6 +1761,7 @@ mod tests {
                     kind: crate::common::StackMapSafepointKind::Call,
                     result_slot_from_local_top: Some(20),
                 }]),
+                instruction_ordinal_by_raw_start: Arc::from([]),
             },
         );
         let reference = LocalReference::from_layout(32, &frame_layout);
@@ -1720,6 +1786,82 @@ mod tests {
 
         let unwind_site = frame_layout.unwind_site(7).unwrap();
         assert_eq!(unwind_site.result_slot_from_local_top, Some(20));
+    }
+
+    #[test]
+    fn safepoint_cache_drives_pointer_based_ref_and_unwind_helpers() {
+        let stack = Stack::new(128);
+        let frame_layout = layout_with_cold(
+            4,
+            8,
+            ReturnShape::Scalar4,
+            ReturnShape::Scalar4,
+            crate::common::FrameLayoutColdMetadata {
+                local_slots: Arc::from([]),
+                local_ref_runs: Arc::from([crate::common::RefSlotRun {
+                    start_from_local_top: 0,
+                    len_bytes: 4,
+                }]),
+                stack_map_sites: Arc::from([crate::common::StackMapSite {
+                    instruction_ordinal: 7,
+                    kind: crate::common::StackMapSafepointKind::Call,
+                    operand_bytes: 8,
+                    ref_offsets_from_operand_base: Arc::from([0]),
+                }]),
+                unwind_sites: Arc::from([crate::common::UnwindSiteMetadata {
+                    instruction_ordinal: 7,
+                    kind: crate::common::StackMapSafepointKind::Call,
+                    result_slot_from_local_top: Some(16),
+                }]),
+                instruction_ordinal_by_raw_start: Arc::from([]),
+            },
+        );
+        let reference = LocalReference::from_layout(32, &frame_layout);
+        let stack_map_site = frame_layout.stack_map_site(7).unwrap();
+        let unwind_site = frame_layout.unwind_site(7).unwrap();
+        let safepoint = SafepointMetadataCache::new(
+            stack_map_site as *const _ as usize,
+            unwind_site as *const _ as usize,
+        );
+
+        let mut ranges = Vec::new();
+        stack.visit_local_and_operand_ref_ranges(&reference, safepoint, |range| ranges.push(range));
+
+        let operand_base = reference.local_top + frame_layout.operand_base_from_local_top as usize;
+        assert_eq!(ranges, vec![32..36, operand_base..operand_base + 4]);
+        assert_eq!(
+            stack.result_slot_from_unwind_site(&reference, safepoint.unwind_site_ptr()),
+            Some(16)
+        );
+    }
+
+    #[test]
+    fn control_unwind_sites_translate_operand_offsets_to_local_offsets() {
+        let stack = Stack::new(128);
+        let frame_layout = layout_with_cold(
+            4,
+            8,
+            ReturnShape::Scalar4,
+            ReturnShape::Scalar4,
+            crate::common::FrameLayoutColdMetadata {
+                local_slots: Arc::from([]),
+                local_ref_runs: Arc::from([]),
+                stack_map_sites: Arc::from([]),
+                unwind_sites: Arc::from([crate::common::UnwindSiteMetadata {
+                    instruction_ordinal: 9,
+                    kind: crate::common::StackMapSafepointKind::Loop,
+                    result_slot_from_local_top: Some(8),
+                }]),
+                instruction_ordinal_by_raw_start: Arc::from([]),
+            },
+        );
+        let reference = LocalReference::from_layout(32, &frame_layout);
+        let unwind_site = frame_layout.unwind_site(9).unwrap();
+
+        assert_eq!(
+            stack.result_slot_from_unwind_site(&reference, Some(unwind_site as *const _)),
+            Some(frame_layout.operand_base_from_local_top as usize + 8)
+        );
     }
 
     #[test]

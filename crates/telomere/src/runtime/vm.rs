@@ -221,25 +221,40 @@ fn pop_result_values(stack: &mut Stack, ty: &ResultType) -> ResultValue {
     ResultValue::new(result)
 }
 
+#[inline(always)]
+fn touch_current_ref_ranges(_ctx: &ExecuteContext) {
+    #[cfg(debug_assertions)]
+    _ctx.visit_current_ref_ranges(|_| {});
+}
+
 fn start_async_host_call(
+    _return_pc: crate::common::StablePc,
     return_addr: *const Instr,
+    safepoint: crate::common::SafepointMetadataCache,
     ctx: &mut ExecuteContext,
 ) -> VMResult<CallOutcome> {
     let async_host = ctx.func().async_host_code_pointer();
     let task_id = ctx.task_id;
+    touch_current_ref_ranges(ctx);
     let future = async_host(ctx);
     ctx.effect
-        .push_pending(PendingOp::HostCall(HostCallPending { task_id, future }));
+        .push_pending(PendingOp::HostCall(HostCallPending {
+            task_id,
+            future,
+            safepoint,
+        }));
     ctx.cont = return_addr;
     VMResult::Success(CallOutcome::Pending)
 }
 
 fn invoke_host_function(
+    return_pc: crate::common::StablePc,
     return_addr: *const Instr,
+    safepoint: crate::common::SafepointMetadataCache,
     ctx: &mut ExecuteContext,
 ) -> VMResult<CallOutcome> {
     if ctx.func().is_async_host_func() {
-        start_async_host_call(return_addr, ctx)
+        start_async_host_call(return_pc, return_addr, safepoint, ctx)
     } else {
         let fp = ctx.func().host_code_pointer();
         let return_addr = vm_try!(fp(ctx));
@@ -257,8 +272,9 @@ pub(crate) use bulk_memory::{
     op_mem_init_shared,
 };
 pub(crate) use call::{
-    op_call, op_call_import, op_call_indirect, op_call_indirect_precomputed, op_call_precomputed,
-    op_return_call, op_return_call_import, op_return_call_indirect,
+    op_call, op_call_import, op_call_import_precomputed, op_call_indirect,
+    op_call_indirect_precomputed, op_call_precomputed, op_return_call, op_return_call_import,
+    op_return_call_import_precomputed, op_return_call_indirect,
     op_return_call_indirect_precomputed, op_return_call_precomputed, special_start_function_call,
 };
 pub use control::special_function_return;
@@ -495,6 +511,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
                 stack,
                 local_reference,
                 current_frame: frame,
+                safepoint: crate::common::SafepointMetadataCache::EMPTY,
                 ready_flag: ReadyFlag::Ready,
                 pending_effects: 0,
                 terminal_result: None,
@@ -592,6 +609,7 @@ pub(crate) fn run_module_function_sync_with_gc(
                 stack,
                 local_reference,
                 current_frame: frame,
+                safepoint: crate::common::SafepointMetadataCache::EMPTY,
                 ready_flag: ReadyFlag::Ready,
                 pending_effects: 0,
                 terminal_result: None,

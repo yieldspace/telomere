@@ -1,5 +1,8 @@
 use super::*;
-use crate::common::store::{PrecomputedDirectCallSite, PrecomputedIndirectCallSite};
+use crate::common::store::{
+    PrecomputedDirectCallSite, PrecomputedImportCallSite, PrecomputedIndirectCallSite,
+};
+use crate::common::SafepointMetadataCache;
 
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
@@ -25,12 +28,21 @@ unsafe fn internal_op_call(
 ) -> VMResult<CallOutcome> {
     let return_pc =
         StablePc::from_raw_in_frame(ctx.gc, ctx.stack, ctx.local_reference, return_addr);
-    internal_op_call_with_return_pc(return_pc, funcaddr, ctx, is_return_call)
+    internal_op_call_with_return_pc(
+        return_pc,
+        SafepointMetadataCache::EMPTY,
+        2,
+        funcaddr,
+        ctx,
+        is_return_call,
+    )
 }
 
 #[inline(never)]
 unsafe fn internal_op_call_with_return_pc(
     return_pc: StablePc,
+    safepoint: SafepointMetadataCache,
+    call_site_width: usize,
     funcaddr: ObjectRef,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
@@ -43,7 +55,7 @@ unsafe fn internal_op_call_with_return_pc(
         .copied()
         .and_then(|slot| slot.handle());
     let frame = CallFrameCache::from_parts(funcaddr, &funcinst, memory0);
-    let return_addr = return_pc.resolve(ctx.gc, ctx.stack, ctx.local_reference);
+    let return_addr = return_pc.resolve_in_call_frame(ctx.current_frame);
     trace!(
         "op_call_internal: {:?}({:?})  {funcaddr:?}",
         ctx.gc.object_ref_for_instance(funcinst.instance),
@@ -52,6 +64,12 @@ unsafe fn internal_op_call_with_return_pc(
     let param_size = funcinst.execution.param_stack_bytes as usize;
     let is_host_func = funcinst.is_host_func();
     if is_host_func {
+        let safepoint = if funcinst.is_async_host_func() && safepoint.is_empty() {
+            cold_lookup_call_safepoint(ctx, return_pc, call_site_width)
+        } else {
+            safepoint
+        };
+        ctx.set_safepoint(safepoint);
         if is_return_call {
             let local_reference = vm_try!(ctx.stack.function_return_call_raw(
                 &ctx.local_reference,
@@ -72,7 +90,7 @@ unsafe fn internal_op_call_with_return_pc(
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
         }
-        invoke_host_function(return_addr, ctx)
+        invoke_host_function(return_pc, return_addr, safepoint, ctx)
     } else {
         let wasm_metadata = funcinst
             .wasm_metadata()
@@ -109,6 +127,11 @@ unsafe fn direct_call_site_unchecked(tail_code: *const Instr) -> *const Precompu
 }
 
 #[inline(always)]
+unsafe fn import_call_site_unchecked(tail_code: *const Instr) -> *const PrecomputedImportCallSite {
+    (*tail_code).operand.code_ptr as *const PrecomputedImportCallSite
+}
+
+#[inline(always)]
 unsafe fn indirect_call_site_unchecked(
     tail_code: *const Instr,
 ) -> *const PrecomputedIndirectCallSite {
@@ -122,9 +145,8 @@ unsafe fn internal_op_call_precomputed(
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
     let frame = site.frame.materialize(ctx.gc);
-    let return_addr = site
-        .return_pc
-        .resolve(ctx.gc, ctx.stack, ctx.local_reference);
+    let safepoint = site.safepoint_cache();
+    let return_addr = site.return_pc.resolve_in_call_frame(ctx.current_frame);
     trace!("op_call_precomputed: {:?}", frame.code_addr);
     if let Some(layout) = site.callee_layout_ptr() {
         let layout = &*layout;
@@ -167,8 +189,37 @@ unsafe fn internal_op_call_precomputed(
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
         }
-        invoke_host_function(return_addr, ctx)
+        ctx.set_safepoint(safepoint);
+        invoke_host_function(site.return_pc, return_addr, safepoint, ctx)
     }
+}
+
+#[inline(always)]
+fn cold_lookup_call_safepoint(
+    ctx: &ExecuteContext,
+    return_pc: StablePc,
+    call_site_width: usize,
+) -> SafepointMetadataCache {
+    let Some(relative_index) = return_pc.relative_index() else {
+        return SafepointMetadataCache::EMPTY;
+    };
+    let Some(raw_start) = relative_index.checked_sub(call_site_width) else {
+        return SafepointMetadataCache::EMPTY;
+    };
+    let Some(layout) = ctx.func().frame_layout() else {
+        return SafepointMetadataCache::EMPTY;
+    };
+    let Some(instruction_ordinal) = layout.instruction_ordinal_for_raw_start(raw_start) else {
+        return SafepointMetadataCache::EMPTY;
+    };
+    SafepointMetadataCache::new(
+        layout
+            .stack_map_site(instruction_ordinal)
+            .map_or(0, |site| site as *const _ as usize),
+        layout
+            .unwind_site(instruction_ordinal)
+            .map_or(0, |site| site as *const _ as usize),
+    )
 }
 
 #[inline(always)]
@@ -177,6 +228,31 @@ unsafe fn direct_funcaddr_unchecked(ctx: &ExecuteContext, funcidx: u32) -> Objec
         .funcs
         .as_slice()
         .get_unchecked(funcidx as usize)
+}
+
+#[inline(always)]
+unsafe fn op_precomputed_import_call(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<()> {
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let site = &*import_call_site_unchecked(tail_code);
+    let funcaddr = direct_funcaddr_unchecked(ctx, site.funcidx);
+    match vm_try!(internal_op_call_with_return_pc(
+        site.return_pc,
+        site.safepoint_cache(),
+        2,
+        funcaddr,
+        ctx,
+        is_return_call,
+    )) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 
 #[inline(always)]
@@ -282,6 +358,29 @@ pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     op_direct_call(tail_code, ctx, false)
 }
 
+/// WebAssembly `call` for imported callees with precomputed continuation metadata.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[params] -> [results]`.
+/// Traps: traps if the target function cannot be invoked.
+/// Notes: Keeps import relink dynamic while avoiding per-call continuation and safepoint lookup.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operand for this handler in the active
+///   instruction stream.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and
+///   default memory/table state satisfy this instruction.
+pub unsafe fn op_call_import_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_precomputed_import_call(tail_code, ctx, false)
+}
+
 /// WebAssembly `return_call`.
 ///
 /// Related spec:
@@ -342,6 +441,27 @@ pub unsafe fn op_return_call_import(
     op_direct_call(tail_code, ctx, true)
 }
 
+/// WebAssembly `return_call` for imported callees with precomputed continuation metadata.
+///
+/// Related spec:
+/// - Tail-call: https://webassembly.github.io/tail-call/core/
+///
+/// Stack effect: `[params] -> [results]`.
+/// Traps: traps if the target function cannot be invoked.
+/// Notes: Keeps import relink dynamic while avoiding per-call continuation and safepoint lookup.
+///
+/// # Safety
+/// - `tail_code` must point to the metadata-bearing operand for this handler in the active
+///   instruction stream.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and
+///   default memory/table state satisfy this instruction.
+pub unsafe fn op_return_call_import_precomputed(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    op_precomputed_import_call(tail_code, ctx, true)
+}
+
 #[inline(never)]
 /// WebAssembly indirect call-dispatch helper for direct-threaded function invocation.
 ///
@@ -387,11 +507,15 @@ unsafe fn internal_op_call_indirect(
     if &funcinst.execution.type_identity != expected_type_identity {
         return VMResult::CallIndirectInvalidType;
     }
-    let outcome = vm_try!(internal_op_call(
-        tail_code.offset(2),
+    let return_pc =
+        StablePc::from_raw_in_frame(ctx.gc, ctx.stack, ctx.local_reference, tail_code.offset(2));
+    let outcome = vm_try!(internal_op_call_with_return_pc(
+        return_pc,
+        SafepointMetadataCache::EMPTY,
+        3,
         func_addr,
         ctx,
-        is_return_call
+        is_return_call,
     ));
     VMResult::Success(outcome)
 }
@@ -427,6 +551,8 @@ unsafe fn internal_op_call_indirect_precomputed(
     }
     let outcome = vm_try!(internal_op_call_with_return_pc(
         site.return_pc,
+        site.safepoint_cache(),
+        0,
         func_addr,
         ctx,
         is_return_call
@@ -570,7 +696,12 @@ pub unsafe fn special_start_function_call(
     _tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    match vm_try!(invoke_host_function(&VM_END as *const Instr, ctx)) {
+    match vm_try!(invoke_host_function(
+        StablePc::from_stable_ptr(&VM_END as *const Instr),
+        &VM_END as *const Instr,
+        SafepointMetadataCache::EMPTY,
+        ctx,
+    )) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }

@@ -15,6 +15,7 @@ pub(crate) struct OptimizedCoreProgram {
     pub(crate) control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
     pub(crate) stack_map_sites: Arc<[StackMapSite]>,
     pub(crate) unwind_sites: Arc<[UnwindSiteMetadata]>,
+    pub(crate) instruction_ordinal_by_raw_start: Arc<[u32]>,
 }
 
 #[derive(Clone)]
@@ -515,6 +516,7 @@ pub(crate) fn optimize_core_program_with_metadata(
             control_flow_metadata: Arc::from([]),
             stack_map_sites: Arc::from([]),
             unwind_sites: Arc::from([]),
+            instruction_ordinal_by_raw_start: Arc::from([]),
         };
     }
 
@@ -537,12 +539,23 @@ pub(crate) fn optimize_core_program_with_metadata(
         &lowered.old_to_new,
         &lowered.instruction_starts,
     );
+    let instruction_ordinal_by_raw_start =
+        build_instruction_ordinal_by_raw_start(lowered.instr.len(), &lowered.instruction_starts);
     OptimizedCoreProgram {
         instr: lowered.instr,
         control_flow_metadata,
         stack_map_sites,
         unwind_sites,
+        instruction_ordinal_by_raw_start,
     }
+}
+
+fn build_instruction_ordinal_by_raw_start(len: usize, instruction_starts: &[usize]) -> Arc<[u32]> {
+    let mut map = vec![u32::MAX; len];
+    for (instruction_ordinal, &start) in instruction_starts.iter().enumerate() {
+        map[start] = instruction_ordinal as u32;
+    }
+    Arc::from(map)
 }
 
 fn decode_instructions(instrs: &[Instr], starts: &[usize]) -> Vec<DecodedInstruction> {

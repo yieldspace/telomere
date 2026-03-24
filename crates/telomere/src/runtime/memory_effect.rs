@@ -1,13 +1,27 @@
 use std::{fmt, sync::Arc};
 
 use crate::{
-    common::{AsyncHostFuture, SharedMemoryObject, SharedWaitRegistration},
+    common::{AsyncHostFuture, SafepointMetadataCache, SharedMemoryObject, SharedWaitRegistration},
     VMResult,
 };
 
+#[allow(private_interfaces)]
 pub struct HostCallPending {
     pub task_id: u32,
     pub future: AsyncHostFuture,
+    pub safepoint: SafepointMetadataCache,
+}
+
+impl HostCallPending {
+    pub async fn into_completion(self) -> Completion {
+        Completion {
+            task_id: self.task_id,
+            payload: CompletionPayload::HostCall {
+                result: self.future.await,
+                safepoint: self.safepoint,
+            },
+        }
+    }
 }
 
 pub struct MemoryWaitPending {
@@ -65,6 +79,7 @@ pub struct Completion {
 }
 
 #[derive(Debug)]
+#[allow(private_interfaces)]
 pub enum CompletionPayload {
     #[allow(dead_code)]
     Resume {
@@ -76,6 +91,7 @@ pub enum CompletionPayload {
     },
     HostCall {
         result: VMResult<*const crate::common::Instr>,
+        safepoint: SafepointMetadataCache,
     },
     #[allow(dead_code)]
     WasmAsync,

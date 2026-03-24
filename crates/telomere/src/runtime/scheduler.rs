@@ -2,7 +2,10 @@ use super::memory_effect::{
     Completion, CompletionPayload, HostCallPending, MemoryWaitPending, PendingOp,
 };
 use crate::{
-    common::{CallFrameCache, ExecuteContext, LocalReference, StablePc, StoreInner},
+    common::{
+        CallFrameCache, ExecuteContext, LocalReference, SafepointMetadataCache, StablePc,
+        StoreInner,
+    },
     Stack, Store, VMResult,
 };
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -35,6 +38,7 @@ pub(crate) struct Task {
     pub stack: Stack,
     pub local_reference: LocalReference,
     pub current_frame: CallFrameCache,
+    pub safepoint: SafepointMetadataCache,
     pub pending_effects: u32,
     pub ready_flag: ReadyFlag,
     pub fp: StablePc,
@@ -107,6 +111,7 @@ impl TokioDriver {
                 task_id: op.task_id,
                 payload: CompletionPayload::HostCall {
                     result: op.future.await,
+                    safepoint: op.safepoint,
                 },
             }
         }));
@@ -241,18 +246,18 @@ impl<'a> Scheduler<'a> {
                     });
                 }
             }
-            CompletionPayload::HostCall { result } => match result {
+            CompletionPayload::HostCall { result, safepoint } => match result {
                 VMResult::Success(fp) => {
-                    let gc = self.store.lock_gc();
                     let fp = {
-                        let task = self.tasks.get_mut(task_index).unwrap();
-                        StablePc::from_raw_in_frame(&gc, &task.stack, task.local_reference, fp)
+                        let task = self.tasks.get(task_index).unwrap();
+                        StablePc::from_raw_in_call_frame(task.current_frame, fp)
                     };
                     let mut complete_result = None;
                     {
                         let task = self.tasks.get_mut(task_index).unwrap();
                         task.pending_effects -= 1;
                         task.fp = fp;
+                        task.safepoint = safepoint;
                         if task.pending_effects == 0 {
                             if let Some(result) = task.terminal_result.take() {
                                 complete_result = Some(result);
@@ -301,6 +306,7 @@ impl<'a> Scheduler<'a> {
             let Task {
                 local_reference,
                 current_frame,
+                safepoint,
                 fp: pc,
                 mut stack,
                 task_id,
@@ -309,11 +315,12 @@ impl<'a> Scheduler<'a> {
             } = task;
             let fp = pc.resolve(gc, &stack, local_reference);
 
-            let (res, cont, local_reference, current_frame) = {
+            let (res, cont, local_reference, current_frame, safepoint) = {
                 let mut ec = ExecuteContext {
                     gc,
                     local_reference,
                     current_frame,
+                    safepoint,
                     stack: &mut stack,
                     store: self.store,
                     effect: EffectSupplier {
@@ -325,7 +332,13 @@ impl<'a> Scheduler<'a> {
                     task_id,
                 };
                 let res = unsafe { ((*fp).op)(fp.offset(1), &mut ec) };
-                (res, ec.cont, ec.local_reference, ec.current_frame)
+                (
+                    res,
+                    ec.cont,
+                    ec.local_reference,
+                    ec.current_frame,
+                    ec.safepoint,
+                )
             };
             match res {
                 VMResult::Success(()) => {
@@ -333,7 +346,8 @@ impl<'a> Scheduler<'a> {
                         self.tasks.push_back(Task {
                             local_reference,
                             current_frame,
-                            fp: StablePc::from_raw_in_frame(gc, &stack, local_reference, cont),
+                            safepoint,
+                            fp: StablePc::from_raw_in_call_frame(current_frame, cont),
                             ready_flag: if pending_effects == 0 {
                                 ReadyFlag::Ready
                             } else {
@@ -356,6 +370,7 @@ impl<'a> Scheduler<'a> {
                         self.tasks.push_back(Task {
                             local_reference,
                             current_frame,
+                            safepoint,
                             fp: pc,
                             ready_flag: ReadyFlag::NonReady,
                             task_id,
@@ -375,6 +390,7 @@ impl<'a> Scheduler<'a> {
                         self.tasks.push_back(Task {
                             local_reference,
                             current_frame,
+                            safepoint,
                             fp: pc,
                             ready_flag: ReadyFlag::NonReady,
                             task_id,
@@ -434,7 +450,11 @@ impl<'a> Scheduler<'a> {
 #[cfg(test)]
 mod tests {
     use super::{CompletionPayload, ExecutionDriver, HostCallPending, PendingOp, TokioDriver};
-    use crate::VMResult;
+    use crate::{
+        common::{stack::CallFrameCache, LocalReference, SafepointMetadataCache, StablePc},
+        runtime::scheduler::{ReadyFlag, Scheduler, Task},
+        Stack, Store, VMResult,
+    };
 
     #[tokio::test]
     async fn tokio_driver_completes_host_call_future() {
@@ -442,13 +462,73 @@ mod tests {
         driver.submit(PendingOp::HostCall(HostCallPending {
             task_id: 3,
             future: Box::pin(async { VMResult::Success(std::ptr::null()) }),
+            safepoint: SafepointMetadataCache::new(11, 22),
         }));
         let completion = driver.next_completion().await.unwrap();
         match completion.payload {
-            CompletionPayload::HostCall { result } => {
+            CompletionPayload::HostCall { result, safepoint } => {
                 assert!(matches!(result, VMResult::Success(ptr) if ptr.is_null()));
+                assert_eq!(safepoint, SafepointMetadataCache::new(11, 22));
             }
             other => panic!("unexpected completion: {other:?}"),
         }
+    }
+
+    #[test]
+    fn host_call_completion_restores_task_safepoint_metadata() {
+        let store = Store::new();
+        let mut scheduler = Scheduler::new(&store);
+        scheduler.push(Task {
+            task_id: 1,
+            stack: Stack::new(64),
+            local_reference: LocalReference::empty(),
+            current_frame: CallFrameCache::dummy(),
+            safepoint: SafepointMetadataCache::EMPTY,
+            pending_effects: 1,
+            ready_flag: ReadyFlag::NonReady,
+            fp: StablePc::from_raw(0),
+            terminal_result: None,
+        });
+
+        scheduler.apply_completion(crate::runtime::memory_effect::Completion {
+            task_id: 1,
+            payload: CompletionPayload::HostCall {
+                result: VMResult::Success(std::ptr::null()),
+                safepoint: SafepointMetadataCache::new(11, 22),
+            },
+        });
+
+        let task = scheduler.tasks.front().expect("task must remain pending");
+        assert_eq!(task.safepoint, SafepointMetadataCache::new(11, 22));
+        assert_eq!(task.ready_flag, ReadyFlag::Ready);
+    }
+
+    #[test]
+    fn memory_wait_completion_preserves_existing_task_safepoint_metadata() {
+        let store = Store::new();
+        let mut scheduler = Scheduler::new(&store);
+        scheduler.push(Task {
+            task_id: 1,
+            stack: Stack::new(64),
+            local_reference: LocalReference::empty(),
+            current_frame: CallFrameCache::dummy(),
+            safepoint: SafepointMetadataCache::new(33, 44),
+            pending_effects: 1,
+            ready_flag: ReadyFlag::NonReady,
+            fp: StablePc::from_raw(0),
+            terminal_result: None,
+        });
+
+        scheduler.apply_completion(crate::runtime::memory_effect::Completion {
+            task_id: 1,
+            payload: CompletionPayload::ResumeWithI32 {
+                fp: StablePc::from_raw(77).raw(),
+                value: 9,
+            },
+        });
+
+        let task = scheduler.tasks.front().expect("task must remain queued");
+        assert_eq!(task.safepoint, SafepointMetadataCache::new(33, 44));
+        assert_eq!(task.ready_flag, ReadyFlag::Ready);
     }
 }

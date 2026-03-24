@@ -3555,6 +3555,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }
                         0x01 => {
                             let (len2, memidx, memarg) = self.parse_atomic_memarg(2)?;
+                            self.record_stack_map_site(
+                                instrs,
+                                checker,
+                                stack_map_sites,
+                                StackMapSafepointKind::MemoryWait,
+                            );
+                            self.record_unwind_site(
+                                instrs,
+                                unwind_sites,
+                                StackMapSafepointKind::MemoryWait,
+                                None,
+                            );
                             self.push_memarg_instruction(
                                 instrs,
                                 memidx,
@@ -3570,6 +3582,18 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         }
                         0x02 => {
                             let (len2, memidx, memarg) = self.parse_atomic_memarg(3)?;
+                            self.record_stack_map_site(
+                                instrs,
+                                checker,
+                                stack_map_sites,
+                                StackMapSafepointKind::MemoryWait,
+                            );
+                            self.record_unwind_site(
+                                instrs,
+                                unwind_sites,
+                                StackMapSafepointKind::MemoryWait,
+                                None,
+                            );
                             self.push_memarg_instruction(
                                 instrs,
                                 memidx,
@@ -4535,6 +4559,43 @@ mod tests {
         assert!(unwind_sites
             .iter()
             .all(|site| (site.instruction_ordinal as usize) < func.expr.len()));
+    }
+
+    #[cfg(feature = "threads")]
+    #[test]
+    fn parser_collects_memory_wait_safepoint_metadata() {
+        let func = func_in_module(
+            r#"
+            (module
+              (memory 1 1 shared)
+              (func (export "wait32") (param i32 i32 i64) (result i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                memory.atomic.wait32))
+            "#,
+            0,
+        );
+
+        let layout = func.frame_layout.as_ref();
+        let stack_sites = layout.cold.stack_map_sites.as_ref();
+        let unwind_sites = layout.cold.unwind_sites.as_ref();
+
+        let wait_stack_site = stack_sites
+            .iter()
+            .find(|site| site.kind == StackMapSafepointKind::MemoryWait)
+            .expect("memory.wait stack-map safepoint must exist");
+        assert_eq!(wait_stack_site.operand_bytes, 16);
+        assert_eq!(
+            wait_stack_site.ref_offsets_from_operand_base.as_ref(),
+            &[] as &[u32]
+        );
+
+        let wait_unwind_site = unwind_sites
+            .iter()
+            .find(|site| site.kind == StackMapSafepointKind::MemoryWait)
+            .expect("memory.wait unwind safepoint must exist");
+        assert_eq!(wait_unwind_site.result_slot_from_local_top, None);
     }
 
     #[test]

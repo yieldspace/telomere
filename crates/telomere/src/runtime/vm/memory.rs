@@ -1343,7 +1343,8 @@ mod tests {
         common::{
             stack::{CachedMemoryKind, CallFrameCache},
             store::InstanceId,
-            ExecuteContext, LocalReference, ObjectRef, Operand, Store, StoreInner,
+            ExecuteContext, LocalReference, ObjectRef, Operand, SafepointMetadataCache, Store,
+            StoreInner,
         },
         runtime::{memory_effect::PendingOp, scheduler::EffectSupplier},
     };
@@ -1354,6 +1355,7 @@ mod tests {
             code_addr: ObjectRef(0),
             code_base: std::ptr::null(),
             code_len: 0,
+            function_return_site_addr: 0,
             instance: InstanceId::from_index(0),
             memory0_kind: kind,
             memory0_raw: raw,
@@ -1371,6 +1373,7 @@ mod tests {
             stack,
             local_reference: LocalReference::empty(),
             current_frame: frame(CachedMemoryKind::Local, 1),
+            safepoint: SafepointMetadataCache::EMPTY,
             store,
             gc,
             effect: EffectSupplier::from_parts(1, pending_effects, queue),

@@ -13,8 +13,8 @@ use telomere::{
     },
     get_global, instantiate_native_async_module, link_async_host_function_with_export_name,
     link_async_host_function_with_function_idx, link_host_function_with_function_idx, Completion,
-    CompletionPayload, ExecutionDriver, HostCallPending, MemoryWaitPending, PendingOp, Registry,
-    ResultValue, Store, StoreState, VMResult, WasmValue,
+    CompletionPayload, ExecutionDriver, MemoryWaitPending, PendingOp, Registry, ResultValue, Store,
+    StoreState, VMResult, WasmValue,
 };
 
 struct MockDriver {
@@ -35,15 +35,8 @@ impl ExecutionDriver for MockDriver {
     fn submit(&mut self, op: PendingOp) {
         self.submitted += 1;
         match op {
-            PendingOp::HostCall(HostCallPending { task_id, future }) => {
-                self.inflight.push_back(Box::pin(async move {
-                    Completion {
-                        task_id,
-                        payload: CompletionPayload::HostCall {
-                            result: future.await,
-                        },
-                    }
-                }));
+            PendingOp::HostCall(op) => {
+                self.inflight.push_back(Box::pin(op.into_completion()));
             }
             PendingOp::MemoryWait(MemoryWaitPending {
                 task_id,

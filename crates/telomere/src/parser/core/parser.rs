@@ -960,6 +960,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 local_ref_runs: Arc::from(local_ref_runs),
                 stack_map_sites: optimized.stack_map_sites,
                 unwind_sites: optimized.unwind_sites,
+                instruction_ordinal_by_raw_start: optimized.instruction_ordinal_by_raw_start,
             },
         ));
         Ok(Func {

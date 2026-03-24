@@ -6,8 +6,8 @@ use super::{
     stack::{CachedMemoryKind, CallFrameCache},
     AsyncHostFunction, ControlFlowMetadataSite, Data, Elem, ExportSection, FrameLayoutHeader,
     FrameLayoutMetadata, FuncType, FuncTypeIdentity, GlobalType, HostFunction, Instr, LocalsData,
-    MemArg, MemType, ReturnShape, StablePc, Stack, StackMapSite, TableType, TypeIdx,
-    UnwindSiteMetadata, VMResult,
+    MemArg, MemType, ReturnShape, SafepointMetadataCache, StablePc, Stack, StackMapSite, TableType,
+    TypeIdx, UnwindSiteMetadata, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -147,7 +147,8 @@ pub(crate) struct WasmExecutionMetadata {
     pub frame_layout: Arc<FrameLayoutMetadata>,
     pub frame_layout_addr: usize,
     pub control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
-    pub derived_call_metadata: Option<Arc<DerivedCallMetadata>>,
+    pub derived_runtime_metadata: Option<Arc<DerivedRuntimeMetadata>>,
+    pub function_return_site_addr: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -155,6 +156,7 @@ pub(crate) struct PrecomputedCallFrame {
     pub code_addr: ObjectRef,
     pub code_base_addr: usize,
     pub code_len: u32,
+    pub function_return_site_addr: usize,
     pub instance: InstanceId,
     pub memory0_kind: CachedMemoryKind,
     pub memory0_raw: u32,
@@ -174,6 +176,7 @@ impl PrecomputedCallFrame {
                 self.code_base_addr as *const Instr
             },
             code_len: self.code_len,
+            function_return_site_addr: self.function_return_site_addr,
             instance: self.instance,
             memory0_kind: self.memory0_kind,
             memory0_raw: self.memory0_raw,
@@ -189,6 +192,15 @@ pub(crate) struct PrecomputedDirectCallSite {
     pub param_bytes: u32,
     pub param_shape: ReturnShape,
     pub callee_layout_addr: usize,
+    pub stack_map_site_addr: usize,
+    pub unwind_site_addr: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedImportCallSite {
+    pub instruction_ordinal: u32,
+    pub funcidx: u32,
+    pub return_pc: StablePc,
     pub stack_map_site_addr: usize,
     pub unwind_site_addr: usize,
 }
@@ -217,6 +229,31 @@ pub(crate) struct PrecomputedWaitSite {
     pub resume_pc: StablePc,
     pub memarg: MemArg,
     pub memidx: u32,
+    pub stack_map_site_addr: usize,
+    pub unwind_site_addr: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedLoopSite {
+    pub instruction_ordinal: u32,
+    meta: u32,
+    pub stack_map_site_addr: usize,
+    pub unwind_site_addr: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedBlockReturnSite {
+    pub instruction_ordinal: u32,
+    meta: u32,
+    pub stack_map_site_addr: usize,
+    pub unwind_site_addr: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrecomputedFunctionReturnSite {
+    pub instruction_ordinal: u32,
+    pub stack_map_site_addr: usize,
+    pub unwind_site_addr: usize,
 }
 
 impl PrecomputedDirectCallSite {
@@ -234,13 +271,22 @@ impl PrecomputedDirectCallSite {
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
         (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
     }
+
+    #[inline(always)]
+    pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
+        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+    }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DerivedCallMetadata {
+pub(crate) struct DerivedRuntimeMetadata {
     pub direct_call_sites: Arc<[PrecomputedDirectCallSite]>,
+    pub import_call_sites: Arc<[PrecomputedImportCallSite]>,
     pub indirect_call_sites: Arc<[PrecomputedIndirectCallSite]>,
     pub wait_sites: Arc<[PrecomputedWaitSite]>,
+    pub loop_sites: Arc<[PrecomputedLoopSite]>,
+    pub block_return_sites: Arc<[PrecomputedBlockReturnSite]>,
+    pub function_return_site: Option<Arc<PrecomputedFunctionReturnSite>>,
 }
 
 impl PrecomputedIndirectCallSite {
@@ -257,6 +303,146 @@ impl PrecomputedIndirectCallSite {
     #[inline(always)]
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
         (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
+        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+    }
+}
+
+impl PrecomputedImportCallSite {
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
+        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+    }
+}
+
+impl PrecomputedLoopSite {
+    pub(crate) const fn new(
+        instruction_ordinal: u32,
+        param_size: u32,
+        shape: ReturnShape,
+        stack_map_site_addr: usize,
+        unwind_site_addr: usize,
+    ) -> Self {
+        Self {
+            instruction_ordinal,
+            meta: ReturnShape::encode_meta(param_size, shape),
+            stack_map_site_addr,
+            unwind_site_addr,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn param_size(self) -> u32 {
+        ReturnShape::size_from_meta(self.meta)
+    }
+
+    #[inline(always)]
+    pub(crate) const fn param_shape(self) -> ReturnShape {
+        ReturnShape::decode_meta(self.meta)
+    }
+
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
+        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+    }
+}
+
+impl PrecomputedBlockReturnSite {
+    pub(crate) const fn new(
+        instruction_ordinal: u32,
+        return_size: u32,
+        shape: ReturnShape,
+        stack_map_site_addr: usize,
+        unwind_site_addr: usize,
+    ) -> Self {
+        Self {
+            instruction_ordinal,
+            meta: ReturnShape::encode_meta(return_size, shape),
+            stack_map_site_addr,
+            unwind_site_addr,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn return_size(self) -> u32 {
+        ReturnShape::size_from_meta(self.meta)
+    }
+
+    #[inline(always)]
+    pub(crate) const fn return_shape(self) -> ReturnShape {
+        ReturnShape::decode_meta(self.meta)
+    }
+
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
+        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+    }
+}
+
+impl PrecomputedFunctionReturnSite {
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
+        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+    }
+}
+
+impl PrecomputedWaitSite {
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+    }
+
+    #[inline(always)]
+    pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
+        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
     }
 }
 
@@ -405,7 +591,7 @@ impl FunctionInstanceData {
     pub(crate) fn direct_call_sites(&self) -> &[PrecomputedDirectCallSite] {
         match &self.body {
             FunctionBody::Wasm { metadata, .. } => metadata
-                .derived_call_metadata
+                .derived_runtime_metadata
                 .as_ref()
                 .map_or(&[], |metadata| metadata.direct_call_sites.as_ref()),
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => &[],
@@ -415,10 +601,60 @@ impl FunctionInstanceData {
     pub(crate) fn indirect_call_sites(&self) -> &[PrecomputedIndirectCallSite] {
         match &self.body {
             FunctionBody::Wasm { metadata, .. } => metadata
-                .derived_call_metadata
+                .derived_runtime_metadata
                 .as_ref()
                 .map_or(&[], |metadata| metadata.indirect_call_sites.as_ref()),
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => &[],
+        }
+    }
+
+    pub(crate) fn import_call_sites(&self) -> &[PrecomputedImportCallSite] {
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => metadata
+                .derived_runtime_metadata
+                .as_ref()
+                .map_or(&[], |metadata| metadata.import_call_sites.as_ref()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => &[],
+        }
+    }
+
+    pub(crate) fn wait_sites(&self) -> &[PrecomputedWaitSite] {
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => metadata
+                .derived_runtime_metadata
+                .as_ref()
+                .map_or(&[], |metadata| metadata.wait_sites.as_ref()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => &[],
+        }
+    }
+
+    pub(crate) fn loop_sites(&self) -> &[PrecomputedLoopSite] {
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => metadata
+                .derived_runtime_metadata
+                .as_ref()
+                .map_or(&[], |metadata| metadata.loop_sites.as_ref()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => &[],
+        }
+    }
+
+    pub(crate) fn block_return_sites(&self) -> &[PrecomputedBlockReturnSite] {
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => metadata
+                .derived_runtime_metadata
+                .as_ref()
+                .map_or(&[], |metadata| metadata.block_return_sites.as_ref()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => &[],
+        }
+    }
+
+    pub(crate) fn function_return_site(&self) -> Option<PrecomputedFunctionReturnSite> {
+        match &self.body {
+            FunctionBody::Wasm { metadata, .. } => metadata
+                .derived_runtime_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.function_return_site.as_deref().copied()),
+            FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => None,
         }
     }
 
@@ -465,27 +701,43 @@ impl FunctionInstanceData {
         }
     }
 
-    pub(crate) fn set_precomputed_call_sites(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn set_precomputed_runtime_sites(
         &mut self,
         direct_call_sites: Arc<[PrecomputedDirectCallSite]>,
+        import_call_sites: Arc<[PrecomputedImportCallSite]>,
         indirect_call_sites: Arc<[PrecomputedIndirectCallSite]>,
         wait_sites: Arc<[PrecomputedWaitSite]>,
+        loop_sites: Arc<[PrecomputedLoopSite]>,
+        block_return_sites: Arc<[PrecomputedBlockReturnSite]>,
+        function_return_site: Option<Arc<PrecomputedFunctionReturnSite>>,
     ) {
         match &mut self.body {
             FunctionBody::Wasm { metadata, .. } => {
-                metadata.derived_call_metadata = (!direct_call_sites.is_empty()
+                metadata.function_return_site_addr = function_return_site
+                    .as_ref()
+                    .map_or(0, |site| site.as_ref() as *const _ as usize);
+                metadata.derived_runtime_metadata = (!direct_call_sites.is_empty()
+                    || !import_call_sites.is_empty()
                     || !indirect_call_sites.is_empty()
-                    || !wait_sites.is_empty())
+                    || !wait_sites.is_empty()
+                    || !loop_sites.is_empty()
+                    || !block_return_sites.is_empty()
+                    || function_return_site.is_some())
                 .then(|| {
-                    Arc::new(DerivedCallMetadata {
+                    Arc::new(DerivedRuntimeMetadata {
                         direct_call_sites,
+                        import_call_sites,
                         indirect_call_sites,
                         wait_sites,
+                        loop_sites,
+                        block_return_sites,
+                        function_return_site,
                     })
                 });
             }
             FunctionBody::Host(_) | FunctionBody::AsyncHost(_) => {
-                unreachable!("precomputed call-site metadata is only valid for wasm functions")
+                unreachable!("precomputed runtime metadata is only valid for wasm functions")
             }
         }
     }
@@ -1998,6 +2250,7 @@ mod tests {
                 local_ref_runs: Arc::from([]),
                 stack_map_sites: Arc::from([]),
                 unwind_sites: Arc::from([]),
+                instruction_ordinal_by_raw_start: Arc::from([]),
             },
         ))
     }
@@ -2051,7 +2304,8 @@ mod tests {
                     frame_layout_addr: frame_layout.header() as *const _ as usize,
                     frame_layout,
                     control_flow_metadata: Arc::from([]),
-                    derived_call_metadata: None,
+                    derived_runtime_metadata: None,
+                    function_return_site_addr: 0,
                 },
             },
         };
@@ -2135,6 +2389,7 @@ mod tests {
                     kind: crate::common::StackMapSafepointKind::FunctionReturn,
                     result_slot_from_local_top: Some(0),
                 }]),
+                instruction_ordinal_by_raw_start: Arc::from([0]),
             },
         ));
         let func = FunctionInstanceData {
@@ -2158,7 +2413,8 @@ mod tests {
                     frame_layout: frame_layout.clone(),
                     frame_layout_addr: frame_layout.header() as *const _ as usize,
                     control_flow_metadata: Arc::from([]),
-                    derived_call_metadata: None,
+                    derived_runtime_metadata: None,
+                    function_return_site_addr: 0,
                 },
             },
         };

@@ -1,4 +1,7 @@
 use super::*;
+use crate::common::store::{
+    PrecomputedBlockReturnSite, PrecomputedFunctionReturnSite, PrecomputedLoopSite,
+};
 
 macro_rules! replicated_br_if {
     ($name:ident) => {
@@ -59,10 +62,12 @@ macro_rules! define_loop_handler {
 macro_rules! define_precomputed_loop_handler {
     ($name:ident, $method:ident $(, size = $size:ident)?) => {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let loop_param = (*tail_code).operand.precomputed_loop_param;
+            let loop_param = precomputed_loop_site_unchecked(tail_code);
+            let dst_from_local_top =
+                loop_result_slot_from_unwind_site(ctx.stack, &ctx.local_reference(), loop_param);
             ctx.stack.$method(
                 &ctx.local_reference(),
-                loop_param.dst_from_local_top as usize
+                dst_from_local_top
                 $(, loop_param.$size() as usize)?,
             );
             call_next(tail_code, 1, ctx)
@@ -94,15 +99,111 @@ macro_rules! define_special_block_return_handler {
 macro_rules! define_precomputed_special_block_return_handler {
     ($name:ident, $method:ident $(, size = $size:ident)?) => {
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            let block_return = (*tail_code).operand.precomputed_block_return;
+            let block_return = precomputed_block_return_site_unchecked(tail_code);
+            let dst_from_local_top =
+                block_return_result_slot_from_unwind_site(
+                    ctx.stack,
+                    &ctx.local_reference(),
+                    block_return,
+                );
             ctx.stack.$method(
                 &ctx.local_reference(),
-                block_return.dst_from_local_top as usize
+                dst_from_local_top
                 $(, block_return.$size() as usize)?,
             );
             call_next(tail_code, 1, ctx)
         }
     };
+}
+
+macro_rules! define_precomputed_special_function_return_handler {
+    ($name:ident, $method:ident) => {
+        pub unsafe fn $name(_tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let site = current_function_return_site_unchecked(ctx);
+            let result_slot = function_return_result_slot_from_unwind_site(
+                ctx.stack,
+                &ctx.local_reference(),
+                site,
+            );
+            debug_assert_eq!(result_slot, 0);
+            let (prev_local_ref, tail_code) = ctx.stack.$method(&ctx.local_reference(), ctx.gc);
+            ctx.set_local_reference(prev_local_ref);
+            call_next(tail_code, 0, ctx)
+        }
+    };
+    ($name:ident, $method:ident, size = $size:ident) => {
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            let site = current_function_return_site_unchecked(ctx);
+            let result_slot = function_return_result_slot_from_unwind_site(
+                ctx.stack,
+                &ctx.local_reference(),
+                site,
+            );
+            debug_assert_eq!(result_slot, 0);
+            let (prev_local_ref, tail_code) = ctx.stack.$method(
+                &ctx.local_reference(),
+                (*tail_code).operand.$size as usize,
+                ctx.gc,
+            );
+            ctx.set_local_reference(prev_local_ref);
+            call_next(tail_code, 0, ctx)
+        }
+    };
+}
+
+#[inline(always)]
+unsafe fn precomputed_loop_site_unchecked(tail_code: *const Instr) -> &'static PrecomputedLoopSite {
+    &*((*tail_code).operand.code_ptr as *const PrecomputedLoopSite)
+}
+
+#[inline(always)]
+unsafe fn precomputed_block_return_site_unchecked(
+    tail_code: *const Instr,
+) -> &'static PrecomputedBlockReturnSite {
+    &*((*tail_code).operand.code_ptr as *const PrecomputedBlockReturnSite)
+}
+
+#[inline(always)]
+unsafe fn current_function_return_site_unchecked(
+    ctx: &ExecuteContext,
+) -> &'static PrecomputedFunctionReturnSite {
+    &*ctx
+        .current_frame
+        .function_return_site_ptr()
+        .expect("precomputed function return must expose a site pointer")
+}
+
+#[inline(always)]
+unsafe fn loop_result_slot_from_unwind_site(
+    stack: &Stack,
+    reference: &LocalReference,
+    site: &'static PrecomputedLoopSite,
+) -> usize {
+    stack
+        .result_slot_from_unwind_site(reference, site.unwind_site_ptr())
+        .expect("control safepoint metadata must expose a result slot")
+}
+
+#[inline(always)]
+unsafe fn block_return_result_slot_from_unwind_site(
+    stack: &Stack,
+    reference: &LocalReference,
+    site: &'static PrecomputedBlockReturnSite,
+) -> usize {
+    stack
+        .result_slot_from_unwind_site(reference, site.unwind_site_ptr())
+        .expect("block-return safepoint metadata must expose a result slot")
+}
+
+#[inline(always)]
+fn function_return_result_slot_from_unwind_site(
+    stack: &Stack,
+    reference: &LocalReference,
+    site: &PrecomputedFunctionReturnSite,
+) -> usize {
+    stack
+        .result_slot_from_unwind_site(reference, site.unwind_site_ptr())
+        .expect("function-return safepoint metadata must expose a result slot")
 }
 
 macro_rules! define_special_function_return_handler {
@@ -468,6 +569,23 @@ define_special_function_return_handler!(special_function_return4, function_retur
 define_special_function_return_handler!(special_function_return8, function_return8);
 define_special_function_return_handler!(
     special_function_return_generic,
+    function_return,
+    size = drop_size
+);
+define_precomputed_special_function_return_handler!(
+    special_function_return_empty_precomputed,
+    function_return_empty
+);
+define_precomputed_special_function_return_handler!(
+    special_function_return4_precomputed,
+    function_return4
+);
+define_precomputed_special_function_return_handler!(
+    special_function_return8_precomputed,
+    function_return8
+);
+define_precomputed_special_function_return_handler!(
+    special_function_return_generic_precomputed,
     function_return,
     size = drop_size
 );

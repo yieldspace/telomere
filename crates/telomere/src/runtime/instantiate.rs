@@ -9,8 +9,8 @@ use crate::{
         ExportSection, FrameLayoutHeader, FuncIdx, FuncType, FunctionBody, FunctionInstanceData,
         GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceData,
         InstanceHandle, Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule,
-        ObjectRef, Op, Operand, PrecomputedBlockReturn, PrecomputedLoopParam, StablePc, StoreInner,
-        TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
+        ObjectRef, Op, Operand, StablePc, StackMapSafepointKind, StoreInner, TableIdx, TypeIdx,
+        TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
@@ -21,8 +21,9 @@ use crate::{
 
 use crate::common::store::{FunctionExecutionMetadata, FunctionKind, WasmExecutionMetadata};
 use crate::common::store::{
-    InstanceId, PrecomputedCallFrame, PrecomputedDirectCallSite, PrecomputedIndirectCallSite,
-    PrecomputedWaitSite,
+    InstanceId, PrecomputedBlockReturnSite, PrecomputedCallFrame, PrecomputedDirectCallSite,
+    PrecomputedFunctionReturnSite, PrecomputedImportCallSite, PrecomputedIndirectCallSite,
+    PrecomputedLoopSite, PrecomputedWaitSite,
 };
 
 #[derive(Clone)]
@@ -32,11 +33,25 @@ struct PendingWasmDerivedData {
     control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
 }
 
-type PrecomputedSiteTriples = (
+type PrecomputedSiteSets = (
     Arc<[PrecomputedDirectCallSite]>,
+    Arc<[PrecomputedImportCallSite]>,
     Arc<[PrecomputedIndirectCallSite]>,
     Arc<[PrecomputedWaitSite]>,
+    Arc<[PrecomputedLoopSite]>,
+    Arc<[PrecomputedBlockReturnSite]>,
+    Option<Arc<PrecomputedFunctionReturnSite>>,
 );
+
+struct RuntimeSiteRefs<'a> {
+    direct_call_sites: &'a [PrecomputedDirectCallSite],
+    import_call_sites: &'a [PrecomputedImportCallSite],
+    indirect_call_sites: &'a [PrecomputedIndirectCallSite],
+    wait_sites: &'a [PrecomputedWaitSite],
+    loop_sites: &'a [PrecomputedLoopSite],
+    block_return_sites: &'a [PrecomputedBlockReturnSite],
+    function_return_site: Option<&'a PrecomputedFunctionReturnSite>,
+}
 
 fn shape_for_result_type(ty: &crate::common::ResultType) -> crate::common::ReturnShape {
     match (ty.0.first(), ty.0.get(1)) {
@@ -182,11 +197,37 @@ fn rewrite_block_return_op(op: Op) -> Option<Op> {
     })
 }
 
+fn rewrite_function_return_op(op: Op) -> Option<Op> {
+    Some(if op_eq(op, vm::special_function_return_empty as Op) {
+        vm::special_function_return_empty_precomputed
+    } else if op_eq(op, vm::special_function_return4 as Op) {
+        vm::special_function_return4_precomputed
+    } else if op_eq(op, vm::special_function_return8 as Op) {
+        vm::special_function_return8_precomputed
+    } else if op_eq(op, vm::special_function_return_generic as Op)
+        || op_eq(op, vm::special_function_return as Op)
+    {
+        vm::special_function_return_generic_precomputed
+    } else {
+        return None;
+    })
+}
+
 fn rewrite_direct_call_op(op: Op) -> Option<Op> {
     Some(if op_eq(op, vm::op_call as Op) {
         vm::op_call_precomputed
     } else if op_eq(op, vm::op_return_call as Op) {
         vm::op_return_call_precomputed
+    } else {
+        return None;
+    })
+}
+
+fn rewrite_import_call_op(op: Op) -> Option<Op> {
+    Some(if op_eq(op, vm::op_call_import as Op) {
+        vm::op_call_import_precomputed
+    } else if op_eq(op, vm::op_return_call_import as Op) {
+        vm::op_return_call_import_precomputed
     } else {
         return None;
     })
@@ -216,29 +257,132 @@ fn rewrite_wait_op(op: Op) -> Option<Op> {
     })
 }
 
-fn build_precomputed_call_sites(
+enum ControlRuntimeSite {
+    Loop(PrecomputedLoopSite),
+    BlockReturn(PrecomputedBlockReturnSite),
+}
+
+fn control_flow_metadata_to_loop_and_block_sites(
+    frame_layout: &FrameLayoutHeader,
+    canonical: &[Instr],
+) -> Vec<ControlRuntimeSite> {
+    let mut sites = Vec::new();
+    for stack_map_site in frame_layout.cold().stack_map_sites.iter() {
+        let start = stack_map_site.instruction_ordinal as usize;
+        let Some(op) = canonical.get(start).map(|instr| unsafe { instr.op }) else {
+            continue;
+        };
+        let Some(unwind_site) = frame_layout.unwind_site(stack_map_site.instruction_ordinal) else {
+            continue;
+        };
+        match stack_map_site.kind {
+            StackMapSafepointKind::Loop => {
+                if rewrite_loop_op(op).is_none() {
+                    continue;
+                }
+                let loop_param = unsafe { canonical[start + 1].operand.loop_param };
+                sites.push(ControlRuntimeSite::Loop(PrecomputedLoopSite::new(
+                    stack_map_site.instruction_ordinal,
+                    loop_param.param_size(),
+                    loop_param.param_shape(),
+                    stack_map_site as *const _ as usize,
+                    unwind_site as *const _ as usize,
+                )));
+            }
+            StackMapSafepointKind::BlockReturn => {
+                if rewrite_block_return_op(op).is_none() {
+                    continue;
+                }
+                let block_return = unsafe { canonical[start + 1].operand.block_return };
+                sites.push(ControlRuntimeSite::BlockReturn(
+                    PrecomputedBlockReturnSite::new(
+                        stack_map_site.instruction_ordinal,
+                        block_return.return_size(),
+                        block_return.return_shape(),
+                        stack_map_site as *const _ as usize,
+                        unwind_site as *const _ as usize,
+                    ),
+                ));
+            }
+            _ => {}
+        }
+    }
+    sites
+}
+
+fn build_function_return_site(
+    frame_layout: &FrameLayoutHeader,
+) -> Option<Arc<PrecomputedFunctionReturnSite>> {
+    frame_layout
+        .cold()
+        .stack_map_sites
+        .iter()
+        .find(|site| site.kind == StackMapSafepointKind::FunctionReturn)
+        .and_then(|stack_map_site| {
+            frame_layout
+                .unwind_site(stack_map_site.instruction_ordinal)
+                .map(|unwind_site| {
+                    Arc::new(PrecomputedFunctionReturnSite {
+                        instruction_ordinal: stack_map_site.instruction_ordinal,
+                        stack_map_site_addr: stack_map_site as *const _ as usize,
+                        unwind_site_addr: unwind_site as *const _ as usize,
+                    })
+                })
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_precomputed_runtime_sites(
     canonical: &[Instr],
     frame_layout: &FrameLayoutHeader,
+    current_funcidx: u32,
     caller_instance: InstanceId,
     funcs: &[ObjectRef],
+    function_return_sites: &[Option<Arc<PrecomputedFunctionReturnSite>>],
     function_type_identities: &[crate::common::FuncTypeIdentity],
     gc: &StoreInner,
     allow_local_direct_precompute: bool,
-) -> PrecomputedSiteTriples {
+) -> PrecomputedSiteSets {
     let mut direct_sites = Vec::new();
+    let mut import_sites = Vec::new();
     let mut indirect_sites = Vec::new();
     let mut wait_sites = Vec::new();
+    let mut loop_sites = Vec::new();
+    let mut block_return_sites = Vec::new();
 
     for (instruction_ordinal, instr) in canonical.iter().enumerate() {
         let op = unsafe { instr.op };
+        let safepoint_instruction_ordinal =
+            frame_layout.instruction_ordinal_for_raw_start(instruction_ordinal);
+        let stack_map_site_addr = safepoint_instruction_ordinal
+            .and_then(|ordinal| frame_layout.stack_map_site(ordinal))
+            .map_or(0, |site| site as *const _ as usize);
+        let unwind_site_addr = safepoint_instruction_ordinal
+            .and_then(|ordinal| frame_layout.unwind_site(ordinal))
+            .map_or(0, |site| site as *const _ as usize);
+        let safepoint_kind = safepoint_instruction_ordinal
+            .and_then(|ordinal| frame_layout.stack_map_site(ordinal))
+            .map(|site| site.kind);
         if rewrite_direct_call_op(op).is_some() {
-            if !allow_local_direct_precompute {
-                continue;
-            }
-            let funcidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 as usize };
-            let funcaddr = funcs[funcidx];
+            let funcidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 };
+            let funcaddr = funcs[funcidx as usize];
             let funcinst = gc.get_func(funcaddr);
-            if funcinst.instance != caller_instance || funcinst.wasm_metadata().is_none() {
+            let import_like = matches!(
+                safepoint_kind,
+                Some(StackMapSafepointKind::CallImport | StackMapSafepointKind::ReturnCallImport)
+            );
+            if import_like
+                || !allow_local_direct_precompute
+                || funcinst.instance != caller_instance
+                || funcinst.wasm_metadata().is_none()
+            {
+                import_sites.push(PrecomputedImportCallSite {
+                    instruction_ordinal: instruction_ordinal as u32,
+                    funcidx,
+                    return_pc: StablePc::from_relative_index(instruction_ordinal + 2),
+                    stack_map_site_addr,
+                    unwind_site_addr,
+                });
                 continue;
             }
             let memory0 = gc
@@ -260,6 +404,7 @@ fn build_precomputed_call_sites(
                     || canonical.iter().any(|instr| {
                         let op = unsafe { instr.op };
                         rewrite_direct_call_op(op).is_some()
+                            || rewrite_import_call_op(op).is_some()
                             || rewrite_indirect_call_op(op).is_some()
                     });
                 if has_dynamic_rewrite {
@@ -280,6 +425,10 @@ fn build_precomputed_call_sites(
                     code_len: funcinst.code().map_or(0, |code| {
                         u32::try_from(code.len()).expect("code length overflow")
                     }),
+                    function_return_site_addr: function_return_sites
+                        .get(funcidx as usize)
+                        .and_then(|site| site.as_ref())
+                        .map_or(0, |site| site.as_ref() as *const _ as usize),
                     instance: funcinst.instance,
                     memory0_kind,
                     memory0_raw,
@@ -289,12 +438,17 @@ fn build_precomputed_call_sites(
                 callee_layout_addr: funcinst
                     .frame_layout_header()
                     .map_or(0, |layout| layout as *const FrameLayoutHeader as usize),
-                stack_map_site_addr: frame_layout
-                    .stack_map_site(instruction_ordinal as u32)
-                    .map_or(0, |site| site as *const _ as usize),
-                unwind_site_addr: frame_layout
-                    .unwind_site(instruction_ordinal as u32)
-                    .map_or(0, |site| site as *const _ as usize),
+                stack_map_site_addr,
+                unwind_site_addr,
+            });
+        } else if rewrite_import_call_op(op).is_some() {
+            let funcidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 };
+            import_sites.push(PrecomputedImportCallSite {
+                instruction_ordinal: instruction_ordinal as u32,
+                funcidx,
+                return_pc: StablePc::from_relative_index(instruction_ordinal + 2),
+                stack_map_site_addr,
+                unwind_site_addr,
             });
         } else if rewrite_indirect_call_op(op).is_some() {
             let tableidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 };
@@ -308,12 +462,8 @@ fn build_precomputed_call_sites(
                     .expect("validated indirect call type")
                     as *const crate::common::FuncTypeIdentity
                     as usize,
-                stack_map_site_addr: frame_layout
-                    .stack_map_site(instruction_ordinal as u32)
-                    .map_or(0, |site| site as *const _ as usize),
-                unwind_site_addr: frame_layout
-                    .unwind_site(instruction_ordinal as u32)
-                    .map_or(0, |site| site as *const _ as usize),
+                stack_map_site_addr,
+                unwind_site_addr,
             });
         } else if rewrite_wait_op(op).is_some() {
             let memarg = unsafe { canonical[instruction_ordinal + 1].operand.memarg };
@@ -330,14 +480,32 @@ fn build_precomputed_call_sites(
                 } else {
                     0
                 },
+                stack_map_site_addr,
+                unwind_site_addr,
             });
         }
     }
 
+    for site in control_flow_metadata_to_loop_and_block_sites(frame_layout, canonical) {
+        match site {
+            ControlRuntimeSite::Loop(loop_site) => loop_sites.push(loop_site),
+            ControlRuntimeSite::BlockReturn(block_site) => block_return_sites.push(block_site),
+        }
+    }
+
+    let function_return_site = function_return_sites
+        .get(current_funcidx as usize)
+        .cloned()
+        .unwrap_or(None);
+
     (
         direct_sites.into(),
+        import_sites.into(),
         indirect_sites.into(),
         wait_sites.into(),
+        loop_sites.into(),
+        block_return_sites.into(),
+        function_return_site,
     )
 }
 
@@ -351,6 +519,14 @@ fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut Sto
             .clone();
         (funcs, function_type_identities)
     };
+    let function_return_sites = funcs
+        .iter()
+        .map(|&funcaddr| {
+            gc.get_func(funcaddr)
+                .frame_layout_header()
+                .and_then(build_function_return_site)
+        })
+        .collect::<Vec<_>>();
 
     let mut rebuilt = Vec::new();
     for &funcaddr in &funcs {
@@ -361,11 +537,21 @@ fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut Sto
         let canonical_code = func
             .canonical_code_arc()
             .expect("wasm function must retain canonical code");
-        let (direct_call_sites, indirect_call_sites, wait_sites) = build_precomputed_call_sites(
+        let (
+            direct_call_sites,
+            import_call_sites,
+            indirect_call_sites,
+            wait_sites,
+            loop_sites,
+            block_return_sites,
+            function_return_site,
+        ) = build_precomputed_runtime_sites(
             canonical_code.as_ref(),
             metadata.frame_layout_header(),
+            func.funcidx,
             func.instance,
             funcs.as_slice(),
+            function_return_sites.as_slice(),
             function_type_identities.as_slice(),
             gc,
             false,
@@ -373,22 +559,51 @@ fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut Sto
         let derived_code = build_derived_code(
             &canonical_code,
             metadata.control_flow_metadata.as_ref(),
-            direct_call_sites.as_ref(),
-            indirect_call_sites.as_ref(),
-            wait_sites.as_ref(),
+            RuntimeSiteRefs {
+                direct_call_sites: direct_call_sites.as_ref(),
+                import_call_sites: import_call_sites.as_ref(),
+                indirect_call_sites: indirect_call_sites.as_ref(),
+                wait_sites: wait_sites.as_ref(),
+                loop_sites: loop_sites.as_ref(),
+                block_return_sites: block_return_sites.as_ref(),
+                function_return_site: function_return_site.as_deref(),
+            },
         );
         rebuilt.push((
             funcaddr,
             direct_call_sites,
+            import_call_sites,
             indirect_call_sites,
             wait_sites,
+            loop_sites,
+            block_return_sites,
+            function_return_site,
             derived_code,
         ));
     }
 
-    for (funcaddr, direct_call_sites, indirect_call_sites, wait_sites, derived_code) in rebuilt {
+    for (
+        funcaddr,
+        direct_call_sites,
+        import_call_sites,
+        indirect_call_sites,
+        wait_sites,
+        loop_sites,
+        block_return_sites,
+        function_return_site,
+        derived_code,
+    ) in rebuilt
+    {
         let func = gc.get_func_mut(funcaddr);
-        func.set_precomputed_call_sites(direct_call_sites, indirect_call_sites, wait_sites);
+        func.set_precomputed_runtime_sites(
+            direct_call_sites,
+            import_call_sites,
+            indirect_call_sites,
+            wait_sites,
+            loop_sites,
+            block_return_sites,
+            function_return_site,
+        );
         if let Some(derived_code) = derived_code {
             func.set_derived_code(derived_code);
         } else {
@@ -400,14 +615,16 @@ fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut Sto
 fn build_derived_code(
     canonical: &Arc<[Instr]>,
     control_flow_metadata: &[ControlFlowMetadataSite],
-    direct_call_sites: &[PrecomputedDirectCallSite],
-    indirect_call_sites: &[PrecomputedIndirectCallSite],
-    wait_sites: &[PrecomputedWaitSite],
+    runtime_sites: RuntimeSiteRefs<'_>,
 ) -> Option<Arc<[Instr]>> {
     if control_flow_metadata.is_empty()
-        && direct_call_sites.is_empty()
-        && indirect_call_sites.is_empty()
-        && wait_sites.is_empty()
+        && runtime_sites.direct_call_sites.is_empty()
+        && runtime_sites.import_call_sites.is_empty()
+        && runtime_sites.indirect_call_sites.is_empty()
+        && runtime_sites.wait_sites.is_empty()
+        && runtime_sites.loop_sites.is_empty()
+        && runtime_sites.block_return_sites.is_empty()
+        && runtime_sites.function_return_site.is_none()
     {
         return None;
     }
@@ -436,45 +653,41 @@ fn build_derived_code(
                     };
                 }
             }
-            ControlFlowMetadataKind::Loop {
-                dst_from_local_top,
-                param_size,
-                shape,
-            } => {
-                let ptr_op = rewrite_loop_op(op).expect("loop metadata must target a loop op");
-                code[start] = Instr { op: ptr_op };
-                code[start + 1] = Instr {
-                    operand: Operand {
-                        precomputed_loop_param: PrecomputedLoopParam::with_shape(
-                            *dst_from_local_top,
-                            *param_size,
-                            *shape,
-                        ),
-                    },
-                };
+            ControlFlowMetadataKind::Loop { .. } => {
+                if let Some(site) = runtime_sites.loop_sites.iter().find(|runtime_site| {
+                    runtime_site.instruction_ordinal == site.instruction_ordinal
+                }) {
+                    let ptr_op = rewrite_loop_op(op).expect("loop metadata must target a loop op");
+                    code[start] = Instr { op: ptr_op };
+                    code[start + 1] = Instr {
+                        operand: Operand {
+                            code_ptr: site as *const PrecomputedLoopSite as usize,
+                        },
+                    };
+                }
             }
-            ControlFlowMetadataKind::BlockReturn {
-                dst_from_local_top,
-                return_size,
-                shape,
-            } => {
-                let ptr_op = rewrite_block_return_op(op)
-                    .expect("block-return metadata must target a block-return op");
-                code[start] = Instr { op: ptr_op };
-                code[start + 1] = Instr {
-                    operand: Operand {
-                        precomputed_block_return: PrecomputedBlockReturn::with_shape(
-                            *dst_from_local_top,
-                            *return_size,
-                            *shape,
-                        ),
-                    },
-                };
+            ControlFlowMetadataKind::BlockReturn { .. } => {
+                if let Some(site) = runtime_sites
+                    .block_return_sites
+                    .iter()
+                    .find(|runtime_site| {
+                        runtime_site.instruction_ordinal == site.instruction_ordinal
+                    })
+                {
+                    let ptr_op = rewrite_block_return_op(op)
+                        .expect("block-return metadata must target a block-return op");
+                    code[start] = Instr { op: ptr_op };
+                    code[start + 1] = Instr {
+                        operand: Operand {
+                            code_ptr: site as *const PrecomputedBlockReturnSite as usize,
+                        },
+                    };
+                }
             }
         }
     }
 
-    for site in direct_call_sites {
+    for site in runtime_sites.direct_call_sites {
         let start = site.instruction_ordinal as usize;
         let ptr_op =
             rewrite_direct_call_op(unsafe { code[start].op }).expect("direct-call rewrite target");
@@ -486,7 +699,19 @@ fn build_derived_code(
         };
     }
 
-    for site in indirect_call_sites {
+    for site in runtime_sites.import_call_sites {
+        let start = site.instruction_ordinal as usize;
+        let ptr_op =
+            rewrite_import_call_op(unsafe { code[start].op }).expect("import-call rewrite target");
+        code[start] = Instr { op: ptr_op };
+        code[start + 1] = Instr {
+            operand: Operand {
+                code_ptr: site as *const PrecomputedImportCallSite as usize,
+            },
+        };
+    }
+
+    for site in runtime_sites.indirect_call_sites {
         let start = site.instruction_ordinal as usize;
         let ptr_op = rewrite_indirect_call_op(unsafe { code[start].op })
             .expect("indirect-call rewrite target");
@@ -498,7 +723,7 @@ fn build_derived_code(
         };
     }
 
-    for site in wait_sites {
+    for site in runtime_sites.wait_sites {
         let start = site.instruction_ordinal as usize;
         let ptr_op = rewrite_wait_op(unsafe { code[start].op }).expect("wait rewrite target");
         code[start] = Instr { op: ptr_op };
@@ -507,6 +732,22 @@ fn build_derived_code(
                 code_ptr: site as *const PrecomputedWaitSite as usize,
             },
         };
+    }
+
+    if let Some(site) = runtime_sites.function_return_site {
+        let start = code
+            .get(site.instruction_ordinal as usize)
+            .and_then(|instr| {
+                rewrite_function_return_op(unsafe { instr.op })
+                    .map(|ptr_op| (site.instruction_ordinal as usize, ptr_op))
+            })
+            .or_else(|| {
+                code.iter().enumerate().find_map(|(index, instr)| {
+                    rewrite_function_return_op(unsafe { instr.op }).map(|ptr_op| (index, ptr_op))
+                })
+            })
+            .expect("function-return rewrite target");
+        code[start.0] = Instr { op: start.1 };
     }
 
     Some(derived)
@@ -899,7 +1140,8 @@ pub async fn instantiate(
                                 frame_layout: code.frame_layout.clone(),
                                 frame_layout_addr: code.frame_layout.header() as *const _ as usize,
                                 control_flow_metadata: code.control_flow_metadata.clone(),
-                                derived_call_metadata: None,
+                                derived_runtime_metadata: None,
+                                function_return_site_addr: 0,
                             },
                         },
                         funcidx,
@@ -992,6 +1234,15 @@ pub async fn instantiate(
         unsafe {
             gc.place_instance_unchecked(inst_addr, &instance);
         }
+        let function_return_sites = instance
+            .funcs
+            .iter()
+            .map(|&funcaddr| {
+                gc.get_func(funcaddr)
+                    .frame_layout_header()
+                    .and_then(build_function_return_site)
+            })
+            .collect::<Vec<_>>();
         for pending in pending_wasm_functions {
             let pending_func = gc.get_func(pending.func_addr);
             let caller_instance = pending_func.instance;
@@ -1002,11 +1253,21 @@ pub async fn instantiate(
                 .get_module(instance.module_addr)
                 .function_type_identities
                 .as_slice();
-            let (direct_call_sites, indirect_call_sites, wait_sites) = build_precomputed_call_sites(
+            let (
+                direct_call_sites,
+                import_call_sites,
+                indirect_call_sites,
+                wait_sites,
+                loop_sites,
+                block_return_sites,
+                function_return_site,
+            ) = build_precomputed_runtime_sites(
                 pending.canonical_code.as_ref(),
                 frame_layout,
+                pending_func.funcidx,
                 caller_instance,
                 instance.funcs.as_slice(),
+                function_return_sites.as_slice(),
                 function_type_identities,
                 &gc,
                 true,
@@ -1014,12 +1275,26 @@ pub async fn instantiate(
             let derived_code = build_derived_code(
                 &pending.canonical_code,
                 pending.control_flow_metadata.as_ref(),
-                direct_call_sites.as_ref(),
-                indirect_call_sites.as_ref(),
-                wait_sites.as_ref(),
+                RuntimeSiteRefs {
+                    direct_call_sites: direct_call_sites.as_ref(),
+                    import_call_sites: import_call_sites.as_ref(),
+                    indirect_call_sites: indirect_call_sites.as_ref(),
+                    wait_sites: wait_sites.as_ref(),
+                    loop_sites: loop_sites.as_ref(),
+                    block_return_sites: block_return_sites.as_ref(),
+                    function_return_site: function_return_site.as_deref(),
+                },
             );
             let func = gc.get_func_mut(pending.func_addr);
-            func.set_precomputed_call_sites(direct_call_sites, indirect_call_sites, wait_sites);
+            func.set_precomputed_runtime_sites(
+                direct_call_sites,
+                import_call_sites,
+                indirect_call_sites,
+                wait_sites,
+                loop_sites,
+                block_return_sites,
+                function_return_site,
+            );
             if let Some(derived_code) = derived_code {
                 func.set_derived_code(derived_code);
             }
@@ -1056,6 +1331,7 @@ pub async fn instantiate(
                     stack,
                     local_reference,
                     current_frame: frame,
+                    safepoint: crate::common::SafepointMetadataCache::EMPTY,
                     ready_flag: ReadyFlag::Ready,
                     fp: StablePc::from_stable_ptr(vm::START_HOST_FUNCTION_PROGRAM.as_ptr()),
                     pending_effects: 0,
@@ -1079,6 +1355,7 @@ pub async fn instantiate(
                     stack,
                     local_reference,
                     current_frame: frame,
+                    safepoint: crate::common::SafepointMetadataCache::EMPTY,
                     ready_flag: ReadyFlag::Ready,
                     pending_effects: 0,
                     terminal_result: None,
@@ -1399,17 +1676,21 @@ mod tests {
             std::ptr::fn_addr_eq(instr.op, vm::op_if_ptr as Op)
                 || std::ptr::fn_addr_eq(instr.op, vm::op_else_ptr as Op)
                 || std::ptr::fn_addr_eq(instr.op, vm::special_block_return4_precomputed as Op)
+                || std::ptr::fn_addr_eq(instr.op, vm::special_function_return4_precomputed as Op)
         }));
         assert!(branch_canonical.iter().any(|instr| unsafe {
             std::ptr::fn_addr_eq(instr.op, vm::op_if as Op)
                 || std::ptr::fn_addr_eq(instr.op, vm::op_else as Op)
         }));
+        assert!(branch_func.function_return_site().is_some());
 
         let loop_active = loop_func.code().expect("active wasm code");
         assert!(loop_active.iter().any(|instr| unsafe {
             std::ptr::fn_addr_eq(instr.op, vm::op_loop_empty_precomputed as Op)
                 || std::ptr::fn_addr_eq(instr.op, vm::special_block_return_empty_precomputed as Op)
         }));
+        assert!(!loop_func.loop_sites().is_empty());
+        assert!(loop_func.function_return_site().is_some());
     }
 
     #[tokio::test]
@@ -1551,6 +1832,94 @@ mod tests {
         );
     }
 
+    fn passthrough_host(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
+        let value = ctx.stack.pop_u32();
+        crate::vm_try!(ctx.stack.push_u32(value));
+        let (prev_local_ref, return_addr) =
+            ctx.stack
+                .function_return_in_place(&ctx.local_reference, 4, ctx.gc);
+        ctx.set_local_reference(prev_local_ref);
+        VMResult::Success(return_addr)
+    }
+
+    #[tokio::test]
+    async fn instantiate_builds_pointer_bearing_call_site_metadata_for_import_calls() {
+        let store = Store::new();
+        let mut registry = Registry::new();
+        let host = instantiate_native_module(
+            NativeModule {
+                functions: vec![HostFunctionDefinition {
+                    fp: passthrough_host,
+                    name: Some("passthrough".to_string()),
+                    signature: FuncType::new(
+                        vec![crate::common::ValType::I32],
+                        vec![crate::common::ValType::I32],
+                    ),
+                }],
+            },
+            &store,
+            &registry,
+        )
+        .await
+        .unwrap();
+        registry.register("host", host);
+        let module = parse_wat_module(
+            r#"
+            (module
+              (import "host" "passthrough" (func $passthrough (param i32) (result i32)))
+              (func (export "caller") (param i32) (result i32)
+                local.get 0
+                call $passthrough)
+              (func (export "tailcaller") (param i32) (result i32)
+                local.get 0
+                return_call $passthrough))
+            "#,
+        );
+
+        let instance = instantiate(module, &store, &registry).await.unwrap();
+        let gc = store.lock_gc();
+        let inst = gc.get_instance(
+            instance
+                .object_ref_for_store(&store)
+                .expect("instance must stay live in store"),
+        );
+
+        let caller = gc.get_func(inst.funcs[1]);
+        let tailcaller = gc.get_func(inst.funcs[2]);
+
+        assert_eq!(caller.import_call_sites().len(), 1);
+        assert_eq!(tailcaller.import_call_sites().len(), 1);
+        assert!(caller.code().unwrap().iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_call_import_precomputed as Op)
+        }));
+        assert!(tailcaller.code().unwrap().iter().any(|instr| unsafe {
+            std::ptr::fn_addr_eq(instr.op, vm::op_return_call_import_precomputed as Op)
+        }));
+
+        let direct_site = caller
+            .import_call_sites()
+            .first()
+            .expect("import call site");
+        assert_eq!(direct_site.funcidx, 0);
+        assert_eq!(direct_site.return_pc, StablePc::from_relative_index(4));
+        let stack_map_sites = &caller
+            .wasm_metadata()
+            .unwrap()
+            .frame_layout
+            .cold()
+            .stack_map_sites;
+        eprintln!("caller stack_map_sites={stack_map_sites:?}");
+        assert!(direct_site.stack_map_site_ptr().is_some());
+
+        let tail_site = tailcaller
+            .import_call_sites()
+            .first()
+            .expect("tail import call site");
+        assert_eq!(tail_site.funcidx, 0);
+        assert_eq!(tail_site.return_pc, StablePc::from_relative_index(4));
+        assert!(tail_site.stack_map_site_ptr().is_some());
+    }
+
     #[cfg(feature = "threads")]
     #[tokio::test]
     async fn instantiate_rewrites_shared_wait_handlers_to_precomputed_variants() {
@@ -1596,5 +1965,19 @@ mod tests {
                 vm::op_memory_atomic_wait64_shared_precomputed as Op,
             )
         }));
+
+        let wait32_site = wait32
+            .wait_sites()
+            .first()
+            .expect("wait32 site metadata must exist");
+        assert!(wait32_site.stack_map_site_ptr().is_some());
+        assert!(wait32_site.unwind_site_ptr().is_some());
+
+        let wait64_site = wait64
+            .wait_sites()
+            .first()
+            .expect("wait64 site metadata must exist");
+        assert!(wait64_site.stack_map_site_ptr().is_some());
+        assert!(wait64_site.unwind_site_ptr().is_some());
     }
 }

@@ -2,6 +2,7 @@ use super::*;
 use crate::common::store::PrecomputedWaitSite;
 use crate::common::AtomicRmwOp;
 use crate::common::AtomicWaitResult;
+use crate::common::SafepointMetadataCache;
 use crate::runtime::memory_effect::{MemoryWaitPending, PendingOp};
 
 const WAIT_RESULT_NOT_EQUAL: i32 = 1;
@@ -2247,7 +2248,9 @@ unsafe fn push_wait_effect(
     resume_pc: *const Instr,
 ) {
     let task_id = ctx.task_id;
-    let fp = StablePc::from_raw_in_frame(ctx.gc, ctx.stack, ctx.local_reference, resume_pc).raw();
+    #[cfg(debug_assertions)]
+    ctx.visit_current_ref_ranges(|_| {});
+    let fp = StablePc::from_raw_in_call_frame(ctx.current_frame, resume_pc).raw();
     ctx.effect
         .push_pending(PendingOp::MemoryWait(MemoryWaitPending {
             task_id,
@@ -2259,6 +2262,34 @@ unsafe fn push_wait_effect(
 }
 
 #[inline(always)]
+unsafe fn cold_lookup_wait_safepoint(
+    ctx: &ExecuteContext,
+    tail_code: *const Instr,
+) -> SafepointMetadataCache {
+    let Some(layout) = ctx.func().frame_layout_header() else {
+        return SafepointMetadataCache::EMPTY;
+    };
+    let raw_start = unsafe { tail_code.offset_from(ctx.code()) };
+    let Some(raw_start) = usize::try_from(raw_start)
+        .ok()
+        .and_then(|value| value.checked_sub(1))
+    else {
+        return SafepointMetadataCache::EMPTY;
+    };
+    let Some(instruction_ordinal) = layout.instruction_ordinal_for_raw_start(raw_start) else {
+        return SafepointMetadataCache::EMPTY;
+    };
+    SafepointMetadataCache::new(
+        layout
+            .stack_map_site(instruction_ordinal)
+            .map_or(0, |site| site as *const _ as usize),
+        layout
+            .unwind_site(instruction_ordinal)
+            .map_or(0, |site| site as *const _ as usize),
+    )
+}
+
+#[inline(always)]
 unsafe fn push_wait_effect_precomputed(
     ctx: &mut ExecuteContext,
     shared: std::sync::Arc<crate::common::SharedMemoryObject>,
@@ -2267,6 +2298,8 @@ unsafe fn push_wait_effect_precomputed(
     resume_pc: StablePc,
 ) {
     let task_id = ctx.task_id;
+    #[cfg(debug_assertions)]
+    ctx.visit_current_ref_ranges(|_| {});
     ctx.effect
         .push_pending(PendingOp::MemoryWait(MemoryWaitPending {
             task_id,
@@ -2331,9 +2364,11 @@ pub unsafe fn op_memory_atomic_wait32_shared(
         }
         AtomicWaitResult::Pending(wait) => {
             let resume_pc = tail_code.offset(1);
+            let safepoint = cold_lookup_wait_safepoint(ctx, tail_code);
             let shared = ctx
                 .gc
                 .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+            ctx.set_safepoint(safepoint);
             push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
             trace!("waiting effect: {:?}", resume_pc);
             ctx.cont = resume_pc;
@@ -2372,13 +2407,13 @@ pub unsafe fn op_memory_atomic_wait32_shared_precomputed(
         }
         AtomicWaitResult::Pending(wait) => {
             let site = precomputed_wait_site_unchecked(tail_code);
+            let safepoint = site.safepoint_cache();
             let shared = ctx
                 .gc
                 .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+            ctx.set_safepoint(safepoint);
             push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
-            ctx.cont = site
-                .resume_pc
-                .resolve(ctx.gc, ctx.stack, ctx.local_reference);
+            ctx.cont = site.resume_pc.resolve_in_call_frame(ctx.current_frame);
             VMResult::Success(())
         }
     }
@@ -2437,9 +2472,11 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared(
         }
         AtomicWaitResult::Pending(wait) => {
             let resume_pc = tail_code.offset(2);
+            let safepoint = cold_lookup_wait_safepoint(ctx, tail_code);
             let shared = ctx
                 .gc
                 .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+            ctx.set_safepoint(safepoint);
             push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
             trace!("waiting effect: {:?}", resume_pc);
             ctx.cont = resume_pc;
@@ -2478,13 +2515,13 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared_precomputed(
         }
         AtomicWaitResult::Pending(wait) => {
             let site = precomputed_wait_site_unchecked(tail_code);
+            let safepoint = site.safepoint_cache();
             let shared = ctx
                 .gc
                 .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+            ctx.set_safepoint(safepoint);
             push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
-            ctx.cont = site
-                .resume_pc
-                .resolve(ctx.gc, ctx.stack, ctx.local_reference);
+            ctx.cont = site.resume_pc.resolve_in_call_frame(ctx.current_frame);
             VMResult::Success(())
         }
     }
@@ -2544,9 +2581,11 @@ pub unsafe fn op_memory_atomic_wait64_shared(
         }
         AtomicWaitResult::Pending(wait) => {
             let resume_pc = tail_code.offset(1);
+            let safepoint = cold_lookup_wait_safepoint(ctx, tail_code);
             let shared = ctx
                 .gc
                 .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+            ctx.set_safepoint(safepoint);
             push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
             trace!("waiting effect: {:?}", resume_pc);
             ctx.cont = resume_pc;
@@ -2585,13 +2624,13 @@ pub unsafe fn op_memory_atomic_wait64_shared_precomputed(
         }
         AtomicWaitResult::Pending(wait) => {
             let site = precomputed_wait_site_unchecked(tail_code);
+            let safepoint = site.safepoint_cache();
             let shared = ctx
                 .gc
                 .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
+            ctx.set_safepoint(safepoint);
             push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
-            ctx.cont = site
-                .resume_pc
-                .resolve(ctx.gc, ctx.stack, ctx.local_reference);
+            ctx.cont = site.resume_pc.resolve_in_call_frame(ctx.current_frame);
             VMResult::Success(())
         }
     }
@@ -2650,9 +2689,11 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared(
         }
         AtomicWaitResult::Pending(wait) => {
             let resume_pc = tail_code.offset(2);
+            let safepoint = cold_lookup_wait_safepoint(ctx, tail_code);
             let shared = ctx
                 .gc
                 .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+            ctx.set_safepoint(safepoint);
             push_wait_effect(ctx, shared, wait, timeout_ns, resume_pc);
             trace!("waiting effect: {:?}", resume_pc);
             ctx.cont = resume_pc;
@@ -2691,13 +2732,13 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared_precomputed(
         }
         AtomicWaitResult::Pending(wait) => {
             let site = precomputed_wait_site_unchecked(tail_code);
+            let safepoint = site.safepoint_cache();
             let shared = ctx
                 .gc
                 .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
+            ctx.set_safepoint(safepoint);
             push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
-            ctx.cont = site
-                .resume_pc
-                .resolve(ctx.gc, ctx.stack, ctx.local_reference);
+            ctx.cont = site.resume_pc.resolve_in_call_frame(ctx.current_frame);
             VMResult::Success(())
         }
     }
