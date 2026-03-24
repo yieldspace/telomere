@@ -1,5 +1,40 @@
 use super::*;
 
+macro_rules! replicated_local_push_load4 {
+    ($name:ident) => {
+        #[inline(never)]
+        pub(crate) unsafe fn $name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            let start = vm_try!(load_start(tail_code, ctx));
+            vm_try!(ctx.gc.local_push_memory_to_stack::<4>(
+                ctx.default_local_memory_id_unchecked(),
+                ctx.stack,
+                start,
+            ));
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
+macro_rules! replicated_local_i32_load8_u {
+    ($name:ident) => {
+        #[inline(never)]
+        pub(crate) unsafe fn $name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            let start = vm_try!(load_start(tail_code, ctx));
+            let value = vm_try!(ctx
+                .gc
+                .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start,));
+            vm_try!(ctx.stack.push_u32(u32::from(value)));
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
 #[inline(always)]
 fn truncate_u32_to_u8_bytes(value: u32) -> [u8; 1] {
     [(value & 0xff) as u8]
@@ -303,6 +338,11 @@ pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 1, ctx)
 }
 
+replicated_local_push_load4!(op_f32_load_local_r0);
+replicated_local_push_load4!(op_f32_load_local_r1);
+replicated_local_push_load4!(op_f32_load_local_r2);
+replicated_local_push_load4!(op_f32_load_local_r3);
+
 /// WebAssembly `f64.load`.
 ///
 /// Spec:
@@ -351,6 +391,11 @@ pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     vm_try!(ctx.stack.push_u32(u32::from(value)));
     call_next(tail_code, 1, ctx)
 }
+
+replicated_local_i32_load8_u!(op_i32_load8_u_local_r0);
+replicated_local_i32_load8_u!(op_i32_load8_u_local_r1);
+replicated_local_i32_load8_u!(op_i32_load8_u_local_r2);
+replicated_local_i32_load8_u!(op_i32_load8_u_local_r3);
 
 /// WebAssembly `i32.load8_s`.
 ///

@@ -1856,6 +1856,251 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("producer_compare_select_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    (local $cond i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        local.get $i
+                        local.get $i
+                        i32.const 3
+                        i32.shr_u
+                        local.get $n
+                        i32.lt_u
+                        select
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                let _ = black_box(
+                    telomere::run_module_function(
+                        &handle,
+                        &store,
+                        "run",
+                        &ResultValue::new(vec![WasmValue::I32(1024)]),
+                    )
+                    .await,
+                )
+                .unwrap();
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("baseline_producer_compare_select_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    (local $cond i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $i
+                        i32.const 3
+                        i32.shr_u
+                        local.get $n
+                        i32.lt_u
+                        local.set $cond
+                        local.get $acc
+                        local.get $i
+                        local.get $cond
+                        select
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                let _ = black_box(
+                    telomere::run_module_function(
+                        &handle,
+                        &store,
+                        "run",
+                        &ResultValue::new(vec![WasmValue::I32(1024)]),
+                    )
+                    .await,
+                )
+                .unwrap();
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("f32_load_compare_select_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $addr i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        i32.const 7
+                        local.get $addr
+                        f32.load
+                        f32.const 0
+                        f32.gt
+                        select
+                        local.set $acc
+                        local.get $addr
+                        i32.const 4
+                        i32.add
+                        local.set $addr
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                let _ = black_box(
+                    telomere::run_module_function(
+                        &handle,
+                        &store,
+                        "run",
+                        &ResultValue::new(vec![WasmValue::I32(1024)]),
+                    )
+                    .await,
+                )
+                .unwrap();
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("baseline_f32_load_compare_select_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $addr i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    (local $cond i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $addr
+                        f32.load
+                        f32.const 0
+                        f32.gt
+                        local.set $cond
+                        local.get $acc
+                        i32.const 7
+                        local.get $cond
+                        select
+                        local.set $acc
+                        local.get $addr
+                        i32.const 4
+                        i32.add
+                        local.set $addr
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                let _ = black_box(
+                    telomere::run_module_function(
+                        &handle,
+                        &store,
+                        "run",
+                        &ResultValue::new(vec![WasmValue::I32(1024)]),
+                    )
+                    .await,
+                )
+                .unwrap();
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
     group.bench_function("divrem_loop_nontrap", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
             let store = Store::new();

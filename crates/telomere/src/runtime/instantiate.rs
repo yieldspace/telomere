@@ -144,6 +144,22 @@ fn rewrite_jump_op(op: Op) -> Option<Op> {
         vm::op_i64_seed_tee_imm_compare_br_if_ptr
     } else if op_eq(op, vm::op_i64_seed_tee_imm_compare_if as Op) {
         vm::op_i64_seed_tee_imm_compare_if_ptr
+    } else if op_eq(op, vm::op_i32_seed_imm_and_br_if as Op) {
+        vm::op_i32_seed_imm_and_br_if_ptr
+    } else if op_eq(op, vm::op_i32_seed_imm_and_eqz_br_if as Op) {
+        vm::op_i32_seed_imm_and_eqz_br_if_ptr
+    } else if op_eq(op, vm::op_i32_seed_imm_and_if as Op) {
+        vm::op_i32_seed_imm_and_if_ptr
+    } else if op_eq(op, vm::op_i32_seed_imm_and_eqz_if as Op) {
+        vm::op_i32_seed_imm_and_eqz_if_ptr
+    } else if op_eq(op, vm::op_i64_seed_imm_and_br_if as Op) {
+        vm::op_i64_seed_imm_and_br_if_ptr
+    } else if op_eq(op, vm::op_i64_seed_imm_and_eqz_br_if as Op) {
+        vm::op_i64_seed_imm_and_eqz_br_if_ptr
+    } else if op_eq(op, vm::op_i64_seed_imm_and_if as Op) {
+        vm::op_i64_seed_imm_and_if_ptr
+    } else if op_eq(op, vm::op_i64_seed_imm_and_eqz_if as Op) {
+        vm::op_i64_seed_imm_and_eqz_if_ptr
     } else if op_eq(op, vm::op_i32_local_local_ge_u_br_if as Op) {
         vm::op_i32_local_local_ge_u_br_if_ptr
     } else if op_eq(op, vm::op_i32_local_local_compare_br_if as Op) {
@@ -1734,6 +1750,27 @@ mod tests {
         assert!(active.iter().any(|instr| unsafe {
             std::ptr::fn_addr_eq(instr.op, vm::op_i32_seed_tee_imm_compare_br_if_ptr as Op)
         }));
+    }
+
+    #[tokio::test]
+    async fn instantiate_rewrites_seed_imm_and_branch_op_mapping() {
+        assert!(
+            rewrite_jump_op(vm::op_i32_seed_imm_and_br_if as Op).is_some_and(|op| {
+                std::ptr::fn_addr_eq(op, vm::op_i32_seed_imm_and_br_if_ptr as Op)
+            })
+        );
+        assert!(
+            rewrite_jump_op(vm::op_i32_seed_imm_and_eqz_br_if as Op).is_some_and(|op| {
+                std::ptr::fn_addr_eq(op, vm::op_i32_seed_imm_and_eqz_br_if_ptr as Op)
+            })
+        );
+        assert!(rewrite_jump_op(vm::op_i32_seed_imm_and_if as Op)
+            .is_some_and(|op| { std::ptr::fn_addr_eq(op, vm::op_i32_seed_imm_and_if_ptr as Op) }));
+        assert!(
+            rewrite_jump_op(vm::op_i32_seed_imm_and_eqz_if as Op).is_some_and(|op| {
+                std::ptr::fn_addr_eq(op, vm::op_i32_seed_imm_and_eqz_if_ptr as Op)
+            })
+        );
     }
 
     #[tokio::test]

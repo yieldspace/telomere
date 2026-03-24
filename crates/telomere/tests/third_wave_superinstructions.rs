@@ -1664,6 +1664,402 @@ async fn producer_tee_branch_superinstructions_match_unfused_semantics_and_traps
 }
 
 #[tokio::test]
+async fn producer_scalar_branch_and_float_select_superinstructions_match_unfused_semantics() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "seed8") (param i32 i32)
+            local.get 0
+            local.get 1
+            i32.store8)
+          (func (export "seedf32") (param i32 f32)
+            local.get 0
+            local.get 1
+            f32.store)
+          (func (export "seedf64") (param i32 f64)
+            local.get 0
+            local.get 1
+            f64.store)
+          (func (export "fused_mask_set") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            i32.load8_u
+            i32.const 31
+            i32.and
+            local.set 1
+            local.get 1)
+          (func (export "baseline_mask_set") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            i32.load8_u
+            i32.const 0
+            i32.or
+            i32.const 31
+            i32.and
+            local.set 1
+            local.get 1)
+          (func (export "fused_mask_tee") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            i32.load8_u
+            i32.const 31
+            i32.and
+            local.tee 1)
+          (func (export "baseline_mask_tee") (param i32) (result i32)
+            (local i32)
+            local.get 0
+            i32.load8_u
+            i32.const 0
+            i32.or
+            i32.const 31
+            i32.and
+            local.tee 1)
+          (func (export "fused_mask_if") (param i32) (result i32)
+            block
+              local.get 0
+              i32.load8_u
+              i32.const 31
+              i32.and
+              i32.eqz
+              if
+                i32.const 7
+                return
+              end
+            end
+            i32.const 0)
+          (func (export "baseline_mask_if") (param i32) (result i32)
+            block
+              local.get 0
+              i32.load8_u
+              i32.const 31
+              i32.and
+              i32.const 0
+              i32.or
+              i32.eqz
+              if
+                i32.const 7
+                return
+              end
+            end
+            i32.const 0)
+          (func (export "fused_mask_br_if") (param i32) (result i32)
+            block $exit
+              local.get 0
+              i32.load8_u
+              i32.const 31
+              i32.and
+              br_if $exit
+              i32.const 0
+              return
+            end
+            i32.const 7)
+          (func (export "baseline_mask_br_if") (param i32) (result i32)
+            block $exit
+              local.get 0
+              i32.load8_u
+              i32.const 31
+              i32.and
+              i32.const 0
+              i32.or
+              br_if $exit
+              i32.const 0
+              return
+            end
+            i32.const 7)
+          (func (export "fused_f32_select") (param i32 i32 i32) (result i32)
+            local.get 1
+            local.get 2
+            local.get 0
+            f32.load
+            f32.const 0
+            f32.gt
+            select)
+          (func (export "baseline_f32_select") (param i32 i32 i32) (result i32) (local i32)
+            local.get 0
+            f32.load
+            f32.const 0
+            f32.gt
+            local.set 3
+            local.get 1
+            local.get 2
+            local.get 3
+            select)
+          (func (export "fused_f64_select") (param i32 i64 i64) (result i64)
+            local.get 1
+            local.get 2
+            local.get 0
+            f64.load
+            f64.const 0
+            f64.gt
+            select)
+          (func (export "baseline_f64_select") (param i32 i64 i64) (result i64) (local i32)
+            local.get 0
+            f64.load
+            f64.const 0
+            f64.gt
+            local.set 3
+            local.get 1
+            local.get 2
+            local.get 3
+            select))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed8",
+            &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(63)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+
+    assert_success(
+        call_i32(&instance, &store, "fused_mask_set", vec![WasmValue::I32(0)]).await,
+        31,
+        "fused_mask_set",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_mask_set",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        31,
+        "baseline_mask_set",
+    );
+    assert_success(
+        call_i32(&instance, &store, "fused_mask_tee", vec![WasmValue::I32(0)]).await,
+        31,
+        "fused_mask_tee",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_mask_tee",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        31,
+        "baseline_mask_tee",
+    );
+    assert_success(
+        call_i32(&instance, &store, "fused_mask_if", vec![WasmValue::I32(0)]).await,
+        0,
+        "fused_mask_if nonzero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_mask_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        0,
+        "baseline_mask_if nonzero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_mask_br_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        7,
+        "fused_mask_br_if nonzero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_mask_br_if",
+            vec![WasmValue::I32(0)],
+        )
+        .await,
+        7,
+        "baseline_mask_br_if nonzero",
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seed8",
+            &ResultValue::new(vec![WasmValue::I32(4), WasmValue::I32(0)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+
+    assert_success(
+        call_i32(&instance, &store, "fused_mask_if", vec![WasmValue::I32(4)]).await,
+        7,
+        "fused_mask_if zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_mask_if",
+            vec![WasmValue::I32(4)],
+        )
+        .await,
+        7,
+        "baseline_mask_if zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_mask_br_if",
+            vec![WasmValue::I32(4)],
+        )
+        .await,
+        0,
+        "fused_mask_br_if zero",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_mask_br_if",
+            vec![WasmValue::I32(4)],
+        )
+        .await,
+        0,
+        "baseline_mask_br_if zero",
+    );
+
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seedf32",
+            &ResultValue::new(vec![WasmValue::I32(16), WasmValue::F32(1.5)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+    assert!(matches!(
+        run_module_function(
+            &instance,
+            &store,
+            "seedf64",
+            &ResultValue::new(vec![WasmValue::I32(24), WasmValue::F64(-2.0)]),
+        )
+        .await,
+        VMResult::Success(_)
+    ));
+
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "fused_f32_select",
+            vec![WasmValue::I32(16), WasmValue::I32(11), WasmValue::I32(22)],
+        )
+        .await,
+        11,
+        "fused_f32_select",
+    );
+    assert_success(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_f32_select",
+            vec![WasmValue::I32(16), WasmValue::I32(11), WasmValue::I32(22)],
+        )
+        .await,
+        11,
+        "baseline_f32_select",
+    );
+    assert_success(
+        call_i64(
+            &instance,
+            &store,
+            "fused_f64_select",
+            vec![WasmValue::I32(24), WasmValue::I64(33), WasmValue::I64(44)],
+        )
+        .await,
+        44,
+        "fused_f64_select",
+    );
+    assert_success(
+        call_i64(
+            &instance,
+            &store,
+            "baseline_f64_select",
+            vec![WasmValue::I32(24), WasmValue::I64(33), WasmValue::I64(44)],
+        )
+        .await,
+        44,
+        "baseline_f64_select",
+    );
+
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "fused_mask_set",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "fused_mask_set_oob",
+    );
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_mask_set",
+            vec![WasmValue::I32(65536)],
+        )
+        .await,
+        "baseline_mask_set_oob",
+    );
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "fused_f32_select",
+            vec![
+                WasmValue::I32(65536),
+                WasmValue::I32(11),
+                WasmValue::I32(22),
+            ],
+        )
+        .await,
+        "fused_f32_select_oob",
+    );
+    assert_memory_oob(
+        call_i32(
+            &instance,
+            &store,
+            "baseline_f32_select",
+            vec![
+                WasmValue::I32(65536),
+                WasmValue::I32(11),
+                WasmValue::I32(22),
+            ],
+        )
+        .await,
+        "baseline_f32_select_oob",
+    );
+}
+
+#[tokio::test]
 async fn compare_superinstructions_match_unfused_semantics_and_float_edges() {
     let store = Store::new();
     let registry = Registry::new();

@@ -5206,10 +5206,13 @@ mod tests {
             "#,
             0,
         );
-        assert!(std::ptr::fn_addr_eq(
-            op,
-            vm::op_i32_local_addr_load8_u_and_imm_eqz_if as crate::common::Op
-        ));
+        assert!(
+            std::ptr::fn_addr_eq(op, vm::op_i32_seed_imm_and_eqz_if as crate::common::Op)
+                || std::ptr::fn_addr_eq(
+                    op,
+                    vm::op_i32_local_addr_load8_u_and_imm_eqz_if as crate::common::Op
+                )
+        );
     }
 
     #[test]
@@ -5233,10 +5236,13 @@ mod tests {
             "#,
             0,
         );
-        assert!(contains_op(
-            &ops,
-            vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if as crate::common::Op
-        ));
+        assert!(
+            contains_op(&ops, vm::op_i32_seed_imm_and_eqz_br_if as crate::common::Op)
+                || contains_op(
+                    &ops,
+                    vm::op_i32_local_addr_load8_u_and_imm_eqz_br_if as crate::common::Op
+                )
+        );
     }
 
     #[test]
