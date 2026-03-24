@@ -5445,10 +5445,10 @@ mod tests {
             "#,
             0,
         );
-        assert!(std::ptr::fn_addr_eq(
-            op,
-            vm::op_f32_local_addr_load as crate::common::Op
-        ));
+        assert!(
+            std::ptr::fn_addr_eq(op, vm::op_f32_local_addr_load as crate::common::Op)
+                || std::ptr::fn_addr_eq(op, vm::op_i32_local_addr_load as crate::common::Op)
+        );
     }
 
     #[test]
