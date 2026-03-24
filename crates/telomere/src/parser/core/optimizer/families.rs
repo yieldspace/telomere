@@ -60,6 +60,16 @@ pub(super) fn fuse_superinstructions(
             continue;
         }
         if let Some((consumed, fused)) = try_matchers(
+            PRODUCER_COMPARE_BRANCH_MATCHERS,
+            decoded.as_slice(),
+            index,
+            jump_targets,
+        ) {
+            optimized.push(fused);
+            index += consumed;
+            continue;
+        }
+        if let Some((consumed, fused)) = try_matchers(
             PRODUCER_COMPARE_SELECT_MATCHERS,
             decoded.as_slice(),
             index,
@@ -530,6 +540,102 @@ pub(super) fn match_producer_imm_scalar_set_tee(
             dst_local,
             dst_tee,
             op: scalar_op,
+        },
+    ))
+}
+
+pub(super) fn match_producer_local_compare_branch(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &JumpTargetBitmap,
+) -> Option<MatchOutcome> {
+    let seed_match = match_producer_seed(decoded, index)?;
+    if !has_nontrivial_seed(&seed_match) {
+        return None;
+    }
+    let rhs_index = index + seed_match.consumed;
+    let compare_index = rhs_index + 1;
+    let branch_index = rhs_index + 2;
+    let (rhs_width, rhs_local_addr) = local_get(decoded.get(rhs_index)?.kind)?;
+    let compare_op = match decoded.get(compare_index)?.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let branch = decoded.get(branch_index)?;
+    let (branch_kind, target_old) = match branch.kind {
+        DecodedKind::BrIf(target) => (ControlBranchKind::BrIf, target),
+        DecodedKind::If(target) => (ControlBranchKind::If, target),
+        _ => return None,
+    };
+    let seed = seed_match.seed;
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..branch_index + 1) {
+        return None;
+    }
+    if !same_width(seed.width(), rhs_width)
+        || !same_width(seed.width(), compare_op.width())
+        || (is_float_compare(compare_op) && !is_float_load_seed_for_compare(seed, compare_op))
+    {
+        return None;
+    }
+    Some((
+        branch_index - index + 1,
+        OptimizedInstruction::ProducerCompareBranchLocal {
+            span: InstructionSpan::new(decoded[index].old_range.start, branch.old_range.end),
+            seed,
+            rhs_local_addr,
+            target_old,
+            op: compare_op,
+            branch_kind,
+        },
+    ))
+}
+
+pub(super) fn match_producer_const_compare_branch(
+    decoded: &[DecodedInstruction],
+    index: usize,
+    jump_targets: &JumpTargetBitmap,
+) -> Option<MatchOutcome> {
+    let seed_match = match_producer_seed(decoded, index)?;
+    if !has_nontrivial_seed(&seed_match) {
+        return None;
+    }
+    let const_index = index + seed_match.consumed;
+    let compare_index = const_index + 1;
+    let branch_index = const_index + 2;
+    let rhs_const = match decoded.get(const_index)?.kind {
+        DecodedKind::Const(value) => value,
+        _ => return None,
+    };
+    let compare_op = match decoded.get(compare_index)?.kind {
+        DecodedKind::Compare(op) => op,
+        _ => return None,
+    };
+    let branch = decoded.get(branch_index)?;
+    let (branch_kind, target_old) = match branch.kind {
+        DecodedKind::BrIf(target) => (ControlBranchKind::BrIf, target),
+        DecodedKind::If(target) => (ControlBranchKind::If, target),
+        _ => return None,
+    };
+    let seed = seed_match.seed;
+    if sequence_crosses_jump_targets(decoded, jump_targets, index + 1..branch_index + 1) {
+        return None;
+    }
+    if !same_width(seed.width(), rhs_const.width())
+        || !same_width(seed.width(), compare_op.width())
+        || !compare_matches_const(compare_op, rhs_const)
+        || (is_float_compare(compare_op) && !is_float_load_seed_for_compare(seed, compare_op))
+    {
+        return None;
+    }
+    Some((
+        branch_index - index + 1,
+        OptimizedInstruction::ProducerCompareBranchConst {
+            span: InstructionSpan::new(decoded[index].old_range.start, branch.old_range.end),
+            seed,
+            rhs_const,
+            target_old,
+            op: compare_op,
+            branch_kind,
         },
     ))
 }

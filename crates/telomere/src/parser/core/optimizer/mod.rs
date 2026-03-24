@@ -314,6 +314,22 @@ enum OptimizedInstruction {
         dst_tee: bool,
         op: TypedScalarOp,
     },
+    ProducerCompareBranchLocal {
+        span: InstructionSpan,
+        seed: ProducerSeed,
+        rhs_local_addr: u32,
+        target_old: u32,
+        op: TypedCompareOp,
+        branch_kind: ControlBranchKind,
+    },
+    ProducerCompareBranchConst {
+        span: InstructionSpan,
+        seed: ProducerSeed,
+        rhs_const: TypedConst,
+        target_old: u32,
+        op: TypedCompareOp,
+        branch_kind: ControlBranchKind,
+    },
     ProducerTeeConstSelfSelect {
         span: InstructionSpan,
         seed: ProducerSeed,
@@ -378,6 +394,10 @@ const COMPARE_SELECT_MATCHERS: &[Matcher] = &[
 ];
 const LOAD_MASK_BRANCH_MATCHERS: &[Matcher] = &[match_i32_local_addr_load8_u_and_imm_eqz_branch];
 const PRODUCER_IMM_AND_BRANCH_MATCHERS: &[Matcher] = &[match_producer_imm_and_branch];
+const PRODUCER_COMPARE_BRANCH_MATCHERS: &[Matcher] = &[
+    match_producer_local_compare_branch,
+    match_producer_const_compare_branch,
+];
 const PRODUCER_COMPARE_SELECT_MATCHERS: &[Matcher] = &[
     match_producer_local_compare_select,
     match_producer_const_compare_select,
@@ -832,24 +852,71 @@ mod tests {
             unsafe { eqz_program[0].op },
             vm::op_i32_eqz as crate::common::Op
         ));
+    }
 
-        let tee_program = optimize_core_program_with_function_index(
+    #[test]
+    fn optimizer_replicates_hot_raw_local_set4_handler() {
+        let optimized = optimize_core_program_with_function_index(
+            InstructionProgram {
+                instr: vec![
+                    Instr {
+                        op: vm::op_local_set4,
+                    },
+                    Instr {
+                        operand: Operand { local_addr: 8 },
+                    },
+                ],
+                instruction_starts: vec![0],
+            },
+            19,
+        );
+
+        let op = unsafe { optimized[0].op };
+        assert!(!std::ptr::fn_addr_eq(
+            op,
+            vm::op_local_set4 as crate::common::Op
+        ));
+        assert!(op_is_any(
+            op,
+            &[
+                vm::op_local_set4_r0 as crate::common::Op,
+                vm::op_local_set4_r1 as crate::common::Op,
+                vm::op_local_set4_r2 as crate::common::Op,
+                vm::op_local_set4_r3 as crate::common::Op,
+            ],
+        ));
+    }
+
+    #[test]
+    fn optimizer_replicates_hot_raw_local_tee4_handler() {
+        let optimized = optimize_core_program_with_function_index(
             InstructionProgram {
                 instr: vec![
                     Instr {
                         op: vm::op_local_tee4,
                     },
                     Instr {
-                        operand: Operand { local_addr: 0 },
+                        operand: Operand { local_addr: 12 },
                     },
                 ],
                 instruction_starts: vec![0],
             },
-            7,
+            23,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unsafe { tee_program[0].op },
+
+        let op = unsafe { optimized[0].op };
+        assert!(!std::ptr::fn_addr_eq(
+            op,
             vm::op_local_tee4 as crate::common::Op
+        ));
+        assert!(op_is_any(
+            op,
+            &[
+                vm::op_local_tee4_r0 as crate::common::Op,
+                vm::op_local_tee4_r1 as crate::common::Op,
+                vm::op_local_tee4_r2 as crate::common::Op,
+                vm::op_local_tee4_r3 as crate::common::Op,
+            ],
         ));
     }
 

@@ -110,6 +110,8 @@ fn old_span(instruction: OptimizedInstruction) -> InstructionSpan {
         | OptimizedInstruction::ProducerTeeImmCompareBranch { span, .. }
         | OptimizedInstruction::ProducerTeeImmScalarSetTee { span, .. }
         | OptimizedInstruction::ProducerImmScalarSetTee { span, .. }
+        | OptimizedInstruction::ProducerCompareBranchLocal { span, .. }
+        | OptimizedInstruction::ProducerCompareBranchConst { span, .. }
         | OptimizedInstruction::ProducerTeeConstSelfSelect { span, .. }
         | OptimizedInstruction::ProducerCompareSelectLocal { span, .. }
         | OptimizedInstruction::ProducerCompareSelectConst { span, .. }
@@ -187,6 +189,8 @@ fn output_len(instruction: OptimizedInstruction) -> usize {
         OptimizedInstruction::ProducerTeeImmCompareBranch { .. } => 10,
         OptimizedInstruction::ProducerTeeImmScalarSetTee { .. } => 10,
         OptimizedInstruction::ProducerImmScalarSetTee { .. } => 9,
+        OptimizedInstruction::ProducerCompareBranchLocal { .. }
+        | OptimizedInstruction::ProducerCompareBranchConst { .. } => 9,
         OptimizedInstruction::ProducerTeeConstSelfSelect { .. } => 8,
         OptimizedInstruction::ProducerCompareSelectLocal { .. }
         | OptimizedInstruction::ProducerCompareSelectConst { .. } => 8,
@@ -1299,6 +1303,90 @@ fn lower_instruction(
             lowered.push(Instr {
                 operand: Operand {
                     u32: scalar_kind_operand(scalar_op),
+                },
+            });
+        }
+        OptimizedInstruction::ProducerCompareBranchLocal {
+            seed,
+            rhs_local_addr,
+            target_old,
+            op: compare_op,
+            branch_kind,
+            ..
+        } => {
+            let handler = match (compare_op, branch_kind) {
+                (TypedCompareOp::I32(_), ControlBranchKind::BrIf) => {
+                    vm::op_i32_seed_local_compare_br_if
+                }
+                (TypedCompareOp::I32(_), ControlBranchKind::If) => vm::op_i32_seed_local_compare_if,
+                (TypedCompareOp::I64(_), ControlBranchKind::BrIf) => {
+                    vm::op_i64_seed_local_compare_br_if
+                }
+                (TypedCompareOp::I64(_), ControlBranchKind::If) => vm::op_i64_seed_local_compare_if,
+                (TypedCompareOp::F32(_), ControlBranchKind::BrIf) => {
+                    vm::op_f32_seed_local_compare_br_if
+                }
+                (TypedCompareOp::F32(_), ControlBranchKind::If) => vm::op_f32_seed_local_compare_if,
+                (TypedCompareOp::F64(_), ControlBranchKind::BrIf) => {
+                    vm::op_f64_seed_local_compare_br_if
+                }
+                (TypedCompareOp::F64(_), ControlBranchKind::If) => vm::op_f64_seed_local_compare_if,
+            };
+            lowered.push(Instr { op: handler });
+            push_producer_seed_operands(lowered, seed);
+            lowered.push(Instr {
+                operand: Operand {
+                    local_addr: rhs_local_addr,
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    jump_addr: remap_jump_target(target_old, old_to_new),
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
+                },
+            });
+        }
+        OptimizedInstruction::ProducerCompareBranchConst {
+            seed,
+            rhs_const,
+            target_old,
+            op: compare_op,
+            branch_kind,
+            ..
+        } => {
+            let handler = match (compare_op, branch_kind) {
+                (TypedCompareOp::I32(_), ControlBranchKind::BrIf) => {
+                    vm::op_i32_seed_const_compare_br_if
+                }
+                (TypedCompareOp::I32(_), ControlBranchKind::If) => vm::op_i32_seed_const_compare_if,
+                (TypedCompareOp::I64(_), ControlBranchKind::BrIf) => {
+                    vm::op_i64_seed_const_compare_br_if
+                }
+                (TypedCompareOp::I64(_), ControlBranchKind::If) => vm::op_i64_seed_const_compare_if,
+                (TypedCompareOp::F32(_), ControlBranchKind::BrIf) => {
+                    vm::op_f32_seed_const_compare_br_if
+                }
+                (TypedCompareOp::F32(_), ControlBranchKind::If) => vm::op_f32_seed_const_compare_if,
+                (TypedCompareOp::F64(_), ControlBranchKind::BrIf) => {
+                    vm::op_f64_seed_const_compare_br_if
+                }
+                (TypedCompareOp::F64(_), ControlBranchKind::If) => vm::op_f64_seed_const_compare_if,
+            };
+            lowered.push(Instr { op: handler });
+            push_producer_seed_operands(lowered, seed);
+            push_const_operand(lowered, rhs_const);
+            lowered.push(Instr {
+                operand: Operand {
+                    jump_addr: remap_jump_target(target_old, old_to_new),
+                },
+            });
+            lowered.push(Instr {
+                operand: Operand {
+                    u32: compare_kind_operand(compare_op),
                 },
             });
         }

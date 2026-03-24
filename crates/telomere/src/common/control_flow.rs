@@ -313,6 +313,86 @@ pub(crate) fn structured_jump_rewrite(op: Op) -> Option<StructuredJumpRewrite> {
             ptr_op: vm::op_i64_seed_imm_and_eqz_if_ptr,
             kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
         }
+    } else if std::ptr::fn_addr_eq(op, vm::op_i32_seed_local_compare_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_i32_seed_local_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_i32_seed_local_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_i32_seed_local_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_i32_seed_const_compare_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_i32_seed_const_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_i32_seed_const_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_i32_seed_const_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_i64_seed_local_compare_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_i64_seed_local_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_i64_seed_local_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_i64_seed_local_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_i64_seed_const_compare_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_i64_seed_const_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_i64_seed_const_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_i64_seed_const_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_f32_seed_local_compare_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_f32_seed_local_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_f32_seed_local_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_f32_seed_local_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_f32_seed_const_compare_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_f32_seed_const_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_f32_seed_const_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_f32_seed_const_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_f64_seed_local_compare_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_f64_seed_local_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_f64_seed_local_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_f64_seed_local_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_f64_seed_const_compare_br_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_f64_seed_const_compare_br_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
+    } else if std::ptr::fn_addr_eq(op, vm::op_f64_seed_const_compare_if as Op) {
+        StructuredJumpRewrite {
+            ptr_op: vm::op_f64_seed_const_compare_if_ptr,
+            kind: StructuredJumpRewriteKind::Single { jump_slot: 7 },
+        }
     } else if std::ptr::fn_addr_eq(op, vm::op_i32_local_local_ge_u_br_if as Op) {
         StructuredJumpRewrite {
             ptr_op: vm::op_i32_local_local_ge_u_br_if_ptr,

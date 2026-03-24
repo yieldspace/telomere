@@ -173,6 +173,12 @@ pub(super) fn decode_kind(raw: &[Instr]) -> DecodedKind {
         vm::op_i32_const,
         DecodedKind::Const(TypedConst::I32(unsafe { raw[1].operand.i32 }))
     );
+    decode1!(vm::op_i32_const_0, DecodedKind::Const(TypedConst::I32(0)));
+    decode1!(vm::op_i32_const_1, DecodedKind::Const(TypedConst::I32(1)));
+    decode1!(
+        vm::op_i32_const_neg1,
+        DecodedKind::Const(TypedConst::I32(-1))
+    );
     decode2!(
         vm::op_i64_const,
         DecodedKind::Const(TypedConst::I64(unsafe { raw[1].operand.i64 }))

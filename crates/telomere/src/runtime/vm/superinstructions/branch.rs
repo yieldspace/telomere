@@ -850,6 +850,378 @@ pub unsafe fn op_i64_seed_imm_and_eqz_if_ptr(
     op_seed_imm_and_branch_u64::<true, true>(tail_code, ctx, ControlBranchKind::If)
 }
 
+#[inline(always)]
+unsafe fn seed_compare_branch_i32_local<const PTR_TARGET: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let taken = i32_compare_eval(
+        vm_try!(producer_seed_u32(tail_code, ctx)),
+        local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(5)).operand.local_addr,
+        ),
+        IntCompareKind::from_raw((*tail_code.add(7)).operand.u32),
+    ) != 0;
+    let ptr = if PTR_TARGET {
+        branch_target_ptr(tail_code, 6, 8, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 8, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn seed_compare_branch_i32_const<const PTR_TARGET: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let taken = i32_compare_eval(
+        vm_try!(producer_seed_u32(tail_code, ctx)),
+        (*tail_code.add(5)).operand.u32,
+        IntCompareKind::from_raw((*tail_code.add(7)).operand.u32),
+    ) != 0;
+    let ptr = if PTR_TARGET {
+        branch_target_ptr(tail_code, 6, 8, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 8, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn seed_compare_branch_i64_local<const PTR_TARGET: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let taken = i64_compare_eval(
+        vm_try!(producer_seed_u64(tail_code, ctx)),
+        local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(5)).operand.local_addr,
+        ),
+        IntCompareKind::from_raw((*tail_code.add(7)).operand.u32),
+    ) != 0;
+    let ptr = if PTR_TARGET {
+        branch_target_ptr(tail_code, 6, 8, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 8, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn seed_compare_branch_i64_const<const PTR_TARGET: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let taken = i64_compare_eval(
+        vm_try!(producer_seed_u64(tail_code, ctx)),
+        (*tail_code.add(5)).operand.u64,
+        IntCompareKind::from_raw((*tail_code.add(7)).operand.u32),
+    ) != 0;
+    let ptr = if PTR_TARGET {
+        branch_target_ptr(tail_code, 6, 8, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 8, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn seed_compare_branch_f32_local<const PTR_TARGET: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let taken = f32_compare_eval(
+        vm_try!(producer_seed_u32(tail_code, ctx)),
+        local_u32(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(5)).operand.local_addr,
+        ),
+        FloatCompareKind::from_raw((*tail_code.add(7)).operand.u32),
+    ) != 0;
+    let ptr = if PTR_TARGET {
+        branch_target_ptr(tail_code, 6, 8, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 8, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn seed_compare_branch_f32_const<const PTR_TARGET: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let taken = f32_compare_eval(
+        vm_try!(producer_seed_u32(tail_code, ctx)),
+        (*tail_code.add(5)).operand.f32.to_bits(),
+        FloatCompareKind::from_raw((*tail_code.add(7)).operand.u32),
+    ) != 0;
+    let ptr = if PTR_TARGET {
+        branch_target_ptr(tail_code, 6, 8, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 8, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn seed_compare_branch_f64_local<const PTR_TARGET: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let taken = f64_compare_eval(
+        vm_try!(producer_seed_u64(tail_code, ctx)),
+        local_u64(
+            ctx.stack,
+            &ctx.local_reference(),
+            (*tail_code.add(5)).operand.local_addr,
+        ),
+        FloatCompareKind::from_raw((*tail_code.add(7)).operand.u32),
+    ) != 0;
+    let ptr = if PTR_TARGET {
+        branch_target_ptr(tail_code, 6, 8, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 8, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn seed_compare_branch_f64_const<const PTR_TARGET: bool>(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    branch_kind: ControlBranchKind,
+) -> VMResult<()> {
+    let taken = f64_compare_eval(
+        vm_try!(producer_seed_u64(tail_code, ctx)),
+        (*tail_code.add(5)).operand.f64.to_bits(),
+        FloatCompareKind::from_raw((*tail_code.add(7)).operand.u32),
+    ) != 0;
+    let ptr = if PTR_TARGET {
+        branch_target_ptr(tail_code, 6, 8, branch_kind, taken)
+    } else {
+        branch_target_relative(tail_code, ctx, 6, 8, branch_kind, taken)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+macro_rules! define_seed_compare_branch {
+    ($name:ident, $helper:ident, $ptr:expr, $kind:expr) => {
+        pub(crate) unsafe fn $name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            $helper::<$ptr>(tail_code, ctx, $kind)
+        }
+    };
+}
+
+define_seed_compare_branch!(
+    op_i32_seed_local_compare_br_if,
+    seed_compare_branch_i32_local,
+    false,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_i32_seed_local_compare_if,
+    seed_compare_branch_i32_local,
+    false,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_i32_seed_local_compare_br_if_ptr,
+    seed_compare_branch_i32_local,
+    true,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_i32_seed_local_compare_if_ptr,
+    seed_compare_branch_i32_local,
+    true,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_i32_seed_const_compare_br_if,
+    seed_compare_branch_i32_const,
+    false,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_i32_seed_const_compare_if,
+    seed_compare_branch_i32_const,
+    false,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_i32_seed_const_compare_br_if_ptr,
+    seed_compare_branch_i32_const,
+    true,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_i32_seed_const_compare_if_ptr,
+    seed_compare_branch_i32_const,
+    true,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_i64_seed_local_compare_br_if,
+    seed_compare_branch_i64_local,
+    false,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_i64_seed_local_compare_if,
+    seed_compare_branch_i64_local,
+    false,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_i64_seed_local_compare_br_if_ptr,
+    seed_compare_branch_i64_local,
+    true,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_i64_seed_local_compare_if_ptr,
+    seed_compare_branch_i64_local,
+    true,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_i64_seed_const_compare_br_if,
+    seed_compare_branch_i64_const,
+    false,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_i64_seed_const_compare_if,
+    seed_compare_branch_i64_const,
+    false,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_i64_seed_const_compare_br_if_ptr,
+    seed_compare_branch_i64_const,
+    true,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_i64_seed_const_compare_if_ptr,
+    seed_compare_branch_i64_const,
+    true,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_f32_seed_local_compare_br_if,
+    seed_compare_branch_f32_local,
+    false,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_f32_seed_local_compare_if,
+    seed_compare_branch_f32_local,
+    false,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_f32_seed_local_compare_br_if_ptr,
+    seed_compare_branch_f32_local,
+    true,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_f32_seed_local_compare_if_ptr,
+    seed_compare_branch_f32_local,
+    true,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_f32_seed_const_compare_br_if,
+    seed_compare_branch_f32_const,
+    false,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_f32_seed_const_compare_if,
+    seed_compare_branch_f32_const,
+    false,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_f32_seed_const_compare_br_if_ptr,
+    seed_compare_branch_f32_const,
+    true,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_f32_seed_const_compare_if_ptr,
+    seed_compare_branch_f32_const,
+    true,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_f64_seed_local_compare_br_if,
+    seed_compare_branch_f64_local,
+    false,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_f64_seed_local_compare_if,
+    seed_compare_branch_f64_local,
+    false,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_f64_seed_local_compare_br_if_ptr,
+    seed_compare_branch_f64_local,
+    true,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_f64_seed_local_compare_if_ptr,
+    seed_compare_branch_f64_local,
+    true,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_f64_seed_const_compare_br_if,
+    seed_compare_branch_f64_const,
+    false,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_f64_seed_const_compare_if,
+    seed_compare_branch_f64_const,
+    false,
+    ControlBranchKind::If
+);
+define_seed_compare_branch!(
+    op_f64_seed_const_compare_br_if_ptr,
+    seed_compare_branch_f64_const,
+    true,
+    ControlBranchKind::BrIf
+);
+define_seed_compare_branch!(
+    op_f64_seed_const_compare_if_ptr,
+    seed_compare_branch_f64_const,
+    true,
+    ControlBranchKind::If
+);
+
 pub unsafe fn op_i32_local_local_ge_u_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

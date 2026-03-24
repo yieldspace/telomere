@@ -16,6 +16,34 @@ macro_rules! replicated_local_get4 {
     };
 }
 
+macro_rules! replicated_local_set4 {
+    ($name:ident) => {
+        #[inline(never)]
+        pub(crate) unsafe fn $name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            let addr = (*tail_code).operand.local_addr as usize;
+            ctx.stack.local_set4(&ctx.local_reference(), addr);
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
+macro_rules! replicated_local_tee4 {
+    ($name:ident) => {
+        #[inline(never)]
+        pub(crate) unsafe fn $name(
+            tail_code: *const Instr,
+            ctx: &mut ExecuteContext,
+        ) -> VMResult<()> {
+            let addr = (*tail_code).operand.local_addr as usize;
+            ctx.stack.local_tee4(&ctx.local_reference(), addr);
+            call_next(tail_code, 1, ctx)
+        }
+    };
+}
+
 #[inline(always)]
 unsafe fn select4_in_place(ctx: &mut ExecuteContext) {
     let cond = ctx.stack.pop_u32();
@@ -232,6 +260,11 @@ pub unsafe fn op_local_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     call_next(tail_code, 1, ctx)
 }
 
+replicated_local_set4!(op_local_set4_r0);
+replicated_local_set4!(op_local_set4_r1);
+replicated_local_set4!(op_local_set4_r2);
+replicated_local_set4!(op_local_set4_r3);
+
 /// WebAssembly `local.set`.
 ///
 /// Spec:
@@ -296,6 +329,11 @@ pub unsafe fn op_local_tee4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
     ctx.stack.local_tee4(&ctx.local_reference(), addr);
     call_next(tail_code, 1, ctx)
 }
+
+replicated_local_tee4!(op_local_tee4_r0);
+replicated_local_tee4!(op_local_tee4_r1);
+replicated_local_tee4!(op_local_tee4_r2);
+replicated_local_tee4!(op_local_tee4_r3);
 
 /// WebAssembly `local.tee`.
 ///

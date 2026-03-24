@@ -1974,6 +1974,666 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("coremark_const_and_branch_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        block $skip
+                          local.get $i
+                          i32.const 31
+                          i32.and
+                          i32.eqz
+                          br_if $skip
+                          local.get $acc
+                          i32.const 1
+                          i32.add
+                          local.set $acc
+                        end
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(992)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("baseline_coremark_const_and_branch_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        block $skip
+                          local.get $i
+                          i32.const 0
+                          i32.add
+                          i32.const 31
+                          i32.and
+                          i32.eqz
+                          br_if $skip
+                          local.get $acc
+                          i32.const 1
+                          i32.add
+                          local.set $acc
+                        end
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(992)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("coremark_const_scalar_tee_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    (local $tmp i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $i
+                        i32.const 5
+                        i32.add
+                        local.tee $tmp
+                        local.get $acc
+                        i32.add
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(528896)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("baseline_coremark_const_scalar_tee_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    (local $tmp i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $i
+                        i32.const 0
+                        i32.add
+                        i32.const 5
+                        i32.add
+                        local.tee $tmp
+                        local.get $acc
+                        i32.add
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(528896)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("coremark_load8_compare_branch_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (data (i32.const 0) "\ff\00\00\00\00\00\00\00\00\00")
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $addr i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        block $skip
+                          local.get $addr
+                          i32.load8_u
+                          i32.const 255
+                          i32.eq
+                          br_if $skip
+                          local.get $acc
+                          i32.const 1
+                          i32.add
+                          local.set $acc
+                        end
+                        local.get $addr
+                        i32.const 1
+                        i32.add
+                        local.set $addr
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(1023)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("baseline_coremark_load8_compare_branch_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (data (i32.const 0) "\ff\00\00\00\00\00\00\00\00\00")
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $addr i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        block $skip
+                          local.get $addr
+                          i32.const 0
+                          i32.add
+                          i32.load8_u
+                          i32.const 255
+                          i32.eq
+                          br_if $skip
+                          local.get $acc
+                          i32.const 1
+                          i32.add
+                          local.set $acc
+                        end
+                        local.get $addr
+                        i32.const 1
+                        i32.add
+                        local.set $addr
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(1023)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("coremark_load16_compare_select_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (data (i32.const 0) "\ff\ff\00\00\34\12\00\00\00\00\00\00")
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $addr i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        i32.const 7
+                        local.get $addr
+                        i32.load16_u
+                        i32.const 4660
+                        i32.eq
+                        select
+                        local.set $acc
+                        local.get $addr
+                        i32.const 4
+                        i32.add
+                        local.set $addr
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(7)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("baseline_coremark_load16_compare_select_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (data (i32.const 0) "\ff\ff\00\00\34\12\00\00\00\00\00\00")
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $addr i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        i32.const 7
+                        local.get $addr
+                        i32.const 0
+                        i32.add
+                        i32.load16_u
+                        i32.const 4660
+                        i32.eq
+                        select
+                        local.set $acc
+                        local.get $addr
+                        i32.const 4
+                        i32.add
+                        local.set $addr
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(7)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("coremark_load16_compare_branch_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (data (i32.const 0) "\ff\ff\00\00\34\12\00\00\00\00\00\00")
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $addr i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        block $skip
+                          local.get $addr
+                          i32.load16_s
+                          i32.const -1
+                          i32.eq
+                          br_if $skip
+                          local.get $acc
+                          i32.const 1
+                          i32.add
+                          local.set $acc
+                        end
+                        local.get $addr
+                        i32.const 4
+                        i32.add
+                        local.set $addr
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(1023)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("baseline_coremark_load16_compare_branch_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (memory 1)
+                  (data (i32.const 0) "\ff\ff\00\00\34\12\00\00\00\00\00\00")
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $addr i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        block $skip
+                          local.get $addr
+                          i32.const 0
+                          i32.add
+                          i32.load16_s
+                          i32.const -1
+                          i32.eq
+                          br_if $skip
+                          local.get $acc
+                          i32.const 1
+                          i32.add
+                          local.set $acc
+                        end
+                        local.get $addr
+                        i32.const 4
+                        i32.add
+                        local.set $addr
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(1023)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
     group.bench_function("f32_load_compare_select_loop", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
             let store = Store::new();

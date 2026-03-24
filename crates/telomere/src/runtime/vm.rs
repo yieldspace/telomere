@@ -94,6 +94,22 @@ pub(crate) fn select_replicated_op(base: Op, function_index: u32, instruction_or
             locals::op_local_get4_r3,
         ][hash & 3];
     }
+    if std::ptr::fn_addr_eq(base, locals::op_local_set4 as Op) {
+        return [
+            locals::op_local_set4_r0,
+            locals::op_local_set4_r1,
+            locals::op_local_set4_r2,
+            locals::op_local_set4_r3,
+        ][hash & 3];
+    }
+    if std::ptr::fn_addr_eq(base, locals::op_local_tee4 as Op) {
+        return [
+            locals::op_local_tee4_r0,
+            locals::op_local_tee4_r1,
+            locals::op_local_tee4_r2,
+            locals::op_local_tee4_r3,
+        ][hash & 3];
+    }
     if std::ptr::fn_addr_eq(base, memory::op_i32_load8_u_local as Op) {
         return [
             memory::op_i32_load8_u_local_r0,

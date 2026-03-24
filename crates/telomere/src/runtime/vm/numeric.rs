@@ -115,6 +115,78 @@ pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32.const 0`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[] -> [0]`.
+/// Traps: none.
+/// Notes: Specializes the hottest CoreMark-style constant literal without reading an immediate operand.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub(crate) unsafe fn op_i32_const_0(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    trace!("op_i32_const_0");
+    vm_try!(ctx.stack.push_i32(0));
+    call_next(tail_code, 0, ctx)
+}
+
+/// WebAssembly `i32.const 1`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[] -> [1]`.
+/// Traps: none.
+/// Notes: Specializes the hottest CoreMark-style constant literal without reading an immediate operand.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub(crate) unsafe fn op_i32_const_1(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    trace!("op_i32_const_1");
+    vm_try!(ctx.stack.push_i32(1));
+    call_next(tail_code, 0, ctx)
+}
+
+/// WebAssembly `i32.const -1`.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[] -> [-1]`.
+/// Traps: none.
+/// Notes: Specializes the common sentinel literal without reading an immediate operand.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded instruction for this handler in the active function body.
+/// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub(crate) unsafe fn op_i32_const_neg1(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    trace!("op_i32_const_neg1");
+    vm_try!(ctx.stack.push_i32(-1));
+    call_next(tail_code, 0, ctx)
+}
+
 /// WebAssembly `i32.add`.
 ///
 /// Spec:

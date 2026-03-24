@@ -1731,12 +1731,31 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             0x41 => {
                 trace!("parse_op_i32_const");
                 let (len, operand) = self.parse_i32()?;
-                instrs.push(Instr {
-                    op: vm::op_i32_const,
-                });
-                instrs.push(Instr {
-                    operand: Operand { i32: operand },
-                });
+                match operand {
+                    0 => {
+                        instrs.push(Instr {
+                            op: vm::op_i32_const_0,
+                        });
+                    }
+                    1 => {
+                        instrs.push(Instr {
+                            op: vm::op_i32_const_1,
+                        });
+                    }
+                    -1 => {
+                        instrs.push(Instr {
+                            op: vm::op_i32_const_neg1,
+                        });
+                    }
+                    _ => {
+                        instrs.push(Instr {
+                            op: vm::op_i32_const,
+                        });
+                        instrs.push(Instr {
+                            operand: Operand { i32: operand },
+                        });
+                    }
+                }
 
                 checker.op(&[], &[ValType::I32])?;
                 (1 + len, false)
@@ -4976,6 +4995,47 @@ mod tests {
         assert!(std::ptr::fn_addr_eq(
             op,
             vm::op_i32_const_set4 as crate::common::Op
+        ));
+    }
+
+    #[test]
+    fn parser_specializes_hot_i32_const_literals() {
+        let zero = op_at(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                i32.const 0))
+            "#,
+            0,
+        );
+        let one = op_at(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                i32.const 1))
+            "#,
+            0,
+        );
+        let neg_one = op_at(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                i32.const -1))
+            "#,
+            0,
+        );
+
+        assert!(std::ptr::fn_addr_eq(
+            zero,
+            vm::op_i32_const_0 as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            one,
+            vm::op_i32_const_1 as crate::common::Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            neg_one,
+            vm::op_i32_const_neg1 as crate::common::Op
         ));
     }
 
