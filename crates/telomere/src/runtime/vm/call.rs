@@ -146,7 +146,7 @@ unsafe fn internal_op_call_precomputed(
 ) -> VMResult<CallOutcome> {
     let frame = site.frame.materialize(ctx.gc);
     let safepoint = site.safepoint_cache();
-    let return_addr = site.return_pc.resolve_in_call_frame(ctx.current_frame);
+    let return_addr = site.return_pc().resolve_in_call_frame(ctx.current_frame);
     trace!("op_call_precomputed: {:?}", frame.code_addr);
     if let Some(layout) = site.callee_layout_ptr() {
         let layout = &*layout;
@@ -161,7 +161,7 @@ unsafe fn internal_op_call_precomputed(
                 layout,
                 frame,
                 ctx.local_reference,
-                site.return_pc,
+                site.return_pc(),
                 ctx.gc,
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
@@ -184,13 +184,13 @@ unsafe fn internal_op_call_precomputed(
                 0,
                 frame,
                 ctx.local_reference,
-                site.return_pc,
+                site.return_pc(),
                 ctx.gc,
             ));
             ctx.set_local_reference_with_frame(local_reference, frame);
         }
         ctx.set_safepoint(safepoint);
-        invoke_host_function(site.return_pc, return_addr, safepoint, ctx)
+        invoke_host_function(site.return_pc(), return_addr, safepoint, ctx)
     }
 }
 
@@ -243,7 +243,7 @@ unsafe fn op_precomputed_import_call(
     let site = &*import_call_site_unchecked(tail_code);
     let funcaddr = direct_funcaddr_unchecked(ctx, site.funcidx);
     match vm_try!(internal_op_call_with_return_pc(
-        site.return_pc,
+        site.return_pc(),
         site.safepoint_cache(),
         2,
         funcaddr,
@@ -550,7 +550,7 @@ unsafe fn internal_op_call_indirect_precomputed(
         return VMResult::CallIndirectInvalidType;
     }
     let outcome = vm_try!(internal_op_call_with_return_pc(
-        site.return_pc,
+        site.return_pc(),
         site.safepoint_cache(),
         0,
         func_addr,

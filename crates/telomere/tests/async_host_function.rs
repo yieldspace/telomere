@@ -13,8 +13,7 @@ use telomere::{
     },
     get_global, instantiate_native_async_module, link_async_host_function_with_export_name,
     link_async_host_function_with_function_idx, link_host_function_with_function_idx, Completion,
-    CompletionPayload, ExecutionDriver, MemoryWaitPending, PendingOp, Registry, ResultValue, Store,
-    StoreState, VMResult, WasmValue,
+    ExecutionDriver, PendingOp, Registry, ResultValue, Store, StoreState, VMResult, WasmValue,
 };
 
 struct MockDriver {
@@ -38,20 +37,8 @@ impl ExecutionDriver for MockDriver {
             PendingOp::HostCall(op) => {
                 self.inflight.push_back(Box::pin(op.into_completion()));
             }
-            PendingOp::MemoryWait(MemoryWaitPending {
-                task_id,
-                shared,
-                wait,
-                timeout_ns,
-                fp,
-            }) => {
-                self.inflight.push_back(Box::pin(async move {
-                    let value = wait.wait_result(shared, timeout_ns).await;
-                    Completion {
-                        task_id,
-                        payload: CompletionPayload::ResumeWithI32 { fp, value },
-                    }
-                }));
+            PendingOp::MemoryWait(op) => {
+                self.inflight.push_back(Box::pin(op.into_completion()));
             }
             PendingOp::WasmAsync(op) => {
                 panic!(

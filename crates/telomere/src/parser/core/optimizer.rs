@@ -2,8 +2,9 @@ use std::{collections::HashSet, ops::Range, sync::Arc};
 
 use crate::{
     common::{
-        ControlFlowMetadataKind, ControlFlowMetadataSite, Instr, MemArg, Op, Operand, ReturnShape,
-        StackMapSite, StackMapSourceSite, UnwindSiteMetadata, UnwindSourceSite, ValueSize,
+        structured_jump_rewrite, ControlFlowMetadataKind, ControlFlowMetadataSite, Instr, MemArg,
+        Op, Operand, ReturnShape, StackMapSite, StackMapSourceSite, StructuredJumpRewriteKind,
+        UnwindSiteMetadata, UnwindSourceSite, ValueSize,
     },
     parser::core::instruction_generator::InstructionProgram,
     runtime::vm::{self, compute_memory_offset},
@@ -3391,9 +3392,9 @@ fn collect_control_flow_metadata(
     let mut metadata = Vec::new();
     for &start in instruction_starts {
         let op = unsafe { code[start].op };
-        if let Some(rewrite) = vm::structured_jump_rewrite(op) {
+        if let Some(rewrite) = structured_jump_rewrite(op) {
             match rewrite.kind {
-                vm::StructuredJumpRewriteKind::Single { jump_slot } => {
+                StructuredJumpRewriteKind::Single { jump_slot } => {
                     let target = unsafe { code[start + jump_slot as usize].operand.jump_addr };
                     metadata.push(ControlFlowMetadataSite {
                         instruction_ordinal: start as u32,
@@ -3403,7 +3404,7 @@ fn collect_control_flow_metadata(
                         },
                     });
                 }
-                vm::StructuredJumpRewriteKind::BrTable => {
+                StructuredJumpRewriteKind::BrTable => {
                     let table_size = unsafe { code[start + 1].operand.u32 as usize };
                     let mut jump_slots = Vec::with_capacity(table_size + 1);
                     let mut target_ordinals = Vec::with_capacity(table_size + 1);

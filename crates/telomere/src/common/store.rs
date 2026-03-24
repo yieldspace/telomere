@@ -154,7 +154,7 @@ pub(crate) struct WasmExecutionMetadata {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedCallFrame {
     pub code_addr: ObjectRef,
-    pub code_base_addr: usize,
+    pub code_base_addr: Option<usize>,
     pub code_len: u32,
     pub function_return_site_addr: usize,
     pub instance: InstanceId,
@@ -167,13 +167,13 @@ impl PrecomputedCallFrame {
     pub(crate) fn materialize(self, runtime: &StoreInner) -> CallFrameCache {
         CallFrameCache {
             code_addr: self.code_addr,
-            code_base: if self.code_base_addr == 0 {
+            code_base: if let Some(code_base_addr) = self.code_base_addr {
+                code_base_addr as *const Instr
+            } else {
                 runtime
                     .get_func(self.code_addr)
                     .code_pointer()
                     .unwrap_or(std::ptr::null())
-            } else {
-                self.code_base_addr as *const Instr
             },
             code_len: self.code_len,
             function_return_site_addr: self.function_return_site_addr,
@@ -185,24 +185,101 @@ impl PrecomputedCallFrame {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct ContinuationSiteHeader {
+    instruction_ordinal: u32,
+    pc: StablePc,
+    safepoint: SafepointMetadataCache,
+}
+
+impl ContinuationSiteHeader {
+    #[inline(always)]
+    pub(crate) const fn new(
+        instruction_ordinal: u32,
+        pc: StablePc,
+        safepoint: SafepointMetadataCache,
+    ) -> Self {
+        Self {
+            instruction_ordinal,
+            pc,
+            safepoint,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.instruction_ordinal
+    }
+
+    #[inline(always)]
+    pub(crate) const fn pc(self) -> StablePc {
+        self.pc
+    }
+
+    #[inline(always)]
+    pub(crate) const fn safepoint_cache(self) -> SafepointMetadataCache {
+        self.safepoint
+    }
+
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        self.safepoint.stack_map_site_ptr()
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        self.safepoint.unwind_site_ptr()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ControlSiteHeader {
+    instruction_ordinal: u32,
+    safepoint: SafepointMetadataCache,
+}
+
+impl ControlSiteHeader {
+    #[inline(always)]
+    pub(crate) const fn new(instruction_ordinal: u32, safepoint: SafepointMetadataCache) -> Self {
+        Self {
+            instruction_ordinal,
+            safepoint,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.instruction_ordinal
+    }
+
+    #[inline(always)]
+    pub(crate) const fn safepoint_cache(self) -> SafepointMetadataCache {
+        self.safepoint
+    }
+
+    #[inline(always)]
+    pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
+        self.safepoint.stack_map_site_ptr()
+    }
+
+    #[inline(always)]
+    pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
+        self.safepoint.unwind_site_ptr()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedDirectCallSite {
-    pub instruction_ordinal: u32,
-    pub return_pc: StablePc,
+    header: ContinuationSiteHeader,
     pub frame: PrecomputedCallFrame,
     pub param_bytes: u32,
     pub param_shape: ReturnShape,
     pub callee_layout_addr: usize,
-    pub stack_map_site_addr: usize,
-    pub unwind_site_addr: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedImportCallSite {
-    pub instruction_ordinal: u32,
+    header: ContinuationSiteHeader,
     pub funcidx: u32,
-    pub return_pc: StablePc,
-    pub stack_map_site_addr: usize,
-    pub unwind_site_addr: usize,
 }
 
 impl WasmExecutionMetadata {
@@ -215,48 +292,65 @@ impl WasmExecutionMetadata {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedIndirectCallSite {
-    pub instruction_ordinal: u32,
-    pub return_pc: StablePc,
+    header: ContinuationSiteHeader,
     pub tableidx: u32,
     pub expected_type_identity_addr: usize,
-    pub stack_map_site_addr: usize,
-    pub unwind_site_addr: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedWaitSite {
-    pub instruction_ordinal: u32,
-    pub resume_pc: StablePc,
+    header: ContinuationSiteHeader,
     pub memarg: MemArg,
     pub memidx: u32,
-    pub stack_map_site_addr: usize,
-    pub unwind_site_addr: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedLoopSite {
-    pub instruction_ordinal: u32,
+    header: ControlSiteHeader,
     meta: u32,
-    pub stack_map_site_addr: usize,
-    pub unwind_site_addr: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedBlockReturnSite {
-    pub instruction_ordinal: u32,
+    header: ControlSiteHeader,
     meta: u32,
-    pub stack_map_site_addr: usize,
-    pub unwind_site_addr: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PrecomputedFunctionReturnSite {
-    pub instruction_ordinal: u32,
-    pub stack_map_site_addr: usize,
-    pub unwind_site_addr: usize,
+    header: ControlSiteHeader,
 }
 
 impl PrecomputedDirectCallSite {
+    #[inline(always)]
+    pub(crate) const fn new(
+        instruction_ordinal: u32,
+        return_pc: StablePc,
+        safepoint: SafepointMetadataCache,
+        frame: PrecomputedCallFrame,
+        param_bytes: u32,
+        param_shape: ReturnShape,
+        callee_layout_addr: usize,
+    ) -> Self {
+        Self {
+            header: ContinuationSiteHeader::new(instruction_ordinal, return_pc, safepoint),
+            frame,
+            param_bytes,
+            param_shape,
+            callee_layout_addr,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.header.instruction_ordinal()
+    }
+
+    #[inline(always)]
+    pub(crate) const fn return_pc(self) -> StablePc {
+        self.header.pc()
+    }
+
     #[inline(always)]
     pub(crate) fn callee_layout_ptr(self) -> Option<*const FrameLayoutHeader> {
         (self.callee_layout_addr != 0).then_some(self.callee_layout_addr as *const _)
@@ -264,17 +358,17 @@ impl PrecomputedDirectCallSite {
 
     #[inline(always)]
     pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
-        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+        self.header.stack_map_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
-        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+        self.header.unwind_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
-        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+        self.header.safepoint_cache()
     }
 }
 
@@ -291,40 +385,88 @@ pub(crate) struct DerivedRuntimeMetadata {
 
 impl PrecomputedIndirectCallSite {
     #[inline(always)]
+    pub(crate) const fn new(
+        instruction_ordinal: u32,
+        return_pc: StablePc,
+        safepoint: SafepointMetadataCache,
+        tableidx: u32,
+        expected_type_identity_addr: usize,
+    ) -> Self {
+        Self {
+            header: ContinuationSiteHeader::new(instruction_ordinal, return_pc, safepoint),
+            tableidx,
+            expected_type_identity_addr,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.header.instruction_ordinal()
+    }
+
+    #[inline(always)]
+    pub(crate) const fn return_pc(self) -> StablePc {
+        self.header.pc()
+    }
+
+    #[inline(always)]
     pub(crate) fn expected_type_identity_ptr(self) -> *const FuncTypeIdentity {
         self.expected_type_identity_addr as *const _
     }
 
     #[inline(always)]
     pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
-        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+        self.header.stack_map_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
-        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+        self.header.unwind_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
-        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+        self.header.safepoint_cache()
     }
 }
 
 impl PrecomputedImportCallSite {
     #[inline(always)]
+    pub(crate) const fn new(
+        instruction_ordinal: u32,
+        funcidx: u32,
+        return_pc: StablePc,
+        safepoint: SafepointMetadataCache,
+    ) -> Self {
+        Self {
+            header: ContinuationSiteHeader::new(instruction_ordinal, return_pc, safepoint),
+            funcidx,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.header.instruction_ordinal()
+    }
+
+    #[inline(always)]
+    pub(crate) const fn return_pc(self) -> StablePc {
+        self.header.pc()
+    }
+
+    #[inline(always)]
     pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
-        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+        self.header.stack_map_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
-        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+        self.header.unwind_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
-        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+        self.header.safepoint_cache()
     }
 }
 
@@ -337,11 +479,17 @@ impl PrecomputedLoopSite {
         unwind_site_addr: usize,
     ) -> Self {
         Self {
-            instruction_ordinal,
+            header: ControlSiteHeader::new(
+                instruction_ordinal,
+                SafepointMetadataCache::new(stack_map_site_addr, unwind_site_addr),
+            ),
             meta: ReturnShape::encode_meta(param_size, shape),
-            stack_map_site_addr,
-            unwind_site_addr,
         }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.header.instruction_ordinal()
     }
 
     #[inline(always)]
@@ -356,17 +504,17 @@ impl PrecomputedLoopSite {
 
     #[inline(always)]
     pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
-        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+        self.header.stack_map_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
-        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+        self.header.unwind_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
-        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+        self.header.safepoint_cache()
     }
 }
 
@@ -379,11 +527,17 @@ impl PrecomputedBlockReturnSite {
         unwind_site_addr: usize,
     ) -> Self {
         Self {
-            instruction_ordinal,
+            header: ControlSiteHeader::new(
+                instruction_ordinal,
+                SafepointMetadataCache::new(stack_map_site_addr, unwind_site_addr),
+            ),
             meta: ReturnShape::encode_meta(return_size, shape),
-            stack_map_site_addr,
-            unwind_site_addr,
         }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.header.instruction_ordinal()
     }
 
     #[inline(always)]
@@ -398,51 +552,88 @@ impl PrecomputedBlockReturnSite {
 
     #[inline(always)]
     pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
-        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+        self.header.stack_map_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
-        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+        self.header.unwind_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
-        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+        self.header.safepoint_cache()
     }
 }
 
 impl PrecomputedFunctionReturnSite {
     #[inline(always)]
+    pub(crate) const fn new(instruction_ordinal: u32, safepoint: SafepointMetadataCache) -> Self {
+        Self {
+            header: ControlSiteHeader::new(instruction_ordinal, safepoint),
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.header.instruction_ordinal()
+    }
+
+    #[inline(always)]
     pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
-        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+        self.header.stack_map_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
-        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+        self.header.unwind_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
-        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+        self.header.safepoint_cache()
     }
 }
 
 impl PrecomputedWaitSite {
     #[inline(always)]
+    pub(crate) const fn new(
+        instruction_ordinal: u32,
+        resume_pc: StablePc,
+        safepoint: SafepointMetadataCache,
+        memarg: MemArg,
+        memidx: u32,
+    ) -> Self {
+        Self {
+            header: ContinuationSiteHeader::new(instruction_ordinal, resume_pc, safepoint),
+            memarg,
+            memidx,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn instruction_ordinal(self) -> u32 {
+        self.header.instruction_ordinal()
+    }
+
+    #[inline(always)]
+    pub(crate) const fn resume_pc(self) -> StablePc {
+        self.header.pc()
+    }
+
+    #[inline(always)]
     pub(crate) fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
-        (self.stack_map_site_addr != 0).then_some(self.stack_map_site_addr as *const _)
+        self.header.stack_map_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
-        (self.unwind_site_addr != 0).then_some(self.unwind_site_addr as *const _)
+        self.header.unwind_site_ptr()
     }
 
     #[inline(always)]
     pub(crate) fn safepoint_cache(self) -> SafepointMetadataCache {
-        SafepointMetadataCache::new(self.stack_map_site_addr, self.unwind_site_addr)
+        self.header.safepoint_cache()
     }
 }
 

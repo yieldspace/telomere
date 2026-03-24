@@ -2,7 +2,10 @@
 
 #[macro_use]
 mod vm_result;
-use std::{fmt::Display, future::Future, ops::Deref, pin::Pin, sync::Arc};
+mod continuation;
+mod control_flow;
+mod frame_layout;
+use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
 
@@ -13,6 +16,14 @@ pub use memory::{
 };
 pub use memory::{AtomicWaitResult, SharedWaitRegistration};
 pub(crate) mod stack;
+pub(crate) use continuation::StablePc;
+pub(crate) use control_flow::{
+    structured_jump_rewrite, ControlFlowMetadataKind, ControlFlowMetadataSite,
+    SafepointMetadataCache, StackMapSite, StackMapSourceSite, StructuredJumpRewriteKind,
+    UnwindSiteMetadata, UnwindSourceSite,
+};
+pub(crate) use frame_layout::{FrameLayoutColdMetadata, FrameLayoutHeader, FrameLayoutMetadata};
+pub(crate) use frame_layout::{LocalSlotLayout, RefSlotRun};
 use stack::CachedMemoryKind;
 pub(crate) use stack::CallFrameCache;
 pub use stack::{LocalReference, Stack};
@@ -499,31 +510,6 @@ pub(crate) struct PrecomputedBlockReturn {
     meta: u32,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ControlFlowMetadataSite {
-    pub instruction_ordinal: u32,
-    pub kind: ControlFlowMetadataKind,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(crate) enum ControlFlowMetadataKind {
-    Jump {
-        jump_operand_slots: Arc<[u8]>,
-        target_ordinals: Arc<[u32]>,
-    },
-    Loop {
-        dst_from_local_top: u32,
-        param_size: u32,
-        shape: ReturnShape,
-    },
-    BlockReturn {
-        dst_from_local_top: u32,
-        return_size: u32,
-        shape: ReturnShape,
-    },
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum ReturnShape {
@@ -547,217 +533,6 @@ pub(crate) enum StackMapSafepointKind {
     BlockReturn = 8,
     FunctionReturn = 9,
     MemoryWait = 10,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LocalSlotLayout {
-    pub wasm_local_index: u32,
-    pub val_type: ValType,
-    pub offset_from_local_top: u32,
-    pub size: u32,
-    pub is_ref: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RefSlotRun {
-    pub start_from_local_top: u32,
-    pub len_bytes: u32,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(crate) struct StackMapSite {
-    pub instruction_ordinal: u32,
-    pub kind: StackMapSafepointKind,
-    pub operand_bytes: u32,
-    pub ref_offsets_from_operand_base: Arc<[u32]>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct StackMapSourceSite {
-    pub raw_start: usize,
-    pub kind: StackMapSafepointKind,
-    pub operand_bytes: u32,
-    pub ref_offsets_from_operand_base: Arc<[u32]>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(crate) struct UnwindSiteMetadata {
-    pub instruction_ordinal: u32,
-    pub kind: StackMapSafepointKind,
-    pub result_slot_from_local_top: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct UnwindSourceSite {
-    pub raw_start: usize,
-    pub kind: StackMapSafepointKind,
-    pub result_slot_from_local_top: Option<u32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct SafepointMetadataCache {
-    pub stack_map_site_addr: usize,
-    pub unwind_site_addr: usize,
-}
-
-impl SafepointMetadataCache {
-    pub(crate) const EMPTY: Self = Self {
-        stack_map_site_addr: 0,
-        unwind_site_addr: 0,
-    };
-
-    #[inline(always)]
-    pub(crate) const fn new(stack_map_site_addr: usize, unwind_site_addr: usize) -> Self {
-        Self {
-            stack_map_site_addr,
-            unwind_site_addr,
-        }
-    }
-
-    #[inline(always)]
-    pub(crate) const fn is_empty(self) -> bool {
-        self.stack_map_site_addr == 0 && self.unwind_site_addr == 0
-    }
-
-    #[inline(always)]
-    pub(crate) const fn stack_map_site_ptr(self) -> Option<*const StackMapSite> {
-        if self.stack_map_site_addr != 0 {
-            Some(self.stack_map_site_addr as *const _)
-        } else {
-            None
-        }
-    }
-
-    #[inline(always)]
-    #[allow(dead_code)]
-    pub(crate) const fn unwind_site_ptr(self) -> Option<*const UnwindSiteMetadata> {
-        if self.unwind_site_addr != 0 {
-            Some(self.unwind_site_addr as *const _)
-        } else {
-            None
-        }
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(crate) struct FrameLayoutColdMetadata {
-    pub local_slots: Arc<[LocalSlotLayout]>,
-    pub local_ref_runs: Arc<[RefSlotRun]>,
-    pub stack_map_sites: Arc<[StackMapSite]>,
-    pub unwind_sites: Arc<[UnwindSiteMetadata]>,
-    pub instruction_ordinal_by_raw_start: Arc<[u32]>,
-}
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub(crate) struct FrameLayoutHeader {
-    pub param_bytes: u32,
-    pub locals_bytes: u32,
-    pub fixed_frame_bytes: u32,
-    pub locals_zero_start_from_local_top: u32,
-    pub footer_from_local_top: u32,
-    pub operand_base_from_local_top: u32,
-    pub max_operand_bytes: u32,
-    pub param_shape: ReturnShape,
-    pub result_shape: ReturnShape,
-    cold_addr: usize,
-}
-
-impl FrameLayoutHeader {
-    #[inline(always)]
-    pub(crate) fn cold(&self) -> &FrameLayoutColdMetadata {
-        debug_assert_ne!(self.cold_addr, 0);
-        unsafe { &*(self.cold_addr as *const FrameLayoutColdMetadata) }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn stack_map_site(&self, instruction_ordinal: u32) -> Option<&StackMapSite> {
-        self.cold()
-            .stack_map_sites
-            .iter()
-            .find(|site| site.instruction_ordinal == instruction_ordinal)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn unwind_site(&self, instruction_ordinal: u32) -> Option<&UnwindSiteMetadata> {
-        self.cold()
-            .unwind_sites
-            .iter()
-            .find(|site| site.instruction_ordinal == instruction_ordinal)
-    }
-
-    #[inline(always)]
-    pub(crate) fn instruction_ordinal_for_raw_start(&self, raw_start: usize) -> Option<u32> {
-        self.cold()
-            .instruction_ordinal_by_raw_start
-            .get(raw_start)
-            .copied()
-            .filter(|ordinal| *ordinal != u32::MAX)
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(crate) struct FrameLayoutMetadata {
-    pub header: FrameLayoutHeader,
-    pub cold: Arc<FrameLayoutColdMetadata>,
-}
-
-impl FrameLayoutMetadata {
-    pub(crate) fn new(
-        param_bytes: u32,
-        locals_bytes: u32,
-        max_operand_bytes: u32,
-        param_shape: ReturnShape,
-        result_shape: ReturnShape,
-        cold: FrameLayoutColdMetadata,
-    ) -> Self {
-        let cold = Arc::new(cold);
-        let footer_from_local_top = param_bytes + locals_bytes;
-        let operand_base_from_local_top = footer_from_local_top
-            + std::mem::size_of::<crate::common::stack::CallStackInfo>() as u32;
-        Self {
-            header: FrameLayoutHeader {
-                param_bytes,
-                locals_bytes,
-                fixed_frame_bytes: operand_base_from_local_top,
-                locals_zero_start_from_local_top: param_bytes,
-                footer_from_local_top,
-                operand_base_from_local_top,
-                max_operand_bytes,
-                param_shape,
-                result_shape,
-                cold_addr: Arc::as_ptr(&cold) as usize,
-            },
-            cold,
-        }
-    }
-
-    #[inline(always)]
-    pub(crate) fn header(&self) -> &FrameLayoutHeader {
-        &self.header
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn stack_map_site(&self, instruction_ordinal: u32) -> Option<&StackMapSite> {
-        self.header.stack_map_site(instruction_ordinal)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn unwind_site(&self, instruction_ordinal: u32) -> Option<&UnwindSiteMetadata> {
-        self.header.unwind_site(instruction_ordinal)
-    }
-}
-
-impl Deref for FrameLayoutMetadata {
-    type Target = FrameLayoutHeader;
-
-    fn deref(&self) -> &Self::Target {
-        &self.header
-    }
 }
 
 impl ReturnShape {
@@ -903,145 +678,6 @@ pub union Instr {
 }
 unsafe impl Send for Instr {}
 unsafe impl Sync for Instr {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(transparent)]
-pub(crate) struct StablePc(usize);
-impl StablePc {
-    const RELATIVE_TAG: usize = 1;
-
-    pub(crate) fn from_raw(raw: usize) -> Self {
-        Self(raw)
-    }
-
-    pub(crate) fn raw(self) -> usize {
-        self.0
-    }
-
-    pub(crate) fn from_stable_ptr(ptr: *const Instr) -> Self {
-        let ptr = ptr as usize;
-        debug_assert_eq!(ptr & Self::RELATIVE_TAG, 0);
-        Self(ptr)
-    }
-
-    pub(crate) fn from_relative_index(index: usize) -> Self {
-        Self((index << 1) | Self::RELATIVE_TAG)
-    }
-
-    pub(crate) fn from_raw_in_frame(
-        _runtime: &StoreInner,
-        stack: &Stack,
-        local_reference: LocalReference,
-        ptr: *const Instr,
-    ) -> Self {
-        Self::relative_index_for_ptr(stack, local_reference, ptr)
-            .map(Self::from_relative_index)
-            .unwrap_or_else(|| Self::from_stable_ptr(ptr))
-    }
-
-    pub(crate) fn from_raw_in_call_frame(frame: CallFrameCache, ptr: *const Instr) -> Self {
-        Self::relative_index_for_code_range(frame.code_base, frame.code_len, ptr)
-            .map(Self::from_relative_index)
-            .unwrap_or_else(|| Self::from_stable_ptr(ptr))
-    }
-
-    pub(crate) fn resolve(
-        self,
-        _runtime: &StoreInner,
-        stack: &Stack,
-        local_reference: LocalReference,
-    ) -> *const Instr {
-        match self.relative_index() {
-            Some(index) => {
-                let (base, len) = Self::current_frame_code_range(stack, local_reference)
-                    .expect("relative continuation must resolve against a wasm frame");
-                debug_assert!(index < len);
-                unsafe { base.add(index) }
-            }
-            None => self.0 as *const Instr,
-        }
-    }
-
-    pub(crate) fn resolve_in_call_frame(self, frame: CallFrameCache) -> *const Instr {
-        match self.relative_index() {
-            Some(index) => {
-                let (base, len) = Self::code_range(frame.code_base, frame.code_len)
-                    .expect("relative continuation must resolve against a wasm frame");
-                debug_assert!(index < len);
-                unsafe { base.add(index) }
-            }
-            None => self.0 as *const Instr,
-        }
-    }
-
-    pub(crate) fn relative_index(self) -> Option<usize> {
-        (self.0 & Self::RELATIVE_TAG == Self::RELATIVE_TAG).then_some(self.0 >> 1)
-    }
-
-    fn current_frame_code_range(
-        stack: &Stack,
-        local_reference: LocalReference,
-    ) -> Option<(*const Instr, usize)> {
-        let frame_size = local_reference.frame_bytes as usize;
-        if frame_size < std::mem::size_of::<crate::common::stack::CallStackInfo>() {
-            return None;
-        }
-        let code_base = stack.code_base(&local_reference);
-        if code_base.is_null() {
-            return None;
-        }
-        let code_len = stack.code_len(&local_reference) as usize;
-        if code_len == 0 {
-            return None;
-        }
-        Some((code_base, code_len))
-    }
-
-    fn code_range(code_base: *const Instr, code_len: u32) -> Option<(*const Instr, usize)> {
-        if code_base.is_null() || code_len == 0 {
-            return None;
-        }
-        Some((code_base, code_len as usize))
-    }
-
-    fn relative_index_for_ptr(
-        stack: &Stack,
-        local_reference: LocalReference,
-        ptr: *const Instr,
-    ) -> Option<usize> {
-        let (base, instr_len) = Self::current_frame_code_range(stack, local_reference)?;
-        Self::relative_index_for_range(base, instr_len, ptr)
-    }
-
-    fn relative_index_for_code_range(
-        code_base: *const Instr,
-        code_len: u32,
-        ptr: *const Instr,
-    ) -> Option<usize> {
-        let (base, instr_len) = Self::code_range(code_base, code_len)?;
-        Self::relative_index_for_range(base, instr_len, ptr)
-    }
-
-    fn relative_index_for_range(
-        base: *const Instr,
-        instr_len: usize,
-        ptr: *const Instr,
-    ) -> Option<usize> {
-        let instr_size = std::mem::size_of::<Instr>();
-        let base_addr = base as usize;
-        let ptr_addr = ptr as usize;
-        let byte_len = instr_len.checked_mul(instr_size)?;
-        let end_addr = base_addr.checked_add(byte_len)?;
-        if !(base_addr..end_addr).contains(&ptr_addr) {
-            return None;
-        }
-        let delta = ptr_addr - base_addr;
-        if delta % instr_size != 0 {
-            return None;
-        }
-        Some(delta / instr_size)
-    }
-}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WasmValue {
     I32(i32),

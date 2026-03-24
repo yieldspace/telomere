@@ -118,13 +118,7 @@ impl TokioDriver {
     }
 
     fn submit_memory_wait(&mut self, op: MemoryWaitPending) {
-        self.inflight.push(Box::pin(async move {
-            let value = op.wait.wait_result(op.shared, op.timeout_ns).await;
-            Completion {
-                task_id: op.task_id,
-                payload: CompletionPayload::ResumeWithI32 { fp: op.fp, value },
-            }
-        }));
+        self.inflight.push(Box::pin(op.into_completion()));
     }
 }
 
@@ -189,13 +183,13 @@ impl<'a> Scheduler<'a> {
             return;
         };
         match completion.payload {
-            CompletionPayload::Resume { fp } => {
-                let fp = StablePc::from_raw(fp);
+            CompletionPayload::Resume { fp, safepoint } => {
                 let mut complete_result = None;
                 {
                     let task = self.tasks.get_mut(task_index).unwrap();
                     task.pending_effects -= 1;
                     task.fp = fp;
+                    task.safepoint = safepoint;
                     if task.pending_effects == 0 {
                         if let Some(result) = task.terminal_result.take() {
                             complete_result = Some(result);
@@ -213,14 +207,18 @@ impl<'a> Scheduler<'a> {
                     });
                 }
             }
-            CompletionPayload::ResumeWithI32 { fp, value } => {
-                let fp = StablePc::from_raw(fp);
+            CompletionPayload::ResumeWithI32 {
+                fp,
+                value,
+                safepoint,
+            } => {
                 let mut complete_result = None;
                 {
                     let task = self.tasks.get_mut(task_index).unwrap();
                     let push_result = task.stack.push_i32(value);
                     task.pending_effects -= 1;
                     task.fp = fp;
+                    task.safepoint = safepoint;
                     let push_result = vm_result_to_unit(push_result);
                     if task.pending_effects == 0 {
                         if push_result.is_err() {
@@ -522,8 +520,9 @@ mod tests {
         scheduler.apply_completion(crate::runtime::memory_effect::Completion {
             task_id: 1,
             payload: CompletionPayload::ResumeWithI32 {
-                fp: StablePc::from_raw(77).raw(),
+                fp: StablePc::from_raw(77),
                 value: 9,
+                safepoint: SafepointMetadataCache::new(33, 44),
             },
         });
 

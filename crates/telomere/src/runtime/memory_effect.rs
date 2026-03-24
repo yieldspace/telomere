@@ -1,7 +1,10 @@
 use std::{fmt, sync::Arc};
 
 use crate::{
-    common::{AsyncHostFuture, SafepointMetadataCache, SharedMemoryObject, SharedWaitRegistration},
+    common::{
+        AsyncHostFuture, SafepointMetadataCache, SharedMemoryObject, SharedWaitRegistration,
+        StablePc,
+    },
     VMResult,
 };
 
@@ -25,11 +28,26 @@ impl HostCallPending {
 }
 
 pub struct MemoryWaitPending {
-    pub task_id: u32,
-    pub shared: Arc<SharedMemoryObject>,
-    pub wait: SharedWaitRegistration,
-    pub timeout_ns: i64,
-    pub fp: usize,
+    pub(crate) task_id: u32,
+    pub(crate) shared: Arc<SharedMemoryObject>,
+    pub(crate) wait: SharedWaitRegistration,
+    pub(crate) timeout_ns: i64,
+    pub(crate) fp: StablePc,
+    pub(crate) safepoint: SafepointMetadataCache,
+}
+
+impl MemoryWaitPending {
+    pub async fn into_completion(self) -> Completion {
+        let value = self.wait.wait_result(self.shared, self.timeout_ns).await;
+        Completion {
+            task_id: self.task_id,
+            payload: CompletionPayload::ResumeWithI32 {
+                fp: self.fp,
+                value,
+                safepoint: self.safepoint,
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -65,7 +83,6 @@ impl fmt::Debug for PendingOp {
                 .debug_struct("PendingOp::MemoryWait")
                 .field("task_id", &op.task_id)
                 .field("timeout_ns", &op.timeout_ns)
-                .field("fp", &op.fp)
                 .finish(),
             Self::WasmAsync(op) => f.debug_tuple("PendingOp::WasmAsync").field(op).finish(),
         }
@@ -83,11 +100,13 @@ pub struct Completion {
 pub enum CompletionPayload {
     #[allow(dead_code)]
     Resume {
-        fp: usize,
+        fp: StablePc,
+        safepoint: SafepointMetadataCache,
     },
     ResumeWithI32 {
-        fp: usize,
+        fp: StablePc,
         value: i32,
+        safepoint: SafepointMetadataCache,
     },
     HostCall {
         result: VMResult<*const crate::common::Instr>,

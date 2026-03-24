@@ -2250,7 +2250,7 @@ unsafe fn push_wait_effect(
     let task_id = ctx.task_id;
     #[cfg(debug_assertions)]
     ctx.visit_current_ref_ranges(|_| {});
-    let fp = StablePc::from_raw_in_call_frame(ctx.current_frame, resume_pc).raw();
+    let fp = StablePc::from_raw_in_call_frame(ctx.current_frame, resume_pc);
     ctx.effect
         .push_pending(PendingOp::MemoryWait(MemoryWaitPending {
             task_id,
@@ -2258,6 +2258,7 @@ unsafe fn push_wait_effect(
             wait,
             timeout_ns,
             fp,
+            safepoint: ctx.safepoint,
         }));
 }
 
@@ -2306,7 +2307,8 @@ unsafe fn push_wait_effect_precomputed(
             shared,
             wait,
             timeout_ns,
-            fp: resume_pc.raw(),
+            fp: resume_pc,
+            safepoint: ctx.safepoint,
         }));
 }
 
@@ -2412,8 +2414,8 @@ pub unsafe fn op_memory_atomic_wait32_shared_precomputed(
                 .gc
                 .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
             ctx.set_safepoint(safepoint);
-            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
-            ctx.cont = site.resume_pc.resolve_in_call_frame(ctx.current_frame);
+            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc());
+            ctx.cont = site.resume_pc().resolve_in_call_frame(ctx.current_frame);
             VMResult::Success(())
         }
     }
@@ -2520,8 +2522,8 @@ pub unsafe fn op_memory_atomic_wait32_indexed_shared_precomputed(
                 .gc
                 .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
             ctx.set_safepoint(safepoint);
-            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
-            ctx.cont = site.resume_pc.resolve_in_call_frame(ctx.current_frame);
+            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc());
+            ctx.cont = site.resume_pc().resolve_in_call_frame(ctx.current_frame);
             VMResult::Success(())
         }
     }
@@ -2629,8 +2631,8 @@ pub unsafe fn op_memory_atomic_wait64_shared_precomputed(
                 .gc
                 .clone_shared_memory(ctx.default_shared_memory_id_unchecked());
             ctx.set_safepoint(safepoint);
-            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
-            ctx.cont = site.resume_pc.resolve_in_call_frame(ctx.current_frame);
+            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc());
+            ctx.cont = site.resume_pc().resolve_in_call_frame(ctx.current_frame);
             VMResult::Success(())
         }
     }
@@ -2737,8 +2739,8 @@ pub unsafe fn op_memory_atomic_wait64_indexed_shared_precomputed(
                 .gc
                 .clone_shared_memory(ctx.shared_memory_id_at_unchecked(memidx));
             ctx.set_safepoint(safepoint);
-            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc);
-            ctx.cont = site.resume_pc.resolve_in_call_frame(ctx.current_frame);
+            push_wait_effect_precomputed(ctx, shared, wait, timeout_ns, site.resume_pc());
+            ctx.cont = site.resume_pc().resolve_in_call_frame(ctx.current_frame);
             VMResult::Success(())
         }
     }

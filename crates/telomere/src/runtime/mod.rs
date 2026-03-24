@@ -2,6 +2,7 @@
 #[macro_use]
 mod trace;
 pub(crate) mod instantiate;
+mod instantiate_sites;
 pub(crate) mod memory_effect;
 pub(crate) mod scheduler;
 #[allow(clippy::missing_safety_doc)]

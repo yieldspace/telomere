@@ -6,11 +6,10 @@ use crate::{
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
         CodeSection, ConstExpr, ControlFlowMetadataKind, ControlFlowMetadataSite, DataMode,
         DataSection, ElemInit, ElemMode, ElementSection, ExecuteContext, Export, ExportDesc,
-        ExportSection, FrameLayoutHeader, FuncIdx, FuncType, FunctionBody, FunctionInstanceData,
-        GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceData,
+        ExportSection, FuncIdx, FuncType, FunctionBody, FunctionInstanceData, GlobalIdx,
+        HostFunction, HostFunctionDefinition, ImportDesc, ImportSection, InstanceData,
         InstanceHandle, Instr, Limits, LocalReference, MemIdx, ModuleInstance, NativeModule,
-        ObjectRef, Op, Operand, StablePc, StackMapSafepointKind, StoreInner, TableIdx, TypeIdx,
-        TypeSection, PAGE_SIZE_MAX,
+        ObjectRef, Operand, StablePc, StoreInner, TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
@@ -19,12 +18,19 @@ use crate::{
     Instance, Module, Registry, Stack, Store, VMResult,
 };
 
+use super::instantiate_sites::{
+    build_function_return_site, build_precomputed_runtime_sites, rewrite_block_return_op,
+    rewrite_direct_call_op, rewrite_function_return_op, rewrite_import_call_op,
+    rewrite_indirect_call_op, rewrite_jump_op, rewrite_loop_op, rewrite_wait_op,
+};
 use crate::common::store::{FunctionExecutionMetadata, FunctionKind, WasmExecutionMetadata};
 use crate::common::store::{
-    InstanceId, PrecomputedBlockReturnSite, PrecomputedCallFrame, PrecomputedDirectCallSite,
-    PrecomputedFunctionReturnSite, PrecomputedImportCallSite, PrecomputedIndirectCallSite,
-    PrecomputedLoopSite, PrecomputedWaitSite,
+    PrecomputedBlockReturnSite, PrecomputedDirectCallSite, PrecomputedFunctionReturnSite,
+    PrecomputedImportCallSite, PrecomputedIndirectCallSite, PrecomputedLoopSite,
+    PrecomputedWaitSite,
 };
+#[cfg(test)]
+use crate::common::{structured_jump_rewrite, Op};
 
 #[derive(Clone)]
 struct PendingWasmDerivedData {
@@ -32,16 +38,6 @@ struct PendingWasmDerivedData {
     canonical_code: Arc<[Instr]>,
     control_flow_metadata: Arc<[ControlFlowMetadataSite]>,
 }
-
-type PrecomputedSiteSets = (
-    Arc<[PrecomputedDirectCallSite]>,
-    Arc<[PrecomputedImportCallSite]>,
-    Arc<[PrecomputedIndirectCallSite]>,
-    Arc<[PrecomputedWaitSite]>,
-    Arc<[PrecomputedLoopSite]>,
-    Arc<[PrecomputedBlockReturnSite]>,
-    Option<Arc<PrecomputedFunctionReturnSite>>,
-);
 
 struct RuntimeSiteRefs<'a> {
     direct_call_sites: &'a [PrecomputedDirectCallSite],
@@ -75,356 +71,6 @@ fn build_execution_metadata(
         result_stack_bytes: ft.result_stack_byte_size(),
         result_shape: shape_for_result_type(&ft.1),
     }
-}
-
-fn op_eq(op: Op, expected: Op) -> bool {
-    std::ptr::fn_addr_eq(op, expected)
-}
-
-fn rewrite_jump_op(op: Op) -> Option<Op> {
-    vm::structured_jump_rewrite(op).map(|rewrite| rewrite.ptr_op)
-}
-
-fn rewrite_loop_op(op: Op) -> Option<Op> {
-    Some(if op_eq(op, vm::op_loop_empty as Op) {
-        vm::op_loop_empty_precomputed
-    } else if op_eq(op, vm::op_loop4 as Op) {
-        vm::op_loop4_precomputed
-    } else if op_eq(op, vm::op_loop8 as Op) {
-        vm::op_loop8_precomputed
-    } else if op_eq(op, vm::op_loop_generic as Op) || op_eq(op, vm::op_loop as Op) {
-        vm::op_loop_generic_precomputed
-    } else {
-        return None;
-    })
-}
-
-fn rewrite_block_return_op(op: Op) -> Option<Op> {
-    Some(if op_eq(op, vm::special_block_return_empty as Op) {
-        vm::special_block_return_empty_precomputed
-    } else if op_eq(op, vm::special_block_return4 as Op) {
-        vm::special_block_return4_precomputed
-    } else if op_eq(op, vm::special_block_return8 as Op) {
-        vm::special_block_return8_precomputed
-    } else if op_eq(op, vm::special_block_return_generic as Op)
-        || op_eq(op, vm::special_block_return as Op)
-    {
-        vm::special_block_return_generic_precomputed
-    } else {
-        return None;
-    })
-}
-
-fn rewrite_function_return_op(op: Op) -> Option<Op> {
-    Some(if op_eq(op, vm::special_function_return_empty as Op) {
-        vm::special_function_return_empty_precomputed
-    } else if op_eq(op, vm::special_function_return4 as Op) {
-        vm::special_function_return4_precomputed
-    } else if op_eq(op, vm::special_function_return8 as Op) {
-        vm::special_function_return8_precomputed
-    } else if op_eq(op, vm::special_function_return_generic as Op)
-        || op_eq(op, vm::special_function_return as Op)
-    {
-        vm::special_function_return_generic_precomputed
-    } else {
-        return None;
-    })
-}
-
-fn rewrite_direct_call_op(op: Op) -> Option<Op> {
-    Some(if op_eq(op, vm::op_call as Op) {
-        vm::op_call_precomputed
-    } else if op_eq(op, vm::op_return_call as Op) {
-        vm::op_return_call_precomputed
-    } else {
-        return None;
-    })
-}
-
-fn rewrite_import_call_op(op: Op) -> Option<Op> {
-    Some(if op_eq(op, vm::op_call_import as Op) {
-        vm::op_call_import_precomputed
-    } else if op_eq(op, vm::op_return_call_import as Op) {
-        vm::op_return_call_import_precomputed
-    } else {
-        return None;
-    })
-}
-
-fn rewrite_indirect_call_op(op: Op) -> Option<Op> {
-    Some(if op_eq(op, vm::op_call_indirect as Op) {
-        vm::op_call_indirect_precomputed
-    } else if op_eq(op, vm::op_return_call_indirect as Op) {
-        vm::op_return_call_indirect_precomputed
-    } else {
-        return None;
-    })
-}
-
-fn rewrite_wait_op(op: Op) -> Option<Op> {
-    Some(if op_eq(op, vm::op_memory_atomic_wait32_shared as Op) {
-        vm::op_memory_atomic_wait32_shared_precomputed
-    } else if op_eq(op, vm::op_memory_atomic_wait32_indexed_shared as Op) {
-        vm::op_memory_atomic_wait32_indexed_shared_precomputed
-    } else if op_eq(op, vm::op_memory_atomic_wait64_shared as Op) {
-        vm::op_memory_atomic_wait64_shared_precomputed
-    } else if op_eq(op, vm::op_memory_atomic_wait64_indexed_shared as Op) {
-        vm::op_memory_atomic_wait64_indexed_shared_precomputed
-    } else {
-        return None;
-    })
-}
-
-enum ControlRuntimeSite {
-    Loop(PrecomputedLoopSite),
-    BlockReturn(PrecomputedBlockReturnSite),
-}
-
-fn control_flow_metadata_to_loop_and_block_sites(
-    frame_layout: &FrameLayoutHeader,
-    canonical: &[Instr],
-) -> Vec<ControlRuntimeSite> {
-    let mut sites = Vec::new();
-    for stack_map_site in frame_layout.cold().stack_map_sites.iter() {
-        let start = stack_map_site.instruction_ordinal as usize;
-        let Some(op) = canonical.get(start).map(|instr| unsafe { instr.op }) else {
-            continue;
-        };
-        let Some(unwind_site) = frame_layout.unwind_site(stack_map_site.instruction_ordinal) else {
-            continue;
-        };
-        match stack_map_site.kind {
-            StackMapSafepointKind::Loop => {
-                if rewrite_loop_op(op).is_none() {
-                    continue;
-                }
-                let loop_param = unsafe { canonical[start + 1].operand.loop_param };
-                sites.push(ControlRuntimeSite::Loop(PrecomputedLoopSite::new(
-                    stack_map_site.instruction_ordinal,
-                    loop_param.param_size(),
-                    loop_param.param_shape(),
-                    stack_map_site as *const _ as usize,
-                    unwind_site as *const _ as usize,
-                )));
-            }
-            StackMapSafepointKind::BlockReturn => {
-                if rewrite_block_return_op(op).is_none() {
-                    continue;
-                }
-                let block_return = unsafe { canonical[start + 1].operand.block_return };
-                sites.push(ControlRuntimeSite::BlockReturn(
-                    PrecomputedBlockReturnSite::new(
-                        stack_map_site.instruction_ordinal,
-                        block_return.return_size(),
-                        block_return.return_shape(),
-                        stack_map_site as *const _ as usize,
-                        unwind_site as *const _ as usize,
-                    ),
-                ));
-            }
-            _ => {}
-        }
-    }
-    sites
-}
-
-fn build_function_return_site(
-    frame_layout: &FrameLayoutHeader,
-) -> Option<Arc<PrecomputedFunctionReturnSite>> {
-    frame_layout
-        .cold()
-        .stack_map_sites
-        .iter()
-        .find(|site| site.kind == StackMapSafepointKind::FunctionReturn)
-        .and_then(|stack_map_site| {
-            frame_layout
-                .unwind_site(stack_map_site.instruction_ordinal)
-                .map(|unwind_site| {
-                    Arc::new(PrecomputedFunctionReturnSite {
-                        instruction_ordinal: stack_map_site.instruction_ordinal,
-                        stack_map_site_addr: stack_map_site as *const _ as usize,
-                        unwind_site_addr: unwind_site as *const _ as usize,
-                    })
-                })
-        })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_precomputed_runtime_sites(
-    canonical: &[Instr],
-    frame_layout: &FrameLayoutHeader,
-    current_funcidx: u32,
-    caller_instance: InstanceId,
-    funcs: &[ObjectRef],
-    function_return_sites: &[Option<Arc<PrecomputedFunctionReturnSite>>],
-    function_type_identities: &[crate::common::FuncTypeIdentity],
-    gc: &StoreInner,
-    allow_local_direct_precompute: bool,
-) -> PrecomputedSiteSets {
-    let mut direct_sites = Vec::new();
-    let mut import_sites = Vec::new();
-    let mut indirect_sites = Vec::new();
-    let mut wait_sites = Vec::new();
-    let mut loop_sites = Vec::new();
-    let mut block_return_sites = Vec::new();
-
-    for (instruction_ordinal, instr) in canonical.iter().enumerate() {
-        let op = unsafe { instr.op };
-        let safepoint_instruction_ordinal =
-            frame_layout.instruction_ordinal_for_raw_start(instruction_ordinal);
-        let stack_map_site_addr = safepoint_instruction_ordinal
-            .and_then(|ordinal| frame_layout.stack_map_site(ordinal))
-            .map_or(0, |site| site as *const _ as usize);
-        let unwind_site_addr = safepoint_instruction_ordinal
-            .and_then(|ordinal| frame_layout.unwind_site(ordinal))
-            .map_or(0, |site| site as *const _ as usize);
-        let safepoint_kind = safepoint_instruction_ordinal
-            .and_then(|ordinal| frame_layout.stack_map_site(ordinal))
-            .map(|site| site.kind);
-        if rewrite_direct_call_op(op).is_some() {
-            let funcidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 };
-            let funcaddr = funcs[funcidx as usize];
-            let funcinst = gc.get_func(funcaddr);
-            let import_like = matches!(
-                safepoint_kind,
-                Some(StackMapSafepointKind::CallImport | StackMapSafepointKind::ReturnCallImport)
-            );
-            if import_like
-                || !allow_local_direct_precompute
-                || funcinst.instance != caller_instance
-                || funcinst.wasm_metadata().is_none()
-            {
-                import_sites.push(PrecomputedImportCallSite {
-                    instruction_ordinal: instruction_ordinal as u32,
-                    funcidx,
-                    return_pc: StablePc::from_relative_index(instruction_ordinal + 2),
-                    stack_map_site_addr,
-                    unwind_site_addr,
-                });
-                continue;
-            }
-            let memory0 = gc
-                .instance(funcinst.instance)
-                .memory_slots
-                .first()
-                .copied()
-                .and_then(|slot| slot.handle());
-            let (memory0_kind, memory0_raw) =
-                crate::common::stack::CachedMemoryKind::from_memory_handle(memory0);
-            let code_base_addr = {
-                let metadata = funcinst
-                    .wasm_metadata()
-                    .expect("local wasm direct call must expose metadata");
-                let canonical = funcinst
-                    .canonical_code()
-                    .expect("local wasm direct call must expose canonical code");
-                let has_dynamic_rewrite = !metadata.control_flow_metadata.is_empty()
-                    || canonical.iter().any(|instr| {
-                        let op = unsafe { instr.op };
-                        rewrite_direct_call_op(op).is_some()
-                            || rewrite_import_call_op(op).is_some()
-                            || rewrite_indirect_call_op(op).is_some()
-                    });
-                if has_dynamic_rewrite {
-                    0
-                } else {
-                    funcinst
-                        .code_pointer()
-                        .expect("stable local wasm direct call must expose code")
-                        as usize
-                }
-            };
-            direct_sites.push(PrecomputedDirectCallSite {
-                instruction_ordinal: instruction_ordinal as u32,
-                return_pc: StablePc::from_relative_index(instruction_ordinal + 2),
-                frame: PrecomputedCallFrame {
-                    code_addr: funcaddr,
-                    code_base_addr,
-                    code_len: funcinst.code().map_or(0, |code| {
-                        u32::try_from(code.len()).expect("code length overflow")
-                    }),
-                    function_return_site_addr: function_return_sites
-                        .get(funcidx as usize)
-                        .and_then(|site| site.as_ref())
-                        .map_or(0, |site| site.as_ref() as *const _ as usize),
-                    instance: funcinst.instance,
-                    memory0_kind,
-                    memory0_raw,
-                },
-                param_bytes: funcinst.execution.param_stack_bytes,
-                param_shape: funcinst.execution.param_shape,
-                callee_layout_addr: funcinst
-                    .frame_layout_header()
-                    .map_or(0, |layout| layout as *const FrameLayoutHeader as usize),
-                stack_map_site_addr,
-                unwind_site_addr,
-            });
-        } else if rewrite_import_call_op(op).is_some() {
-            let funcidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 };
-            import_sites.push(PrecomputedImportCallSite {
-                instruction_ordinal: instruction_ordinal as u32,
-                funcidx,
-                return_pc: StablePc::from_relative_index(instruction_ordinal + 2),
-                stack_map_site_addr,
-                unwind_site_addr,
-            });
-        } else if rewrite_indirect_call_op(op).is_some() {
-            let tableidx = unsafe { canonical[instruction_ordinal + 1].operand.u32 };
-            let expected_typeidx = unsafe { canonical[instruction_ordinal + 2].operand.u32 };
-            indirect_sites.push(PrecomputedIndirectCallSite {
-                instruction_ordinal: instruction_ordinal as u32,
-                return_pc: StablePc::from_relative_index(instruction_ordinal + 3),
-                tableidx,
-                expected_type_identity_addr: function_type_identities
-                    .get(expected_typeidx as usize)
-                    .expect("validated indirect call type")
-                    as *const crate::common::FuncTypeIdentity
-                    as usize,
-                stack_map_site_addr,
-                unwind_site_addr,
-            });
-        } else if rewrite_wait_op(op).is_some() {
-            let memarg = unsafe { canonical[instruction_ordinal + 1].operand.memarg };
-            let indexed = op_eq(op, vm::op_memory_atomic_wait32_indexed_shared as Op)
-                || op_eq(op, vm::op_memory_atomic_wait64_indexed_shared as Op);
-            wait_sites.push(PrecomputedWaitSite {
-                instruction_ordinal: instruction_ordinal as u32,
-                resume_pc: StablePc::from_relative_index(
-                    instruction_ordinal + if indexed { 3 } else { 2 },
-                ),
-                memarg,
-                memidx: if indexed {
-                    unsafe { canonical[instruction_ordinal + 2].operand.u32 }
-                } else {
-                    0
-                },
-                stack_map_site_addr,
-                unwind_site_addr,
-            });
-        }
-    }
-
-    for site in control_flow_metadata_to_loop_and_block_sites(frame_layout, canonical) {
-        match site {
-            ControlRuntimeSite::Loop(loop_site) => loop_sites.push(loop_site),
-            ControlRuntimeSite::BlockReturn(block_site) => block_return_sites.push(block_site),
-        }
-    }
-
-    let function_return_site = function_return_sites
-        .get(current_funcidx as usize)
-        .cloned()
-        .unwrap_or(None);
-
-    (
-        direct_sites.into(),
-        import_sites.into(),
-        indirect_sites.into(),
-        wait_sites.into(),
-        loop_sites.into(),
-        block_return_sites.into(),
-        function_return_site,
-    )
 }
 
 fn rebuild_wasm_derived_data_for_instance(instance_addr: ObjectRef, gc: &mut StoreInner) {
@@ -573,7 +219,7 @@ fn build_derived_code(
             }
             ControlFlowMetadataKind::Loop { .. } => {
                 if let Some(site) = runtime_sites.loop_sites.iter().find(|runtime_site| {
-                    runtime_site.instruction_ordinal == site.instruction_ordinal
+                    runtime_site.instruction_ordinal() == site.instruction_ordinal
                 }) {
                     let ptr_op = rewrite_loop_op(op).expect("loop metadata must target a loop op");
                     code[start] = Instr { op: ptr_op };
@@ -589,7 +235,7 @@ fn build_derived_code(
                     .block_return_sites
                     .iter()
                     .find(|runtime_site| {
-                        runtime_site.instruction_ordinal == site.instruction_ordinal
+                        runtime_site.instruction_ordinal() == site.instruction_ordinal
                     })
                 {
                     let ptr_op = rewrite_block_return_op(op)
@@ -606,7 +252,7 @@ fn build_derived_code(
     }
 
     for site in runtime_sites.direct_call_sites {
-        let start = site.instruction_ordinal as usize;
+        let start = site.instruction_ordinal() as usize;
         let ptr_op =
             rewrite_direct_call_op(unsafe { code[start].op }).expect("direct-call rewrite target");
         code[start] = Instr { op: ptr_op };
@@ -618,7 +264,7 @@ fn build_derived_code(
     }
 
     for site in runtime_sites.import_call_sites {
-        let start = site.instruction_ordinal as usize;
+        let start = site.instruction_ordinal() as usize;
         let ptr_op =
             rewrite_import_call_op(unsafe { code[start].op }).expect("import-call rewrite target");
         code[start] = Instr { op: ptr_op };
@@ -630,7 +276,7 @@ fn build_derived_code(
     }
 
     for site in runtime_sites.indirect_call_sites {
-        let start = site.instruction_ordinal as usize;
+        let start = site.instruction_ordinal() as usize;
         let ptr_op = rewrite_indirect_call_op(unsafe { code[start].op })
             .expect("indirect-call rewrite target");
         code[start] = Instr { op: ptr_op };
@@ -642,7 +288,7 @@ fn build_derived_code(
     }
 
     for site in runtime_sites.wait_sites {
-        let start = site.instruction_ordinal as usize;
+        let start = site.instruction_ordinal() as usize;
         let ptr_op = rewrite_wait_op(unsafe { code[start].op }).expect("wait rewrite target");
         code[start] = Instr { op: ptr_op };
         code[start + 1] = Instr {
@@ -654,10 +300,10 @@ fn build_derived_code(
 
     if let Some(site) = runtime_sites.function_return_site {
         let start = code
-            .get(site.instruction_ordinal as usize)
+            .get(site.instruction_ordinal() as usize)
             .and_then(|instr| {
                 rewrite_function_return_op(unsafe { instr.op })
-                    .map(|ptr_op| (site.instruction_ordinal as usize, ptr_op))
+                    .map(|ptr_op| (site.instruction_ordinal() as usize, ptr_op))
             })
             .or_else(|| {
                 code.iter().enumerate().find_map(|(index, instr)| {
@@ -1721,7 +1367,7 @@ mod tests {
                 };
                 let canonical_op = unsafe { parsed.expr[site.instruction_ordinal as usize].op };
                 let rewrite =
-                    vm::structured_jump_rewrite(canonical_op).expect("jump metadata must rewrite");
+                    structured_jump_rewrite(canonical_op).expect("jump metadata must rewrite");
                 let active_op = unsafe { active[site.instruction_ordinal as usize].op };
                 assert!(
                     std::ptr::fn_addr_eq(active_op, rewrite.ptr_op),
@@ -1833,14 +1479,17 @@ mod tests {
             .first()
             .expect("direct call site");
         assert!(direct_site.callee_layout_ptr().is_some());
-        assert_eq!(direct_site.return_pc, StablePc::from_relative_index(4),);
+        assert_eq!(direct_site.return_pc(), StablePc::from_relative_index(4),);
 
         let return_call_site = tailcaller
             .direct_call_sites()
             .first()
             .expect("return_call site");
         assert!(return_call_site.callee_layout_ptr().is_some());
-        assert_eq!(return_call_site.return_pc, StablePc::from_relative_index(4),);
+        assert_eq!(
+            return_call_site.return_pc(),
+            StablePc::from_relative_index(4),
+        );
 
         let indirect_site = indirect
             .indirect_call_sites()
@@ -1848,7 +1497,7 @@ mod tests {
             .expect("indirect call site");
         assert_eq!(indirect_site.tableidx, 0);
         assert!(!indirect_site.expected_type_identity_ptr().is_null());
-        assert_eq!(indirect_site.return_pc, StablePc::from_relative_index(7),);
+        assert_eq!(indirect_site.return_pc(), StablePc::from_relative_index(7),);
 
         let return_indirect_site = tailindirect
             .indirect_call_sites()
@@ -1857,7 +1506,7 @@ mod tests {
         assert_eq!(return_indirect_site.tableidx, 0);
         assert!(!return_indirect_site.expected_type_identity_ptr().is_null());
         assert_eq!(
-            return_indirect_site.return_pc,
+            return_indirect_site.return_pc(),
             StablePc::from_relative_index(7),
         );
     }
@@ -1931,7 +1580,7 @@ mod tests {
             .first()
             .expect("import call site");
         assert_eq!(direct_site.funcidx, 0);
-        assert_eq!(direct_site.return_pc, StablePc::from_relative_index(4));
+        assert_eq!(direct_site.return_pc(), StablePc::from_relative_index(4));
         let stack_map_sites = &caller
             .wasm_metadata()
             .unwrap()
@@ -1946,7 +1595,7 @@ mod tests {
             .first()
             .expect("tail import call site");
         assert_eq!(tail_site.funcidx, 0);
-        assert_eq!(tail_site.return_pc, StablePc::from_relative_index(4));
+        assert_eq!(tail_site.return_pc(), StablePc::from_relative_index(4));
         assert!(tail_site.stack_map_site_ptr().is_some());
     }
 

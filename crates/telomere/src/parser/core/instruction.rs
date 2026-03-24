@@ -26,7 +26,6 @@ use crate::{
     },
     WasmParserError,
 };
-use std::sync::Arc;
 use tracing::trace;
 
 macro_rules! simd_instruction {
@@ -184,42 +183,6 @@ impl<R: BinaryReader> WasmBaseParser<R> for InstructionParser<'_, R> {
     }
 }
 impl<'a, R: BinaryReader> InstructionParser<'a, R> {
-    fn record_stack_map_site(
-        &self,
-        instrs: &InstructionGenerator,
-        checker: &TypeChecker,
-        stack_map_sites: &mut Vec<StackMapSourceSite>,
-        kind: StackMapSafepointKind,
-    ) {
-        let Some(operand_bytes) = checker.current_stack_byte_size() else {
-            return;
-        };
-        let Some(ref_offsets_from_operand_base) = checker.current_ref_offsets_from_operand_base()
-        else {
-            return;
-        };
-        stack_map_sites.push(StackMapSourceSite {
-            raw_start: instrs.len(),
-            kind,
-            operand_bytes,
-            ref_offsets_from_operand_base: Arc::from(ref_offsets_from_operand_base),
-        });
-    }
-
-    fn record_unwind_site(
-        &self,
-        instrs: &InstructionGenerator,
-        unwind_sites: &mut Vec<UnwindSourceSite>,
-        kind: StackMapSafepointKind,
-        result_slot_from_local_top: Option<u32>,
-    ) {
-        unwind_sites.push(UnwindSourceSite {
-            raw_start: instrs.len(),
-            kind,
-            result_slot_from_local_top,
-        });
-    }
-
     #[inline(always)]
     fn is_local_direct_call_target(&self, idx: u32) -> bool {
         idx >= self.imported_function_len
