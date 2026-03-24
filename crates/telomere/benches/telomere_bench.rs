@@ -136,6 +136,58 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("tail_recursive_accumulate", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param i32) (result i32)
+                    local.get 0
+                    i32.const 0
+                    call 1)
+                  (func (param $n i32) (param $acc i32) (result i32)
+                    local.get $n
+                    i32.eqz
+                    if
+                      local.get $acc
+                      return
+                    end
+                    local.get $n
+                    i32.const 1
+                    i32.sub
+                    local.get $acc
+                    local.get $n
+                    i32.add
+                    return_call 1))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(524800)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
     group.bench_function("sync_host_roundtrip_i32", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
             let store = Store::new();

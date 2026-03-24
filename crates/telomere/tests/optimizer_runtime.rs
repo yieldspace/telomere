@@ -154,7 +154,61 @@ async fn optimizer_recursive_fib_remains_correct() {
     )
     .await;
 
-    for (input, expected) in [(0, 0), (1, 1), (2, 1), (5, 5)] {
+    let cases: &[(i32, i32)] = if cfg!(debug_assertions) {
+        &[(0, 0), (1, 1), (2, 1), (5, 5), (8, 21)]
+    } else {
+        &[(0, 0), (1, 1), (2, 1), (5, 5), (8, 21), (10, 55), (12, 144)]
+    };
+    for (input, expected) in cases {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(*input)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(*expected)]));
+            }
+            other => panic!("recursive fib({input}) must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_tail_recursive_return_call_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            call 1)
+          (func (param $n i32) (param $acc i32) (result i32)
+            local.get $n
+            i32.eqz
+            if
+              local.get $acc
+              return
+            end
+            local.get $n
+            i32.const 1
+            i32.sub
+            local.get $acc
+            local.get $n
+            i32.add
+            return_call 1))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (input, expected) in [(0, 0), (1, 1), (5, 15), (16, 136)] {
         let result = run_module_function(
             &instance,
             &store,
@@ -167,7 +221,7 @@ async fn optimizer_recursive_fib_remains_correct() {
             VMResult::Success(values) => {
                 assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
             }
-            other => panic!("recursive fib({input}) must succeed, got {other:?}"),
+            other => panic!("tail-recursive sum({input}) must succeed, got {other:?}"),
         }
     }
 }

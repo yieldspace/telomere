@@ -50,6 +50,14 @@ impl RewriteSink {
         self.records.get_mut(idx)
     }
 
+    pub(crate) fn live_indices(&self) -> Vec<usize> {
+        self.records
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, record)| record.alive.then_some(idx))
+            .collect()
+    }
+
     pub(crate) fn into_live_records(self) -> Vec<RecordEmit> {
         self.records
             .into_iter()

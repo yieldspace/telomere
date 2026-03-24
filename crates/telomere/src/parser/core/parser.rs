@@ -737,7 +737,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     ) -> Result<Func> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
         let slice = &locals[..];
-        let locals_data = LocalsData::from(slice);
+        let mut locals_data = LocalsData::from(slice);
         let local_reassign = locals_data.create_reassignment_table(&locals)?;
         validate_locals(&locals)?;
         let mut instrs = InstructionGenerator::new();
@@ -806,7 +806,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let instrs = optimizer::optimize_function(
             funcidx,
             functype,
-            &locals_data,
+            &mut locals_data,
             instrs.build(),
             instruction_meta,
         );

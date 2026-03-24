@@ -1,4 +1,8 @@
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    ops::{Deref, DerefMut},
+};
 
 use crate::common::ValType;
 
@@ -22,6 +26,13 @@ pub(crate) struct ExprOrigin {
     pub(crate) block_id: usize,
     pub(crate) ordinal: usize,
     pub(crate) kind: ExprOriginKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BlockParam {
+    pub(crate) block_id: usize,
+    pub(crate) ordinal: usize,
+    pub(crate) ty: ValType,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,14 +196,39 @@ pub(crate) enum ValueKey {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ExprState {
+pub(crate) struct ValueNode {
     pub(crate) ty: ValType,
     pub(crate) origin: ExprOrigin,
+    pub(crate) block_param: Option<BlockParam>,
     pub(crate) const_value: Option<ConstValue>,
     pub(crate) key: Option<ValueKey>,
     pub(crate) producer_record: Option<usize>,
+    pub(crate) materialized_record: Option<usize>,
+    pub(crate) use_count: usize,
     pub(crate) ref_count: usize,
     pub(crate) removable: bool,
+}
+
+pub(crate) type ExprState = ValueNode;
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ValueGraph {
+    pub(crate) nodes: Vec<ValueNode>,
+    pub(crate) latest_by_origin: HashMap<ExprOrigin, ExprId>,
+}
+
+impl Deref for ValueGraph {
+    type Target = [ValueNode];
+
+    fn deref(&self) -> &Self::Target {
+        &self.nodes
+    }
+}
+
+impl DerefMut for ValueGraph {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.nodes
+    }
 }
 
 pub(crate) type EffectEpoch = usize;

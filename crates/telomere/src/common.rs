@@ -956,9 +956,13 @@ pub struct LocalsData {
     count_i64: u32,
     count_f64: u32,
     count_v128: u32,
+    temp_bytes: u32,
 }
 impl LocalsData {
     pub fn byte_size(&self) -> usize {
+        self.base_byte_size() + self.temp_bytes as usize
+    }
+    pub(crate) fn base_byte_size(&self) -> usize {
         self.word_size() * 4
     }
     pub(crate) fn word_size(&self) -> usize {
@@ -970,6 +974,7 @@ impl LocalsData {
             count_i32,
             count_i64,
             count_v128,
+            temp_bytes: _,
         } = self;
         (*count_i32 as usize
             + *count_f32 as usize
@@ -977,6 +982,11 @@ impl LocalsData {
             + *count_func_ref as usize)
             + (*count_i64 as usize + *count_f64 as usize) * 2
             + *count_v128 as usize * 4
+    }
+    pub(crate) fn allocate_temp_slot(&mut self, ty: ValType) -> u32 {
+        let addr = self.base_byte_size() as u32 + self.temp_bytes;
+        self.temp_bytes += ty.stack_size().u32();
+        addr
     }
     pub(crate) fn create_reassignment_table(
         &self,

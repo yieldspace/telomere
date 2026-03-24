@@ -10,7 +10,7 @@ pub(crate) use cfg::InstructionMeta;
 pub(crate) fn optimize_function(
     funcidx: FuncIdx,
     functype: &FuncType,
-    locals: &LocalsData,
+    locals: &mut LocalsData,
     instrs: Vec<Instr>,
     meta: Vec<InstructionMeta>,
 ) -> Vec<Instr> {
@@ -27,13 +27,13 @@ mod tests {
         sink::RecordEmit,
     };
     use crate::{
-        common::{FunctionBody, Instr, LoopParam, Operand, ValType},
+        common::{Func, FunctionBody, Instr, LoopParam, Operand, ValType},
         parser::core::type_checker::StackSnapshot,
         runtime::vm,
         IoReadBinaryReader, WasmParser,
     };
 
-    fn function_expr_at(wat: &str, func_idx: usize) -> Vec<Instr> {
+    fn function_at(wat: &str, func_idx: usize) -> Func {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
         let mut parser = WasmParser::new(&mut reader);
@@ -41,7 +41,11 @@ mod tests {
         let FunctionBody::Wasm(func) = &module.codes.0[func_idx] else {
             panic!("expected wasm function body");
         };
-        func.expr.clone()
+        func.clone()
+    }
+
+    fn function_expr_at(wat: &str, func_idx: usize) -> Vec<Instr> {
+        function_at(wat, func_idx).expr
     }
 
     fn function_expr(wat: &str) -> Vec<Instr> {
@@ -639,6 +643,93 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_rewrites_self_recursive_call_body_without_bailing_out() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "run") (param i32) (result i32)
+                local.get 0
+                i32.eqz
+                if
+                  i32.const 0
+                  return
+                end
+                local.get 0
+                call 0
+                drop
+                local.get 0
+                i32.const 1
+                i32.add))
+            "#,
+        );
+        assert_eq!(count_op(&expr, vm::op_call as crate::common::Op), 1);
+        assert_eq!(
+            count_op(&expr, vm::op_local_get4_i32_const_add as crate::common::Op)
+                + count_op(
+                    &expr,
+                    vm::op_local_get4_i32_const_add_set4 as crate::common::Op
+                )
+                + count_op(
+                    &expr,
+                    vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
+                ),
+            1
+        );
+    }
+
+    #[test]
+    fn optimizer_does_not_cse_across_self_recursive_call_barrier() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "run") (param i32) (result i32)
+                (local i32)
+                local.get 0
+                i32.const 1
+                i32.add
+                local.set 1
+                local.get 0
+                call 0
+                drop
+                local.get 0
+                i32.const 1
+                i32.add
+                local.get 1
+                i32.add))
+            "#,
+        );
+        assert_eq!(count_i32_add_family(&expr), 3);
+    }
+
+    #[test]
+    fn optimizer_rewrites_self_recursive_return_call_body_without_bailing_out() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "run") (param $n i32) (param $acc i32) (result i32)
+                local.get $n
+                i32.eqz
+                if
+                  local.get $acc
+                  return
+                end
+                i32.const 0
+                drop
+                local.get $n
+                i32.const 1
+                i32.sub
+                local.get $acc
+                i32.const 1
+                i32.add
+                return_call 0))
+            "#,
+        );
+        assert_control_targets_align(&expr);
+        assert_eq!(count_op(&expr, vm::op_return_call as crate::common::Op), 1);
+        assert_eq!(count_op(&expr, vm::op_drop as crate::common::Op), 0);
+    }
+
+    #[test]
     fn build_program_splits_control_boundaries_and_targets() {
         let instrs = vec![
             Instr {
@@ -767,5 +858,199 @@ mod tests {
         patch_jump_targets(&mut records).expect("jump targets must patch");
         assert_eq!(unsafe { records[1].operands[1].jump_addr }, 0);
         assert_eq!(unsafe { records[1].operands[2].jump_addr }, 6);
+    }
+
+    #[test]
+    fn optimizer_licm_hoists_loop_invariant_pure_expr_to_temp_local() {
+        let func = function_at(
+            r#"
+            (module
+              (func (export "f") (param $n i32) (param $x i32) (result i32)
+                (local $acc i32)
+                i32.const 0
+                drop
+                block $done
+                  loop $loop
+                    local.get $x
+                    i32.const 1
+                    i32.add
+                    local.set $acc
+                    local.get $n
+                    i32.eqz
+                    br_if $done
+                    local.get $n
+                    i32.const 1
+                    i32.sub
+                    local.set $n
+                    br $loop
+                  end
+                end
+                local.get $acc))
+            "#,
+            0,
+        );
+        assert_eq!(func.locals.byte_size(), 8);
+        assert_eq!(count_i32_add_family(&func.expr), 1);
+    }
+
+    #[test]
+    fn optimizer_licm_hoists_global_get_when_loop_has_no_global_write() {
+        let func = function_at(
+            r#"
+            (module
+              (global $g (mut i32) (i32.const 7))
+              (func (export "f") (param $n i32) (result i32)
+                (local $acc i32)
+                i32.const 0
+                drop
+                block $done
+                  loop $loop
+                    global.get $g
+                    local.set $acc
+                    local.get $n
+                    i32.eqz
+                    br_if $done
+                    local.get $n
+                    i32.const 1
+                    i32.sub
+                    local.set $n
+                    br $loop
+                  end
+                end
+                local.get $acc))
+            "#,
+            0,
+        );
+        assert_eq!(func.locals.byte_size(), 8);
+    }
+
+    #[test]
+    fn optimizer_licm_does_not_hoist_global_get_across_global_set_in_loop() {
+        let func = function_at(
+            r#"
+            (module
+              (global $g (mut i32) (i32.const 7))
+              (func (export "f") (param $n i32) (result i32)
+                (local $acc i32)
+                i32.const 0
+                drop
+                block $done
+                  loop $loop
+                    global.get $g
+                    local.set $acc
+                    i32.const 9
+                    global.set $g
+                    local.get $n
+                    i32.eqz
+                    br_if $done
+                    local.get $n
+                    i32.const 1
+                    i32.sub
+                    local.set $n
+                    br $loop
+                  end
+                end
+                local.get $acc))
+            "#,
+            0,
+        );
+        assert_eq!(func.locals.byte_size(), 4);
+    }
+
+    #[test]
+    fn optimizer_licm_hoists_must_alias_load_without_loop_store() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param $n i32) (result i32)
+                (local $acc i32)
+                i32.const 0
+                i32.const 42
+                i32.store
+                i32.const 0
+                drop
+                block $done
+                  loop $loop
+                    i32.const 0
+                    i32.load
+                    local.set $acc
+                    local.get $n
+                    i32.eqz
+                    br_if $done
+                    local.get $n
+                    i32.const 1
+                    i32.sub
+                    local.set $n
+                    br $loop
+                  end
+                end
+                local.get $acc))
+            "#,
+            0,
+        );
+        assert_eq!(func.locals.byte_size(), 4);
+        assert_eq!(
+            count_op(&func.expr, vm::op_i32_load_local as crate::common::Op),
+            0
+        );
+    }
+
+    #[test]
+    fn optimizer_licm_does_not_hoist_load_across_loop_store() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (param $n i32) (result i32)
+                (local $acc i32)
+                i32.const 0
+                drop
+                block $done
+                  loop $loop
+                    i32.const 0
+                    i32.load
+                    local.set $acc
+                    i32.const 0
+                    i32.const 9
+                    i32.store
+                    local.get $n
+                    i32.eqz
+                    br_if $done
+                    local.get $n
+                    i32.const 1
+                    i32.sub
+                    local.set $n
+                    br $loop
+                  end
+                end
+                local.get $acc))
+            "#,
+            0,
+        );
+        assert_eq!(func.locals.byte_size(), 4);
+    }
+
+    #[test]
+    fn optimizer_selector_skips_multi_use_value_chain() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.const 1
+                i32.add
+                local.tee 0
+                local.get 0
+                i32.add))
+            "#,
+        );
+        assert_eq!(
+            count_op(
+                &expr,
+                vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
+            ),
+            0
+        );
     }
 }

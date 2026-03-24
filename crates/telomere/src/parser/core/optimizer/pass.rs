@@ -11,25 +11,27 @@ use crate::{
 use super::{
     cfg::{build_program, BasicBlock, BasicBlockProgram, DecodedInstr, InstructionMeta},
     expr::{
-        AliasAddress, AliasKey, AliasSpace, ConstValue, EffectBarrier, EffectEpoch, ExprId,
-        ExprOrigin, ExprOriginKind, ExprState, HeapVersion, LocalSlot, PureOpKind, ValueKey,
+        AliasAddress, AliasKey, AliasSpace, BlockParam, ConstValue, EffectBarrier, EffectEpoch,
+        ExprId, ExprOrigin, ExprOriginKind, ExprState, HeapVersion, LocalSlot, PureOpKind,
+        ValueGraph, ValueKey,
     },
     sink::{RecordEmit, RewriteSink},
 };
 
-pub(crate) trait LocalPass {
+trait LocalPass {
     fn run_block(
         &mut self,
         program: &BasicBlockProgram,
         block: BasicBlock,
         entry: &BlockEntryState,
-    ) -> Vec<RecordEmit>;
+    ) -> BlockRunResult;
 }
 
 #[derive(Clone, Debug)]
 struct AbstractValue {
     ty: ValType,
     origin: ExprOrigin,
+    block_param: Option<BlockParam>,
     const_value: Option<ConstValue>,
     key: Option<ValueKey>,
 }
@@ -43,42 +45,73 @@ pub(crate) struct BlockEntryState {
     aliases: HashMap<AliasKey, AbstractValue>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct LoopInvariantSet {
+    pure_origins: BTreeSet<ExprOrigin>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum JoinAliasAddress {
+    Const(u32),
+    EntryLocal(usize),
+    BlockParam(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct JoinAliasKey {
+    space: AliasSpace,
+    index: u32,
+    width: u8,
+    address: JoinAliasAddress,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RecordGraphInfo {
+    origin: Option<ExprOrigin>,
+    use_count: usize,
+    block_param: bool,
+}
+
+#[derive(Clone, Default)]
+struct BlockRunResult {
+    exit: BlockEntryState,
+    records: Vec<RecordEmit>,
+    record_graph: Vec<RecordGraphInfo>,
+    loop_invariants: LoopInvariantSet,
+}
+
 #[derive(Default)]
-struct FunctionAnalysis {
+struct RelowerState {
+    records_by_block: Vec<Vec<RecordEmit>>,
+    record_graphs_by_block: Vec<Vec<RecordGraphInfo>>,
+    loop_invariants: Vec<LoopInvariantSet>,
+}
+
+#[derive(Default)]
+struct FunctionRewrite {
     entries: Vec<BlockEntryState>,
     exits: Vec<BlockEntryState>,
+    relower: RelowerState,
 }
 
 const UNKNOWN_HEAP_VERSION: u32 = u32::MAX;
 const INSTR_RESULT_ORIGIN_STRIDE: usize = 256;
 
 pub(crate) fn optimize_function(
-    funcidx: FuncIdx,
+    _funcidx: FuncIdx,
     _functype: &FuncType,
-    _locals: &LocalsData,
+    locals: &mut LocalsData,
     instrs: Vec<Instr>,
     meta: Vec<InstructionMeta>,
 ) -> Vec<Instr> {
     let Some(program) = build_program(&instrs, meta) else {
         return instrs;
     };
-    if program.records.iter().any(|record| {
-        (record.op_eq(vm::op_call) || record.op_eq(vm::op_return_call))
-            && record.operand_u32(0) == funcidx.0
-    }) {
-        return instrs;
-    }
-    let analysis = analyze_program(&program);
-    let mut pass = BlockOptimizer::default();
-    let mut per_block_records = vec![Vec::new(); program.blocks.len()];
-    for block in &program.blocks {
-        let entry = &analysis.entries[block.id];
-        if !entry.reachable {
-            continue;
-        }
-        let rewritten = pass.run_block(&program, *block, entry);
-        per_block_records[block.id] = select_superinstructions(rewritten);
-    }
+    let rewrite = rewrite_program(&program);
+    let mut per_block_records = rewrite.relower.records_by_block.to_vec();
+    let licm_modified = apply_licm(&program, &rewrite, locals, &mut per_block_records);
+    let per_block_records =
+        select_superinstructions(&program, &rewrite, &per_block_records, &licm_modified);
     let reachable = reachable_blocks(&program, &per_block_records);
     let mut records = Vec::new();
     for block in &program.blocks {
@@ -92,11 +125,17 @@ pub(crate) fn optimize_function(
     RewriteSink::flatten(&records)
 }
 
-fn analyze_program(program: &BasicBlockProgram) -> FunctionAnalysis {
-    let mut analysis = FunctionAnalysis {
+fn rewrite_program(program: &BasicBlockProgram) -> FunctionRewrite {
+    let mut rewrite = FunctionRewrite {
         entries: vec![BlockEntryState::default(); program.blocks.len()],
         exits: vec![BlockEntryState::default(); program.blocks.len()],
+        relower: RelowerState {
+            records_by_block: vec![Vec::new(); program.blocks.len()],
+            record_graphs_by_block: vec![Vec::new(); program.blocks.len()],
+            loop_invariants: vec![LoopInvariantSet::default(); program.blocks.len()],
+        },
     };
+    let mut pass = BlockOptimizer::default();
     let mut worklist = VecDeque::new();
     let mut queued = vec![false; program.blocks.len()];
     worklist.push_back(0usize);
@@ -104,42 +143,46 @@ fn analyze_program(program: &BasicBlockProgram) -> FunctionAnalysis {
 
     while let Some(block_id) = worklist.pop_front() {
         queued[block_id] = false;
-        let Some(entry) = compute_entry_state(program, &analysis, block_id) else {
+        let Some(entry) = compute_entry_state(program, &rewrite, block_id) else {
+            if clear_block_rewrite(&mut rewrite, block_id) {
+                enqueue_successors(program, block_id, &mut worklist, &mut queued);
+            }
             continue;
         };
-        let entry_changed = !same_state(&analysis.entries[block_id], &entry);
+        let entry_changed = !same_state(&rewrite.entries[block_id], &entry);
         if entry_changed {
-            analysis.entries[block_id] = entry.clone();
+            rewrite.entries[block_id] = entry.clone();
         }
-        let exit = transfer_block(program, program.block(block_id), entry);
-        let exit_changed = !same_state(&analysis.exits[block_id], &exit);
+        let result = pass.run_block(program, program.block(block_id), &entry);
+        let exit_changed = !same_state(&rewrite.exits[block_id], &result.exit);
+        let records_changed =
+            !same_records(&rewrite.relower.records_by_block[block_id], &result.records);
+        let graph_changed = rewrite.relower.record_graphs_by_block[block_id] != result.record_graph;
+        let invariants_changed =
+            rewrite.relower.loop_invariants[block_id] != result.loop_invariants;
         if exit_changed {
-            analysis.exits[block_id] = exit;
+            rewrite.exits[block_id] = result.exit;
         }
-        if entry_changed || exit_changed {
-            for succ in &program.successors[block_id] {
-                if !queued[*succ] {
-                    queued[*succ] = true;
-                    worklist.push_back(*succ);
-                }
-            }
-            if block_id == 0 {
-                for pred in &program.predecessors[block_id] {
-                    if !queued[*pred] {
-                        queued[*pred] = true;
-                        worklist.push_back(*pred);
-                    }
-                }
-            }
+        if records_changed {
+            rewrite.relower.records_by_block[block_id] = result.records;
+        }
+        if graph_changed {
+            rewrite.relower.record_graphs_by_block[block_id] = result.record_graph;
+        }
+        if invariants_changed {
+            rewrite.relower.loop_invariants[block_id] = result.loop_invariants;
+        }
+        if entry_changed || exit_changed || records_changed || graph_changed || invariants_changed {
+            enqueue_successors(program, block_id, &mut worklist, &mut queued);
         }
     }
 
-    analysis
+    rewrite
 }
 
 fn compute_entry_state(
     program: &BasicBlockProgram,
-    analysis: &FunctionAnalysis,
+    rewrite: &FunctionRewrite,
     block_id: usize,
 ) -> Option<BlockEntryState> {
     let block = program.block(block_id);
@@ -149,7 +192,7 @@ fn compute_entry_state(
         incoming.push(default_entry_state(block_id, first));
     }
     for pred in &program.predecessors[block_id] {
-        let pred_state = &analysis.exits[*pred];
+        let pred_state = &rewrite.exits[*pred];
         if pred_state.reachable {
             incoming.push(pred_state.clone());
         }
@@ -158,6 +201,45 @@ fn compute_entry_state(
         return None;
     }
     Some(merge_states(block_id, first, &incoming))
+}
+
+fn clear_block_rewrite(rewrite: &mut FunctionRewrite, block_id: usize) -> bool {
+    let entry_changed = !same_state(&rewrite.entries[block_id], &BlockEntryState::default());
+    let exit_changed = !same_state(&rewrite.exits[block_id], &BlockEntryState::default());
+    let records_changed = !rewrite.relower.records_by_block[block_id].is_empty();
+    let graph_changed = !rewrite.relower.record_graphs_by_block[block_id].is_empty();
+    let invariants_changed =
+        rewrite.relower.loop_invariants[block_id] != LoopInvariantSet::default();
+    if entry_changed {
+        rewrite.entries[block_id] = BlockEntryState::default();
+    }
+    if exit_changed {
+        rewrite.exits[block_id] = BlockEntryState::default();
+    }
+    if records_changed {
+        rewrite.relower.records_by_block[block_id].clear();
+    }
+    if graph_changed {
+        rewrite.relower.record_graphs_by_block[block_id].clear();
+    }
+    if invariants_changed {
+        rewrite.relower.loop_invariants[block_id] = LoopInvariantSet::default();
+    }
+    entry_changed || exit_changed || records_changed || graph_changed || invariants_changed
+}
+
+fn enqueue_successors(
+    program: &BasicBlockProgram,
+    block_id: usize,
+    worklist: &mut VecDeque<usize>,
+    queued: &mut [bool],
+) {
+    for succ in &program.successors[block_id] {
+        if !queued[*succ] {
+            queued[*succ] = true;
+            worklist.push_back(*succ);
+        }
+    }
 }
 
 fn default_entry_state(block_id: usize, first: &DecodedInstr) -> BlockEntryState {
@@ -175,6 +257,7 @@ fn default_entry_state(block_id: usize, first: &DecodedInstr) -> BlockEntryState
                     ordinal,
                     kind: ExprOriginKind::EntryStack,
                 },
+                block_param: None,
                 const_value: None,
                 key: None,
             })
@@ -230,36 +313,91 @@ fn merge_states(
         );
     }
 
-    let mut alias_keys = if let Some(first_entry) = incoming.first() {
+    merge_aliases(block_id, incoming, &mut state);
+
+    state
+}
+
+fn merge_aliases(block_id: usize, incoming: &[BlockEntryState], state: &mut BlockEntryState) {
+    let mut exact_keys = if let Some(first_entry) = incoming.first() {
         first_entry.aliases.keys().copied().collect::<BTreeSet<_>>()
     } else {
         BTreeSet::new()
     };
     for entry in incoming.iter().skip(1) {
-        alias_keys.retain(|key| entry.aliases.contains_key(key));
+        exact_keys.retain(|key| entry.aliases.contains_key(key));
     }
-    for key in alias_keys {
+    for key in exact_keys {
         if !space_version_stable(key.space, incoming, state.heap) {
             continue;
         }
-        let values = incoming
-            .iter()
-            .map(|entry| entry.aliases.get(&key))
-            .collect::<Vec<_>>();
-        let Some(first_value) = values.first().and_then(|value| *value) else {
-            continue;
-        };
-        let merged = merge_value_candidates(
+        merge_alias_value(
             block_id,
-            alias_ordinal(key),
-            first_value.ty,
-            &values,
-            ExprOriginKind::BlockParam,
+            key,
+            incoming
+                .iter()
+                .map(|entry| entry.aliases.get(&key))
+                .collect::<Vec<_>>(),
+            state,
         );
-        state.aliases.insert(key, merged);
     }
 
-    state
+    let mut join_keys = BTreeSet::new();
+    for entry in incoming {
+        for key in entry.aliases.keys().copied() {
+            if let Some(join_key) = join_alias_key(key) {
+                join_keys.insert(join_key);
+            }
+        }
+    }
+    for join_key in join_keys {
+        if !space_version_stable(join_key.space, incoming, state.heap) {
+            continue;
+        }
+        let merged_key = alias_key_from_join(block_id, join_key);
+        if state.aliases.contains_key(&merged_key) {
+            continue;
+        }
+        let mut values = Vec::with_capacity(incoming.len());
+        let mut ambiguous = false;
+        for entry in incoming {
+            let matches = entry
+                .aliases
+                .iter()
+                .filter_map(|(key, value)| {
+                    (join_alias_key(*key) == Some(join_key)).then_some(value)
+                })
+                .collect::<Vec<_>>();
+            if matches.len() != 1 {
+                ambiguous = true;
+                break;
+            }
+            values.push(Some(matches[0]));
+        }
+        if ambiguous {
+            continue;
+        }
+        merge_alias_value(block_id, merged_key, values, state);
+    }
+}
+
+fn merge_alias_value(
+    block_id: usize,
+    key: AliasKey,
+    values: Vec<Option<&AbstractValue>>,
+    state: &mut BlockEntryState,
+) {
+    let Some(first_value) = values.first().and_then(|value| *value) else {
+        return;
+    };
+    let merged = merge_value_candidates(
+        block_id,
+        alias_ordinal(key),
+        first_value.ty,
+        &values,
+        ExprOriginKind::BlockParam,
+    );
+    state.aliases.insert(key, merged);
 }
 
 fn merge_heap_versions(incoming: &[BlockEntryState]) -> HeapVersion {
@@ -311,6 +449,11 @@ fn merge_value_candidates(
                 ordinal,
                 kind,
             },
+            block_param: Some(BlockParam {
+                block_id,
+                ordinal,
+                ty,
+            }),
             const_value: None,
             key: None,
         };
@@ -338,6 +481,11 @@ fn merge_value_candidates(
             ordinal,
             kind,
         },
+        block_param: Some(BlockParam {
+            block_id,
+            ordinal,
+            ty,
+        }),
         const_value,
         key,
     }
@@ -349,373 +497,50 @@ fn alias_ordinal(key: AliasKey) -> usize {
     hasher.finish() as usize
 }
 
-fn transfer_block(
-    program: &BasicBlockProgram,
-    block: BasicBlock,
-    mut state: BlockEntryState,
-) -> BlockEntryState {
-    for record_idx in block.start..block.end {
-        let record = &program.records[record_idx];
-        let ordinal = record_idx - block.start;
-        transfer_record(&mut state, block.id, ordinal, record);
-    }
-    state
+fn join_alias_key(key: AliasKey) -> Option<JoinAliasKey> {
+    let address = match key.address {
+        AliasAddress::Const(value) => JoinAliasAddress::Const(value),
+        AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::EntryLocal => {
+            JoinAliasAddress::EntryLocal(origin.ordinal)
+        }
+        AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::BlockParam => {
+            JoinAliasAddress::BlockParam(origin.ordinal)
+        }
+        _ => return None,
+    };
+    Some(JoinAliasKey {
+        space: key.space,
+        index: key.index,
+        width: key.width,
+        address,
+    })
 }
 
-fn transfer_record(
-    state: &mut BlockEntryState,
-    block_id: usize,
-    ordinal: usize,
-    record: &DecodedInstr,
-) {
-    if let Some((ty, value)) = decode_const(record) {
-        state.stack.push(AbstractValue {
-            ty,
-            origin: ExprOrigin {
-                block_id,
-                ordinal,
-                kind: ExprOriginKind::SyntheticConst,
-            },
-            const_value: Some(value),
-            key: None,
-        });
-        return;
-    }
-    if let Some(slot) = decode_local_get(record) {
-        let value = state.locals.get(&slot).cloned().unwrap_or(AbstractValue {
-            ty: type_from_slot(slot.size),
-            origin: ExprOrigin {
-                block_id,
-                ordinal: slot.addr as usize,
-                kind: ExprOriginKind::EntryLocal,
-            },
-            const_value: None,
-            key: None,
-        });
-        state.stack.push(value);
-        return;
-    }
-    if let Some(slot) = decode_local_set(record) {
-        if let Some(value) = state.stack.pop() {
-            state.locals.insert(slot, value);
-        }
-        return;
-    }
-    if let Some(slot) = decode_local_tee(record) {
-        if let Some(value) = state.stack.pop() {
-            state.locals.insert(slot, value.clone());
-            state.stack.push(value);
-        }
-        return;
-    }
-    if record.op_eq(vm::op_drop) {
-        let _ = state.stack.pop();
-        return;
-    }
-    if record.op_eq(vm::op_select) {
-        transfer_select(state, block_id, ordinal);
-        return;
-    }
-    if let Some(op) = decode_pure_unary(record) {
-        transfer_unary(state, block_id, ordinal, op);
-        return;
-    }
-    if let Some(op) = decode_pure_binary(record) {
-        transfer_binary(state, block_id, ordinal, op);
-        return;
-    }
-    if let Some(slot) = decode_global_get(record) {
-        let key = global_alias_key(slot);
-        let value = state.aliases.get(&key).cloned().unwrap_or(AbstractValue {
-            ty: type_from_slot(slot.size),
-            origin: ExprOrigin {
-                block_id,
-                ordinal,
-                kind: ExprOriginKind::GlobalValue,
-            },
-            const_value: None,
-            key: Some(ValueKey::GlobalGet { slot }),
-        });
-        state.aliases.insert(key, value.clone());
-        state.stack.push(value);
-        return;
-    }
-    if let Some(slot) = decode_global_set(record) {
-        if let Some(value) = state.stack.pop() {
-            state.heap.global = state.heap.global.saturating_add(1);
-            clear_alias_space(state, AliasSpace::Global);
-            state.aliases.insert(global_alias_key(slot), value);
-        }
-        return;
-    }
-    if let Some(tableidx) = decode_table_get(record) {
-        if let Some(index) = state.stack.pop() {
-            if let Some(address) = canonical_alias_address(&index) {
-                let key = AliasKey {
-                    space: AliasSpace::Table,
-                    index: tableidx,
-                    width: 4,
-                    address,
-                };
-                let value = state.aliases.get(&key).cloned().unwrap_or(AbstractValue {
-                    ty: ValType::FuncRef,
-                    origin: ExprOrigin {
-                        block_id,
-                        ordinal,
-                        kind: ExprOriginKind::TableValue,
-                    },
-                    const_value: None,
-                    key: Some(ValueKey::TableGet {
-                        tableidx,
-                        index: index.origin,
-                    }),
-                });
-                state.aliases.insert(key, value.clone());
-                state.stack.push(value);
-            } else {
-                state.stack.push(unknown_value(
-                    block_id,
-                    ordinal,
-                    ValType::FuncRef,
-                    ExprOriginKind::TableValue,
-                ));
-            }
-        }
-        return;
-    }
-    if let Some(tableidx) = decode_table_set(record) {
-        let _value = state.stack.pop();
-        let index = state.stack.pop();
-        state.heap.table = state.heap.table.saturating_add(1);
-        clear_alias_space(state, AliasSpace::Table);
-        let address = index.as_ref().and_then(canonical_alias_address);
-        if let (Some(_index), Some(address)) = (index, address) {
-            if let Some(value) = _value {
-                state.aliases.insert(
-                    AliasKey {
-                        space: AliasSpace::Table,
-                        index: tableidx,
-                        width: 4,
-                        address,
-                    },
-                    value,
-                );
-            }
-        }
-        return;
-    }
-    if let Some(access) = decode_memory_load(record) {
-        if let Some(address_value) = state.stack.pop() {
-            if let Some(key) = memory_alias_key_seed(access, &address_value) {
-                let value = state.aliases.get(&key).cloned().unwrap_or(AbstractValue {
-                    ty: access.ty,
-                    origin: ExprOrigin {
-                        block_id,
-                        ordinal,
-                        kind: ExprOriginKind::MemoryValue,
-                    },
-                    const_value: None,
-                    key: Some(ValueKey::MemoryLoad(key)),
-                });
-                state.aliases.insert(key, value.clone());
-                state.stack.push(value);
-            } else {
-                state.stack.push(unknown_value(
-                    block_id,
-                    ordinal,
-                    access.ty,
-                    ExprOriginKind::MemoryValue,
-                ));
-            }
-        }
-        return;
-    }
-    if let Some(access) = decode_memory_store(record) {
-        let value = state.stack.pop();
-        let address = state.stack.pop();
-        state.heap.memory = state.heap.memory.saturating_add(1);
-        clear_alias_space(state, AliasSpace::Memory);
-        if let (Some(value), Some(address)) = (
-            value,
-            address.and_then(|value| memory_alias_key_seed(access, &value)),
-        ) {
-            state.aliases.insert(address, value);
-        }
-        return;
-    }
-
-    match effect_barrier(record) {
-        EffectBarrier::Control | EffectBarrier::TrapSensitive => {
-            reset_stack_from_snapshot(state, block_id, ordinal, &record.stack_after);
-        }
-        EffectBarrier::Memory => {
-            state.heap.memory = state.heap.memory.saturating_add(1);
-            clear_alias_space(state, AliasSpace::Memory);
-            reset_stack_from_snapshot(state, block_id, ordinal, &record.stack_after);
-        }
-        EffectBarrier::Global => {
-            state.heap.global = state.heap.global.saturating_add(1);
-            clear_alias_space(state, AliasSpace::Global);
-            reset_stack_from_snapshot(state, block_id, ordinal, &record.stack_after);
-        }
-        EffectBarrier::Table => {
-            state.heap.table = state.heap.table.saturating_add(1);
-            clear_alias_space(state, AliasSpace::Table);
-            reset_stack_from_snapshot(state, block_id, ordinal, &record.stack_after);
-        }
-        EffectBarrier::Call => {
-            state.heap.memory = state.heap.memory.saturating_add(1);
-            state.heap.global = state.heap.global.saturating_add(1);
-            state.heap.table = state.heap.table.saturating_add(1);
-            state.aliases.clear();
-            reset_stack_from_snapshot(state, block_id, ordinal, &record.stack_after);
-        }
-    }
-}
-
-fn transfer_select(state: &mut BlockEntryState, block_id: usize, ordinal: usize) {
-    let Some(cond) = state.stack.pop() else {
-        return;
-    };
-    let Some(rhs) = state.stack.pop() else {
-        state.stack.push(cond);
-        return;
-    };
-    let Some(lhs) = state.stack.pop() else {
-        state.stack.push(rhs);
-        state.stack.push(cond);
-        return;
-    };
-    let value = match cond.const_value {
-        Some(ConstValue::I32(0)) => rhs,
-        Some(ConstValue::I32(_)) => lhs,
-        _ if same_value(&lhs, &rhs) => lhs,
-        _ => AbstractValue {
-            ty: lhs.ty,
-            origin: ExprOrigin {
-                block_id,
-                ordinal: instr_result_origin_ordinal(ordinal, 0),
-                kind: ExprOriginKind::InstrResult,
-            },
-            const_value: if lhs.const_value == rhs.const_value {
-                lhs.const_value
-            } else {
-                None
-            },
-            key: None,
-        },
-    };
-    state.stack.push(value);
-}
-
-fn transfer_unary(state: &mut BlockEntryState, block_id: usize, ordinal: usize, op: PureOpKind) {
-    let Some(value) = state.stack.pop() else {
-        return;
-    };
-    let const_value = value.const_value.and_then(|value| fold_unary(op, value));
-    state.stack.push(AbstractValue {
-        ty: unary_output_type(op),
-        origin: ExprOrigin {
+fn alias_key_from_join(block_id: usize, key: JoinAliasKey) -> AliasKey {
+    let address = match key.address {
+        JoinAliasAddress::Const(value) => AliasAddress::Const(value),
+        JoinAliasAddress::EntryLocal(ordinal) => AliasAddress::Origin(ExprOrigin {
             block_id,
-            ordinal: instr_result_origin_ordinal(ordinal, 0),
-            kind: if const_value.is_some() {
-                ExprOriginKind::SyntheticConst
-            } else {
-                ExprOriginKind::InstrResult
-            },
-        },
-        const_value,
-        key: const_value.is_none().then_some(ValueKey::Unary {
-            op,
-            input: value.origin,
+            ordinal,
+            kind: ExprOriginKind::EntryLocal,
         }),
-    });
-}
-
-fn transfer_binary(state: &mut BlockEntryState, block_id: usize, ordinal: usize, op: PureOpKind) {
-    let Some(rhs) = state.stack.pop() else {
-        return;
-    };
-    let Some(lhs) = state.stack.pop() else {
-        state.stack.push(rhs);
-        return;
-    };
-    if let Some((keep, _remove)) = simplify_identity_seed(op, &lhs, &rhs) {
-        state.stack.push(keep);
-        return;
-    }
-    let const_value = match (lhs.const_value, rhs.const_value) {
-        (Some(lhs), Some(rhs)) => fold_binary(op, lhs, rhs),
-        _ => None,
-    };
-    let (lhs_origin, rhs_origin) = canonicalize_binary_origins(op, lhs.origin, rhs.origin);
-    state.stack.push(AbstractValue {
-        ty: binary_output_type(op),
-        origin: ExprOrigin {
+        JoinAliasAddress::BlockParam(ordinal) => AliasAddress::Origin(ExprOrigin {
             block_id,
-            ordinal: instr_result_origin_ordinal(ordinal, 0),
-            kind: if const_value.is_some() {
-                ExprOriginKind::SyntheticConst
-            } else {
-                ExprOriginKind::InstrResult
-            },
-        },
-        const_value,
-        key: const_value.is_none().then_some(ValueKey::Binary {
-            op,
-            lhs: lhs_origin,
-            rhs: rhs_origin,
+            ordinal,
+            kind: ExprOriginKind::BlockParam,
         }),
-    });
+    };
+    AliasKey {
+        space: key.space,
+        index: key.index,
+        width: key.width,
+        address,
+    }
 }
-
-fn reset_stack_from_snapshot(
-    state: &mut BlockEntryState,
-    block_id: usize,
-    ordinal: usize,
-    snapshot: &crate::parser::core::type_checker::StackSnapshot,
-) {
-    state.stack = snapshot
-        .types
-        .iter()
-        .enumerate()
-        .map(|(result_idx, ty)| {
-            unknown_value(
-                block_id,
-                instr_result_origin_ordinal(ordinal, result_idx),
-                *ty,
-                ExprOriginKind::InstrResult,
-            )
-        })
-        .collect();
-}
-
-fn clear_alias_space(state: &mut BlockEntryState, space: AliasSpace) {
-    state.aliases.retain(|key, _| key.space != space);
-}
-
 fn instr_result_origin_ordinal(ordinal: usize, result_index: usize) -> usize {
     ordinal
         .saturating_mul(INSTR_RESULT_ORIGIN_STRIDE)
         .saturating_add(result_index)
-}
-
-fn unknown_value(
-    block_id: usize,
-    ordinal: usize,
-    ty: ValType,
-    kind: ExprOriginKind,
-) -> AbstractValue {
-    AbstractValue {
-        ty,
-        origin: ExprOrigin {
-            block_id,
-            ordinal,
-            kind,
-        },
-        const_value: None,
-        key: None,
-    }
 }
 
 fn same_state(lhs: &BlockEntryState, rhs: &BlockEntryState) -> bool {
@@ -748,6 +573,7 @@ fn same_value_map<K: Eq + std::hash::Hash + Copy>(
 fn same_value(lhs: &AbstractValue, rhs: &AbstractValue) -> bool {
     lhs.ty == rhs.ty
         && lhs.origin == rhs.origin
+        && lhs.block_param == rhs.block_param
         && lhs.const_value == rhs.const_value
         && lhs.key == rhs.key
 }
@@ -757,7 +583,7 @@ struct BlockOptimizer {
     block_id: usize,
     effect_epoch: EffectEpoch,
     sink: RewriteSink,
-    exprs: Vec<ExprState>,
+    exprs: ValueGraph,
     stack: Vec<ExprId>,
     locals: HashMap<LocalSlot, ExprId>,
     origin_locals: HashMap<ExprOrigin, LocalSlot>,
@@ -766,6 +592,7 @@ struct BlockOptimizer {
     last_local_write: Option<LocalWrite>,
     last_store: HashMap<AliasKey, StoreWrite>,
     heap: HeapVersion,
+    loop_invariants: LoopInvariantSet,
 }
 
 #[derive(Clone, Copy)]
@@ -792,14 +619,19 @@ impl LocalPass for BlockOptimizer {
         program: &BasicBlockProgram,
         block: BasicBlock,
         entry: &BlockEntryState,
-    ) -> Vec<RecordEmit> {
+    ) -> BlockRunResult {
         self.reset(block, entry);
         for record_idx in block.start..block.end {
             let record = &program.records[record_idx];
             let ordinal = record_idx - block.start;
             self.visit_record(record, ordinal);
         }
-        self.sink.clone().into_live_records()
+        BlockRunResult {
+            exit: self.snapshot_exit_state(),
+            records: self.sink.clone().into_live_records(),
+            record_graph: self.build_record_graph(),
+            loop_invariants: self.loop_invariants.clone(),
+        }
     }
 }
 
@@ -808,7 +640,8 @@ impl BlockOptimizer {
         self.block_id = block.id;
         self.effect_epoch = 0;
         self.sink = RewriteSink::default();
-        self.exprs.clear();
+        self.exprs.nodes.clear();
+        self.exprs.latest_by_origin.clear();
         self.stack.clear();
         self.locals.clear();
         self.origin_locals.clear();
@@ -817,6 +650,7 @@ impl BlockOptimizer {
         self.last_local_write = None;
         self.last_store.clear();
         self.heap = entry.heap;
+        self.loop_invariants = LoopInvariantSet::default();
 
         let mut locals = entry.locals.iter().collect::<Vec<_>>();
         locals.sort_by_key(|(slot, _)| (slot.addr, slot.size));
@@ -824,12 +658,14 @@ impl BlockOptimizer {
             let expr = self.seed_value(value, false);
             self.bind_local(*slot, expr);
             self.seed_cse(expr);
+            self.maybe_mark_loop_invariant(expr);
         }
 
         for value in &entry.stack {
             let expr = self.seed_value(value, false);
             self.push_stack(expr);
             self.seed_cse(expr);
+            self.maybe_mark_loop_invariant(expr);
         }
 
         let mut aliases = entry.aliases.iter().collect::<Vec<_>>();
@@ -837,20 +673,25 @@ impl BlockOptimizer {
         for (key, value) in aliases {
             let expr = self.seed_value(value, false);
             self.aliases.insert(*key, expr);
+            self.maybe_mark_loop_invariant(expr);
         }
     }
 
     fn seed_value(&mut self, value: &AbstractValue, removable: bool) -> ExprId {
-        let id = ExprId(self.exprs.len());
-        self.exprs.push(ExprState {
+        let id = ExprId(self.exprs.nodes.len());
+        self.exprs.nodes.push(ExprState {
             ty: value.ty,
             origin: value.origin,
+            block_param: value.block_param,
             const_value: value.const_value,
             key: value.key,
             producer_record: None,
+            materialized_record: None,
+            use_count: 0,
             ref_count: 0,
             removable,
         });
+        self.exprs.latest_by_origin.insert(value.origin, id);
         id
     }
 
@@ -973,6 +814,7 @@ impl BlockOptimizer {
             self.new_expr_with_origin(
                 source_state.ty,
                 source_state.origin,
+                source_state.block_param,
                 source_state.const_value,
                 source_state.key,
                 Some(record_idx),
@@ -986,6 +828,7 @@ impl BlockOptimizer {
                     ordinal: slot.addr as usize,
                     kind: ExprOriginKind::EntryLocal,
                 },
+                None,
                 None,
                 None,
                 Some(record_idx),
@@ -1103,6 +946,7 @@ impl BlockOptimizer {
                 ordinal: instr_result_origin_ordinal(ordinal, 0),
                 kind: ExprOriginKind::InstrResult,
             },
+            None,
             const_value,
             key,
             Some(record_idx),
@@ -1154,10 +998,12 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::InstrResult,
             },
             None,
+            None,
             Some(key),
             Some(record_idx),
             true,
         );
+        self.maybe_mark_loop_invariant(expr);
         self.cse.insert(
             key,
             CseEntry {
@@ -1226,10 +1072,12 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::InstrResult,
             },
             None,
+            None,
             Some(key),
             Some(record_idx),
             true,
         );
+        self.maybe_mark_loop_invariant(expr);
         self.cse.insert(
             key,
             CseEntry {
@@ -1308,6 +1156,7 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::GlobalValue,
             },
             None,
+            None,
             Some(ValueKey::GlobalGet { slot }),
             Some(record_idx),
             true,
@@ -1349,7 +1198,7 @@ impl BlockOptimizer {
         self.last_local_write = None;
         self.bump_effect_epoch();
         clear_store_space_on_load(&mut self.last_store, AliasSpace::Table);
-        let Some(address) = canonical_alias_address_from_expr(&self.exprs[index.0]) else {
+        let Some(address) = self.canonical_alias_address(index) else {
             let record_idx = self.push_original(record);
             let expr = self.new_expr_with_origin(
                 ValType::FuncRef,
@@ -1358,6 +1207,7 @@ impl BlockOptimizer {
                     ordinal,
                     kind: ExprOriginKind::TableValue,
                 },
+                None,
                 None,
                 None,
                 Some(record_idx),
@@ -1387,12 +1237,13 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::TableValue,
             },
             None,
+            None,
             Some(ValueKey::TableGet {
                 tableidx,
                 index: self.exprs[index.0].origin,
             }),
             Some(record_idx),
-            true,
+            false,
         );
         self.aliases.insert(key, expr);
         self.push_stack(expr);
@@ -1413,7 +1264,7 @@ impl BlockOptimizer {
         self.bump_effect_epoch();
         clear_alias_space_rewrite(&mut self.aliases, &mut self.last_store, AliasSpace::Table);
         let record_idx = self.push_original(record);
-        if let Some(address) = canonical_alias_address_from_expr(&self.exprs[index.0]) {
+        if let Some(address) = self.canonical_alias_address(index) {
             let key = AliasKey {
                 space: AliasSpace::Table,
                 index: tableidx,
@@ -1435,7 +1286,7 @@ impl BlockOptimizer {
         };
         self.last_local_write = None;
         self.bump_effect_epoch();
-        let Some(key) = memory_alias_key(access, &self.exprs[address.0]) else {
+        let Some(key) = self.memory_alias_key(access, address) else {
             let record_idx = self.push_original(record);
             let expr = self.new_expr_with_origin(
                 access.ty,
@@ -1444,6 +1295,7 @@ impl BlockOptimizer {
                     ordinal,
                     kind: ExprOriginKind::MemoryValue,
                 },
+                None,
                 None,
                 None,
                 Some(record_idx),
@@ -1469,9 +1321,10 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::MemoryValue,
             },
             None,
+            None,
             Some(ValueKey::MemoryLoad(key)),
             Some(record_idx),
-            true,
+            false,
         );
         self.aliases.insert(key, expr);
         self.push_stack(expr);
@@ -1492,7 +1345,7 @@ impl BlockOptimizer {
         self.bump_effect_epoch();
         clear_alias_space_rewrite(&mut self.aliases, &mut self.last_store, AliasSpace::Memory);
         let record_idx = self.push_original(record);
-        if let Some(key) = memory_alias_key(access, &self.exprs[address.0]) {
+        if let Some(key) = self.memory_alias_key(access, address) {
             if self
                 .aliases
                 .get(&key)
@@ -1568,6 +1421,7 @@ impl BlockOptimizer {
                 ordinal,
                 kind: ExprOriginKind::SyntheticConst,
             },
+            None,
             Some(value),
             None,
             Some(record_idx),
@@ -1600,6 +1454,7 @@ impl BlockOptimizer {
     fn pop_stack(&mut self) -> Option<ExprId> {
         let expr = self.stack.pop()?;
         self.decref(expr);
+        self.exprs[expr.0].use_count = self.exprs[expr.0].use_count.saturating_add(1);
         Some(expr)
     }
 
@@ -1629,13 +1484,108 @@ impl BlockOptimizer {
     }
 
     fn can_materialize(&self, expr: ExprId) -> bool {
-        self.exprs[expr.0].const_value.is_some()
-            || self.origin_locals.contains_key(&self.exprs[expr.0].origin)
+        let state = &self.exprs[expr.0];
+        state.const_value.is_some()
+            || self.origin_locals.contains_key(&state.origin)
+            || self.can_materialize_key(state.key)
     }
 
     fn bump_effect_epoch(&mut self) {
         self.effect_epoch += 1;
         self.cse.clear();
+    }
+
+    fn snapshot_exit_state(&self) -> BlockEntryState {
+        let mut state = BlockEntryState {
+            reachable: true,
+            heap: self.heap,
+            ..BlockEntryState::default()
+        };
+
+        let mut locals = self.locals.iter().collect::<Vec<_>>();
+        locals.sort_by_key(|(slot, _)| (slot.addr, slot.size));
+        for (slot, expr) in locals {
+            state.locals.insert(*slot, self.snapshot_value(*expr));
+        }
+
+        for expr in &self.stack {
+            state.stack.push(self.snapshot_value(*expr));
+        }
+
+        let mut aliases = self.aliases.iter().collect::<Vec<_>>();
+        aliases.sort_by_key(|(key, _)| (key.space as u8, key.index, key.width));
+        for (key, expr) in aliases {
+            state.aliases.insert(*key, self.snapshot_value(*expr));
+        }
+
+        state
+    }
+
+    fn build_record_graph(&self) -> Vec<RecordGraphInfo> {
+        let mut expr_by_record = HashMap::new();
+        for (expr_idx, expr) in self.exprs.nodes.iter().enumerate() {
+            if let Some(record_idx) = expr.materialized_record {
+                expr_by_record.entry(record_idx).or_insert(ExprId(expr_idx));
+            }
+        }
+        self.sink
+            .live_indices()
+            .into_iter()
+            .map(|record_idx| {
+                expr_by_record
+                    .get(&record_idx)
+                    .map(|expr| {
+                        let expr = &self.exprs[expr.0];
+                        RecordGraphInfo {
+                            origin: Some(expr.origin),
+                            use_count: expr.use_count,
+                            block_param: expr.block_param.is_some(),
+                        }
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    fn snapshot_value(&self, expr: ExprId) -> AbstractValue {
+        let state = &self.exprs[expr.0];
+        AbstractValue {
+            ty: state.ty,
+            origin: state.origin,
+            block_param: state.block_param,
+            const_value: state.const_value,
+            key: state.key,
+        }
+    }
+
+    fn can_materialize_key(&self, key: Option<ValueKey>) -> bool {
+        let Some(key) = key else {
+            return false;
+        };
+        match key {
+            ValueKey::Unary { input, .. } => self
+                .exprs
+                .latest_by_origin
+                .get(&input)
+                .copied()
+                .is_some_and(|expr| self.can_materialize(expr)),
+            ValueKey::Binary { lhs, rhs, .. } => {
+                self.exprs
+                    .latest_by_origin
+                    .get(&lhs)
+                    .copied()
+                    .is_some_and(|expr| self.can_materialize(expr))
+                    && self
+                        .exprs
+                        .latest_by_origin
+                        .get(&rhs)
+                        .copied()
+                        .is_some_and(|expr| self.can_materialize(expr))
+            }
+            ValueKey::MemoryLoad(_) | ValueKey::GlobalGet { .. } | ValueKey::TableGet { .. } => {
+                false
+            }
+        }
     }
 
     fn reset_stack_from_snapshot(
@@ -1658,31 +1608,38 @@ impl BlockOptimizer {
                 None,
                 None,
                 None,
+                None,
                 false,
             );
             self.push_stack(expr);
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_expr_with_origin(
         &mut self,
         ty: ValType,
         origin: ExprOrigin,
+        block_param: Option<BlockParam>,
         const_value: Option<ConstValue>,
         key: Option<ValueKey>,
         producer_record: Option<usize>,
         removable: bool,
     ) -> ExprId {
-        let id = ExprId(self.exprs.len());
-        self.exprs.push(ExprState {
+        let id = ExprId(self.exprs.nodes.len());
+        self.exprs.nodes.push(ExprState {
             ty,
             origin,
+            block_param,
             const_value,
             key,
             producer_record,
+            materialized_record: producer_record,
+            use_count: 0,
             ref_count: 0,
             removable,
         });
+        self.exprs.latest_by_origin.insert(origin, id);
         id
     }
 
@@ -1699,24 +1656,160 @@ impl BlockOptimizer {
                 self.decref(*expr);
             });
         }
-        let slot = *self.origin_locals.get(&self.exprs[source.0].origin)?;
-        let op = local_get_op(slot.size);
-        let record_idx = self.sink.push(
-            Some(source_start),
-            op,
-            vec![Operand {
-                local_addr: slot.addr,
-            }],
-        );
+        if let Some(slot) = self
+            .origin_locals
+            .get(&self.exprs[source.0].origin)
+            .copied()
+        {
+            let op = local_get_op(slot.size);
+            let record_idx = self.sink.push(
+                Some(source_start),
+                op,
+                vec![Operand {
+                    local_addr: slot.addr,
+                }],
+            );
+            let source_state = self.exprs[source.0].clone();
+            return Some(self.new_expr_with_origin(
+                source_state.ty,
+                source_state.origin,
+                source_state.block_param,
+                source_state.const_value,
+                source_state.key,
+                Some(record_idx),
+                true,
+            ));
+        }
+        self.try_materialize_pure_value(source_start, source)
+    }
+
+    fn try_materialize_pure_value(
+        &mut self,
+        source_start: usize,
+        source: ExprId,
+    ) -> Option<ExprId> {
         let source_state = self.exprs[source.0].clone();
-        Some(self.new_expr_with_origin(
-            source_state.ty,
-            source_state.origin,
-            source_state.const_value,
-            source_state.key,
-            Some(record_idx),
-            true,
-        ))
+        match source_state.key? {
+            ValueKey::Unary { op, input } => {
+                let input_expr = self.exprs.latest_by_origin.get(&input).copied()?;
+                let _ = self.try_materialize_value(source_start, input_expr)?;
+                let record_idx = self
+                    .sink
+                    .push(Some(source_start), unary_op(op)?, Vec::new());
+                Some(self.new_expr_with_origin(
+                    source_state.ty,
+                    source_state.origin,
+                    source_state.block_param,
+                    source_state.const_value,
+                    source_state.key,
+                    Some(record_idx),
+                    true,
+                ))
+            }
+            ValueKey::Binary { op, lhs, rhs } => {
+                let lhs_expr = self.exprs.latest_by_origin.get(&lhs).copied()?;
+                let rhs_expr = self.exprs.latest_by_origin.get(&rhs).copied()?;
+                let _ = self.try_materialize_value(source_start, lhs_expr)?;
+                let _ = self.try_materialize_value(source_start, rhs_expr)?;
+                let record_idx = self
+                    .sink
+                    .push(Some(source_start), binary_op(op)?, Vec::new());
+                Some(self.new_expr_with_origin(
+                    source_state.ty,
+                    source_state.origin,
+                    source_state.block_param,
+                    source_state.const_value,
+                    source_state.key,
+                    Some(record_idx),
+                    true,
+                ))
+            }
+            ValueKey::MemoryLoad(_) | ValueKey::GlobalGet { .. } | ValueKey::TableGet { .. } => {
+                None
+            }
+        }
+    }
+
+    fn maybe_mark_loop_invariant(&mut self, expr: ExprId) {
+        if self.expr_is_loop_invariant(expr) {
+            self.loop_invariants
+                .pure_origins
+                .insert(self.exprs[expr.0].origin);
+        }
+    }
+
+    fn expr_is_loop_invariant(&self, expr: ExprId) -> bool {
+        let state = &self.exprs[expr.0];
+        if state.block_param.is_some() {
+            return false;
+        }
+        if state.const_value.is_some() {
+            return true;
+        }
+        match state.origin.kind {
+            ExprOriginKind::EntryLocal | ExprOriginKind::SyntheticConst => return true,
+            ExprOriginKind::EntryStack | ExprOriginKind::BlockParam => return false,
+            _ => {}
+        }
+        match state.key {
+            Some(ValueKey::Unary { input, .. }) => self
+                .exprs
+                .latest_by_origin
+                .get(&input)
+                .copied()
+                .is_some_and(|input| self.expr_is_loop_invariant(input)),
+            Some(ValueKey::Binary { lhs, rhs, .. }) => {
+                self.exprs
+                    .latest_by_origin
+                    .get(&lhs)
+                    .copied()
+                    .is_some_and(|lhs| self.expr_is_loop_invariant(lhs))
+                    && self
+                        .exprs
+                        .latest_by_origin
+                        .get(&rhs)
+                        .copied()
+                        .is_some_and(|rhs| self.expr_is_loop_invariant(rhs))
+            }
+            Some(ValueKey::MemoryLoad(_))
+            | Some(ValueKey::GlobalGet { .. })
+            | Some(ValueKey::TableGet { .. })
+            | None => false,
+        }
+    }
+
+    fn canonical_alias_address(&self, expr: ExprId) -> Option<AliasAddress> {
+        let value = &self.exprs[expr.0];
+        value
+            .const_value
+            .and_then(|value| match value {
+                ConstValue::I32(value) => Some(AliasAddress::Const(value as u32)),
+                _ => None,
+            })
+            .or_else(|| {
+                self.origin_locals
+                    .get(&value.origin)
+                    .map(|slot| AliasAddress::Origin(local_alias_origin(self.block_id, *slot)))
+            })
+            .or_else(|| {
+                value.block_param.map(|param| {
+                    AliasAddress::Origin(ExprOrigin {
+                        block_id: param.block_id,
+                        ordinal: param.ordinal,
+                        kind: ExprOriginKind::BlockParam,
+                    })
+                })
+            })
+            .or(Some(AliasAddress::Origin(value.origin)))
+    }
+
+    fn memory_alias_key(&self, access: MemoryAccess, address: ExprId) -> Option<AliasKey> {
+        Some(AliasKey {
+            space: AliasSpace::Memory,
+            index: access.memidx,
+            width: access.width,
+            address: self.canonical_alias_address(address)?,
+        })
     }
 }
 
@@ -1736,8 +1829,447 @@ fn clear_store_space_on_load(stores: &mut HashMap<AliasKey, StoreWrite>, space: 
 fn same_expr(lhs: &ExprState, rhs: &ExprState) -> bool {
     lhs.ty == rhs.ty
         && lhs.origin == rhs.origin
+        && lhs.block_param == rhs.block_param
         && lhs.const_value == rhs.const_value
         && lhs.key == rhs.key
+}
+
+fn same_records(lhs: &[RecordEmit], rhs: &[RecordEmit]) -> bool {
+    lhs.len() == rhs.len()
+        && lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| {
+            lhs.source_start == rhs.source_start
+                && lhs.alive == rhs.alive
+                && std::ptr::fn_addr_eq(lhs.op, rhs.op)
+                && lhs.operands.len() == rhs.operands.len()
+                && lhs
+                    .operands
+                    .iter()
+                    .zip(rhs.operands.iter())
+                    .all(|(lhs, rhs)| unsafe { lhs.encoded == rhs.encoded })
+        })
+}
+
+#[derive(Clone)]
+struct NaturalLoop {
+    header: usize,
+    preheader: usize,
+    blocks: BTreeSet<usize>,
+}
+
+#[derive(Default)]
+struct LoopEffects {
+    local_writes: BTreeSet<LocalSlot>,
+    global_writes: BTreeSet<LocalSlot>,
+    has_memory_mutation: bool,
+    has_call_barrier: bool,
+}
+
+#[derive(Clone, Copy)]
+struct LicmCandidate {
+    start: usize,
+    end: usize,
+    result_size: u32,
+    source_start: Option<usize>,
+}
+
+fn apply_licm(
+    program: &BasicBlockProgram,
+    rewrite: &FunctionRewrite,
+    locals: &mut LocalsData,
+    records_by_block: &mut [Vec<RecordEmit>],
+) -> Vec<bool> {
+    let loops = collect_natural_loops(program);
+    let mut modified = vec![false; program.blocks.len()];
+    for loop_info in loops {
+        let effects = summarize_loop_effects(program, &loop_info.blocks);
+        let header_records = records_by_block[loop_info.header].clone();
+        let default_invariants = LoopInvariantSet::default();
+        let loop_invariants = rewrite
+            .relower
+            .loop_invariants
+            .get(loop_info.header)
+            .unwrap_or(&default_invariants);
+        let candidates = collect_licm_candidates(
+            &header_records,
+            &effects,
+            loop_invariants,
+            rewrite
+                .relower
+                .record_graphs_by_block
+                .get(loop_info.header)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+        );
+        if candidates.is_empty() {
+            continue;
+        }
+
+        let mut preheader_insert = Vec::new();
+        let mut new_header = Vec::with_capacity(header_records.len());
+        let mut cursor = 0usize;
+        while cursor < header_records.len() {
+            if let Some(candidate) = candidates
+                .iter()
+                .find(|candidate| candidate.start == cursor)
+            {
+                let temp = LocalSlot::new(
+                    locals.allocate_temp_slot(type_from_slot(candidate.result_size)),
+                    candidate.result_size,
+                );
+                preheader_insert.extend(emit_licm_candidate(candidate, temp, &header_records));
+                new_header.push(RecordEmit {
+                    source_start: candidate.source_start,
+                    op: local_get_op(candidate.result_size),
+                    operands: vec![Operand {
+                        local_addr: temp.addr,
+                    }],
+                    alive: true,
+                });
+                cursor = candidate.end;
+                modified[loop_info.header] = true;
+                modified[loop_info.preheader] = true;
+                continue;
+            }
+            new_header.push(header_records[cursor].clone());
+            cursor += 1;
+        }
+
+        if preheader_insert.is_empty() {
+            continue;
+        }
+        insert_before_terminal(&mut records_by_block[loop_info.preheader], preheader_insert);
+        records_by_block[loop_info.header] = new_header;
+    }
+    modified
+}
+
+fn collect_natural_loops(program: &BasicBlockProgram) -> Vec<NaturalLoop> {
+    let mut seen = BTreeSet::new();
+    let mut loops = Vec::new();
+    for (pred, successors) in program.successors.iter().enumerate() {
+        for succ in successors {
+            if *succ > pred {
+                continue;
+            }
+            let blocks = natural_loop_blocks(program, pred, *succ);
+            let outside_preds = program.predecessors[*succ]
+                .iter()
+                .copied()
+                .filter(|candidate| !blocks.contains(candidate))
+                .collect::<Vec<_>>();
+            if outside_preds.len() != 1 {
+                continue;
+            }
+            let preheader = outside_preds[0];
+            if program.successors[preheader].as_slice() != [*succ] {
+                continue;
+            }
+            if seen.insert((*succ, preheader)) {
+                loops.push(NaturalLoop {
+                    header: *succ,
+                    preheader,
+                    blocks,
+                });
+            }
+        }
+    }
+    loops.sort_by_key(|loop_info| (loop_info.header, loop_info.preheader));
+    loops
+}
+
+fn natural_loop_blocks(
+    program: &BasicBlockProgram,
+    latch: usize,
+    header: usize,
+) -> BTreeSet<usize> {
+    let mut blocks = BTreeSet::from([header, latch]);
+    let mut queue = VecDeque::from([latch]);
+    while let Some(block_id) = queue.pop_front() {
+        for pred in &program.predecessors[block_id] {
+            if blocks.insert(*pred) && *pred != header {
+                queue.push_back(*pred);
+            }
+        }
+    }
+    blocks
+}
+
+fn summarize_loop_effects(program: &BasicBlockProgram, blocks: &BTreeSet<usize>) -> LoopEffects {
+    let mut effects = LoopEffects::default();
+    for block_id in blocks {
+        let block = program.block(*block_id);
+        for record in &program.records[block.start..block.end] {
+            if let Some(slot) = decode_local_set(record).or_else(|| decode_local_tee(record)) {
+                effects.local_writes.insert(slot);
+            }
+            if let Some(slot) = decode_global_set(record) {
+                effects.global_writes.insert(slot);
+            }
+            match effect_barrier(record) {
+                EffectBarrier::Call => effects.has_call_barrier = true,
+                EffectBarrier::Memory => effects.has_memory_mutation = true,
+                _ => {}
+            }
+            if decode_memory_store(record).is_some() {
+                effects.has_memory_mutation = true;
+            }
+        }
+    }
+    effects
+}
+
+fn collect_licm_candidates(
+    records: &[RecordEmit],
+    effects: &LoopEffects,
+    loop_invariants: &LoopInvariantSet,
+    record_graph: &[RecordGraphInfo],
+) -> Vec<LicmCandidate> {
+    let mut candidates = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < records.len() {
+        if record_is(&records[cursor], vm::op_loop as Op) {
+            cursor += 1;
+            continue;
+        }
+        if record_is_control_like(&records[cursor]) {
+            break;
+        }
+        if let Some(candidate) =
+            match_licm_candidate(records, record_graph, loop_invariants, cursor, effects)
+        {
+            cursor = candidate.end;
+            candidates.push(candidate);
+            continue;
+        }
+        cursor += 1;
+    }
+    candidates
+}
+
+fn match_licm_candidate(
+    records: &[RecordEmit],
+    record_graph: &[RecordGraphInfo],
+    loop_invariants: &LoopInvariantSet,
+    cursor: usize,
+    effects: &LoopEffects,
+) -> Option<LicmCandidate> {
+    if let Some(slot) = record_local_get_slot(records.get(cursor)?) {
+        if records
+            .get(cursor + 1)
+            .and_then(record_i32_const)
+            .zip(records.get(cursor + 2))
+            .is_some()
+        {
+            let op = records.get(cursor + 2)?;
+            if record_is(op, vm::op_i32_add as Op) || record_is(op, vm::op_i32_sub as Op) {
+                if effects.local_writes.contains(&slot)
+                    || !graph_info_single_use(record_graph, cursor)
+                    || !graph_info_single_use(record_graph, cursor + 1)
+                    || !graph_info_single_use(record_graph, cursor + 2)
+                    || !record_has_invariant_origin(record_graph, loop_invariants, cursor + 2)
+                {
+                    return None;
+                }
+                return Some(LicmCandidate {
+                    start: cursor,
+                    end: cursor + 3,
+                    result_size: 4,
+                    source_start: records[cursor].source_start,
+                });
+            }
+        }
+        if let Some(rhs) = records.get(cursor + 1).and_then(record_local_get_slot) {
+            if records
+                .get(cursor + 2)
+                .is_some_and(|record| record_is(record, vm::op_i32_add as Op))
+            {
+                if effects.local_writes.contains(&slot)
+                    || effects.local_writes.contains(&rhs)
+                    || !graph_info_single_use(record_graph, cursor)
+                    || !graph_info_single_use(record_graph, cursor + 1)
+                    || !graph_info_single_use(record_graph, cursor + 2)
+                    || !record_has_invariant_origin(record_graph, loop_invariants, cursor + 2)
+                {
+                    return None;
+                }
+                return Some(LicmCandidate {
+                    start: cursor,
+                    end: cursor + 3,
+                    result_size: 4,
+                    source_start: records[cursor].source_start,
+                });
+            }
+        }
+    }
+
+    if let Some(slot) = record_global_get_slot(records.get(cursor)?) {
+        if effects.has_call_barrier || effects.global_writes.contains(&slot) {
+            return None;
+        }
+        return Some(LicmCandidate {
+            start: cursor,
+            end: cursor + 1,
+            result_size: slot.size,
+            source_start: records[cursor].source_start,
+        });
+    }
+
+    if effects.has_call_barrier || effects.has_memory_mutation {
+        return None;
+    }
+    let address = records.get(cursor)?;
+    let load = records
+        .get(cursor + 1)
+        .and_then(record_memory_load_access)?;
+    let _address = if let Some(slot) = record_local_get_slot(address) {
+        if effects.local_writes.contains(&slot) {
+            return None;
+        }
+        AliasAddress::Origin(ExprOrigin {
+            block_id: 0,
+            ordinal: slot.addr as usize,
+            kind: ExprOriginKind::EntryLocal,
+        })
+    } else if let Some(value) = record_i32_const(address) {
+        AliasAddress::Const(value as u32)
+    } else {
+        return None;
+    };
+    Some(LicmCandidate {
+        start: cursor,
+        end: cursor + 2,
+        result_size: load.ty.stack_size().u32(),
+        source_start: records[cursor].source_start,
+    })
+}
+
+fn emit_licm_candidate(
+    candidate: &LicmCandidate,
+    temp: LocalSlot,
+    header_records: &[RecordEmit],
+) -> Vec<RecordEmit> {
+    let mut out = header_records[candidate.start..candidate.end]
+        .iter()
+        .cloned()
+        .map(|mut record| {
+            record.source_start = None;
+            record
+        })
+        .collect::<Vec<_>>();
+    out.push(RecordEmit {
+        source_start: None,
+        op: local_set_op(temp.size),
+        operands: vec![Operand {
+            local_addr: temp.addr,
+        }],
+        alive: true,
+    });
+    out
+}
+
+fn insert_before_terminal(records: &mut Vec<RecordEmit>, mut insert: Vec<RecordEmit>) {
+    let insert_at = records
+        .last()
+        .filter(|record| record_ends_basic_block(record))
+        .map(|_| records.len().saturating_sub(1))
+        .unwrap_or(records.len());
+    records.splice(insert_at..insert_at, insert.drain(..));
+}
+
+fn graph_info_single_use(record_graph: &[RecordGraphInfo], idx: usize) -> bool {
+    record_graph
+        .get(idx)
+        .is_some_and(|info| info.origin.is_some() && info.use_count <= 1 && !info.block_param)
+}
+
+fn record_has_invariant_origin(
+    record_graph: &[RecordGraphInfo],
+    loop_invariants: &LoopInvariantSet,
+    idx: usize,
+) -> bool {
+    record_graph
+        .get(idx)
+        .and_then(|info| info.origin)
+        .is_some_and(|origin| loop_invariants.pure_origins.contains(&origin))
+}
+
+fn record_ends_basic_block(record: &RecordEmit) -> bool {
+    record_is_control_like(record)
+        || record_is(record, vm::special_function_return as Op)
+        || record_is(record, vm::special_block_return as Op)
+}
+
+fn record_is_control_like(record: &RecordEmit) -> bool {
+    record_is(record, vm::op_if as Op)
+        || record_is(record, vm::op_else as Op)
+        || record_is(record, vm::op_br as Op)
+        || record_is(record, vm::op_br_if as Op)
+        || record_is(record, vm::op_br_table as Op)
+        || record_is(record, vm::op_return as Op)
+        || record_is(record, vm::op_loop as Op)
+        || record_is(record, vm::op_end as Op)
+}
+
+fn record_local_get_slot(record: &RecordEmit) -> Option<LocalSlot> {
+    if record_is(record, vm::op_local_get4 as Op) {
+        return Some(LocalSlot::new(unsafe { record.operands[0].local_addr }, 4));
+    }
+    if record_is(record, vm::op_local_get8 as Op) {
+        return Some(LocalSlot::new(unsafe { record.operands[0].local_addr }, 8));
+    }
+    if record_is(record, vm::op_local_get16 as Op) {
+        return Some(LocalSlot::new(unsafe { record.operands[0].local_addr }, 16));
+    }
+    None
+}
+
+fn record_global_get_slot(record: &RecordEmit) -> Option<LocalSlot> {
+    if record_is(record, vm::op_global_get4 as Op) {
+        return Some(LocalSlot::new(unsafe { record.operands[0].u32 }, 4));
+    }
+    if record_is(record, vm::op_global_get8 as Op) {
+        return Some(LocalSlot::new(unsafe { record.operands[0].u32 }, 8));
+    }
+    if record_is(record, vm::op_global_get16 as Op) {
+        return Some(LocalSlot::new(unsafe { record.operands[0].u32 }, 16));
+    }
+    None
+}
+
+fn record_i32_const(record: &RecordEmit) -> Option<i32> {
+    record_is(record, vm::op_i32_const as Op).then(|| unsafe { record.operands[0].i32 })
+}
+
+fn record_memory_load_access(record: &RecordEmit) -> Option<MemoryAccess> {
+    if record_is(record, vm::op_i32_load_local as Op) || record_is(record, vm::op_i32_load as Op) {
+        return Some(MemoryAccess {
+            memidx: 0,
+            width: 4,
+            ty: ValType::I32,
+        });
+    }
+    if record_is(record, vm::op_i64_load_local as Op) || record_is(record, vm::op_i64_load as Op) {
+        return Some(MemoryAccess {
+            memidx: 0,
+            width: 8,
+            ty: ValType::I64,
+        });
+    }
+    if record_is(record, vm::op_f32_load_local as Op) || record_is(record, vm::op_f32_load as Op) {
+        return Some(MemoryAccess {
+            memidx: 0,
+            width: 4,
+            ty: ValType::F32,
+        });
+    }
+    if record_is(record, vm::op_f64_load_local as Op) || record_is(record, vm::op_f64_load as Op) {
+        return Some(MemoryAccess {
+            memidx: 0,
+            width: 8,
+            ty: ValType::F64,
+        });
+    }
+    None
 }
 
 #[derive(Clone, Copy)]
@@ -1757,11 +2289,40 @@ enum SelectorPattern {
     LocalGet4LocalGet4I32AddTee4,
 }
 
-fn select_superinstructions(records: Vec<RecordEmit>) -> Vec<RecordEmit> {
+fn select_superinstructions(
+    program: &BasicBlockProgram,
+    rewrite: &FunctionRewrite,
+    records_by_block: &[Vec<RecordEmit>],
+    licm_modified: &[bool],
+) -> Vec<Vec<RecordEmit>> {
+    let mut selected = vec![Vec::new(); program.blocks.len()];
+    for block in &program.blocks {
+        let records = &records_by_block[block.id];
+        if licm_modified.get(block.id).copied().unwrap_or(false) {
+            selected[block.id] = records.clone();
+            continue;
+        }
+        let record_graph = rewrite
+            .relower
+            .record_graphs_by_block
+            .get(block.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        selected[block.id] = select_block_superinstructions(records, record_graph);
+    }
+    selected
+}
+
+fn select_block_superinstructions(
+    records: &[RecordEmit],
+    record_graph: &[RecordGraphInfo],
+) -> Vec<RecordEmit> {
     let mut out = Vec::with_capacity(records.len());
     let mut cursor = 0usize;
     while cursor < records.len() {
-        if let Some((fused, consumed)) = match_selector_pattern(&records[cursor..]) {
+        if let Some((fused, consumed)) =
+            match_selector_pattern(&records[cursor..], &record_graph[cursor..])
+        {
             out.push(fused);
             cursor += consumed;
             continue;
@@ -1772,13 +2333,20 @@ fn select_superinstructions(records: Vec<RecordEmit>) -> Vec<RecordEmit> {
     out
 }
 
-fn match_selector_pattern(records: &[RecordEmit]) -> Option<(RecordEmit, usize)> {
+fn match_selector_pattern(
+    records: &[RecordEmit],
+    record_graph: &[RecordGraphInfo],
+) -> Option<(RecordEmit, usize)> {
     if records.len() >= 4
         && record_is(&records[0], vm::op_local_get4 as Op)
         && record_is(&records[1], vm::op_i32_const as Op)
         && (record_is(&records[2], vm::op_i32_add as Op)
             || record_is(&records[2], vm::op_i32_sub as Op))
         && record_is(&records[3], vm::op_local_set4 as Op)
+        && graph_info_single_use(record_graph, 0)
+        && graph_info_single_use(record_graph, 1)
+        && graph_info_single_use(record_graph, 2)
+        && !next_record_is_call_like(records, 4)
     {
         let imm = if record_is(&records[2], vm::op_i32_sub as Op) {
             unsafe { records[1].operands[0].i32 }.wrapping_neg()
@@ -1803,6 +2371,10 @@ fn match_selector_pattern(records: &[RecordEmit]) -> Option<(RecordEmit, usize)>
         && record_is(&records[0], vm::op_local_get4 as Op)
         && record_is(&records[1], vm::op_i32_const as Op)
         && record_is(&records[2], vm::op_i32_add as Op)
+        && graph_info_single_use(record_graph, 0)
+        && graph_info_single_use(record_graph, 1)
+        && graph_info_single_use(record_graph, 2)
+        && !next_record_is_call_like(records, 3)
     {
         return Some((
             fused_record(
@@ -1820,6 +2392,10 @@ fn match_selector_pattern(records: &[RecordEmit]) -> Option<(RecordEmit, usize)>
         && (record_is(&records[2], vm::op_i32_add as Op)
             || record_is(&records[2], vm::op_i32_sub as Op))
         && record_is(&records[3], vm::op_local_tee4 as Op)
+        && graph_info_single_use(record_graph, 0)
+        && graph_info_single_use(record_graph, 1)
+        && graph_info_single_use(record_graph, 2)
+        && !next_record_is_call_like(records, 4)
     {
         let imm = if record_is(&records[2], vm::op_i32_sub as Op) {
             unsafe { records[1].operands[0].i32 }.wrapping_neg()
@@ -1845,6 +2421,10 @@ fn match_selector_pattern(records: &[RecordEmit]) -> Option<(RecordEmit, usize)>
         && record_is(&records[1], vm::op_local_get4 as Op)
         && record_is(&records[2], vm::op_i32_add as Op)
         && record_is(&records[3], vm::op_local_set4 as Op)
+        && graph_info_single_use(record_graph, 0)
+        && graph_info_single_use(record_graph, 1)
+        && graph_info_single_use(record_graph, 2)
+        && !next_record_is_call_like(records, 4)
     {
         return Some((
             fused_record(
@@ -1864,6 +2444,10 @@ fn match_selector_pattern(records: &[RecordEmit]) -> Option<(RecordEmit, usize)>
         && record_is(&records[0], vm::op_local_get4 as Op)
         && record_is(&records[1], vm::op_local_get4 as Op)
         && record_is(&records[2], vm::op_i32_add as Op)
+        && graph_info_single_use(record_graph, 0)
+        && graph_info_single_use(record_graph, 1)
+        && graph_info_single_use(record_graph, 2)
+        && !next_record_is_call_like(records, 3)
     {
         return Some((
             fused_record(
@@ -1880,6 +2464,10 @@ fn match_selector_pattern(records: &[RecordEmit]) -> Option<(RecordEmit, usize)>
         && record_is(&records[1], vm::op_local_get4 as Op)
         && record_is(&records[2], vm::op_i32_add as Op)
         && record_is(&records[3], vm::op_local_tee4 as Op)
+        && graph_info_single_use(record_graph, 0)
+        && graph_info_single_use(record_graph, 1)
+        && graph_info_single_use(record_graph, 2)
+        && !next_record_is_call_like(records, 4)
     {
         return Some((
             fused_record(
@@ -1896,6 +2484,17 @@ fn match_selector_pattern(records: &[RecordEmit]) -> Option<(RecordEmit, usize)>
         ));
     }
     None
+}
+
+fn next_record_is_call_like(records: &[RecordEmit], consumed: usize) -> bool {
+    records.get(consumed).is_some_and(|record| {
+        record_is(record, vm::op_call as Op)
+            || record_is(record, vm::op_call_import as Op)
+            || record_is(record, vm::op_return_call as Op)
+            || record_is(record, vm::op_return_call_import as Op)
+            || record_is(record, vm::op_call_indirect as Op)
+            || record_is(record, vm::op_return_call_indirect as Op)
+    })
 }
 
 fn fused_record(
@@ -2356,6 +2955,58 @@ fn decode_pure_binary(record: &DecodedInstr) -> Option<PureOpKind> {
     None
 }
 
+fn unary_op(op: PureOpKind) -> Option<Op> {
+    match op {
+        PureOpKind::I32Eqz => Some(vm::op_i32_eqz as Op),
+        PureOpKind::I64Eqz => Some(vm::op_i64_eqz as Op),
+        _ => None,
+    }
+}
+
+fn binary_op(op: PureOpKind) -> Option<Op> {
+    match op {
+        PureOpKind::I32Eqz | PureOpKind::I64Eqz => None,
+        PureOpKind::I32Add => Some(vm::op_i32_add as Op),
+        PureOpKind::I32Sub => Some(vm::op_i32_sub as Op),
+        PureOpKind::I32Mul => Some(vm::op_i32_mul as Op),
+        PureOpKind::I32And => Some(vm::op_i32_and as Op),
+        PureOpKind::I32Or => Some(vm::op_i32_or as Op),
+        PureOpKind::I32Xor => Some(vm::op_i32_xor as Op),
+        PureOpKind::I32Eq => Some(vm::op_i32_eq as Op),
+        PureOpKind::I32Ne => Some(vm::op_i32_ne as Op),
+        PureOpKind::I32LtS => Some(vm::op_i32_lt_s as Op),
+        PureOpKind::I32LtU => Some(vm::op_i32_lt_u as Op),
+        PureOpKind::I32GtS => Some(vm::op_i32_gt_s as Op),
+        PureOpKind::I32GtU => Some(vm::op_i32_gt_u as Op),
+        PureOpKind::I32LeS => Some(vm::op_i32_le_s as Op),
+        PureOpKind::I32LeU => Some(vm::op_i32_le_u as Op),
+        PureOpKind::I32GeS => Some(vm::op_i32_ge_s as Op),
+        PureOpKind::I32GeU => Some(vm::op_i32_ge_u as Op),
+        PureOpKind::I64Add => Some(vm::op_i64_add as Op),
+        PureOpKind::I64Sub => Some(vm::op_i64_sub as Op),
+        PureOpKind::F32Add => Some(vm::op_f32_add as Op),
+        PureOpKind::F32Sub => Some(vm::op_f32_sub as Op),
+        PureOpKind::F32Mul => Some(vm::op_f32_mul as Op),
+        PureOpKind::F32Div => Some(vm::op_f32_div as Op),
+        PureOpKind::F32Eq => Some(vm::op_f32_eq as Op),
+        PureOpKind::F32Ne => Some(vm::op_f32_ne as Op),
+        PureOpKind::F32Lt => Some(vm::op_f32_lt as Op),
+        PureOpKind::F32Gt => Some(vm::op_f32_gt as Op),
+        PureOpKind::F32Le => Some(vm::op_f32_le as Op),
+        PureOpKind::F32Ge => Some(vm::op_f32_ge as Op),
+        PureOpKind::F64Add => Some(vm::op_f64_add as Op),
+        PureOpKind::F64Sub => Some(vm::op_f64_sub as Op),
+        PureOpKind::F64Mul => Some(vm::op_f64_mul as Op),
+        PureOpKind::F64Div => Some(vm::op_f64_div as Op),
+        PureOpKind::F64Eq => Some(vm::op_f64_eq as Op),
+        PureOpKind::F64Ne => Some(vm::op_f64_ne as Op),
+        PureOpKind::F64Lt => Some(vm::op_f64_lt as Op),
+        PureOpKind::F64Gt => Some(vm::op_f64_gt as Op),
+        PureOpKind::F64Le => Some(vm::op_f64_le as Op),
+        PureOpKind::F64Ge => Some(vm::op_f64_ge as Op),
+    }
+}
+
 fn effect_barrier(record: &DecodedInstr) -> EffectBarrier {
     if record.op_eq(vm::op_call)
         || record.op_eq(vm::op_call_import)
@@ -2462,6 +3113,15 @@ fn local_get_op(size: u32) -> Op {
     }
 }
 
+fn local_set_op(size: u32) -> Op {
+    match size {
+        4 => vm::op_local_set4 as Op,
+        8 => vm::op_local_set8 as Op,
+        16 => vm::op_local_set16 as Op,
+        _ => vm::op_local_set4 as Op,
+    }
+}
+
 fn global_alias_key(slot: LocalSlot) -> AliasKey {
     AliasKey {
         space: AliasSpace::Global,
@@ -2471,42 +3131,12 @@ fn global_alias_key(slot: LocalSlot) -> AliasKey {
     }
 }
 
-fn canonical_alias_address(value: &AbstractValue) -> Option<AliasAddress> {
-    value
-        .const_value
-        .and_then(|value| match value {
-            ConstValue::I32(value) => Some(AliasAddress::Const(value as u32)),
-            _ => None,
-        })
-        .or(Some(AliasAddress::Origin(value.origin)))
-}
-
-fn canonical_alias_address_from_expr(value: &ExprState) -> Option<AliasAddress> {
-    value
-        .const_value
-        .and_then(|value| match value {
-            ConstValue::I32(value) => Some(AliasAddress::Const(value as u32)),
-            _ => None,
-        })
-        .or(Some(AliasAddress::Origin(value.origin)))
-}
-
-fn memory_alias_key_seed(access: MemoryAccess, address: &AbstractValue) -> Option<AliasKey> {
-    Some(AliasKey {
-        space: AliasSpace::Memory,
-        index: access.memidx,
-        width: access.width,
-        address: canonical_alias_address(address)?,
-    })
-}
-
-fn memory_alias_key(access: MemoryAccess, address: &ExprState) -> Option<AliasKey> {
-    Some(AliasKey {
-        space: AliasSpace::Memory,
-        index: access.memidx,
-        width: access.width,
-        address: canonical_alias_address_from_expr(address)?,
-    })
+fn local_alias_origin(block_id: usize, slot: LocalSlot) -> ExprOrigin {
+    ExprOrigin {
+        block_id,
+        ordinal: slot.addr as usize,
+        kind: ExprOriginKind::EntryLocal,
+    }
 }
 
 fn const_value_type(value: ConstValue) -> ValType {
@@ -2728,30 +3358,6 @@ fn is_commutative(op: PureOpKind) -> bool {
     )
 }
 
-fn simplify_identity_seed(
-    op: PureOpKind,
-    lhs: &AbstractValue,
-    rhs: &AbstractValue,
-) -> Option<(AbstractValue, AbstractValue)> {
-    match (op, lhs.const_value, rhs.const_value) {
-        (PureOpKind::I32Add, _, Some(ConstValue::I32(0)))
-        | (PureOpKind::I32Sub, _, Some(ConstValue::I32(0)))
-        | (PureOpKind::I32Or, _, Some(ConstValue::I32(0)))
-        | (PureOpKind::I32Xor, _, Some(ConstValue::I32(0))) => Some((lhs.clone(), rhs.clone())),
-        (PureOpKind::I32Add, Some(ConstValue::I32(0)), _)
-        | (PureOpKind::I32Or, Some(ConstValue::I32(0)), _)
-        | (PureOpKind::I32Xor, Some(ConstValue::I32(0)), _) => Some((rhs.clone(), lhs.clone())),
-        (PureOpKind::I32Mul, _, Some(ConstValue::I32(1)))
-        | (PureOpKind::I32And, _, Some(ConstValue::I32(-1))) => Some((lhs.clone(), rhs.clone())),
-        (PureOpKind::I32Mul, Some(ConstValue::I32(1)), _)
-        | (PureOpKind::I32And, Some(ConstValue::I32(-1)), _) => Some((rhs.clone(), lhs.clone())),
-        (PureOpKind::I64Add, _, Some(ConstValue::I64(0)))
-        | (PureOpKind::I64Sub, _, Some(ConstValue::I64(0))) => Some((lhs.clone(), rhs.clone())),
-        (PureOpKind::I64Add, Some(ConstValue::I64(0)), _) => Some((rhs.clone(), lhs.clone())),
-        _ => None,
-    }
-}
-
 fn simplify_identity(
     op: PureOpKind,
     lhs: ExprId,
@@ -2774,5 +3380,114 @@ fn simplify_identity(
         | (PureOpKind::I64Sub, _, Some(ConstValue::I64(0))) => Some((lhs, rhs)),
         (PureOpKind::I64Add, Some(ConstValue::I64(0)), _) => Some((rhs, lhs)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::core::type_checker::StackSnapshot;
+
+    fn empty_snapshot() -> StackSnapshot {
+        StackSnapshot {
+            reachable: true,
+            types: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn merge_states_preserves_entry_local_memory_alias_across_join() {
+        let first = DecodedInstr {
+            old_start: 0,
+            op: vm::op_end as Op,
+            operands: Vec::new(),
+            stack_before: empty_snapshot(),
+            stack_after: empty_snapshot(),
+        };
+        let value_origin_lhs = ExprOrigin {
+            block_id: 10,
+            ordinal: 1,
+            kind: ExprOriginKind::MemoryValue,
+        };
+        let value_origin_rhs = ExprOrigin {
+            block_id: 11,
+            ordinal: 1,
+            kind: ExprOriginKind::MemoryValue,
+        };
+        let key_lhs = AliasKey {
+            space: AliasSpace::Memory,
+            index: 0,
+            width: 4,
+            address: AliasAddress::Origin(ExprOrigin {
+                block_id: 10,
+                ordinal: 0,
+                kind: ExprOriginKind::EntryLocal,
+            }),
+        };
+        let key_rhs = AliasKey {
+            space: AliasSpace::Memory,
+            index: 0,
+            width: 4,
+            address: AliasAddress::Origin(ExprOrigin {
+                block_id: 11,
+                ordinal: 0,
+                kind: ExprOriginKind::EntryLocal,
+            }),
+        };
+        let mut lhs = BlockEntryState {
+            reachable: true,
+            heap: HeapVersion {
+                memory: 1,
+                global: 0,
+                table: 0,
+            },
+            ..BlockEntryState::default()
+        };
+        lhs.aliases.insert(
+            key_lhs,
+            AbstractValue {
+                ty: ValType::I32,
+                origin: value_origin_lhs,
+                block_param: None,
+                const_value: Some(ConstValue::I32(42)),
+                key: None,
+            },
+        );
+        let mut rhs = BlockEntryState {
+            reachable: true,
+            heap: HeapVersion {
+                memory: 1,
+                global: 0,
+                table: 0,
+            },
+            ..BlockEntryState::default()
+        };
+        rhs.aliases.insert(
+            key_rhs,
+            AbstractValue {
+                ty: ValType::I32,
+                origin: value_origin_rhs,
+                block_param: None,
+                const_value: Some(ConstValue::I32(42)),
+                key: None,
+            },
+        );
+
+        let merged = merge_states(7, &first, &[lhs, rhs]);
+        let merged_key = AliasKey {
+            space: AliasSpace::Memory,
+            index: 0,
+            width: 4,
+            address: AliasAddress::Origin(ExprOrigin {
+                block_id: 7,
+                ordinal: 0,
+                kind: ExprOriginKind::EntryLocal,
+            }),
+        };
+        let merged_value = merged
+            .aliases
+            .get(&merged_key)
+            .expect("entry-local alias should survive the join");
+        assert_eq!(merged_value.const_value, Some(ConstValue::I32(42)));
     }
 }
