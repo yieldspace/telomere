@@ -221,6 +221,22 @@ mod tests {
             || std::ptr::fn_addr_eq(op, vm::op_i64_clz as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_ctz as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_popcnt as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_eq as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_ne as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_lt_s as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_lt_u as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_gt_s as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_gt_u as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_le_s as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_le_u as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_ge_s as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_ge_u as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_add as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_sub as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_mul as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_and as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_or as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_xor as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_shl as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_shr_s as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_shr_u as crate::common::Op)
@@ -796,6 +812,27 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_folds_i64_pure_numeric_ops_to_const() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                i64.const 3
+                i64.const 5
+                i64.or
+                i64.const 7
+                i64.and
+                i64.const 7
+                i64.eq))
+            "#,
+        );
+        assert_eq!(count_op(&expr, vm::op_i64_or as crate::common::Op), 0);
+        assert_eq!(count_op(&expr, vm::op_i64_and as crate::common::Op), 0);
+        assert_eq!(count_op(&expr, vm::op_i64_eq as crate::common::Op), 0);
+        assert_eq!(count_op(&expr, vm::op_i32_const as crate::common::Op), 1);
+    }
+
+    #[test]
     fn optimizer_reuses_global_get_from_same_value_global_sets_across_merge() {
         let expr = function_expr(
             r#"
@@ -841,6 +878,34 @@ mod tests {
                 ),
             1
         );
+    }
+
+    #[test]
+    fn optimizer_selects_local_const_sub_superinstruction() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                i32.const 1
+                i32.sub
+                local.set 0
+                local.get 0))
+            "#,
+        );
+        assert_eq!(
+            count_op(&expr, vm::op_local_get4_i32_const_add as crate::common::Op)
+                + count_op(
+                    &expr,
+                    vm::op_local_get4_i32_const_add_set4 as crate::common::Op
+                )
+                + count_op(
+                    &expr,
+                    vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
+                ),
+            1
+        );
+        assert_eq!(count_op(&expr, vm::op_i32_sub as crate::common::Op), 0);
     }
 
     #[test]
@@ -986,8 +1051,8 @@ mod tests {
             "#,
             1,
         );
-        assert_eq!(count_i32_add_family(&expr), 1);
-        assert_eq!(count_op(&expr, vm::op_i32_sub as crate::common::Op), 2);
+        assert_eq!(count_i32_add_family(&expr), 2);
+        assert_eq!(count_op(&expr, vm::op_i32_sub as crate::common::Op), 1);
         assert_eq!(count_op(&expr, vm::op_call as crate::common::Op), 2);
     }
 
@@ -1322,6 +1387,41 @@ mod tests {
                 &expr,
                 vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
             ),
+            0
+        );
+    }
+
+    #[test]
+    fn optimizer_selector_skips_block_argument_value_chain() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                block
+                  local.get 0
+                  if
+                    i32.const 1
+                    local.set 0
+                  else
+                    i32.const 2
+                    local.set 0
+                  end
+                end
+                local.get 0
+                i32.const 1
+                i32.add
+                local.set 0
+                local.get 0))
+            "#,
+        );
+        assert_eq!(
+            count_op(
+                &expr,
+                vm::op_local_get4_i32_const_add_set4 as crate::common::Op
+            ) + count_op(
+                &expr,
+                vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
+            ) + count_op(&expr, vm::op_local_get4_i32_const_add as crate::common::Op),
             0
         );
     }

@@ -757,6 +757,18 @@ fn pure_binary_kind_from_op(op: Op) -> Option<PureOpKind> {
     if std::ptr::fn_addr_eq(op, vm::op_i64_sub as Op) {
         return Some(PureOpKind::I64Sub);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_mul as Op) {
+        return Some(PureOpKind::I64Mul);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_and as Op) {
+        return Some(PureOpKind::I64And);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_or as Op) {
+        return Some(PureOpKind::I64Or);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_xor as Op) {
+        return Some(PureOpKind::I64Xor);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_shl as Op) {
         return Some(PureOpKind::I64Shl);
     }
@@ -771,6 +783,36 @@ fn pure_binary_kind_from_op(op: Op) -> Option<PureOpKind> {
     }
     if std::ptr::fn_addr_eq(op, vm::op_i64_rotr as Op) {
         return Some(PureOpKind::I64Rotr);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_eq as Op) {
+        return Some(PureOpKind::I64Eq);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_ne as Op) {
+        return Some(PureOpKind::I64Ne);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_lt_s as Op) {
+        return Some(PureOpKind::I64LtS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_lt_u as Op) {
+        return Some(PureOpKind::I64LtU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_gt_s as Op) {
+        return Some(PureOpKind::I64GtS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_gt_u as Op) {
+        return Some(PureOpKind::I64GtU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_le_s as Op) {
+        return Some(PureOpKind::I64LeS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_le_u as Op) {
+        return Some(PureOpKind::I64LeU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_ge_s as Op) {
+        return Some(PureOpKind::I64GeS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_ge_u as Op) {
+        return Some(PureOpKind::I64GeU);
     }
     if std::ptr::fn_addr_eq(op, vm::op_f32_add as Op) {
         return Some(PureOpKind::F32Add);
@@ -2263,6 +2305,7 @@ impl BlockOptimizer {
         let key = Self::global_alias_key(slot);
         if let Some(source) = self.aliases.get(&key).copied() {
             if let Some(materialized) = self.try_reuse_alias_value(record.old_start, source) {
+                debug_assert!(self.can_materialize(source));
                 self.push_stack(materialized);
                 return;
             }
@@ -2351,6 +2394,8 @@ impl BlockOptimizer {
         if let Some(key) = alias_key.as_ref() {
             if let Some(source) = self.aliases.get(key).copied() {
                 if let Some(materialized) = self.try_reuse_alias_value(record.old_start, source) {
+                    debug_assert!(self.can_materialize(source));
+                    debug_assert_eq!(self.exprs[source.0].ty, access.ty);
                     let _ = self.try_remove_expr(address);
                     self.push_stack(materialized);
                     return;
@@ -3197,7 +3242,10 @@ fn match_licm_candidate(
     let root = body.ops.get(cursor)?;
     if root.kind == BlockOpKind::GlobalGet {
         let slot = block_op_global_get_slot(root)?;
-        if effects.global_writes.contains(&slot) || !block_op_eligible_for_licm(graph, root) {
+        if effects.global_writes.contains(&slot)
+            || effects.has_call_barrier
+            || !block_op_eligible_for_licm(graph, root)
+        {
             return None;
         }
         return Some(LicmCandidate {
@@ -3278,8 +3326,9 @@ fn block_op_single_use(graph: &ValueGraph, op: &BlockOp) -> bool {
 fn selector_value_is_single_use(graph: &ValueGraph, op: &BlockOp, value: ValueRef) -> bool {
     let node = &graph[value.0];
     node.use_count <= 1
+        && op.source_start.is_some()
         && !node.is_effect_result()
-        && (!node.is_block_argument() || op.kind == BlockOpKind::LocalGet)
+        && !node.is_block_argument()
 }
 
 fn block_op_single_use_for_licm(graph: &ValueGraph, op: &BlockOp) -> bool {
@@ -3396,7 +3445,10 @@ fn collect_licm_value_ops(
         let &index = producer_indices.get(&value)?;
         let op = body.ops.get(index)?;
         let slot = block_op_global_get_slot(op)?;
-        if effects.global_writes.contains(&slot) || !block_op_eligible_for_licm(graph, op) {
+        if effects.global_writes.contains(&slot)
+            || effects.has_call_barrier
+            || !block_op_eligible_for_licm(graph, op)
+        {
             return None;
         }
         op_indices.insert(index);
@@ -3553,19 +3605,27 @@ fn match_selector_pattern(
         && block_op_i32_const(&ops[cursor + 1]).is_some()
         && matches!(
             ops[cursor + 2].kind,
-            BlockOpKind::PureBinary(PureOpKind::I32Add)
+            BlockOpKind::PureBinary(PureOpKind::I32Add | PureOpKind::I32Sub)
         )
         && block_op_single_use(graph, &ops[cursor])
         && block_op_single_use(graph, &ops[cursor + 1])
         && block_op_single_use(graph, &ops[cursor + 2])
         && !next_entry_is_barrier(body, cursor + 3)
     {
+        let imm = if matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Sub)
+        ) {
+            block_op_i32_const(&ops[cursor + 1])?.wrapping_neg()
+        } else {
+            block_op_i32_const(&ops[cursor + 1])?
+        };
         return Some((
             fused_op(
                 SelectorPattern::LocalGet4I32ConstAdd,
                 &ops[cursor],
                 vm::op_local_get4_i32_const_add as Op,
-                vec![ops[cursor].operands[0], ops[cursor + 1].operands[0]],
+                vec![ops[cursor].operands[0], BlockOperand::I32(imm)],
                 ops[cursor + 2].values.clone(),
             ),
             3,
@@ -4407,11 +4467,25 @@ fn binary_op(op: PureOpKind) -> Option<Op> {
         PureOpKind::I32GeU => Some(vm::op_i32_ge_u as Op),
         PureOpKind::I64Add => Some(vm::op_i64_add as Op),
         PureOpKind::I64Sub => Some(vm::op_i64_sub as Op),
+        PureOpKind::I64Mul => Some(vm::op_i64_mul as Op),
+        PureOpKind::I64And => Some(vm::op_i64_and as Op),
+        PureOpKind::I64Or => Some(vm::op_i64_or as Op),
+        PureOpKind::I64Xor => Some(vm::op_i64_xor as Op),
         PureOpKind::I64Shl => Some(vm::op_i64_shl as Op),
         PureOpKind::I64ShrS => Some(vm::op_i64_shr_s as Op),
         PureOpKind::I64ShrU => Some(vm::op_i64_shr_u as Op),
         PureOpKind::I64Rotl => Some(vm::op_i64_rotl as Op),
         PureOpKind::I64Rotr => Some(vm::op_i64_rotr as Op),
+        PureOpKind::I64Eq => Some(vm::op_i64_eq as Op),
+        PureOpKind::I64Ne => Some(vm::op_i64_ne as Op),
+        PureOpKind::I64LtS => Some(vm::op_i64_lt_s as Op),
+        PureOpKind::I64LtU => Some(vm::op_i64_lt_u as Op),
+        PureOpKind::I64GtS => Some(vm::op_i64_gt_s as Op),
+        PureOpKind::I64GtU => Some(vm::op_i64_gt_u as Op),
+        PureOpKind::I64LeS => Some(vm::op_i64_le_s as Op),
+        PureOpKind::I64LeU => Some(vm::op_i64_le_u as Op),
+        PureOpKind::I64GeS => Some(vm::op_i64_ge_s as Op),
+        PureOpKind::I64GeU => Some(vm::op_i64_ge_u as Op),
         PureOpKind::F32Add => Some(vm::op_f32_add as Op),
         PureOpKind::F32Sub => Some(vm::op_f32_sub as Op),
         PureOpKind::F32Mul => Some(vm::op_f32_mul as Op),
@@ -4659,11 +4733,25 @@ fn binary_output_type(op: PureOpKind) -> ValType {
         | PureOpKind::F64Ge => ValType::I32,
         PureOpKind::I64Add
         | PureOpKind::I64Sub
+        | PureOpKind::I64Mul
+        | PureOpKind::I64And
+        | PureOpKind::I64Or
+        | PureOpKind::I64Xor
         | PureOpKind::I64Shl
         | PureOpKind::I64ShrS
         | PureOpKind::I64ShrU
         | PureOpKind::I64Rotl
         | PureOpKind::I64Rotr => ValType::I64,
+        PureOpKind::I64Eq
+        | PureOpKind::I64Ne
+        | PureOpKind::I64LtS
+        | PureOpKind::I64LtU
+        | PureOpKind::I64GtS
+        | PureOpKind::I64GtU
+        | PureOpKind::I64LeS
+        | PureOpKind::I64LeU
+        | PureOpKind::I64GeS
+        | PureOpKind::I64GeU => ValType::I32,
         PureOpKind::F32Add | PureOpKind::F32Sub | PureOpKind::F32Mul | PureOpKind::F32Div => {
             ValType::F32
         }
@@ -4789,6 +4877,18 @@ fn fold_binary(op: PureOpKind, lhs: ConstValue, rhs: ConstValue) -> Option<Const
         (PureOpKind::I64Sub, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
             Some(ConstValue::I64(lhs.wrapping_sub(rhs)))
         }
+        (PureOpKind::I64Mul, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I64(lhs.wrapping_mul(rhs)))
+        }
+        (PureOpKind::I64And, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I64(lhs & rhs))
+        }
+        (PureOpKind::I64Or, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I64(lhs | rhs))
+        }
+        (PureOpKind::I64Xor, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I64(lhs ^ rhs))
+        }
         (PureOpKind::I64Shl, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
             Some(ConstValue::I64(lhs.wrapping_shl(rhs as u32)))
         }
@@ -4803,6 +4903,36 @@ fn fold_binary(op: PureOpKind, lhs: ConstValue, rhs: ConstValue) -> Option<Const
         }
         (PureOpKind::I64Rotr, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
             Some(ConstValue::I64(lhs.rotate_right(rhs as u32)))
+        }
+        (PureOpKind::I64Eq, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32((lhs == rhs) as i32))
+        }
+        (PureOpKind::I64Ne, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32((lhs != rhs) as i32))
+        }
+        (PureOpKind::I64LtS, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32((lhs < rhs) as i32))
+        }
+        (PureOpKind::I64LtU, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32(((lhs as u64) < (rhs as u64)) as i32))
+        }
+        (PureOpKind::I64GtS, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32((lhs > rhs) as i32))
+        }
+        (PureOpKind::I64GtU, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32(((lhs as u64) > (rhs as u64)) as i32))
+        }
+        (PureOpKind::I64LeS, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32((lhs <= rhs) as i32))
+        }
+        (PureOpKind::I64LeU, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32(((lhs as u64) <= (rhs as u64)) as i32))
+        }
+        (PureOpKind::I64GeS, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32((lhs >= rhs) as i32))
+        }
+        (PureOpKind::I64GeU, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I32(((lhs as u64) >= (rhs as u64)) as i32))
         }
         (PureOpKind::F32Add, ConstValue::F32(lhs), ConstValue::F32(rhs)) => {
             Some(ConstValue::F32(lhs + rhs))
@@ -4891,6 +5021,12 @@ fn is_commutative(op: PureOpKind) -> bool {
             | PureOpKind::I32Eq
             | PureOpKind::I32Ne
             | PureOpKind::I64Add
+            | PureOpKind::I64Mul
+            | PureOpKind::I64And
+            | PureOpKind::I64Or
+            | PureOpKind::I64Xor
+            | PureOpKind::I64Eq
+            | PureOpKind::I64Ne
             | PureOpKind::F32Add
             | PureOpKind::F32Mul
             | PureOpKind::F32Eq
@@ -4931,8 +5067,16 @@ fn simplify_identity(
         | (PureOpKind::I64ShrS, _, Some(ConstValue::I64(0)))
         | (PureOpKind::I64ShrU, _, Some(ConstValue::I64(0)))
         | (PureOpKind::I64Rotl, _, Some(ConstValue::I64(0)))
-        | (PureOpKind::I64Rotr, _, Some(ConstValue::I64(0))) => Some((lhs, rhs)),
-        (PureOpKind::I64Add, Some(ConstValue::I64(0)), _) => Some((rhs, lhs)),
+        | (PureOpKind::I64Rotr, _, Some(ConstValue::I64(0)))
+        | (PureOpKind::I64Or, _, Some(ConstValue::I64(0)))
+        | (PureOpKind::I64Xor, _, Some(ConstValue::I64(0))) => Some((lhs, rhs)),
+        (PureOpKind::I64Add, Some(ConstValue::I64(0)), _)
+        | (PureOpKind::I64Or, Some(ConstValue::I64(0)), _)
+        | (PureOpKind::I64Xor, Some(ConstValue::I64(0)), _) => Some((rhs, lhs)),
+        (PureOpKind::I64Mul, _, Some(ConstValue::I64(1)))
+        | (PureOpKind::I64And, _, Some(ConstValue::I64(-1))) => Some((lhs, rhs)),
+        (PureOpKind::I64Mul, Some(ConstValue::I64(1)), _)
+        | (PureOpKind::I64And, Some(ConstValue::I64(-1)), _) => Some((rhs, lhs)),
         _ => None,
     }
 }
