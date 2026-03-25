@@ -15,7 +15,7 @@ use super::{
         ExprOrigin, ExprOriginKind, ExprState, HeapVersion, LocalSlot, PureOpKind, ValueDef,
         ValueGraph, ValueKey, ValueRef,
     },
-    sink::{RecordEmit, RewriteSink},
+    sink::{flatten_records, RecordEmit},
 };
 
 trait LocalPass {
@@ -56,11 +56,6 @@ struct JoinAliasKey {
     address: JoinAliasAddress,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct RecordGraphInfo {
-    value: Option<ValueRef>,
-}
-
 #[derive(Clone, Default)]
 struct BlockRunResult {
     exit: BlockEntryState,
@@ -91,19 +86,532 @@ struct BlockBody {
 
 #[derive(Clone)]
 struct BlockOp {
-    record: RecordEmit,
+    source_start: Option<usize>,
+    op: Op,
+    kind: BlockOpKind,
+    operands: Vec<BlockOperand>,
     value: Option<ValueRef>,
 }
 
 #[derive(Clone)]
 struct BlockTerminator {
-    record: RecordEmit,
-    value: Option<ValueRef>,
+    source_start: Option<usize>,
+    op: Op,
+    kind: BlockTerminatorKind,
+    operands: Vec<BlockOperand>,
+}
+
+#[derive(Clone, Copy)]
+enum BlockOperand {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+    U32(u32),
+    LocalAddr(u32),
+    JumpTarget(usize),
+    Raw(Operand),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FusedOpKind {
+    LocalGet4I32ConstAdd,
+    LocalGet4I32ConstAddSet4,
+    LocalGet4I32ConstAddTee4,
+    LocalGet4LocalGet4I32Add,
+    LocalGet4LocalGet4I32AddSet4,
+    LocalGet4LocalGet4I32AddTee4,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockOpKind {
+    Const,
+    LocalGet,
+    LocalSet,
+    LocalTee,
+    Drop,
+    Select,
+    PureUnary(PureOpKind),
+    PureBinary(PureOpKind),
+    GlobalGet,
+    GlobalSet,
+    TableGet,
+    TableSet,
+    MemoryLoad,
+    MemoryStore,
+    CallLike,
+    Fused(FusedOpKind),
+    Raw,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockTerminatorKind {
+    If,
+    Else,
+    Br,
+    BrIf,
+    BrTable,
+    Return,
+    Loop,
+    End,
+    SpecialFunctionReturn,
+    SpecialBlockReturn,
+    Unreachable,
+}
+
+#[derive(Clone)]
+enum PendingBlockEntryKind {
+    Op(BlockOpKind),
+    Terminator(BlockTerminatorKind),
+}
+
+#[derive(Clone)]
+struct PendingBlockEntry {
+    source_start: Option<usize>,
+    op: Op,
+    kind: PendingBlockEntryKind,
+    operands: Vec<BlockOperand>,
+    alive: bool,
+}
+
+#[derive(Default, Clone)]
+struct BlockBodyBuilder {
+    entries: Vec<PendingBlockEntry>,
 }
 
 const UNKNOWN_HEAP_VERSION: u32 = u32::MAX;
 const INSTR_RESULT_ORIGIN_STRIDE: usize = 256;
 const SYNTHETIC_CONST_ORIGIN_BASE: usize = 1 << 20;
+
+impl BlockBodyBuilder {
+    fn push_raw(&mut self, source_start: Option<usize>, op: Op, operands: Vec<Operand>) -> usize {
+        let idx = self.entries.len();
+        self.entries.push(PendingBlockEntry {
+            source_start,
+            op,
+            kind: classify_pending_entry_kind(op),
+            operands: typed_operands_from_raw(op, &operands),
+            alive: true,
+        });
+        idx
+    }
+
+    fn remove(&mut self, idx: usize) {
+        if let Some(entry) = self.entries.get_mut(idx) {
+            entry.alive = false;
+        }
+    }
+
+    fn last_alive_index(&self) -> Option<usize> {
+        self.entries.iter().rposition(|entry| entry.alive)
+    }
+
+    fn entry_mut(&mut self, idx: usize) -> Option<&mut PendingBlockEntry> {
+        self.entries.get_mut(idx)
+    }
+
+    fn live_entries(&self) -> impl Iterator<Item = (usize, &PendingBlockEntry)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.alive)
+    }
+}
+
+fn classify_pending_entry_kind(op: Op) -> PendingBlockEntryKind {
+    if let Some(kind) = classify_terminator_kind(op) {
+        return PendingBlockEntryKind::Terminator(kind);
+    }
+    PendingBlockEntryKind::Op(classify_block_op_kind(op))
+}
+
+fn classify_block_op_kind(op: Op) -> BlockOpKind {
+    if std::ptr::fn_addr_eq(op, vm::op_i32_const as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_const as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_const as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_const as Op)
+    {
+        return BlockOpKind::Const;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_get8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_get16 as Op)
+    {
+        return BlockOpKind::LocalGet;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_set16 as Op)
+    {
+        return BlockOpKind::LocalSet;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_tee8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_tee16 as Op)
+    {
+        return BlockOpKind::LocalTee;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_drop as Op) {
+        return BlockOpKind::Drop;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_select as Op) {
+        return BlockOpKind::Select;
+    }
+    if let Some(kind) = pure_unary_kind_from_op(op) {
+        return BlockOpKind::PureUnary(kind);
+    }
+    if let Some(kind) = pure_binary_kind_from_op(op) {
+        return BlockOpKind::PureBinary(kind);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_global_get4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_get8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_get16 as Op)
+    {
+        return BlockOpKind::GlobalGet;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_global_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_set16 as Op)
+    {
+        return BlockOpKind::GlobalSet;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_table_get as Op) {
+        return BlockOpKind::TableGet;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_table_set as Op) {
+        return BlockOpKind::TableSet;
+    }
+    if is_memory_load_op(op) {
+        return BlockOpKind::MemoryLoad;
+    }
+    if is_memory_store_op(op) {
+        return BlockOpKind::MemoryStore;
+    }
+    if is_call_like_op(op) {
+        return BlockOpKind::CallLike;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add as Op) {
+        return BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAdd);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add_set4 as Op) {
+        return BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAddSet4);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add_tee4 as Op) {
+        return BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAddTee4);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_i32_add as Op) {
+        return BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32Add);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_i32_add_set4 as Op) {
+        return BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32AddSet4);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_i32_add_tee4 as Op) {
+        return BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32AddTee4);
+    }
+    BlockOpKind::Raw
+}
+
+fn classify_terminator_kind(op: Op) -> Option<BlockTerminatorKind> {
+    if std::ptr::fn_addr_eq(op, vm::op_if as Op) {
+        return Some(BlockTerminatorKind::If);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_else as Op) {
+        return Some(BlockTerminatorKind::Else);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_br as Op) {
+        return Some(BlockTerminatorKind::Br);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_br_if as Op) {
+        return Some(BlockTerminatorKind::BrIf);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_br_table as Op) {
+        return Some(BlockTerminatorKind::BrTable);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_return as Op) {
+        return Some(BlockTerminatorKind::Return);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_loop as Op) {
+        return Some(BlockTerminatorKind::Loop);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_end as Op) {
+        return Some(BlockTerminatorKind::End);
+    }
+    if std::ptr::fn_addr_eq(op, vm::special_function_return as Op) {
+        return Some(BlockTerminatorKind::SpecialFunctionReturn);
+    }
+    if std::ptr::fn_addr_eq(op, vm::special_block_return as Op) {
+        return Some(BlockTerminatorKind::SpecialBlockReturn);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_unreachable as Op) {
+        return Some(BlockTerminatorKind::Unreachable);
+    }
+    None
+}
+
+fn typed_operands_from_raw(op: Op, operands: &[Operand]) -> Vec<BlockOperand> {
+    if std::ptr::fn_addr_eq(op, vm::op_i32_const as Op) {
+        return vec![BlockOperand::I32(unsafe { operands[0].i32 })];
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_const as Op) {
+        return vec![BlockOperand::I64(unsafe { operands[0].i64 })];
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_const as Op) {
+        return vec![BlockOperand::F32(unsafe { operands[0].f32 })];
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_const as Op) {
+        return vec![BlockOperand::F64(unsafe { operands[0].f64 })];
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_get8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_get16 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_set16 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_tee8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_tee16 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add as Op)
+    {
+        return operands
+            .iter()
+            .map(|operand| BlockOperand::LocalAddr(unsafe { operand.local_addr }))
+            .collect();
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_else as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_br as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return as Op)
+    {
+        return vec![BlockOperand::JumpTarget(unsafe {
+            operands[0].jump_addr as usize
+        })];
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_br_table as Op) {
+        let mut out = Vec::with_capacity(operands.len());
+        out.push(BlockOperand::U32(unsafe { operands[0].u32 }));
+        out.extend(
+            operands[1..]
+                .iter()
+                .map(|operand| BlockOperand::JumpTarget(unsafe { operand.jump_addr as usize })),
+        );
+        return out;
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_global_get4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_get8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_get16 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_global_set16 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_table_get as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_table_set as Op)
+        || is_call_like_op(op)
+    {
+        return operands
+            .iter()
+            .map(|operand| BlockOperand::U32(unsafe { operand.u32 }))
+            .collect();
+    }
+    operands.iter().copied().map(BlockOperand::Raw).collect()
+}
+
+fn block_operands_to_raw(operands: &[BlockOperand]) -> Vec<Operand> {
+    operands
+        .iter()
+        .map(|operand| match operand {
+            BlockOperand::I32(value) => Operand { i32: *value },
+            BlockOperand::I64(value) => Operand { i64: *value },
+            BlockOperand::F32(value) => Operand { f32: *value },
+            BlockOperand::F64(value) => Operand { f64: *value },
+            BlockOperand::U32(value) => Operand { u32: *value },
+            BlockOperand::LocalAddr(value) => Operand { local_addr: *value },
+            BlockOperand::JumpTarget(value) => Operand {
+                jump_addr: *value as u32,
+            },
+            BlockOperand::Raw(operand) => *operand,
+        })
+        .collect()
+}
+
+fn pure_unary_kind_from_op(op: Op) -> Option<PureOpKind> {
+    if std::ptr::fn_addr_eq(op, vm::op_i32_eqz as Op) {
+        return Some(PureOpKind::I32Eqz);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_eqz as Op) {
+        return Some(PureOpKind::I64Eqz);
+    }
+    None
+}
+
+fn pure_binary_kind_from_op(op: Op) -> Option<PureOpKind> {
+    if std::ptr::fn_addr_eq(op, vm::op_i32_add as Op) {
+        return Some(PureOpKind::I32Add);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_sub as Op) {
+        return Some(PureOpKind::I32Sub);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_mul as Op) {
+        return Some(PureOpKind::I32Mul);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_and as Op) {
+        return Some(PureOpKind::I32And);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_or as Op) {
+        return Some(PureOpKind::I32Or);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_xor as Op) {
+        return Some(PureOpKind::I32Xor);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_eq as Op) {
+        return Some(PureOpKind::I32Eq);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_ne as Op) {
+        return Some(PureOpKind::I32Ne);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_lt_s as Op) {
+        return Some(PureOpKind::I32LtS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_lt_u as Op) {
+        return Some(PureOpKind::I32LtU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_gt_s as Op) {
+        return Some(PureOpKind::I32GtS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_gt_u as Op) {
+        return Some(PureOpKind::I32GtU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_le_s as Op) {
+        return Some(PureOpKind::I32LeS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_le_u as Op) {
+        return Some(PureOpKind::I32LeU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_ge_s as Op) {
+        return Some(PureOpKind::I32GeS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_ge_u as Op) {
+        return Some(PureOpKind::I32GeU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_add as Op) {
+        return Some(PureOpKind::I64Add);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_sub as Op) {
+        return Some(PureOpKind::I64Sub);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_add as Op) {
+        return Some(PureOpKind::F32Add);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_sub as Op) {
+        return Some(PureOpKind::F32Sub);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_mul as Op) {
+        return Some(PureOpKind::F32Mul);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_div as Op) {
+        return Some(PureOpKind::F32Div);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_eq as Op) {
+        return Some(PureOpKind::F32Eq);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_ne as Op) {
+        return Some(PureOpKind::F32Ne);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_lt as Op) {
+        return Some(PureOpKind::F32Lt);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_gt as Op) {
+        return Some(PureOpKind::F32Gt);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_le as Op) {
+        return Some(PureOpKind::F32Le);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_ge as Op) {
+        return Some(PureOpKind::F32Ge);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_add as Op) {
+        return Some(PureOpKind::F64Add);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_sub as Op) {
+        return Some(PureOpKind::F64Sub);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_mul as Op) {
+        return Some(PureOpKind::F64Mul);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_div as Op) {
+        return Some(PureOpKind::F64Div);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_eq as Op) {
+        return Some(PureOpKind::F64Eq);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_ne as Op) {
+        return Some(PureOpKind::F64Ne);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_lt as Op) {
+        return Some(PureOpKind::F64Lt);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_gt as Op) {
+        return Some(PureOpKind::F64Gt);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_le as Op) {
+        return Some(PureOpKind::F64Le);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_ge as Op) {
+        return Some(PureOpKind::F64Ge);
+    }
+    None
+}
+
+fn is_memory_load_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::op_i32_load as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load_indexed_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load_indexed_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load_indexed_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load_indexed_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_load as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_load_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_load_indexed_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_load_indexed_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_load as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_load_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_load_indexed_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_load_indexed_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_load_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_load_local as Op)
+}
+
+fn is_memory_store_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::op_i32_store as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_store_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_store_indexed_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_store_indexed_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_store as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_store_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_store_indexed_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_store_indexed_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_store as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_store_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_store_indexed_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_store_indexed_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_store as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_store_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_store_indexed_local as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_store_indexed_shared as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_store_local as Op)
+}
+
+fn is_call_like_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::op_call as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
+}
 
 pub(crate) fn optimize_function(
     _funcidx: FuncIdx,
@@ -128,7 +636,7 @@ pub(crate) fn optimize_function(
     if patch_jump_targets(&mut records).is_err() {
         return instrs;
     }
-    RewriteSink::flatten(&records)
+    flatten_records(&records)
 }
 
 fn rewrite_program(program: &BasicBlockProgram) -> FunctionRewrite {
@@ -565,8 +1073,8 @@ fn ensure_seed_value(graph: &mut ValueGraph, ty: ValType, origin: ExprOrigin) ->
         def: ValueDef::Synthetic,
         const_value: None,
         key: None,
-        producer_record: None,
-        materialized_record: None,
+        producer_op: None,
+        materialized_op: None,
         use_count: 0,
         ref_count: 0,
         removable: false,
@@ -580,11 +1088,27 @@ fn block_body_is_empty(body: &BlockBody) -> bool {
 
 fn relower_block_body(body: &BlockBody) -> Vec<RecordEmit> {
     let mut records = Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
-    records.extend(body.ops.iter().map(|op| op.record.clone()));
+    records.extend(body.ops.iter().map(relower_block_op));
     if let Some(terminator) = &body.terminator {
-        records.push(terminator.record.clone());
+        records.push(relower_block_terminator(terminator));
     }
     records
+}
+
+fn relower_block_op(op: &BlockOp) -> RecordEmit {
+    RecordEmit {
+        source_start: op.source_start,
+        op: op.op,
+        operands: block_operands_to_raw(&op.operands),
+    }
+}
+
+fn relower_block_terminator(terminator: &BlockTerminator) -> RecordEmit {
+    RecordEmit {
+        source_start: terminator.source_start,
+        op: terminator.op,
+        operands: block_operands_to_raw(&terminator.operands),
+    }
 }
 
 #[derive(Default)]
@@ -592,7 +1116,7 @@ struct BlockOptimizer {
     block_id: usize,
     effect_epoch: EffectEpoch,
     next_synthetic_const_ordinal: usize,
-    sink: RewriteSink,
+    builder: BlockBodyBuilder,
     exprs: ValueGraph,
     latest_by_origin: HashMap<ExprOrigin, ValueRef>,
     touched_values: Vec<ValueRef>,
@@ -610,13 +1134,13 @@ struct BlockOptimizer {
 #[derive(Clone, Copy)]
 struct LocalWrite {
     slot: LocalSlot,
-    record_idx: usize,
+    op_idx: usize,
     value: ValueRef,
 }
 
 #[derive(Clone, Copy)]
 struct StoreWrite {
-    record_idx: usize,
+    op_idx: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -651,7 +1175,7 @@ impl BlockOptimizer {
         self.block_id = block.id;
         self.effect_epoch = 0;
         self.next_synthetic_const_ordinal = SYNTHETIC_CONST_ORIGIN_BASE;
-        self.sink = RewriteSink::default();
+        self.builder = BlockBodyBuilder::default();
         for value in self.touched_values.drain(..) {
             if let Some(node) = self.exprs.nodes.get_mut(value.0) {
                 node.use_count = 0;
@@ -787,15 +1311,16 @@ impl BlockOptimizer {
 
     fn visit_local_get(&mut self, record: &DecodedInstr, slot: LocalSlot, _ordinal: usize) {
         if let Some(write) = self.last_local_write {
-            if write.slot == slot && self.sink.last_alive_index() == Some(write.record_idx) {
-                if let Some(last) = self.sink.record_mut(write.record_idx) {
+            if write.slot == slot && self.builder.last_alive_index() == Some(write.op_idx) {
+                if let Some(last) = self.builder.entry_mut(write.op_idx) {
                     if let Some(tee_op) = set_to_tee(last.op, slot.size) {
                         last.op = tee_op;
+                        last.kind = PendingBlockEntryKind::Op(classify_block_op_kind(tee_op));
                         let source = write.value;
                         self.push_stack(source);
                         self.last_local_write = Some(LocalWrite {
                             slot,
-                            record_idx: write.record_idx,
+                            op_idx: write.op_idx,
                             value: source,
                         });
                         return;
@@ -812,7 +1337,7 @@ impl BlockOptimizer {
             }
         }
 
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         self.last_local_write = None;
         let expr = if let Some(source) = self.locals.get(&slot).copied() {
             let source_state = self.exprs[source.0].clone();
@@ -822,7 +1347,7 @@ impl BlockOptimizer {
                 source_state.const_value,
                 source_state.key,
                 source_state.def,
-                Some(record_idx),
+                Some(op_idx),
                 true,
             )
         } else {
@@ -836,7 +1361,7 @@ impl BlockOptimizer {
                 None,
                 None,
                 ValueDef::Synthetic,
-                Some(record_idx),
+                Some(op_idx),
                 true,
             )
         };
@@ -867,11 +1392,11 @@ impl BlockOptimizer {
             }
             return;
         }
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         self.bind_local(slot, value);
         self.last_local_write = Some(LocalWrite {
             slot,
-            record_idx,
+            op_idx,
             value,
         });
         if is_tee {
@@ -933,7 +1458,7 @@ impl BlockOptimizer {
             }
         }
 
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         let key = if self.exprs[lhs.0].key == self.exprs[rhs.0].key {
             self.exprs[lhs.0].key
         } else {
@@ -954,7 +1479,7 @@ impl BlockOptimizer {
             const_value,
             key,
             ValueDef::Instr,
-            Some(record_idx),
+            Some(op_idx),
             false,
         );
         self.push_stack(expr);
@@ -994,7 +1519,7 @@ impl BlockOptimizer {
                 }
             }
         }
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         let expr = self.new_expr_with_origin(
             unary_output_type(op),
             ExprOrigin {
@@ -1005,7 +1530,7 @@ impl BlockOptimizer {
             None,
             Some(key),
             ValueDef::Instr,
-            Some(record_idx),
+            Some(op_idx),
             true,
         );
         self.maybe_mark_loop_invariant(expr);
@@ -1068,7 +1593,7 @@ impl BlockOptimizer {
             }
         }
 
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         let expr = self.new_expr_with_origin(
             binary_output_type(op),
             ExprOrigin {
@@ -1079,7 +1604,7 @@ impl BlockOptimizer {
             None,
             Some(key),
             ValueDef::Instr,
-            Some(record_idx),
+            Some(op_idx),
             true,
         );
         self.maybe_mark_loop_invariant(expr);
@@ -1102,7 +1627,7 @@ impl BlockOptimizer {
         if let Some(ConstValue::I32(value)) = self.exprs[cond.0].const_value {
             if self.try_remove_expr(cond) {
                 if value == 0 {
-                    self.sink.push(
+                    self.builder.push_raw(
                         Some(record.old_start),
                         vm::op_br,
                         vec![Operand {
@@ -1126,7 +1651,7 @@ impl BlockOptimizer {
         if let Some(ConstValue::I32(value)) = self.exprs[cond.0].const_value {
             if self.try_remove_expr(cond) {
                 if value != 0 {
-                    self.sink.push(
+                    self.builder.push_raw(
                         Some(record.old_start),
                         vm::op_br,
                         vec![Operand {
@@ -1152,7 +1677,7 @@ impl BlockOptimizer {
                 return;
             }
         }
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         let expr = self.new_expr_with_origin(
             type_from_slot(slot.size),
             ExprOrigin {
@@ -1163,7 +1688,7 @@ impl BlockOptimizer {
             None,
             Some(ValueKey::GlobalGet { slot }),
             ValueDef::Instr,
-            Some(record_idx),
+            Some(op_idx),
             true,
         );
         self.aliases.insert(key, expr);
@@ -1187,9 +1712,9 @@ impl BlockOptimizer {
             return;
         }
         clear_alias_space_rewrite(&mut self.aliases, &mut self.last_store, AliasSpace::Global);
-        let record_idx = self.push_original(record);
-        if let Some(previous) = self.last_store.insert(key, StoreWrite { record_idx }) {
-            self.sink.remove(previous.record_idx);
+        let op_idx = self.push_original(record);
+        if let Some(previous) = self.last_store.insert(key, StoreWrite { op_idx }) {
+            self.builder.remove(previous.op_idx);
         }
         self.aliases.insert(key, value);
         self.heap.global = self.heap.global.saturating_add(1);
@@ -1204,7 +1729,7 @@ impl BlockOptimizer {
         self.bump_effect_epoch();
         clear_store_space_on_load(&mut self.last_store, AliasSpace::Table);
         let Some(address) = self.canonical_alias_address(index) else {
-            let record_idx = self.push_original(record);
+            let op_idx = self.push_original(record);
             let expr = self.new_expr_with_origin(
                 ValType::FuncRef,
                 ExprOrigin {
@@ -1215,7 +1740,7 @@ impl BlockOptimizer {
                 None,
                 None,
                 ValueDef::Instr,
-                Some(record_idx),
+                Some(op_idx),
                 true,
             );
             self.push_stack(expr);
@@ -1233,7 +1758,7 @@ impl BlockOptimizer {
                 return;
             }
         }
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         let expr = self.new_expr_with_origin(
             ValType::FuncRef,
             ExprOrigin {
@@ -1247,7 +1772,7 @@ impl BlockOptimizer {
                 index: self.exprs[index.0].origin,
             }),
             ValueDef::Instr,
-            Some(record_idx),
+            Some(op_idx),
             false,
         );
         self.aliases.insert(key, expr);
@@ -1268,7 +1793,7 @@ impl BlockOptimizer {
         self.last_local_write = None;
         self.bump_effect_epoch();
         clear_alias_space_rewrite(&mut self.aliases, &mut self.last_store, AliasSpace::Table);
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         if let Some(address) = self.canonical_alias_address(index) {
             let key = AliasKey {
                 space: AliasSpace::Table,
@@ -1276,8 +1801,8 @@ impl BlockOptimizer {
                 width: 4,
                 address,
             };
-            if let Some(previous) = self.last_store.insert(key, StoreWrite { record_idx }) {
-                self.sink.remove(previous.record_idx);
+            if let Some(previous) = self.last_store.insert(key, StoreWrite { op_idx }) {
+                self.builder.remove(previous.op_idx);
             }
             self.aliases.insert(key, value);
         }
@@ -1292,7 +1817,7 @@ impl BlockOptimizer {
         self.last_local_write = None;
         self.bump_effect_epoch();
         let Some(key) = self.memory_alias_key(access, address) else {
-            let record_idx = self.push_original(record);
+            let op_idx = self.push_original(record);
             let expr = self.new_expr_with_origin(
                 access.ty,
                 ExprOrigin {
@@ -1303,7 +1828,7 @@ impl BlockOptimizer {
                 None,
                 None,
                 ValueDef::Instr,
-                Some(record_idx),
+                Some(op_idx),
                 true,
             );
             self.push_stack(expr);
@@ -1317,7 +1842,7 @@ impl BlockOptimizer {
                 return;
             }
         }
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         let expr = self.new_expr_with_origin(
             access.ty,
             ExprOrigin {
@@ -1328,7 +1853,7 @@ impl BlockOptimizer {
             None,
             Some(ValueKey::MemoryLoad(key)),
             ValueDef::Instr,
-            Some(record_idx),
+            Some(op_idx),
             false,
         );
         self.aliases.insert(key, expr);
@@ -1349,19 +1874,19 @@ impl BlockOptimizer {
         self.last_local_write = None;
         self.bump_effect_epoch();
         clear_alias_space_rewrite(&mut self.aliases, &mut self.last_store, AliasSpace::Memory);
-        let record_idx = self.push_original(record);
+        let op_idx = self.push_original(record);
         if let Some(key) = self.memory_alias_key(access, address) {
             if self
                 .aliases
                 .get(&key)
                 .is_some_and(|current| same_expr(&self.exprs[current.0], &self.exprs[value.0]))
             {
-                self.sink.remove(record_idx);
+                self.builder.remove(op_idx);
                 let _ = self.try_remove_expr(value);
                 return;
             }
-            if let Some(previous) = self.last_store.insert(key, StoreWrite { record_idx }) {
-                self.sink.remove(previous.record_idx);
+            if let Some(previous) = self.last_store.insert(key, StoreWrite { op_idx }) {
+                self.builder.remove(previous.op_idx);
             }
             self.aliases.insert(key, value);
         }
@@ -1418,7 +1943,7 @@ impl BlockOptimizer {
             ConstValue::F32(value) => (vm::op_f32_const as Op, Operand { f32: value }),
             ConstValue::F64(value) => (vm::op_f64_const as Op, Operand { f64: value }),
         };
-        let record_idx = self.sink.push(Some(source_start), op, vec![operand]);
+        let op_idx = self.builder.push_raw(Some(source_start), op, vec![operand]);
         let expr = self.new_expr_with_origin(
             ty,
             ExprOrigin {
@@ -1429,15 +1954,15 @@ impl BlockOptimizer {
             Some(value),
             None,
             ValueDef::Const,
-            Some(record_idx),
+            Some(op_idx),
             true,
         );
         self.push_stack(expr);
     }
 
     fn push_original(&mut self, record: &DecodedInstr) -> usize {
-        self.sink
-            .push(Some(record.old_start), record.op, record.operands.clone())
+        self.builder
+            .push_raw(Some(record.old_start), record.op, record.operands.clone())
     }
 
     fn bind_local(&mut self, slot: LocalSlot, expr: ValueRef) {
@@ -1479,16 +2004,16 @@ impl BlockOptimizer {
             return false;
         }
         let state = &self.exprs[expr.0];
-        let Some(record_idx) = state.producer_record else {
+        let Some(op_idx) = state.producer_op else {
             return false;
         };
-        self.sink.remove(record_idx);
+        self.builder.remove(op_idx);
         true
     }
 
     fn can_remove_expr(&self, expr: ValueRef) -> bool {
         let state = &self.exprs[expr.0];
-        state.ref_count == 0 && state.removable && state.producer_record.is_some()
+        state.ref_count == 0 && state.removable && state.producer_op.is_some()
     }
 
     fn can_materialize(&self, expr: ValueRef) -> bool {
@@ -1530,23 +2055,34 @@ impl BlockOptimizer {
     }
 
     fn build_block_body(&self) -> BlockBody {
-        let mut expr_by_record = HashMap::new();
+        let mut expr_by_op = HashMap::new();
         for (expr_idx, expr) in self.exprs.nodes.iter().enumerate() {
-            if let Some(record_idx) = expr.materialized_record {
-                expr_by_record.entry(record_idx).or_insert(ExprId(expr_idx));
+            if let Some(op_idx) = expr.materialized_op {
+                expr_by_op.entry(op_idx).or_insert(ExprId(expr_idx));
             }
         }
-        let live = self.sink.clone().into_live_records();
         let mut body = BlockBody::default();
-        for (record_idx, record) in self.sink.live_indices().into_iter().zip(live.into_iter()) {
-            let value = expr_by_record.get(&record_idx).copied();
+        for (op_idx, entry) in self.builder.live_entries() {
+            let value = expr_by_op.get(&op_idx).copied();
             if let Some(value) = value {
                 body.values.push(value);
             }
-            if record_ends_basic_block(&record) {
-                body.terminator = Some(BlockTerminator { record, value });
-            } else {
-                body.ops.push(BlockOp { record, value });
+            match entry.kind {
+                PendingBlockEntryKind::Op(kind) => body.ops.push(BlockOp {
+                    source_start: entry.source_start,
+                    op: entry.op,
+                    kind,
+                    operands: entry.operands.clone(),
+                    value,
+                }),
+                PendingBlockEntryKind::Terminator(kind) => {
+                    body.terminator = Some(BlockTerminator {
+                        source_start: entry.source_start,
+                        op: entry.op,
+                        kind,
+                        operands: entry.operands.clone(),
+                    });
+                }
             }
         }
         body
@@ -1614,7 +2150,7 @@ impl BlockOptimizer {
         const_value: Option<ConstValue>,
         key: Option<ValueKey>,
         def: ValueDef,
-        producer_record: Option<usize>,
+        producer_op: Option<usize>,
         removable: bool,
     ) -> ValueRef {
         let id = ExprId(self.exprs.nodes.len());
@@ -1624,8 +2160,8 @@ impl BlockOptimizer {
             def,
             const_value,
             key,
-            producer_record,
-            materialized_record: producer_record,
+            producer_op,
+            materialized_op: producer_op,
             use_count: 0,
             ref_count: 0,
             removable,
@@ -1654,7 +2190,7 @@ impl BlockOptimizer {
             .copied()
         {
             let op = local_get_op(slot.size);
-            let record_idx = self.sink.push(
+            let op_idx = self.builder.push_raw(
                 Some(source_start),
                 op,
                 vec![Operand {
@@ -1668,7 +2204,7 @@ impl BlockOptimizer {
                 source_state.const_value,
                 source_state.key,
                 source_state.def,
-                Some(record_idx),
+                Some(op_idx),
                 true,
             ));
         }
@@ -1685,16 +2221,16 @@ impl BlockOptimizer {
             ValueKey::Unary { op, input } => {
                 let input_expr = self.latest_by_origin.get(&input).copied()?;
                 let _ = self.try_materialize_value(source_start, input_expr)?;
-                let record_idx = self
-                    .sink
-                    .push(Some(source_start), unary_op(op)?, Vec::new());
+                let op_idx = self
+                    .builder
+                    .push_raw(Some(source_start), unary_op(op)?, Vec::new());
                 Some(self.new_expr_with_origin(
                     source_state.ty,
                     source_state.origin,
                     source_state.const_value,
                     source_state.key,
                     source_state.def,
-                    Some(record_idx),
+                    Some(op_idx),
                     true,
                 ))
             }
@@ -1703,16 +2239,16 @@ impl BlockOptimizer {
                 let rhs_expr = self.latest_by_origin.get(&rhs).copied()?;
                 let _ = self.try_materialize_value(source_start, lhs_expr)?;
                 let _ = self.try_materialize_value(source_start, rhs_expr)?;
-                let record_idx = self
-                    .sink
-                    .push(Some(source_start), binary_op(op)?, Vec::new());
+                let op_idx = self
+                    .builder
+                    .push_raw(Some(source_start), binary_op(op)?, Vec::new());
                 Some(self.new_expr_with_origin(
                     source_state.ty,
                     source_state.origin,
                     source_state.const_value,
                     source_state.key,
                     source_state.def,
-                    Some(record_idx),
+                    Some(op_idx),
                     true,
                 ))
             }
@@ -1875,7 +2411,7 @@ fn apply_licm(
             && rewrite.relower.block_bodies[loop_info.header]
                 .terminator
                 .as_ref()
-                .is_some_and(|terminator| record_is(&terminator.record, vm::op_loop as Op))
+                .is_some_and(|terminator| terminator.kind == BlockTerminatorKind::Loop)
         {
             if let Some(first_loop_block) = program.successors[loop_info.header].first().copied() {
                 candidate_blocks.push(first_loop_block);
@@ -1884,28 +2420,22 @@ fn apply_licm(
 
         for candidate_block in candidate_blocks {
             let header_body = rewrite.relower.block_bodies[candidate_block].clone();
-            let header_records = relower_block_body(&header_body);
             let default_invariants = LoopInvariantSet::default();
             let loop_invariants = rewrite
                 .relower
                 .loop_invariants
                 .get(candidate_block)
                 .unwrap_or(&default_invariants);
-            let candidates = collect_licm_candidates(
-                &rewrite.graph,
-                &header_records,
-                &effects,
-                loop_invariants,
-                &block_body_record_graph(&header_body),
-            );
+            let candidates =
+                collect_licm_candidates(&rewrite.graph, &header_body, &effects, loop_invariants);
             if candidates.is_empty() {
                 continue;
             }
 
             let mut preheader_insert = Vec::new();
-            let mut new_header = Vec::with_capacity(header_records.len());
+            let mut new_header = Vec::with_capacity(header_body.ops.len());
             let mut cursor = 0usize;
-            while cursor < header_records.len() {
+            while cursor < header_body.ops.len() {
                 if let Some(candidate) = candidates
                     .iter()
                     .find(|candidate| candidate.start == cursor)
@@ -1914,33 +2444,31 @@ fn apply_licm(
                         locals.allocate_temp_slot(type_from_slot(candidate.result_size)),
                         candidate.result_size,
                     );
-                    preheader_insert.extend(emit_licm_candidate(candidate, temp, &header_records));
-                    new_header.push(RecordEmit {
+                    preheader_insert.extend(emit_licm_candidate(candidate, temp, &header_body.ops));
+                    new_header.push(BlockOp {
                         source_start: candidate.source_start,
                         op: local_get_op(candidate.result_size),
-                        operands: vec![Operand {
-                            local_addr: temp.addr,
-                        }],
-                        alive: true,
+                        kind: BlockOpKind::LocalGet,
+                        operands: vec![BlockOperand::LocalAddr(temp.addr)],
+                        value: None,
                     });
                     cursor = candidate.end;
                     modified[candidate_block] = true;
                     modified[loop_info.preheader] = true;
                     continue;
                 }
-                new_header.push(header_records[cursor].clone());
+                new_header.push(header_body.ops[cursor].clone());
                 cursor += 1;
             }
 
             if preheader_insert.is_empty() {
                 continue;
             }
-            let mut preheader_records =
-                relower_block_body(&rewrite.relower.block_bodies[loop_info.preheader]);
-            insert_before_terminal(&mut preheader_records, preheader_insert);
-            rewrite.relower.block_bodies[loop_info.preheader] =
-                block_body_from_records(preheader_records);
-            rewrite.relower.block_bodies[candidate_block] = block_body_from_records(new_header);
+            insert_before_terminator(
+                &mut rewrite.relower.block_bodies[loop_info.preheader],
+                preheader_insert,
+            );
+            rewrite.relower.block_bodies[candidate_block].ops = new_header;
             break;
         }
     }
@@ -2024,29 +2552,15 @@ fn summarize_loop_effects(program: &BasicBlockProgram, blocks: &BTreeSet<usize>)
 
 fn collect_licm_candidates(
     graph: &ValueGraph,
-    records: &[RecordEmit],
+    body: &BlockBody,
     effects: &LoopEffects,
     loop_invariants: &LoopInvariantSet,
-    record_graph: &[RecordGraphInfo],
 ) -> Vec<LicmCandidate> {
     let mut candidates = Vec::new();
     let mut cursor = 0usize;
-    while cursor < records.len() {
-        if record_is(&records[cursor], vm::op_loop as Op) {
-            cursor += 1;
-            continue;
-        }
-        if record_is_control_like(&records[cursor]) {
-            break;
-        }
-        if let Some(candidate) = match_licm_candidate(
-            graph,
-            records,
-            record_graph,
-            loop_invariants,
-            cursor,
-            effects,
-        ) {
+    while cursor < body.ops.len() {
+        if let Some(candidate) = match_licm_candidate(graph, body, loop_invariants, cursor, effects)
+        {
             cursor = candidate.end;
             candidates.push(candidate);
             continue;
@@ -2058,30 +2572,26 @@ fn collect_licm_candidates(
 
 fn match_licm_candidate(
     graph: &ValueGraph,
-    records: &[RecordEmit],
-    record_graph: &[RecordGraphInfo],
+    body: &BlockBody,
     loop_invariants: &LoopInvariantSet,
     cursor: usize,
     effects: &LoopEffects,
 ) -> Option<LicmCandidate> {
-    if let Some(slot) = record_local_get_slot(records.get(cursor)?) {
-        if records
-            .get(cursor + 1)
-            .and_then(record_i32_const)
-            .zip(records.get(cursor + 2))
-            .is_some()
-        {
-            let op = records.get(cursor + 2)?;
-            if record_is(op, vm::op_i32_add as Op) || record_is(op, vm::op_i32_sub as Op) {
+    if let Some(slot) = block_op_local_get_slot(body.ops.get(cursor)?) {
+        if block_op_i32_const(body.ops.get(cursor + 1)?).is_some() {
+            let op = body.ops.get(cursor + 2)?;
+            if matches!(
+                op.kind,
+                BlockOpKind::PureBinary(PureOpKind::I32Add | PureOpKind::I32Sub)
+            ) {
                 if effects.local_writes.contains(&slot)
-                    || !graph_info_single_use(graph, record_graph, cursor)
-                    || !graph_info_single_use(graph, record_graph, cursor + 1)
-                    || !graph_info_single_use(graph, record_graph, cursor + 2)
-                    || !record_has_invariant_origin(
+                    || !block_op_single_use(graph, body.ops.get(cursor)?)
+                    || !block_op_single_use(graph, body.ops.get(cursor + 1)?)
+                    || !block_op_single_use(graph, body.ops.get(cursor + 2)?)
+                    || !block_op_has_invariant_origin(
                         graph,
-                        record_graph,
                         loop_invariants,
-                        cursor + 2,
+                        body.ops.get(cursor + 2)?,
                     )
                 {
                     return None;
@@ -2090,25 +2600,25 @@ fn match_licm_candidate(
                     start: cursor,
                     end: cursor + 3,
                     result_size: 4,
-                    source_start: records[cursor].source_start,
+                    source_start: body.ops[cursor].source_start,
                 });
             }
         }
-        if let Some(rhs) = records.get(cursor + 1).and_then(record_local_get_slot) {
-            if records
+        if let Some(rhs) = body.ops.get(cursor + 1).and_then(block_op_local_get_slot) {
+            if body
+                .ops
                 .get(cursor + 2)
-                .is_some_and(|record| record_is(record, vm::op_i32_add as Op))
+                .is_some_and(|op| matches!(op.kind, BlockOpKind::PureBinary(PureOpKind::I32Add)))
             {
                 if effects.local_writes.contains(&slot)
                     || effects.local_writes.contains(&rhs)
-                    || !graph_info_single_use(graph, record_graph, cursor)
-                    || !graph_info_single_use(graph, record_graph, cursor + 1)
-                    || !graph_info_single_use(graph, record_graph, cursor + 2)
-                    || !record_has_invariant_origin(
+                    || !block_op_single_use(graph, body.ops.get(cursor)?)
+                    || !block_op_single_use(graph, body.ops.get(cursor + 1)?)
+                    || !block_op_single_use(graph, body.ops.get(cursor + 2)?)
+                    || !block_op_has_invariant_origin(
                         graph,
-                        record_graph,
                         loop_invariants,
-                        cursor + 2,
+                        body.ops.get(cursor + 2)?,
                     )
                 {
                     return None;
@@ -2117,13 +2627,13 @@ fn match_licm_candidate(
                     start: cursor,
                     end: cursor + 3,
                     result_size: 4,
-                    source_start: records[cursor].source_start,
+                    source_start: body.ops[cursor].source_start,
                 });
             }
         }
     }
 
-    if let Some(slot) = record_global_get_slot(records.get(cursor)?) {
+    if let Some(slot) = block_op_global_get_slot(body.ops.get(cursor)?) {
         if effects.has_call_barrier || effects.global_writes.contains(&slot) {
             return None;
         }
@@ -2131,18 +2641,19 @@ fn match_licm_candidate(
             start: cursor,
             end: cursor + 1,
             result_size: slot.size,
-            source_start: records[cursor].source_start,
+            source_start: body.ops[cursor].source_start,
         });
     }
 
     if effects.has_call_barrier || effects.has_memory_mutation {
         return None;
     }
-    let address = records.get(cursor)?;
-    let load = records
+    let address = body.ops.get(cursor)?;
+    let load = body
+        .ops
         .get(cursor + 1)
-        .and_then(record_memory_load_access)?;
-    let _address = if let Some(slot) = record_local_get_slot(address) {
+        .and_then(block_op_memory_load_access)?;
+    let _address = if let Some(slot) = block_op_local_get_slot(address) {
         if effects.local_writes.contains(&slot) {
             return None;
         }
@@ -2151,7 +2662,7 @@ fn match_licm_candidate(
             ordinal: slot.addr as usize,
             kind: ExprOriginKind::EntryLocal,
         })
-    } else if let Some(value) = record_i32_const(address) {
+    } else if let Some(value) = block_op_i32_const(address) {
         AliasAddress::Const(value as u32)
     } else {
         return None;
@@ -2160,79 +2671,40 @@ fn match_licm_candidate(
         start: cursor,
         end: cursor + 2,
         result_size: load.ty.stack_size().u32(),
-        source_start: records[cursor].source_start,
+        source_start: body.ops[cursor].source_start,
     })
 }
 
 fn emit_licm_candidate(
     candidate: &LicmCandidate,
     temp: LocalSlot,
-    header_records: &[RecordEmit],
-) -> Vec<RecordEmit> {
-    let mut out = header_records[candidate.start..candidate.end]
+    header_ops: &[BlockOp],
+) -> Vec<BlockOp> {
+    let mut out = header_ops[candidate.start..candidate.end]
         .iter()
         .cloned()
-        .map(|mut record| {
-            record.source_start = None;
-            record
+        .map(|mut op| {
+            op.source_start = None;
+            op.value = None;
+            op
         })
         .collect::<Vec<_>>();
-    out.push(RecordEmit {
+    out.push(BlockOp {
         source_start: None,
         op: local_set_op(temp.size),
-        operands: vec![Operand {
-            local_addr: temp.addr,
-        }],
-        alive: true,
+        kind: BlockOpKind::LocalSet,
+        operands: vec![BlockOperand::LocalAddr(temp.addr)],
+        value: None,
     });
     out
 }
 
-fn insert_before_terminal(records: &mut Vec<RecordEmit>, mut insert: Vec<RecordEmit>) {
-    let insert_at = records
-        .last()
-        .filter(|record| record_ends_basic_block(record))
-        .map(|_| records.len().saturating_sub(1))
-        .unwrap_or(records.len());
-    records.splice(insert_at..insert_at, insert.drain(..));
+fn insert_before_terminator(body: &mut BlockBody, mut insert: Vec<BlockOp>) {
+    body.ops.append(&mut insert);
 }
 
-fn block_body_from_records(records: Vec<RecordEmit>) -> BlockBody {
-    let mut body = BlockBody::default();
-    for record in records {
-        if record_ends_basic_block(&record) {
-            body.terminator = Some(BlockTerminator {
-                record,
-                value: None,
-            });
-        } else {
-            body.ops.push(BlockOp {
-                record,
-                value: None,
-            });
-        }
-    }
-    body
-}
-
-fn block_body_record_graph(body: &BlockBody) -> Vec<RecordGraphInfo> {
-    let mut info = body
-        .ops
-        .iter()
-        .map(|op| RecordGraphInfo { value: op.value })
-        .collect::<Vec<_>>();
-    if let Some(terminator) = &body.terminator {
-        info.push(RecordGraphInfo {
-            value: terminator.value,
-        });
-    }
-    info
-}
-
-fn graph_info_single_use(graph: &ValueGraph, record_graph: &[RecordGraphInfo], idx: usize) -> bool {
-    record_graph
-        .get(idx)
-        .and_then(|info| info.value)
+fn block_op_single_use(graph: &ValueGraph, op: &BlockOp) -> bool {
+    op.value
         .is_some_and(|value| value_is_single_use(graph, value))
 }
 
@@ -2241,89 +2713,95 @@ fn value_is_single_use(graph: &ValueGraph, value: ValueRef) -> bool {
     node.use_count <= 1 && !node.is_block_argument()
 }
 
-fn record_has_invariant_origin(
+fn block_op_has_invariant_origin(
     graph: &ValueGraph,
-    record_graph: &[RecordGraphInfo],
     loop_invariants: &LoopInvariantSet,
-    idx: usize,
+    op: &BlockOp,
 ) -> bool {
-    record_graph
-        .get(idx)
-        .and_then(|info| info.value)
+    op.value
         .map(|value| graph[value.0].origin)
         .is_some_and(|origin| loop_invariants.pure_origins.contains(&origin))
 }
 
-fn record_ends_basic_block(record: &RecordEmit) -> bool {
-    record_is_control_like(record)
-        || record_is(record, vm::special_function_return as Op)
-        || record_is(record, vm::special_block_return as Op)
-}
-
-fn record_is_control_like(record: &RecordEmit) -> bool {
-    record_is(record, vm::op_if as Op)
-        || record_is(record, vm::op_else as Op)
-        || record_is(record, vm::op_br as Op)
-        || record_is(record, vm::op_br_if as Op)
-        || record_is(record, vm::op_br_table as Op)
-        || record_is(record, vm::op_return as Op)
-        || record_is(record, vm::op_loop as Op)
-        || record_is(record, vm::op_end as Op)
-}
-
-fn record_local_get_slot(record: &RecordEmit) -> Option<LocalSlot> {
-    if record_is(record, vm::op_local_get4 as Op) {
-        return Some(LocalSlot::new(unsafe { record.operands[0].local_addr }, 4));
+fn block_op_local_get_slot(op: &BlockOp) -> Option<LocalSlot> {
+    if op.kind != BlockOpKind::LocalGet {
+        return None;
     }
-    if record_is(record, vm::op_local_get8 as Op) {
-        return Some(LocalSlot::new(unsafe { record.operands[0].local_addr }, 8));
+    let BlockOperand::LocalAddr(addr) = *op.operands.first()? else {
+        return None;
+    };
+    if std::ptr::fn_addr_eq(op.op, vm::op_local_get4 as Op) {
+        return Some(LocalSlot::new(addr, 4));
     }
-    if record_is(record, vm::op_local_get16 as Op) {
-        return Some(LocalSlot::new(unsafe { record.operands[0].local_addr }, 16));
+    if std::ptr::fn_addr_eq(op.op, vm::op_local_get8 as Op) {
+        return Some(LocalSlot::new(addr, 8));
+    }
+    if std::ptr::fn_addr_eq(op.op, vm::op_local_get16 as Op) {
+        return Some(LocalSlot::new(addr, 16));
     }
     None
 }
 
-fn record_global_get_slot(record: &RecordEmit) -> Option<LocalSlot> {
-    if record_is(record, vm::op_global_get4 as Op) {
-        return Some(LocalSlot::new(unsafe { record.operands[0].u32 }, 4));
+fn block_op_global_get_slot(op: &BlockOp) -> Option<LocalSlot> {
+    if op.kind != BlockOpKind::GlobalGet {
+        return None;
     }
-    if record_is(record, vm::op_global_get8 as Op) {
-        return Some(LocalSlot::new(unsafe { record.operands[0].u32 }, 8));
+    let BlockOperand::U32(index) = *op.operands.first()? else {
+        return None;
+    };
+    if std::ptr::fn_addr_eq(op.op, vm::op_global_get4 as Op) {
+        return Some(LocalSlot::new(index, 4));
     }
-    if record_is(record, vm::op_global_get16 as Op) {
-        return Some(LocalSlot::new(unsafe { record.operands[0].u32 }, 16));
+    if std::ptr::fn_addr_eq(op.op, vm::op_global_get8 as Op) {
+        return Some(LocalSlot::new(index, 8));
+    }
+    if std::ptr::fn_addr_eq(op.op, vm::op_global_get16 as Op) {
+        return Some(LocalSlot::new(index, 16));
     }
     None
 }
 
-fn record_i32_const(record: &RecordEmit) -> Option<i32> {
-    record_is(record, vm::op_i32_const as Op).then(|| unsafe { record.operands[0].i32 })
+fn block_op_i32_const(op: &BlockOp) -> Option<i32> {
+    matches!(op.kind, BlockOpKind::Const).then(|| match op.operands.first()? {
+        BlockOperand::I32(value) => Some(*value),
+        _ => None,
+    })?
 }
 
-fn record_memory_load_access(record: &RecordEmit) -> Option<MemoryAccess> {
-    if record_is(record, vm::op_i32_load_local as Op) || record_is(record, vm::op_i32_load as Op) {
+fn block_op_memory_load_access(op: &BlockOp) -> Option<MemoryAccess> {
+    if op.kind != BlockOpKind::MemoryLoad {
+        return None;
+    }
+    if std::ptr::fn_addr_eq(op.op, vm::op_i32_load_local as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i32_load as Op)
+    {
         return Some(MemoryAccess {
             memidx: 0,
             width: 4,
             ty: ValType::I32,
         });
     }
-    if record_is(record, vm::op_i64_load_local as Op) || record_is(record, vm::op_i64_load as Op) {
+    if std::ptr::fn_addr_eq(op.op, vm::op_i64_load_local as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_load as Op)
+    {
         return Some(MemoryAccess {
             memidx: 0,
             width: 8,
             ty: ValType::I64,
         });
     }
-    if record_is(record, vm::op_f32_load_local as Op) || record_is(record, vm::op_f32_load as Op) {
+    if std::ptr::fn_addr_eq(op.op, vm::op_f32_load_local as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_f32_load as Op)
+    {
         return Some(MemoryAccess {
             memidx: 0,
             width: 4,
             ty: ValType::F32,
         });
     }
-    if record_is(record, vm::op_f64_load_local as Op) || record_is(record, vm::op_f64_load as Op) {
+    if std::ptr::fn_addr_eq(op.op, vm::op_f64_load_local as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_f64_load as Op)
+    {
         return Some(MemoryAccess {
             memidx: 0,
             width: 8,
@@ -2363,170 +2841,192 @@ fn select_superinstructions(
 }
 
 fn select_block_superinstructions(graph: &ValueGraph, body: &BlockBody) -> BlockBody {
-    let records = relower_block_body(body);
-    let record_graph = block_body_record_graph(body);
-    let mut out = Vec::with_capacity(records.len());
+    let mut out = Vec::with_capacity(body.ops.len());
     let mut cursor = 0usize;
-    while cursor < records.len() {
-        if let Some((fused, consumed)) =
-            match_selector_pattern(graph, &records[cursor..], &record_graph[cursor..])
-        {
+    while cursor < body.ops.len() {
+        if let Some((fused, consumed)) = match_selector_pattern(graph, &body.ops, cursor) {
             out.push(fused);
             cursor += consumed;
             continue;
         }
-        out.push(records[cursor].clone());
+        out.push(body.ops[cursor].clone());
         cursor += 1;
     }
-    block_body_from_records(out)
+    BlockBody {
+        values: body.values.clone(),
+        ops: out,
+        terminator: body.terminator.clone(),
+    }
 }
 
 fn match_selector_pattern(
     graph: &ValueGraph,
-    records: &[RecordEmit],
-    record_graph: &[RecordGraphInfo],
-) -> Option<(RecordEmit, usize)> {
-    if records.len() >= 4
-        && record_is(&records[0], vm::op_local_get4 as Op)
-        && record_is(&records[1], vm::op_i32_const as Op)
-        && (record_is(&records[2], vm::op_i32_add as Op)
-            || record_is(&records[2], vm::op_i32_sub as Op))
-        && record_is(&records[3], vm::op_local_set4 as Op)
-        && graph_info_single_use(graph, record_graph, 0)
-        && graph_info_single_use(graph, record_graph, 1)
-        && graph_info_single_use(graph, record_graph, 2)
-        && !next_record_is_call_like(records, 4)
+    ops: &[BlockOp],
+    cursor: usize,
+) -> Option<(BlockOp, usize)> {
+    if ops.len() >= cursor + 4
+        && block_op_local_get_slot(&ops[cursor]).is_some_and(|slot| slot.size == 4)
+        && block_op_i32_const(&ops[cursor + 1]).is_some()
+        && matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Add | PureOpKind::I32Sub)
+        )
+        && ops[cursor + 3].kind == BlockOpKind::LocalSet
+        && block_op_single_use(graph, &ops[cursor])
+        && block_op_single_use(graph, &ops[cursor + 1])
+        && block_op_single_use(graph, &ops[cursor + 2])
+        && !next_op_is_call_like(ops, cursor + 4)
     {
-        let imm = if record_is(&records[2], vm::op_i32_sub as Op) {
-            unsafe { records[1].operands[0].i32 }.wrapping_neg()
+        let imm = if matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Sub)
+        ) {
+            block_op_i32_const(&ops[cursor + 1])?.wrapping_neg()
         } else {
-            unsafe { records[1].operands[0].i32 }
+            block_op_i32_const(&ops[cursor + 1])?
         };
         return Some((
-            fused_record(
+            fused_op(
                 SelectorPattern::LocalGet4I32ConstAddSet4,
-                records,
+                &ops[cursor],
                 vm::op_local_get4_i32_const_add_set4 as Op,
                 vec![
-                    records[0].operands[0],
-                    Operand { i32: imm },
-                    records[3].operands[0],
+                    ops[cursor].operands[0],
+                    BlockOperand::I32(imm),
+                    ops[cursor + 3].operands[0],
                 ],
             ),
             4,
         ));
     }
-    if records.len() >= 3
-        && record_is(&records[0], vm::op_local_get4 as Op)
-        && record_is(&records[1], vm::op_i32_const as Op)
-        && record_is(&records[2], vm::op_i32_add as Op)
-        && graph_info_single_use(graph, record_graph, 0)
-        && graph_info_single_use(graph, record_graph, 1)
-        && graph_info_single_use(graph, record_graph, 2)
-        && !next_record_is_call_like(records, 3)
+    if ops.len() >= cursor + 3
+        && block_op_local_get_slot(&ops[cursor]).is_some_and(|slot| slot.size == 4)
+        && block_op_i32_const(&ops[cursor + 1]).is_some()
+        && matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Add)
+        )
+        && block_op_single_use(graph, &ops[cursor])
+        && block_op_single_use(graph, &ops[cursor + 1])
+        && block_op_single_use(graph, &ops[cursor + 2])
+        && !next_op_is_call_like(ops, cursor + 3)
     {
         return Some((
-            fused_record(
+            fused_op(
                 SelectorPattern::LocalGet4I32ConstAdd,
-                records,
+                &ops[cursor],
                 vm::op_local_get4_i32_const_add as Op,
-                vec![records[0].operands[0], records[1].operands[0]],
+                vec![ops[cursor].operands[0], ops[cursor + 1].operands[0]],
             ),
             3,
         ));
     }
-    if records.len() >= 4
-        && record_is(&records[0], vm::op_local_get4 as Op)
-        && record_is(&records[1], vm::op_i32_const as Op)
-        && (record_is(&records[2], vm::op_i32_add as Op)
-            || record_is(&records[2], vm::op_i32_sub as Op))
-        && record_is(&records[3], vm::op_local_tee4 as Op)
-        && graph_info_single_use(graph, record_graph, 0)
-        && graph_info_single_use(graph, record_graph, 1)
-        && graph_info_single_use(graph, record_graph, 2)
-        && !next_record_is_call_like(records, 4)
+    if ops.len() >= cursor + 4
+        && block_op_local_get_slot(&ops[cursor]).is_some_and(|slot| slot.size == 4)
+        && block_op_i32_const(&ops[cursor + 1]).is_some()
+        && matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Add | PureOpKind::I32Sub)
+        )
+        && ops[cursor + 3].kind == BlockOpKind::LocalTee
+        && block_op_single_use(graph, &ops[cursor])
+        && block_op_single_use(graph, &ops[cursor + 1])
+        && block_op_single_use(graph, &ops[cursor + 2])
+        && !next_op_is_call_like(ops, cursor + 4)
     {
-        let imm = if record_is(&records[2], vm::op_i32_sub as Op) {
-            unsafe { records[1].operands[0].i32 }.wrapping_neg()
+        let imm = if matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Sub)
+        ) {
+            block_op_i32_const(&ops[cursor + 1])?.wrapping_neg()
         } else {
-            unsafe { records[1].operands[0].i32 }
+            block_op_i32_const(&ops[cursor + 1])?
         };
         return Some((
-            fused_record(
+            fused_op(
                 SelectorPattern::LocalGet4I32ConstAddTee4,
-                records,
+                &ops[cursor],
                 vm::op_local_get4_i32_const_add_tee4 as Op,
                 vec![
-                    records[0].operands[0],
-                    Operand { i32: imm },
-                    records[3].operands[0],
+                    ops[cursor].operands[0],
+                    BlockOperand::I32(imm),
+                    ops[cursor + 3].operands[0],
                 ],
             ),
             4,
         ));
     }
-    if records.len() >= 4
-        && record_is(&records[0], vm::op_local_get4 as Op)
-        && record_is(&records[1], vm::op_local_get4 as Op)
-        && record_is(&records[2], vm::op_i32_add as Op)
-        && record_is(&records[3], vm::op_local_set4 as Op)
-        && graph_info_single_use(graph, record_graph, 0)
-        && graph_info_single_use(graph, record_graph, 1)
-        && graph_info_single_use(graph, record_graph, 2)
-        && !next_record_is_call_like(records, 4)
+    if ops.len() >= cursor + 4
+        && block_op_local_get_slot(&ops[cursor]).is_some_and(|slot| slot.size == 4)
+        && block_op_local_get_slot(&ops[cursor + 1]).is_some_and(|slot| slot.size == 4)
+        && matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Add)
+        )
+        && ops[cursor + 3].kind == BlockOpKind::LocalSet
+        && block_op_single_use(graph, &ops[cursor])
+        && block_op_single_use(graph, &ops[cursor + 1])
+        && block_op_single_use(graph, &ops[cursor + 2])
+        && !next_op_is_call_like(ops, cursor + 4)
     {
         return Some((
-            fused_record(
+            fused_op(
                 SelectorPattern::LocalGet4LocalGet4I32AddSet4,
-                records,
+                &ops[cursor],
                 vm::op_local_get4_local_get4_i32_add_set4 as Op,
                 vec![
-                    records[0].operands[0],
-                    records[1].operands[0],
-                    records[3].operands[0],
+                    ops[cursor].operands[0],
+                    ops[cursor + 1].operands[0],
+                    ops[cursor + 3].operands[0],
                 ],
             ),
             4,
         ));
     }
-    if records.len() >= 3
-        && record_is(&records[0], vm::op_local_get4 as Op)
-        && record_is(&records[1], vm::op_local_get4 as Op)
-        && record_is(&records[2], vm::op_i32_add as Op)
-        && graph_info_single_use(graph, record_graph, 0)
-        && graph_info_single_use(graph, record_graph, 1)
-        && graph_info_single_use(graph, record_graph, 2)
-        && !next_record_is_call_like(records, 3)
+    if ops.len() >= cursor + 3
+        && block_op_local_get_slot(&ops[cursor]).is_some_and(|slot| slot.size == 4)
+        && block_op_local_get_slot(&ops[cursor + 1]).is_some_and(|slot| slot.size == 4)
+        && matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Add)
+        )
+        && block_op_single_use(graph, &ops[cursor])
+        && block_op_single_use(graph, &ops[cursor + 1])
+        && block_op_single_use(graph, &ops[cursor + 2])
+        && !next_op_is_call_like(ops, cursor + 3)
     {
         return Some((
-            fused_record(
+            fused_op(
                 SelectorPattern::LocalGet4LocalGet4I32Add,
-                records,
+                &ops[cursor],
                 vm::op_local_get4_local_get4_i32_add as Op,
-                vec![records[0].operands[0], records[1].operands[0]],
+                vec![ops[cursor].operands[0], ops[cursor + 1].operands[0]],
             ),
             3,
         ));
     }
-    if records.len() >= 4
-        && record_is(&records[0], vm::op_local_get4 as Op)
-        && record_is(&records[1], vm::op_local_get4 as Op)
-        && record_is(&records[2], vm::op_i32_add as Op)
-        && record_is(&records[3], vm::op_local_tee4 as Op)
-        && graph_info_single_use(graph, record_graph, 0)
-        && graph_info_single_use(graph, record_graph, 1)
-        && graph_info_single_use(graph, record_graph, 2)
-        && !next_record_is_call_like(records, 4)
+    if ops.len() >= cursor + 4
+        && block_op_local_get_slot(&ops[cursor]).is_some_and(|slot| slot.size == 4)
+        && block_op_local_get_slot(&ops[cursor + 1]).is_some_and(|slot| slot.size == 4)
+        && matches!(
+            ops[cursor + 2].kind,
+            BlockOpKind::PureBinary(PureOpKind::I32Add)
+        )
+        && ops[cursor + 3].kind == BlockOpKind::LocalTee
+        && block_op_single_use(graph, &ops[cursor])
+        && block_op_single_use(graph, &ops[cursor + 1])
+        && block_op_single_use(graph, &ops[cursor + 2])
+        && !next_op_is_call_like(ops, cursor + 4)
     {
         return Some((
-            fused_record(
+            fused_op(
                 SelectorPattern::LocalGet4LocalGet4I32AddTee4,
-                records,
+                &ops[cursor],
                 vm::op_local_get4_local_get4_i32_add_tee4 as Op,
                 vec![
-                    records[0].operands[0],
-                    records[1].operands[0],
-                    records[3].operands[0],
+                    ops[cursor].operands[0],
+                    ops[cursor + 1].operands[0],
+                    ops[cursor + 3].operands[0],
                 ],
             ),
             4,
@@ -2535,33 +3035,44 @@ fn match_selector_pattern(
     None
 }
 
-fn next_record_is_call_like(records: &[RecordEmit], consumed: usize) -> bool {
-    records.get(consumed).is_some_and(|record| {
-        record_is(record, vm::op_call as Op)
-            || record_is(record, vm::op_call_import as Op)
-            || record_is(record, vm::op_return_call as Op)
-            || record_is(record, vm::op_return_call_import as Op)
-            || record_is(record, vm::op_call_indirect as Op)
-            || record_is(record, vm::op_return_call_indirect as Op)
-    })
+fn next_op_is_call_like(ops: &[BlockOp], idx: usize) -> bool {
+    ops.get(idx)
+        .is_some_and(|op| matches!(op.kind, BlockOpKind::CallLike))
 }
 
-fn fused_record(
-    _pattern: SelectorPattern,
-    records: &[RecordEmit],
+fn fused_op(
+    pattern: SelectorPattern,
+    first: &BlockOp,
     op: Op,
-    operands: Vec<Operand>,
-) -> RecordEmit {
-    RecordEmit {
-        source_start: records[0].source_start,
+    operands: Vec<BlockOperand>,
+) -> BlockOp {
+    let kind = match pattern {
+        SelectorPattern::LocalGet4I32ConstAdd => {
+            BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAdd)
+        }
+        SelectorPattern::LocalGet4I32ConstAddSet4 => {
+            BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAddSet4)
+        }
+        SelectorPattern::LocalGet4I32ConstAddTee4 => {
+            BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAddTee4)
+        }
+        SelectorPattern::LocalGet4LocalGet4I32Add => {
+            BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32Add)
+        }
+        SelectorPattern::LocalGet4LocalGet4I32AddSet4 => {
+            BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32AddSet4)
+        }
+        SelectorPattern::LocalGet4LocalGet4I32AddTee4 => {
+            BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32AddTee4)
+        }
+    };
+    BlockOp {
+        source_start: first.source_start,
         op,
+        kind,
         operands,
-        alive: true,
+        value: None,
     }
-}
-
-fn record_is(record: &RecordEmit, op: Op) -> bool {
-    std::ptr::fn_addr_eq(record.op, op)
 }
 
 fn reachable_blocks(program: &BasicBlockProgram, bodies: &[BlockBody]) -> Vec<bool> {
@@ -2572,8 +3083,7 @@ fn reachable_blocks(program: &BasicBlockProgram, bodies: &[BlockBody]) -> Vec<bo
             continue;
         }
         reachable[block_id] = true;
-        for succ in rewritten_successors(program, block_id, &relower_block_body(&bodies[block_id]))
-        {
+        for succ in rewritten_successors(program, block_id, &bodies[block_id]) {
             if !reachable[succ] {
                 queue.push_back(succ);
             }
@@ -2585,52 +3095,53 @@ fn reachable_blocks(program: &BasicBlockProgram, bodies: &[BlockBody]) -> Vec<bo
 fn rewritten_successors(
     program: &BasicBlockProgram,
     block_id: usize,
-    records: &[RecordEmit],
+    body: &BlockBody,
 ) -> Vec<usize> {
     let fallthrough = program.next_block_id(block_id);
-    let Some(last) = records.last() else {
+    let Some(last) = &body.terminator else {
         return fallthrough.into_iter().collect();
     };
-    if record_is(last, vm::op_br as Op)
-        || record_is(last, vm::op_else as Op)
-        || record_is(last, vm::op_return as Op)
-    {
-        return single_target(program, last).into_iter().collect();
-    }
-    if record_is(last, vm::op_br_if as Op) || record_is(last, vm::op_if as Op) {
-        let mut succs = Vec::new();
-        if let Some(target) = single_target(program, last) {
-            succs.push(target);
+    match last.kind {
+        BlockTerminatorKind::Br | BlockTerminatorKind::Else | BlockTerminatorKind::Return => {
+            return single_target(program, last).into_iter().collect();
         }
-        if let Some(next) = fallthrough {
-            succs.push(next);
+        BlockTerminatorKind::BrIf | BlockTerminatorKind::If => {
+            let mut succs = Vec::new();
+            if let Some(target) = single_target(program, last) {
+                succs.push(target);
+            }
+            if let Some(next) = fallthrough {
+                succs.push(next);
+            }
+            succs.sort_unstable();
+            succs.dedup();
+            return succs;
         }
-        succs.sort_unstable();
-        succs.dedup();
-        return succs;
-    }
-    if record_is(last, vm::op_br_table as Op) {
-        return table_targets(program, last);
-    }
-    if record_is(last, vm::special_function_return as Op) {
-        return Vec::new();
-    }
-    if record_is(last, vm::special_block_return as Op) {
-        return fallthrough.into_iter().collect();
+        BlockTerminatorKind::BrTable => return table_targets(program, last),
+        BlockTerminatorKind::SpecialFunctionReturn => return Vec::new(),
+        BlockTerminatorKind::SpecialBlockReturn => return fallthrough.into_iter().collect(),
+        _ => {}
     }
     fallthrough.into_iter().collect()
 }
 
-fn single_target(program: &BasicBlockProgram, record: &RecordEmit) -> Option<usize> {
-    let target = unsafe { record.operands[0].jump_addr as usize };
+fn single_target(program: &BasicBlockProgram, terminator: &BlockTerminator) -> Option<usize> {
+    let BlockOperand::JumpTarget(target) = *terminator.operands.first()? else {
+        return None;
+    };
     program.block_for_old_start(target)
 }
 
-fn table_targets(program: &BasicBlockProgram, record: &RecordEmit) -> Vec<usize> {
-    let table_len = unsafe { record.operands[0].u32 as usize };
+fn table_targets(program: &BasicBlockProgram, terminator: &BlockTerminator) -> Vec<usize> {
+    let Some(BlockOperand::U32(table_len)) = terminator.operands.first() else {
+        return Vec::new();
+    };
+    let table_len = *table_len as usize;
     (1..=table_len + 1)
         .filter_map(|idx| {
-            let target = unsafe { record.operands[idx].jump_addr as usize };
+            let BlockOperand::JumpTarget(target) = terminator.operands[idx] else {
+                return None;
+            };
             program.block_for_old_start(target)
         })
         .collect()
@@ -3508,8 +4019,8 @@ mod tests {
             def: ValueDef::Instr,
             const_value: Some(ConstValue::I32(42)),
             key: None,
-            producer_record: None,
-            materialized_record: None,
+            producer_op: None,
+            materialized_op: None,
             use_count: 0,
             ref_count: 0,
             removable: false,
@@ -3531,8 +4042,8 @@ mod tests {
             def: ValueDef::Instr,
             const_value: Some(ConstValue::I32(42)),
             key: None,
-            producer_record: None,
-            materialized_record: None,
+            producer_op: None,
+            materialized_op: None,
             use_count: 0,
             ref_count: 0,
             removable: false,
@@ -3578,8 +4089,8 @@ mod tests {
             def: ValueDef::Synthetic,
             const_value: Some(ConstValue::I32(1)),
             key: None,
-            producer_record: None,
-            materialized_record: None,
+            producer_op: None,
+            materialized_op: None,
             use_count: 0,
             ref_count: 0,
             removable: false,
@@ -3595,8 +4106,8 @@ mod tests {
             def: ValueDef::Synthetic,
             const_value: Some(ConstValue::I32(2)),
             key: None,
-            producer_record: None,
-            materialized_record: None,
+            producer_op: None,
+            materialized_op: None,
             use_count: 0,
             ref_count: 0,
             removable: false,

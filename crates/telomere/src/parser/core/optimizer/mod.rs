@@ -883,7 +883,6 @@ mod tests {
                         param_size: 0,
                     },
                 }],
-                alive: true,
             },
             RecordEmit {
                 source_start: Some(2),
@@ -893,13 +892,11 @@ mod tests {
                     Operand { jump_addr: 0 },
                     Operand { jump_addr: 6 },
                 ],
-                alive: true,
             },
             RecordEmit {
                 source_start: Some(6),
                 op: vm::op_end as crate::common::Op,
                 operands: vec![],
-                alive: true,
             },
         ];
         patch_jump_targets(&mut records).expect("jump targets must patch");
