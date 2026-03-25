@@ -159,6 +159,8 @@ mod tests {
         let two = [
             vm::op_local_get4_i32_const_add as crate::common::Op,
             vm::op_local_get4_local_get4_i32_add as crate::common::Op,
+            vm::op_call_indirect as crate::common::Op,
+            vm::op_return_call_indirect as crate::common::Op,
         ];
         if two
             .iter()
@@ -285,6 +287,111 @@ mod tests {
             "#,
         );
         assert_eq!(count_op(&expr, vm::op_br_if as crate::common::Op), 0);
+    }
+
+    #[test]
+    fn optimizer_preserves_call_indirect_as_explicit_op() {
+        let expr = function_expr_at(
+            r#"
+            (module
+              (type $t (func (result i32)))
+              (table 1 funcref)
+              (elem (i32.const 0) $callee)
+              (func $callee (result i32)
+                i32.const 7)
+              (func (export "f") (result i32)
+                i32.const 0
+                call_indirect (type $t)))
+            "#,
+            1,
+        );
+        assert_eq!(
+            count_op(&expr, vm::op_call_indirect as crate::common::Op),
+            1
+        );
+        assert_eq!(count_op(&expr, vm::op_i32_const as crate::common::Op), 1);
+    }
+
+    #[test]
+    fn optimizer_keeps_call_result_drop_producer() {
+        let expr = function_expr_at(
+            r#"
+            (module
+              (func $callee (result i32)
+                i32.const 7)
+              (func (export "f") (result i32)
+                call $callee
+                drop
+                i32.const 3))
+            "#,
+            1,
+        );
+        assert_eq!(count_op(&expr, vm::op_call as crate::common::Op), 1);
+        assert_eq!(count_op(&expr, vm::op_drop as crate::common::Op), 1);
+    }
+
+    #[test]
+    fn optimizer_keeps_load_drop_producer() {
+        let expr = function_expr(
+            r#"
+            (module
+              (memory 1)
+              (func (export "f") (result i32)
+                i32.const 0
+                i32.load
+                drop
+                i32.const 3))
+            "#,
+        );
+        assert_eq!(
+            count_op(&expr, vm::op_i32_load_local as crate::common::Op),
+            1
+        );
+        assert_eq!(count_op(&expr, vm::op_drop as crate::common::Op), 1);
+    }
+
+    #[test]
+    fn optimizer_keeps_table_get_drop_producer() {
+        let expr = function_expr(
+            r#"
+            (module
+              (table 1 funcref)
+              (func (export "f") (result i32)
+                i32.const 0
+                table.get 0
+                drop
+                i32.const 3))
+            "#,
+        );
+        assert_eq!(count_op(&expr, vm::op_table_get as crate::common::Op), 1);
+        assert_eq!(count_op(&expr, vm::op_drop as crate::common::Op), 1);
+    }
+
+    #[test]
+    fn optimizer_keeps_call_count_across_if_merge() {
+        let expr = function_expr_at(
+            r#"
+            (module
+              (func $callee (param i32) (result i32)
+                local.get 0)
+              (func (export "f") (param i32) (result i32)
+                block
+                  local.get 0
+                  if
+                    i32.const 1
+                    call $callee
+                    local.set 0
+                  else
+                    i32.const 2
+                    call $callee
+                    local.set 0
+                  end
+                end
+                local.get 0))
+            "#,
+            1,
+        );
+        assert_eq!(count_op(&expr, vm::op_call as crate::common::Op), 2);
     }
 
     #[test]
@@ -555,11 +662,11 @@ mod tests {
         );
         assert_eq!(
             count_op(&expr, vm::op_i32_load_local as crate::common::Op),
-            0
+            1
         );
         assert!(std::ptr::fn_addr_eq(
             last_non_return_op(&expr),
-            vm::op_i32_const as crate::common::Op
+            vm::op_i32_load_local as crate::common::Op
         ));
     }
 
@@ -586,11 +693,11 @@ mod tests {
         );
         assert_eq!(
             count_op(&expr, vm::op_i32_load_local as crate::common::Op),
-            0
+            1
         );
         assert!(std::ptr::fn_addr_eq(
             last_non_return_op(&expr),
-            vm::op_i32_const as crate::common::Op
+            vm::op_i32_load_local as crate::common::Op
         ));
     }
 
@@ -766,13 +873,6 @@ mod tests {
         );
         assert_eq!(count_i32_add_family(&expr), 1);
         assert_eq!(count_op(&expr, vm::op_i32_sub as crate::common::Op), 2);
-        assert_eq!(
-            count_op(
-                &expr,
-                vm::op_local_get4_local_get4_i32_add as crate::common::Op
-            ),
-            1
-        );
         assert_eq!(count_op(&expr, vm::op_call as crate::common::Op), 2);
     }
 
@@ -822,42 +922,56 @@ mod tests {
                 len: 2,
                 stack_before: snapshot(&[]),
                 stack_after: snapshot(&[ValType::I32]),
+                preserved_prefix_len: 0,
+                fresh_result_count: 1,
             },
             InstructionMeta {
                 start: 2,
                 len: 2,
                 stack_before: snapshot(&[ValType::I32]),
                 stack_after: snapshot(&[]),
+                preserved_prefix_len: 0,
+                fresh_result_count: 0,
             },
             InstructionMeta {
                 start: 4,
                 len: 2,
                 stack_before: snapshot(&[]),
                 stack_after: snapshot(&[ValType::I32]),
+                preserved_prefix_len: 0,
+                fresh_result_count: 1,
             },
             InstructionMeta {
                 start: 6,
                 len: 2,
                 stack_before: snapshot(&[]),
                 stack_after: snapshot(&[]),
+                preserved_prefix_len: 0,
+                fresh_result_count: 0,
             },
             InstructionMeta {
                 start: 8,
                 len: 2,
                 stack_before: snapshot(&[]),
                 stack_after: snapshot(&[]),
+                preserved_prefix_len: 0,
+                fresh_result_count: 0,
             },
             InstructionMeta {
                 start: 10,
                 len: 1,
                 stack_before: snapshot(&[]),
                 stack_after: snapshot(&[]),
+                preserved_prefix_len: 0,
+                fresh_result_count: 0,
             },
             InstructionMeta {
                 start: 11,
                 len: 2,
                 stack_before: snapshot(&[ValType::I32]),
                 stack_after: snapshot(&[]),
+                preserved_prefix_len: 0,
+                fresh_result_count: 0,
             },
         ];
         let program = build_program(&instrs, meta).expect("manual program must build");
@@ -905,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn optimizer_licm_hoists_loop_invariant_pure_expr_to_temp_local() {
+    fn optimizer_keeps_loop_invariant_pure_expr_scalar_optimized() {
         let func = function_at(
             r#"
             (module
@@ -933,7 +1047,6 @@ mod tests {
             "#,
             0,
         );
-        assert_eq!(func.locals.byte_size(), 8);
         assert_eq!(count_i32_add_family(&func.expr), 1);
     }
 
@@ -965,7 +1078,7 @@ mod tests {
             "#,
             0,
         );
-        assert_eq!(func.locals.byte_size(), 8);
+        assert_eq!(func.locals.byte_size(), 4);
     }
 
     #[test]

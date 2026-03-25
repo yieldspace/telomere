@@ -12,6 +12,8 @@ pub(crate) struct InstructionMeta {
     pub(crate) len: usize,
     pub(crate) stack_before: StackSnapshot,
     pub(crate) stack_after: StackSnapshot,
+    pub(crate) preserved_prefix_len: usize,
+    pub(crate) fresh_result_count: usize,
 }
 
 #[derive(Clone)]
@@ -21,6 +23,8 @@ pub(crate) struct DecodedInstr {
     pub(crate) operands: Vec<Operand>,
     pub(crate) stack_before: StackSnapshot,
     pub(crate) stack_after: StackSnapshot,
+    pub(crate) preserved_prefix_len: usize,
+    pub(crate) fresh_result_count: usize,
 }
 
 impl DecodedInstr {
@@ -113,6 +117,8 @@ pub(crate) fn build_program(
             operands,
             stack_before: meta.stack_before,
             stack_after: meta.stack_after,
+            preserved_prefix_len: meta.preserved_prefix_len,
+            fresh_result_count: meta.fresh_result_count,
         });
     }
     let (blocks, old_start_to_block) = build_blocks(&records, &start_to_record);

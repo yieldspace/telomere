@@ -14,6 +14,9 @@ pub(crate) type ValueRef = ExprId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct BlockArgumentId(pub(crate) usize);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct EffectOpId(pub(crate) usize);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum ExprOriginKind {
     EntryStack,
@@ -192,20 +195,13 @@ pub(crate) enum ValueKey {
         lhs: ExprOrigin,
         rhs: ExprOrigin,
     },
-    MemoryLoad(AliasKey),
-    GlobalGet {
-        slot: LocalSlot,
-    },
-    TableGet {
-        tableidx: u32,
-        index: ExprOrigin,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ValueDef {
     Const,
     Instr,
+    EffectResult(EffectOpId, usize),
     BlockArgument(BlockArgumentId),
     Synthetic,
 }
@@ -248,6 +244,17 @@ impl DerefMut for ValueGraph {
 }
 
 impl ValueNode {
+    pub(crate) fn effect_result(&self) -> Option<(EffectOpId, usize)> {
+        match self.def {
+            ValueDef::EffectResult(id, result_index) => Some((id, result_index)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_effect_result(&self) -> bool {
+        matches!(self.def, ValueDef::EffectResult(..))
+    }
+
     pub(crate) fn block_argument(&self) -> Option<BlockArgumentId> {
         match self.def {
             ValueDef::BlockArgument(id) => Some(id),
@@ -261,6 +268,17 @@ impl ValueNode {
 }
 
 impl ValueGraph {
+    pub(crate) fn existing_block_argument_value(
+        &self,
+        block_id: usize,
+        ordinal: usize,
+    ) -> Option<ValueRef> {
+        self.block_argument_lookup
+            .get(&(block_id, ordinal))
+            .copied()
+            .map(|id| self.block_arguments[id.0].value)
+    }
+
     pub(crate) fn ensure_block_argument(
         &mut self,
         block_id: usize,
@@ -310,6 +328,7 @@ impl ValueGraph {
         value
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn block_argument(&self, id: BlockArgumentId) -> Option<&BlockArgument> {
         self.block_arguments.get(id.0)
     }

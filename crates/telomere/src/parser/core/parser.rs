@@ -801,6 +801,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 reachable: true,
                 types: Vec::new(),
             },
+            preserved_prefix_len: 0,
+            fresh_result_count: 0,
         });
         jump_resolver.evaluate(&mut instrs);
         let instrs = optimizer::optimize_function(

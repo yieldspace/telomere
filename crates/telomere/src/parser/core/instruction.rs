@@ -126,6 +126,22 @@ fn default_memory_is_shared(mems: &[MemType]) -> bool {
     mems.first().map(|mem| mem.shared).unwrap_or(false)
 }
 
+fn infer_generic_stack_shape(
+    stack_before: &crate::parser::core::type_checker::StackSnapshot,
+    stack_after: &crate::parser::core::type_checker::StackSnapshot,
+) -> (usize, usize) {
+    let preserved_prefix_len = stack_before
+        .types
+        .iter()
+        .zip(stack_after.types.iter())
+        .take_while(|(before, after)| before == after)
+        .count();
+    (
+        preserved_prefix_len,
+        stack_after.types.len().saturating_sub(preserved_prefix_len),
+    )
+}
+
 #[derive(Debug)]
 pub(crate) enum BlockKind {
     Block,
@@ -316,6 +332,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
     }
 
     fn push_instruction_meta(
+        &self,
+        instrs: &InstructionGenerator,
         meta: &mut Vec<InstructionMeta>,
         start: usize,
         end: usize,
@@ -323,13 +341,92 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         stack_after: crate::parser::core::type_checker::StackSnapshot,
     ) {
         if end > start {
+            let (preserved_prefix_len, fresh_result_count) =
+                self.infer_instruction_meta_shape(instrs, start, &stack_before, &stack_after);
             meta.push(InstructionMeta {
                 start,
                 len: end - start,
                 stack_before,
                 stack_after,
+                preserved_prefix_len,
+                fresh_result_count,
             });
         }
+    }
+
+    fn infer_instruction_meta_shape(
+        &self,
+        instrs: &InstructionGenerator,
+        start: usize,
+        stack_before: &crate::parser::core::type_checker::StackSnapshot,
+        stack_after: &crate::parser::core::type_checker::StackSnapshot,
+    ) -> (usize, usize) {
+        let op = unsafe { instrs[start].op };
+        if std::ptr::fn_addr_eq(op, vm::op_call as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
+        {
+            let funcidx = unsafe { instrs[start + 1].operand.u32 };
+            return self.direct_call_stack_shape(funcidx, 0, stack_before, stack_after);
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op) {
+            let typeidx = unsafe { instrs[start + 2].operand.u32 };
+            return self.typeidx_call_stack_shape(typeidx, 1, stack_before, stack_after);
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_return_call as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br_table as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return as Op)
+            || std::ptr::fn_addr_eq(op, vm::special_function_return as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_unreachable as Op)
+        {
+            return (0, 0);
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_if as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br_if as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_else as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_loop as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_end as Op)
+            || std::ptr::fn_addr_eq(op, vm::special_block_return as Op)
+        {
+            return (stack_after.types.len(), 0);
+        }
+        infer_generic_stack_shape(stack_before, stack_after)
+    }
+
+    fn direct_call_stack_shape(
+        &self,
+        funcidx: u32,
+        extra_inputs: usize,
+        stack_before: &crate::parser::core::type_checker::StackSnapshot,
+        stack_after: &crate::parser::core::type_checker::StackSnapshot,
+    ) -> (usize, usize) {
+        let Some(typeidx) = self.functions.get(funcidx as usize) else {
+            return infer_generic_stack_shape(stack_before, stack_after);
+        };
+        self.typeidx_call_stack_shape(typeidx.0, extra_inputs, stack_before, stack_after)
+    }
+
+    fn typeidx_call_stack_shape(
+        &self,
+        typeidx: u32,
+        extra_inputs: usize,
+        stack_before: &crate::parser::core::type_checker::StackSnapshot,
+        stack_after: &crate::parser::core::type_checker::StackSnapshot,
+    ) -> (usize, usize) {
+        let Some(ty) = self.types.get(TypeIdx(typeidx)) else {
+            return infer_generic_stack_shape(stack_before, stack_after);
+        };
+        let input_count = ty.0.iter().count() + extra_inputs;
+        let result_count = ty.1.iter().count();
+        let preserved_prefix_len = stack_before.types.len().saturating_sub(input_count);
+        debug_assert_eq!(
+            preserved_prefix_len + result_count,
+            stack_after.types.len(),
+            "stack transition mismatch for call-like instruction",
+        );
+        (preserved_prefix_len, result_count)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -403,7 +500,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             },
                         },
                     });
-                    Self::push_instruction_meta(
+                    self.push_instruction_meta(
+                        instrs,
                         meta,
                         meta_start,
                         instrs.len(),
@@ -472,7 +570,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         },
                     });
                 }
-                Self::push_instruction_meta(
+                self.push_instruction_meta(
+                    instrs,
                     meta,
                     loop_meta_start,
                     instrs.len(),
@@ -508,7 +607,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             },
                         },
                     });
-                    Self::push_instruction_meta(
+                    self.push_instruction_meta(
+                        instrs,
                         meta,
                         meta_start,
                         instrs.len(),
@@ -567,7 +667,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 } else {
                     checker.enter_block(BlockKind::If, blocktype);
                 }
-                Self::push_instruction_meta(
+                self.push_instruction_meta(
+                    instrs,
                     meta,
                     if_meta_start,
                     instrs.len(),
@@ -4098,11 +4199,16 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             trace!("{checker:?}");
             read_bytes += len;
             if record_meta && instrs.len() > start {
+                let stack_after = checker.snapshot_stack();
+                let (preserved_prefix_len, fresh_result_count) =
+                    self.infer_instruction_meta_shape(instrs, start, &stack_before, &stack_after);
                 meta.push(InstructionMeta {
                     start,
                     len: instrs.len() - start,
                     stack_before,
-                    stack_after: checker.snapshot_stack(),
+                    stack_after,
+                    preserved_prefix_len,
+                    fresh_result_count,
                 });
             }
             if end {
