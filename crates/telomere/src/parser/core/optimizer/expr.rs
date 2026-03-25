@@ -9,13 +9,18 @@ use crate::common::ValType;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ExprId(pub(crate) usize);
 
+pub(crate) type ValueRef = ExprId;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct BlockArgumentId(pub(crate) usize);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum ExprOriginKind {
     EntryStack,
     EntryLocal,
     InstrResult,
     SyntheticConst,
-    BlockParam,
+    BlockArgument,
     MemoryValue,
     GlobalValue,
     TableValue,
@@ -29,10 +34,12 @@ pub(crate) struct ExprOrigin {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct BlockParam {
+pub(crate) struct BlockArgument {
+    pub(crate) id: BlockArgumentId,
     pub(crate) block_id: usize,
     pub(crate) ordinal: usize,
     pub(crate) ty: ValType,
+    pub(crate) value: ValueRef,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -195,11 +202,19 @@ pub(crate) enum ValueKey {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ValueDef {
+    Const,
+    Instr,
+    BlockArgument(BlockArgumentId),
+    Synthetic,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ValueNode {
     pub(crate) ty: ValType,
     pub(crate) origin: ExprOrigin,
-    pub(crate) block_param: Option<BlockParam>,
+    pub(crate) def: ValueDef,
     pub(crate) const_value: Option<ConstValue>,
     pub(crate) key: Option<ValueKey>,
     pub(crate) producer_record: Option<usize>,
@@ -214,7 +229,8 @@ pub(crate) type ExprState = ValueNode;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ValueGraph {
     pub(crate) nodes: Vec<ValueNode>,
-    pub(crate) latest_by_origin: HashMap<ExprOrigin, ExprId>,
+    pub(crate) block_arguments: Vec<BlockArgument>,
+    block_argument_lookup: HashMap<(usize, usize), BlockArgumentId>,
 }
 
 impl Deref for ValueGraph {
@@ -228,6 +244,74 @@ impl Deref for ValueGraph {
 impl DerefMut for ValueGraph {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.nodes
+    }
+}
+
+impl ValueNode {
+    pub(crate) fn block_argument(&self) -> Option<BlockArgumentId> {
+        match self.def {
+            ValueDef::BlockArgument(id) => Some(id),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_block_argument(&self) -> bool {
+        matches!(self.def, ValueDef::BlockArgument(_))
+    }
+}
+
+impl ValueGraph {
+    pub(crate) fn ensure_block_argument(
+        &mut self,
+        block_id: usize,
+        ordinal: usize,
+        ty: ValType,
+        const_value: Option<ConstValue>,
+        key: Option<ValueKey>,
+    ) -> ValueRef {
+        if let Some(id) = self
+            .block_argument_lookup
+            .get(&(block_id, ordinal))
+            .copied()
+        {
+            let value = self.block_arguments[id.0].value;
+            let node = &mut self.nodes[value.0];
+            node.const_value = const_value;
+            node.key = key;
+            return value;
+        }
+
+        let id = BlockArgumentId(self.block_arguments.len());
+        let value = ExprId(self.nodes.len());
+        self.nodes.push(ValueNode {
+            ty,
+            origin: ExprOrigin {
+                block_id,
+                ordinal,
+                kind: ExprOriginKind::BlockArgument,
+            },
+            def: ValueDef::BlockArgument(id),
+            const_value,
+            key,
+            producer_record: None,
+            materialized_record: None,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        self.block_arguments.push(BlockArgument {
+            id,
+            block_id,
+            ordinal,
+            ty,
+            value,
+        });
+        self.block_argument_lookup.insert((block_id, ordinal), id);
+        value
+    }
+
+    pub(crate) fn block_argument(&self, id: BlockArgumentId) -> Option<&BlockArgument> {
+        self.block_arguments.get(id.0)
     }
 }
 

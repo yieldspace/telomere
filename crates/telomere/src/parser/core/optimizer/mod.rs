@@ -730,6 +730,53 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_preserves_recursive_fib_code_shape() {
+        let expr = function_expr_at(
+            r#"
+            (module
+              (func (export "run") (param i32) (result i32)
+                local.get 0
+                call 1)
+              (func (param i32) (result i32)
+                (local i32 i32 i32 i32)
+                local.get 0
+                i32.const 2
+                i32.lt_s
+                if
+                  local.get 0
+                  return
+                end
+                local.get 0
+                i32.const 1
+                i32.sub
+                local.tee 4
+                call 1
+                local.set 1
+                local.get 0
+                i32.const 2
+                i32.sub
+                local.tee 3
+                call 1
+                local.set 2
+                local.get 1
+                local.get 2
+                i32.add))
+            "#,
+            1,
+        );
+        assert_eq!(count_i32_add_family(&expr), 1);
+        assert_eq!(count_op(&expr, vm::op_i32_sub as crate::common::Op), 2);
+        assert_eq!(
+            count_op(
+                &expr,
+                vm::op_local_get4_local_get4_i32_add as crate::common::Op
+            ),
+            1
+        );
+        assert_eq!(count_op(&expr, vm::op_call as crate::common::Op), 2);
+    }
+
+    #[test]
     fn build_program_splits_control_boundaries_and_targets() {
         let instrs = vec![
             Instr {
@@ -958,7 +1005,7 @@ mod tests {
     }
 
     #[test]
-    fn optimizer_licm_hoists_must_alias_load_without_loop_store() {
+    fn optimizer_keeps_single_must_alias_load_when_loop_body_is_split_from_loop_header() {
         let func = function_at(
             r#"
             (module
@@ -992,7 +1039,7 @@ mod tests {
         assert_eq!(func.locals.byte_size(), 4);
         assert_eq!(
             count_op(&func.expr, vm::op_i32_load_local as crate::common::Op),
-            0
+            1
         );
     }
 

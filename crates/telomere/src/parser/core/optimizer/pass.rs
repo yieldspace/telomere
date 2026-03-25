@@ -11,9 +11,9 @@ use crate::{
 use super::{
     cfg::{build_program, BasicBlock, BasicBlockProgram, DecodedInstr, InstructionMeta},
     expr::{
-        AliasAddress, AliasKey, AliasSpace, BlockParam, ConstValue, EffectBarrier, EffectEpoch,
-        ExprId, ExprOrigin, ExprOriginKind, ExprState, HeapVersion, LocalSlot, PureOpKind,
-        ValueGraph, ValueKey,
+        AliasAddress, AliasKey, AliasSpace, ConstValue, EffectBarrier, EffectEpoch, ExprId,
+        ExprOrigin, ExprOriginKind, ExprState, HeapVersion, LocalSlot, PureOpKind, ValueDef,
+        ValueGraph, ValueKey, ValueRef,
     },
     sink::{RecordEmit, RewriteSink},
 };
@@ -27,22 +27,13 @@ trait LocalPass {
     ) -> BlockRunResult;
 }
 
-#[derive(Clone, Debug)]
-struct AbstractValue {
-    ty: ValType,
-    origin: ExprOrigin,
-    block_param: Option<BlockParam>,
-    const_value: Option<ConstValue>,
-    key: Option<ValueKey>,
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BlockEntryState {
     reachable: bool,
-    locals: HashMap<LocalSlot, AbstractValue>,
-    stack: Vec<AbstractValue>,
+    locals: HashMap<LocalSlot, ValueRef>,
+    stack: Vec<ValueRef>,
     heap: HeapVersion,
-    aliases: HashMap<AliasKey, AbstractValue>,
+    aliases: HashMap<AliasKey, ValueRef>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -54,7 +45,7 @@ struct LoopInvariantSet {
 enum JoinAliasAddress {
     Const(u32),
     EntryLocal(usize),
-    BlockParam(usize),
+    BlockArgument(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -67,23 +58,19 @@ struct JoinAliasKey {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct RecordGraphInfo {
-    origin: Option<ExprOrigin>,
-    use_count: usize,
-    block_param: bool,
+    value: Option<ValueRef>,
 }
 
 #[derive(Clone, Default)]
 struct BlockRunResult {
     exit: BlockEntryState,
-    records: Vec<RecordEmit>,
-    record_graph: Vec<RecordGraphInfo>,
+    body: BlockBody,
     loop_invariants: LoopInvariantSet,
 }
 
 #[derive(Default)]
-struct RelowerState {
-    records_by_block: Vec<Vec<RecordEmit>>,
-    record_graphs_by_block: Vec<Vec<RecordGraphInfo>>,
+struct RelowerPlan {
+    block_bodies: Vec<BlockBody>,
     loop_invariants: Vec<LoopInvariantSet>,
 }
 
@@ -91,11 +78,32 @@ struct RelowerState {
 struct FunctionRewrite {
     entries: Vec<BlockEntryState>,
     exits: Vec<BlockEntryState>,
-    relower: RelowerState,
+    graph: ValueGraph,
+    relower: RelowerPlan,
+}
+
+#[derive(Clone, Default)]
+struct BlockBody {
+    values: Vec<ValueRef>,
+    ops: Vec<BlockOp>,
+    terminator: Option<BlockTerminator>,
+}
+
+#[derive(Clone)]
+struct BlockOp {
+    record: RecordEmit,
+    value: Option<ValueRef>,
+}
+
+#[derive(Clone)]
+struct BlockTerminator {
+    record: RecordEmit,
+    value: Option<ValueRef>,
 }
 
 const UNKNOWN_HEAP_VERSION: u32 = u32::MAX;
 const INSTR_RESULT_ORIGIN_STRIDE: usize = 256;
+const SYNTHETIC_CONST_ORIGIN_BASE: usize = 1 << 20;
 
 pub(crate) fn optimize_function(
     _funcidx: FuncIdx,
@@ -107,16 +115,14 @@ pub(crate) fn optimize_function(
     let Some(program) = build_program(&instrs, meta) else {
         return instrs;
     };
-    let rewrite = rewrite_program(&program);
-    let mut per_block_records = rewrite.relower.records_by_block.to_vec();
-    let licm_modified = apply_licm(&program, &rewrite, locals, &mut per_block_records);
-    let per_block_records =
-        select_superinstructions(&program, &rewrite, &per_block_records, &licm_modified);
-    let reachable = reachable_blocks(&program, &per_block_records);
+    let mut rewrite = rewrite_program(&program);
+    let licm_modified = apply_licm(&program, &mut rewrite, locals);
+    select_superinstructions(&program, &mut rewrite, &licm_modified);
+    let reachable = reachable_blocks(&program, &rewrite.relower.block_bodies);
     let mut records = Vec::new();
     for block in &program.blocks {
         if reachable[block.id] {
-            records.extend(per_block_records[block.id].clone());
+            records.extend(relower_block_body(&rewrite.relower.block_bodies[block.id]));
         }
     }
     if patch_jump_targets(&mut records).is_err() {
@@ -126,16 +132,16 @@ pub(crate) fn optimize_function(
 }
 
 fn rewrite_program(program: &BasicBlockProgram) -> FunctionRewrite {
+    let mut pass = BlockOptimizer::default();
     let mut rewrite = FunctionRewrite {
         entries: vec![BlockEntryState::default(); program.blocks.len()],
         exits: vec![BlockEntryState::default(); program.blocks.len()],
-        relower: RelowerState {
-            records_by_block: vec![Vec::new(); program.blocks.len()],
-            record_graphs_by_block: vec![Vec::new(); program.blocks.len()],
+        relower: RelowerPlan {
+            block_bodies: vec![BlockBody::default(); program.blocks.len()],
             loop_invariants: vec![LoopInvariantSet::default(); program.blocks.len()],
         },
+        graph: ValueGraph::default(),
     };
-    let mut pass = BlockOptimizer::default();
     let mut worklist = VecDeque::new();
     let mut queued = vec![false; program.blocks.len()];
     worklist.push_back(0usize);
@@ -143,45 +149,35 @@ fn rewrite_program(program: &BasicBlockProgram) -> FunctionRewrite {
 
     while let Some(block_id) = worklist.pop_front() {
         queued[block_id] = false;
-        let Some(entry) = compute_entry_state(program, &rewrite, block_id) else {
-            if clear_block_rewrite(&mut rewrite, block_id) {
+        let Some(entry) = compute_entry_state(program, &mut pass.exprs, &rewrite, block_id) else {
+            if clear_block_rewrite(&pass.exprs, &mut rewrite, block_id) {
                 enqueue_successors(program, block_id, &mut worklist, &mut queued);
             }
             continue;
         };
-        let entry_changed = !same_state(&rewrite.entries[block_id], &entry);
+        let entry_changed = !same_state(&pass.exprs, &rewrite.entries[block_id], &entry);
         if entry_changed {
             rewrite.entries[block_id] = entry.clone();
         }
         let result = pass.run_block(program, program.block(block_id), &entry);
-        let exit_changed = !same_state(&rewrite.exits[block_id], &result.exit);
-        let records_changed =
-            !same_records(&rewrite.relower.records_by_block[block_id], &result.records);
-        let graph_changed = rewrite.relower.record_graphs_by_block[block_id] != result.record_graph;
-        let invariants_changed =
-            rewrite.relower.loop_invariants[block_id] != result.loop_invariants;
+        let exit_changed = !same_state(&pass.exprs, &rewrite.exits[block_id], &result.exit);
         if exit_changed {
             rewrite.exits[block_id] = result.exit;
         }
-        if records_changed {
-            rewrite.relower.records_by_block[block_id] = result.records;
-        }
-        if graph_changed {
-            rewrite.relower.record_graphs_by_block[block_id] = result.record_graph;
-        }
-        if invariants_changed {
-            rewrite.relower.loop_invariants[block_id] = result.loop_invariants;
-        }
-        if entry_changed || exit_changed || records_changed || graph_changed || invariants_changed {
+        rewrite.relower.block_bodies[block_id] = result.body;
+        rewrite.relower.loop_invariants[block_id] = result.loop_invariants;
+        if entry_changed || exit_changed {
             enqueue_successors(program, block_id, &mut worklist, &mut queued);
         }
     }
 
+    rewrite.graph = pass.exprs;
     rewrite
 }
 
 fn compute_entry_state(
     program: &BasicBlockProgram,
+    graph: &mut ValueGraph,
     rewrite: &FunctionRewrite,
     block_id: usize,
 ) -> Option<BlockEntryState> {
@@ -189,7 +185,7 @@ fn compute_entry_state(
     let first = program.records.get(block.start)?;
     let mut incoming = Vec::new();
     if block_id == 0 {
-        incoming.push(default_entry_state(block_id, first));
+        incoming.push(default_entry_state(graph, block_id, first));
     }
     for pred in &program.predecessors[block_id] {
         let pred_state = &rewrite.exits[*pred];
@@ -200,14 +196,17 @@ fn compute_entry_state(
     if incoming.is_empty() {
         return None;
     }
-    Some(merge_states(block_id, first, &incoming))
+    Some(merge_states(graph, block_id, first, &incoming))
 }
 
-fn clear_block_rewrite(rewrite: &mut FunctionRewrite, block_id: usize) -> bool {
-    let entry_changed = !same_state(&rewrite.entries[block_id], &BlockEntryState::default());
-    let exit_changed = !same_state(&rewrite.exits[block_id], &BlockEntryState::default());
-    let records_changed = !rewrite.relower.records_by_block[block_id].is_empty();
-    let graph_changed = !rewrite.relower.record_graphs_by_block[block_id].is_empty();
+fn clear_block_rewrite(graph: &ValueGraph, rewrite: &mut FunctionRewrite, block_id: usize) -> bool {
+    let entry_changed = !same_state(
+        graph,
+        &rewrite.entries[block_id],
+        &BlockEntryState::default(),
+    );
+    let exit_changed = !same_state(graph, &rewrite.exits[block_id], &BlockEntryState::default());
+    let body_changed = !block_body_is_empty(&rewrite.relower.block_bodies[block_id]);
     let invariants_changed =
         rewrite.relower.loop_invariants[block_id] != LoopInvariantSet::default();
     if entry_changed {
@@ -216,16 +215,13 @@ fn clear_block_rewrite(rewrite: &mut FunctionRewrite, block_id: usize) -> bool {
     if exit_changed {
         rewrite.exits[block_id] = BlockEntryState::default();
     }
-    if records_changed {
-        rewrite.relower.records_by_block[block_id].clear();
-    }
-    if graph_changed {
-        rewrite.relower.record_graphs_by_block[block_id].clear();
+    if body_changed {
+        rewrite.relower.block_bodies[block_id] = BlockBody::default();
     }
     if invariants_changed {
         rewrite.relower.loop_invariants[block_id] = LoopInvariantSet::default();
     }
-    entry_changed || exit_changed || records_changed || graph_changed || invariants_changed
+    entry_changed || exit_changed || body_changed || invariants_changed
 }
 
 fn enqueue_successors(
@@ -242,7 +238,11 @@ fn enqueue_successors(
     }
 }
 
-fn default_entry_state(block_id: usize, first: &DecodedInstr) -> BlockEntryState {
+fn default_entry_state(
+    graph: &mut ValueGraph,
+    block_id: usize,
+    first: &DecodedInstr,
+) -> BlockEntryState {
     BlockEntryState {
         reachable: true,
         stack: first
@@ -250,16 +250,16 @@ fn default_entry_state(block_id: usize, first: &DecodedInstr) -> BlockEntryState
             .types
             .iter()
             .enumerate()
-            .map(|(ordinal, ty)| AbstractValue {
-                ty: *ty,
-                origin: ExprOrigin {
-                    block_id,
-                    ordinal,
-                    kind: ExprOriginKind::EntryStack,
-                },
-                block_param: None,
-                const_value: None,
-                key: None,
+            .map(|(ordinal, ty)| {
+                ensure_seed_value(
+                    graph,
+                    *ty,
+                    ExprOrigin {
+                        block_id,
+                        ordinal,
+                        kind: ExprOriginKind::EntryStack,
+                    },
+                )
             })
             .collect(),
         ..BlockEntryState::default()
@@ -267,6 +267,7 @@ fn default_entry_state(block_id: usize, first: &DecodedInstr) -> BlockEntryState
 }
 
 fn merge_states(
+    graph: &mut ValueGraph,
     block_id: usize,
     first: &DecodedInstr,
     incoming: &[BlockEntryState],
@@ -284,11 +285,7 @@ fn merge_states(
             .map(|entry| entry.stack.get(ordinal))
             .collect::<Vec<_>>();
         state.stack.push(merge_value_candidates(
-            block_id,
-            ordinal,
-            *ty,
-            &values,
-            ExprOriginKind::BlockParam,
+            graph, block_id, ordinal, *ty, &values,
         ));
     }
 
@@ -304,21 +301,26 @@ fn merge_states(
         state.locals.insert(
             slot,
             merge_value_candidates(
+                graph,
                 block_id,
                 1024 + slot.addr as usize,
                 type_from_slot(slot.size),
                 &values,
-                ExprOriginKind::BlockParam,
             ),
         );
     }
 
-    merge_aliases(block_id, incoming, &mut state);
+    merge_aliases(graph, block_id, incoming, &mut state);
 
     state
 }
 
-fn merge_aliases(block_id: usize, incoming: &[BlockEntryState], state: &mut BlockEntryState) {
+fn merge_aliases(
+    graph: &mut ValueGraph,
+    block_id: usize,
+    incoming: &[BlockEntryState],
+    state: &mut BlockEntryState,
+) {
     let mut exact_keys = if let Some(first_entry) = incoming.first() {
         first_entry.aliases.keys().copied().collect::<BTreeSet<_>>()
     } else {
@@ -332,6 +334,7 @@ fn merge_aliases(block_id: usize, incoming: &[BlockEntryState], state: &mut Bloc
             continue;
         }
         merge_alias_value(
+            graph,
             block_id,
             key,
             incoming
@@ -377,25 +380,26 @@ fn merge_aliases(block_id: usize, incoming: &[BlockEntryState], state: &mut Bloc
         if ambiguous {
             continue;
         }
-        merge_alias_value(block_id, merged_key, values, state);
+        merge_alias_value(graph, block_id, merged_key, values, state);
     }
 }
 
 fn merge_alias_value(
+    graph: &mut ValueGraph,
     block_id: usize,
     key: AliasKey,
-    values: Vec<Option<&AbstractValue>>,
+    values: Vec<Option<&ValueRef>>,
     state: &mut BlockEntryState,
 ) {
-    let Some(first_value) = values.first().and_then(|value| *value) else {
+    let Some(first_value) = values.first().and_then(|value| *value).copied() else {
         return;
     };
     let merged = merge_value_candidates(
+        graph,
         block_id,
         alias_ordinal(key),
-        first_value.ty,
+        graph[first_value.0].ty,
         &values,
-        ExprOriginKind::BlockParam,
     );
     state.aliases.insert(key, merged);
 }
@@ -435,60 +439,32 @@ fn space_version_stable(
 }
 
 fn merge_value_candidates(
+    graph: &mut ValueGraph,
     block_id: usize,
     ordinal: usize,
     ty: ValType,
-    values: &[Option<&AbstractValue>],
-    kind: ExprOriginKind,
-) -> AbstractValue {
-    let Some(first) = values.first().and_then(|value| *value) else {
-        return AbstractValue {
-            ty,
-            origin: ExprOrigin {
-                block_id,
-                ordinal,
-                kind,
-            },
-            block_param: Some(BlockParam {
-                block_id,
-                ordinal,
-                ty,
-            }),
-            const_value: None,
-            key: None,
-        };
+    values: &[Option<&ValueRef>],
+) -> ValueRef {
+    let Some(first) = values.first().and_then(|value| *value).copied() else {
+        return graph.ensure_block_argument(block_id, ordinal, ty, None, None);
     };
     if values
         .iter()
-        .all(|value| value.is_some_and(|candidate| same_value(candidate, first)))
+        .all(|value| value.is_some_and(|candidate| same_value(graph, *candidate, first)))
     {
-        return first.clone();
+        return first;
     }
     let const_value = values
         .iter()
-        .map(|value| value.and_then(|value| value.const_value))
+        .map(|value| value.and_then(|value| graph[value.0].const_value))
         .reduce(|lhs, rhs| if lhs == rhs { lhs } else { None })
         .flatten();
     let key = values
         .iter()
-        .map(|value| value.and_then(|value| value.key))
+        .map(|value| value.and_then(|value| graph[value.0].key))
         .reduce(|lhs, rhs| if lhs == rhs { lhs } else { None })
         .flatten();
-    AbstractValue {
-        ty,
-        origin: ExprOrigin {
-            block_id,
-            ordinal,
-            kind,
-        },
-        block_param: Some(BlockParam {
-            block_id,
-            ordinal,
-            ty,
-        }),
-        const_value,
-        key,
-    }
+    graph.ensure_block_argument(block_id, ordinal, ty, const_value, key)
 }
 
 fn alias_ordinal(key: AliasKey) -> usize {
@@ -503,8 +479,8 @@ fn join_alias_key(key: AliasKey) -> Option<JoinAliasKey> {
         AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::EntryLocal => {
             JoinAliasAddress::EntryLocal(origin.ordinal)
         }
-        AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::BlockParam => {
-            JoinAliasAddress::BlockParam(origin.ordinal)
+        AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::BlockArgument => {
+            JoinAliasAddress::BlockArgument(origin.ordinal)
         }
         _ => return None,
     };
@@ -524,10 +500,10 @@ fn alias_key_from_join(block_id: usize, key: JoinAliasKey) -> AliasKey {
             ordinal,
             kind: ExprOriginKind::EntryLocal,
         }),
-        JoinAliasAddress::BlockParam(ordinal) => AliasAddress::Origin(ExprOrigin {
+        JoinAliasAddress::BlockArgument(ordinal) => AliasAddress::Origin(ExprOrigin {
             block_id,
             ordinal,
-            kind: ExprOriginKind::BlockParam,
+            kind: ExprOriginKind::BlockArgument,
         }),
     };
     AliasKey {
@@ -543,52 +519,88 @@ fn instr_result_origin_ordinal(ordinal: usize, result_index: usize) -> usize {
         .saturating_add(result_index)
 }
 
-fn same_state(lhs: &BlockEntryState, rhs: &BlockEntryState) -> bool {
+fn same_state(graph: &ValueGraph, lhs: &BlockEntryState, rhs: &BlockEntryState) -> bool {
     lhs.reachable == rhs.reachable
         && lhs.heap == rhs.heap
-        && same_value_vec(&lhs.stack, &rhs.stack)
-        && same_value_map(&lhs.locals, &rhs.locals)
-        && same_value_map(&lhs.aliases, &rhs.aliases)
+        && same_value_vec(graph, &lhs.stack, &rhs.stack)
+        && same_value_map(graph, &lhs.locals, &rhs.locals)
+        && same_value_map(graph, &lhs.aliases, &rhs.aliases)
 }
 
-fn same_value_vec(lhs: &[AbstractValue], rhs: &[AbstractValue]) -> bool {
+fn same_value_vec(graph: &ValueGraph, lhs: &[ValueRef], rhs: &[ValueRef]) -> bool {
     lhs.len() == rhs.len()
         && lhs
             .iter()
             .zip(rhs.iter())
-            .all(|(lhs, rhs)| same_value(lhs, rhs))
+            .all(|(lhs, rhs)| same_value(graph, *lhs, *rhs))
 }
 
 fn same_value_map<K: Eq + std::hash::Hash + Copy>(
-    lhs: &HashMap<K, AbstractValue>,
-    rhs: &HashMap<K, AbstractValue>,
+    graph: &ValueGraph,
+    lhs: &HashMap<K, ValueRef>,
+    rhs: &HashMap<K, ValueRef>,
 ) -> bool {
     lhs.len() == rhs.len()
         && lhs.iter().all(|(key, lhs_value)| {
             rhs.get(key)
-                .is_some_and(|rhs_value| same_value(lhs_value, rhs_value))
+                .is_some_and(|rhs_value| same_value(graph, *lhs_value, *rhs_value))
         })
 }
 
-fn same_value(lhs: &AbstractValue, rhs: &AbstractValue) -> bool {
+fn same_value(graph: &ValueGraph, lhs: ValueRef, rhs: ValueRef) -> bool {
+    let lhs = &graph[lhs.0];
+    let rhs = &graph[rhs.0];
     lhs.ty == rhs.ty
         && lhs.origin == rhs.origin
-        && lhs.block_param == rhs.block_param
+        && lhs.block_argument() == rhs.block_argument()
         && lhs.const_value == rhs.const_value
         && lhs.key == rhs.key
+}
+
+fn ensure_seed_value(graph: &mut ValueGraph, ty: ValType, origin: ExprOrigin) -> ValueRef {
+    let value = ExprId(graph.nodes.len());
+    graph.nodes.push(ExprState {
+        ty,
+        origin,
+        def: ValueDef::Synthetic,
+        const_value: None,
+        key: None,
+        producer_record: None,
+        materialized_record: None,
+        use_count: 0,
+        ref_count: 0,
+        removable: false,
+    });
+    value
+}
+
+fn block_body_is_empty(body: &BlockBody) -> bool {
+    body.values.is_empty() && body.ops.is_empty() && body.terminator.is_none()
+}
+
+fn relower_block_body(body: &BlockBody) -> Vec<RecordEmit> {
+    let mut records = Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
+    records.extend(body.ops.iter().map(|op| op.record.clone()));
+    if let Some(terminator) = &body.terminator {
+        records.push(terminator.record.clone());
+    }
+    records
 }
 
 #[derive(Default)]
 struct BlockOptimizer {
     block_id: usize,
     effect_epoch: EffectEpoch,
+    next_synthetic_const_ordinal: usize,
     sink: RewriteSink,
     exprs: ValueGraph,
-    stack: Vec<ExprId>,
-    locals: HashMap<LocalSlot, ExprId>,
+    latest_by_origin: HashMap<ExprOrigin, ValueRef>,
+    touched_values: Vec<ValueRef>,
+    stack: Vec<ValueRef>,
+    locals: HashMap<LocalSlot, ValueRef>,
     origin_locals: HashMap<ExprOrigin, LocalSlot>,
     cse: HashMap<ValueKey, CseEntry>,
-    aliases: HashMap<AliasKey, ExprId>,
+    aliases: HashMap<AliasKey, ValueRef>,
     last_local_write: Option<LocalWrite>,
     last_store: HashMap<AliasKey, StoreWrite>,
     heap: HeapVersion,
@@ -599,7 +611,7 @@ struct BlockOptimizer {
 struct LocalWrite {
     slot: LocalSlot,
     record_idx: usize,
-    value: ExprId,
+    value: ValueRef,
 }
 
 #[derive(Clone, Copy)]
@@ -609,7 +621,7 @@ struct StoreWrite {
 
 #[derive(Clone, Copy)]
 struct CseEntry {
-    expr: ExprId,
+    expr: ValueRef,
     epoch: EffectEpoch,
 }
 
@@ -628,8 +640,7 @@ impl LocalPass for BlockOptimizer {
         }
         BlockRunResult {
             exit: self.snapshot_exit_state(),
-            records: self.sink.clone().into_live_records(),
-            record_graph: self.build_record_graph(),
+            body: self.build_block_body(),
             loop_invariants: self.loop_invariants.clone(),
         }
     }
@@ -639,9 +650,15 @@ impl BlockOptimizer {
     fn reset(&mut self, block: BasicBlock, entry: &BlockEntryState) {
         self.block_id = block.id;
         self.effect_epoch = 0;
+        self.next_synthetic_const_ordinal = SYNTHETIC_CONST_ORIGIN_BASE;
         self.sink = RewriteSink::default();
-        self.exprs.nodes.clear();
-        self.exprs.latest_by_origin.clear();
+        for value in self.touched_values.drain(..) {
+            if let Some(node) = self.exprs.nodes.get_mut(value.0) {
+                node.use_count = 0;
+                node.ref_count = 0;
+            }
+        }
+        self.latest_by_origin.clear();
         self.stack.clear();
         self.locals.clear();
         self.origin_locals.clear();
@@ -655,47 +672,35 @@ impl BlockOptimizer {
         let mut locals = entry.locals.iter().collect::<Vec<_>>();
         locals.sort_by_key(|(slot, _)| (slot.addr, slot.size));
         for (slot, value) in locals {
-            let expr = self.seed_value(value, false);
-            self.bind_local(*slot, expr);
-            self.seed_cse(expr);
-            self.maybe_mark_loop_invariant(expr);
+            self.register_existing_value(*value);
+            self.bind_local(*slot, *value);
+            self.seed_cse(*value);
+            self.maybe_mark_loop_invariant(*value);
         }
 
         for value in &entry.stack {
-            let expr = self.seed_value(value, false);
-            self.push_stack(expr);
-            self.seed_cse(expr);
-            self.maybe_mark_loop_invariant(expr);
+            self.register_existing_value(*value);
+            self.push_stack(*value);
+            self.seed_cse(*value);
+            self.maybe_mark_loop_invariant(*value);
         }
 
         let mut aliases = entry.aliases.iter().collect::<Vec<_>>();
         aliases.sort_by_key(|(key, _)| (key.space as u8, key.index, key.width));
         for (key, value) in aliases {
-            let expr = self.seed_value(value, false);
-            self.aliases.insert(*key, expr);
-            self.maybe_mark_loop_invariant(expr);
+            self.register_existing_value(*value);
+            self.aliases.insert(*key, *value);
+            self.maybe_mark_loop_invariant(*value);
         }
     }
 
-    fn seed_value(&mut self, value: &AbstractValue, removable: bool) -> ExprId {
-        let id = ExprId(self.exprs.nodes.len());
-        self.exprs.nodes.push(ExprState {
-            ty: value.ty,
-            origin: value.origin,
-            block_param: value.block_param,
-            const_value: value.const_value,
-            key: value.key,
-            producer_record: None,
-            materialized_record: None,
-            use_count: 0,
-            ref_count: 0,
-            removable,
-        });
-        self.exprs.latest_by_origin.insert(value.origin, id);
-        id
+    fn register_existing_value(&mut self, value: ValueRef) {
+        self.touch_value(value);
+        self.latest_by_origin
+            .insert(self.exprs[value.0].origin, value);
     }
 
-    fn seed_cse(&mut self, expr: ExprId) {
+    fn seed_cse(&mut self, expr: ValueRef) {
         let Some(key) = self.exprs[expr.0].key else {
             return;
         };
@@ -814,9 +819,9 @@ impl BlockOptimizer {
             self.new_expr_with_origin(
                 source_state.ty,
                 source_state.origin,
-                source_state.block_param,
                 source_state.const_value,
                 source_state.key,
+                source_state.def,
                 Some(record_idx),
                 true,
             )
@@ -830,7 +835,7 @@ impl BlockOptimizer {
                 },
                 None,
                 None,
-                None,
+                ValueDef::Synthetic,
                 Some(record_idx),
                 true,
             )
@@ -946,9 +951,9 @@ impl BlockOptimizer {
                 ordinal: instr_result_origin_ordinal(ordinal, 0),
                 kind: ExprOriginKind::InstrResult,
             },
-            None,
             const_value,
             key,
+            ValueDef::Instr,
             Some(record_idx),
             false,
         );
@@ -998,8 +1003,8 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::InstrResult,
             },
             None,
-            None,
             Some(key),
+            ValueDef::Instr,
             Some(record_idx),
             true,
         );
@@ -1072,8 +1077,8 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::InstrResult,
             },
             None,
-            None,
             Some(key),
+            ValueDef::Instr,
             Some(record_idx),
             true,
         );
@@ -1156,8 +1161,8 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::GlobalValue,
             },
             None,
-            None,
             Some(ValueKey::GlobalGet { slot }),
+            ValueDef::Instr,
             Some(record_idx),
             true,
         );
@@ -1209,7 +1214,7 @@ impl BlockOptimizer {
                 },
                 None,
                 None,
-                None,
+                ValueDef::Instr,
                 Some(record_idx),
                 true,
             );
@@ -1237,11 +1242,11 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::TableValue,
             },
             None,
-            None,
             Some(ValueKey::TableGet {
                 tableidx,
                 index: self.exprs[index.0].origin,
             }),
+            ValueDef::Instr,
             Some(record_idx),
             false,
         );
@@ -1297,7 +1302,7 @@ impl BlockOptimizer {
                 },
                 None,
                 None,
-                None,
+                ValueDef::Instr,
                 Some(record_idx),
                 true,
             );
@@ -1321,8 +1326,8 @@ impl BlockOptimizer {
                 kind: ExprOriginKind::MemoryValue,
             },
             None,
-            None,
             Some(ValueKey::MemoryLoad(key)),
+            ValueDef::Instr,
             Some(record_idx),
             false,
         );
@@ -1421,9 +1426,9 @@ impl BlockOptimizer {
                 ordinal,
                 kind: ExprOriginKind::SyntheticConst,
             },
-            None,
             Some(value),
             None,
+            ValueDef::Const,
             Some(record_idx),
             true,
         );
@@ -1435,7 +1440,7 @@ impl BlockOptimizer {
             .push(Some(record.old_start), record.op, record.operands.clone())
     }
 
-    fn bind_local(&mut self, slot: LocalSlot, expr: ExprId) {
+    fn bind_local(&mut self, slot: LocalSlot, expr: ValueRef) {
         if let Some(previous) = self.locals.insert(slot, expr) {
             self.decref(previous);
             if self.origin_locals.get(&self.exprs[previous.0].origin) == Some(&slot) {
@@ -1446,27 +1451,30 @@ impl BlockOptimizer {
         self.incref(expr);
     }
 
-    fn push_stack(&mut self, expr: ExprId) {
+    fn push_stack(&mut self, expr: ValueRef) {
         self.stack.push(expr);
         self.incref(expr);
     }
 
-    fn pop_stack(&mut self) -> Option<ExprId> {
+    fn pop_stack(&mut self) -> Option<ValueRef> {
         let expr = self.stack.pop()?;
         self.decref(expr);
+        self.touch_value(expr);
         self.exprs[expr.0].use_count = self.exprs[expr.0].use_count.saturating_add(1);
         Some(expr)
     }
 
-    fn incref(&mut self, expr: ExprId) {
+    fn incref(&mut self, expr: ValueRef) {
+        self.touch_value(expr);
         self.exprs[expr.0].ref_count += 1;
     }
 
-    fn decref(&mut self, expr: ExprId) {
+    fn decref(&mut self, expr: ValueRef) {
+        self.touch_value(expr);
         self.exprs[expr.0].ref_count = self.exprs[expr.0].ref_count.saturating_sub(1);
     }
 
-    fn try_remove_expr(&mut self, expr: ExprId) -> bool {
+    fn try_remove_expr(&mut self, expr: ValueRef) -> bool {
         if !self.can_remove_expr(expr) {
             return false;
         }
@@ -1478,12 +1486,12 @@ impl BlockOptimizer {
         true
     }
 
-    fn can_remove_expr(&self, expr: ExprId) -> bool {
+    fn can_remove_expr(&self, expr: ValueRef) -> bool {
         let state = &self.exprs[expr.0];
         state.ref_count == 0 && state.removable && state.producer_record.is_some()
     }
 
-    fn can_materialize(&self, expr: ExprId) -> bool {
+    fn can_materialize(&self, expr: ValueRef) -> bool {
         let state = &self.exprs[expr.0];
         state.const_value.is_some()
             || self.origin_locals.contains_key(&state.origin)
@@ -1505,57 +1513,43 @@ impl BlockOptimizer {
         let mut locals = self.locals.iter().collect::<Vec<_>>();
         locals.sort_by_key(|(slot, _)| (slot.addr, slot.size));
         for (slot, expr) in locals {
-            state.locals.insert(*slot, self.snapshot_value(*expr));
+            state.locals.insert(*slot, *expr);
         }
 
         for expr in &self.stack {
-            state.stack.push(self.snapshot_value(*expr));
+            state.stack.push(*expr);
         }
 
         let mut aliases = self.aliases.iter().collect::<Vec<_>>();
         aliases.sort_by_key(|(key, _)| (key.space as u8, key.index, key.width));
         for (key, expr) in aliases {
-            state.aliases.insert(*key, self.snapshot_value(*expr));
+            state.aliases.insert(*key, *expr);
         }
 
         state
     }
 
-    fn build_record_graph(&self) -> Vec<RecordGraphInfo> {
+    fn build_block_body(&self) -> BlockBody {
         let mut expr_by_record = HashMap::new();
         for (expr_idx, expr) in self.exprs.nodes.iter().enumerate() {
             if let Some(record_idx) = expr.materialized_record {
                 expr_by_record.entry(record_idx).or_insert(ExprId(expr_idx));
             }
         }
-        self.sink
-            .live_indices()
-            .into_iter()
-            .map(|record_idx| {
-                expr_by_record
-                    .get(&record_idx)
-                    .map(|expr| {
-                        let expr = &self.exprs[expr.0];
-                        RecordGraphInfo {
-                            origin: Some(expr.origin),
-                            use_count: expr.use_count,
-                            block_param: expr.block_param.is_some(),
-                        }
-                    })
-                    .unwrap_or_default()
-            })
-            .collect()
-    }
-
-    fn snapshot_value(&self, expr: ExprId) -> AbstractValue {
-        let state = &self.exprs[expr.0];
-        AbstractValue {
-            ty: state.ty,
-            origin: state.origin,
-            block_param: state.block_param,
-            const_value: state.const_value,
-            key: state.key,
+        let live = self.sink.clone().into_live_records();
+        let mut body = BlockBody::default();
+        for (record_idx, record) in self.sink.live_indices().into_iter().zip(live.into_iter()) {
+            let value = expr_by_record.get(&record_idx).copied();
+            if let Some(value) = value {
+                body.values.push(value);
+            }
+            if record_ends_basic_block(&record) {
+                body.terminator = Some(BlockTerminator { record, value });
+            } else {
+                body.ops.push(BlockOp { record, value });
+            }
         }
+        body
     }
 
     fn can_materialize_key(&self, key: Option<ValueKey>) -> bool {
@@ -1564,19 +1558,16 @@ impl BlockOptimizer {
         };
         match key {
             ValueKey::Unary { input, .. } => self
-                .exprs
                 .latest_by_origin
                 .get(&input)
                 .copied()
                 .is_some_and(|expr| self.can_materialize(expr)),
             ValueKey::Binary { lhs, rhs, .. } => {
-                self.exprs
-                    .latest_by_origin
+                self.latest_by_origin
                     .get(&lhs)
                     .copied()
                     .is_some_and(|expr| self.can_materialize(expr))
                     && self
-                        .exprs
                         .latest_by_origin
                         .get(&rhs)
                         .copied()
@@ -1607,7 +1598,7 @@ impl BlockOptimizer {
                 },
                 None,
                 None,
-                None,
+                ValueDef::Instr,
                 None,
                 false,
             );
@@ -1620,17 +1611,17 @@ impl BlockOptimizer {
         &mut self,
         ty: ValType,
         origin: ExprOrigin,
-        block_param: Option<BlockParam>,
         const_value: Option<ConstValue>,
         key: Option<ValueKey>,
+        def: ValueDef,
         producer_record: Option<usize>,
         removable: bool,
-    ) -> ExprId {
+    ) -> ValueRef {
         let id = ExprId(self.exprs.nodes.len());
         self.exprs.nodes.push(ExprState {
             ty,
             origin,
-            block_param,
+            def,
             const_value,
             key,
             producer_record,
@@ -1639,18 +1630,19 @@ impl BlockOptimizer {
             ref_count: 0,
             removable,
         });
-        self.exprs.latest_by_origin.insert(origin, id);
+        self.touch_value(id);
+        self.latest_by_origin.insert(origin, id);
         id
     }
 
-    fn lookup_cse_source(&self, key: ValueKey) -> Option<ExprId> {
+    fn lookup_cse_source(&self, key: ValueKey) -> Option<ValueRef> {
         let entry = self.cse.get(&key).copied()?;
         (entry.epoch == self.effect_epoch).then_some(entry.expr)
     }
 
-    fn try_materialize_value(&mut self, source_start: usize, source: ExprId) -> Option<ExprId> {
+    fn try_materialize_value(&mut self, source_start: usize, source: ValueRef) -> Option<ValueRef> {
         if let Some(value) = self.exprs[source.0].const_value {
-            let ordinal = self.exprs.len();
+            let ordinal = self.allocate_synthetic_const_ordinal();
             self.emit_const(source_start, const_value_type(value), value, ordinal);
             return self.stack.pop().inspect(|expr| {
                 self.decref(*expr);
@@ -1673,9 +1665,9 @@ impl BlockOptimizer {
             return Some(self.new_expr_with_origin(
                 source_state.ty,
                 source_state.origin,
-                source_state.block_param,
                 source_state.const_value,
                 source_state.key,
+                source_state.def,
                 Some(record_idx),
                 true,
             ));
@@ -1686,12 +1678,12 @@ impl BlockOptimizer {
     fn try_materialize_pure_value(
         &mut self,
         source_start: usize,
-        source: ExprId,
-    ) -> Option<ExprId> {
+        source: ValueRef,
+    ) -> Option<ValueRef> {
         let source_state = self.exprs[source.0].clone();
         match source_state.key? {
             ValueKey::Unary { op, input } => {
-                let input_expr = self.exprs.latest_by_origin.get(&input).copied()?;
+                let input_expr = self.latest_by_origin.get(&input).copied()?;
                 let _ = self.try_materialize_value(source_start, input_expr)?;
                 let record_idx = self
                     .sink
@@ -1699,16 +1691,16 @@ impl BlockOptimizer {
                 Some(self.new_expr_with_origin(
                     source_state.ty,
                     source_state.origin,
-                    source_state.block_param,
                     source_state.const_value,
                     source_state.key,
+                    source_state.def,
                     Some(record_idx),
                     true,
                 ))
             }
             ValueKey::Binary { op, lhs, rhs } => {
-                let lhs_expr = self.exprs.latest_by_origin.get(&lhs).copied()?;
-                let rhs_expr = self.exprs.latest_by_origin.get(&rhs).copied()?;
+                let lhs_expr = self.latest_by_origin.get(&lhs).copied()?;
+                let rhs_expr = self.latest_by_origin.get(&rhs).copied()?;
                 let _ = self.try_materialize_value(source_start, lhs_expr)?;
                 let _ = self.try_materialize_value(source_start, rhs_expr)?;
                 let record_idx = self
@@ -1717,9 +1709,9 @@ impl BlockOptimizer {
                 Some(self.new_expr_with_origin(
                     source_state.ty,
                     source_state.origin,
-                    source_state.block_param,
                     source_state.const_value,
                     source_state.key,
+                    source_state.def,
                     Some(record_idx),
                     true,
                 ))
@@ -1730,7 +1722,7 @@ impl BlockOptimizer {
         }
     }
 
-    fn maybe_mark_loop_invariant(&mut self, expr: ExprId) {
+    fn maybe_mark_loop_invariant(&mut self, expr: ValueRef) {
         if self.expr_is_loop_invariant(expr) {
             self.loop_invariants
                 .pure_origins
@@ -1738,9 +1730,9 @@ impl BlockOptimizer {
         }
     }
 
-    fn expr_is_loop_invariant(&self, expr: ExprId) -> bool {
+    fn expr_is_loop_invariant(&self, expr: ValueRef) -> bool {
         let state = &self.exprs[expr.0];
-        if state.block_param.is_some() {
+        if state.is_block_argument() {
             return false;
         }
         if state.const_value.is_some() {
@@ -1748,24 +1740,21 @@ impl BlockOptimizer {
         }
         match state.origin.kind {
             ExprOriginKind::EntryLocal | ExprOriginKind::SyntheticConst => return true,
-            ExprOriginKind::EntryStack | ExprOriginKind::BlockParam => return false,
+            ExprOriginKind::EntryStack | ExprOriginKind::BlockArgument => return false,
             _ => {}
         }
         match state.key {
             Some(ValueKey::Unary { input, .. }) => self
-                .exprs
                 .latest_by_origin
                 .get(&input)
                 .copied()
                 .is_some_and(|input| self.expr_is_loop_invariant(input)),
             Some(ValueKey::Binary { lhs, rhs, .. }) => {
-                self.exprs
-                    .latest_by_origin
+                self.latest_by_origin
                     .get(&lhs)
                     .copied()
                     .is_some_and(|lhs| self.expr_is_loop_invariant(lhs))
                     && self
-                        .exprs
                         .latest_by_origin
                         .get(&rhs)
                         .copied()
@@ -1778,7 +1767,7 @@ impl BlockOptimizer {
         }
     }
 
-    fn canonical_alias_address(&self, expr: ExprId) -> Option<AliasAddress> {
+    fn canonical_alias_address(&self, expr: ValueRef) -> Option<AliasAddress> {
         let value = &self.exprs[expr.0];
         value
             .const_value
@@ -1792,18 +1781,21 @@ impl BlockOptimizer {
                     .map(|slot| AliasAddress::Origin(local_alias_origin(self.block_id, *slot)))
             })
             .or_else(|| {
-                value.block_param.map(|param| {
-                    AliasAddress::Origin(ExprOrigin {
-                        block_id: param.block_id,
-                        ordinal: param.ordinal,
-                        kind: ExprOriginKind::BlockParam,
+                value
+                    .block_argument()
+                    .and_then(|id| self.exprs.block_argument(id))
+                    .map(|arg| {
+                        AliasAddress::Origin(ExprOrigin {
+                            block_id: arg.block_id,
+                            ordinal: arg.ordinal,
+                            kind: ExprOriginKind::BlockArgument,
+                        })
                     })
-                })
             })
             .or(Some(AliasAddress::Origin(value.origin)))
     }
 
-    fn memory_alias_key(&self, access: MemoryAccess, address: ExprId) -> Option<AliasKey> {
+    fn memory_alias_key(&self, access: MemoryAccess, address: ValueRef) -> Option<AliasKey> {
         Some(AliasKey {
             space: AliasSpace::Memory,
             index: access.memidx,
@@ -1811,10 +1803,20 @@ impl BlockOptimizer {
             address: self.canonical_alias_address(address)?,
         })
     }
+
+    fn touch_value(&mut self, value: ValueRef) {
+        self.touched_values.push(value);
+    }
+
+    fn allocate_synthetic_const_ordinal(&mut self) -> usize {
+        let ordinal = self.next_synthetic_const_ordinal;
+        self.next_synthetic_const_ordinal = self.next_synthetic_const_ordinal.saturating_add(1);
+        ordinal
+    }
 }
 
 fn clear_alias_space_rewrite(
-    aliases: &mut HashMap<AliasKey, ExprId>,
+    aliases: &mut HashMap<AliasKey, ValueRef>,
     stores: &mut HashMap<AliasKey, StoreWrite>,
     space: AliasSpace,
 ) {
@@ -1829,24 +1831,9 @@ fn clear_store_space_on_load(stores: &mut HashMap<AliasKey, StoreWrite>, space: 
 fn same_expr(lhs: &ExprState, rhs: &ExprState) -> bool {
     lhs.ty == rhs.ty
         && lhs.origin == rhs.origin
-        && lhs.block_param == rhs.block_param
+        && lhs.block_argument() == rhs.block_argument()
         && lhs.const_value == rhs.const_value
         && lhs.key == rhs.key
-}
-
-fn same_records(lhs: &[RecordEmit], rhs: &[RecordEmit]) -> bool {
-    lhs.len() == rhs.len()
-        && lhs.iter().zip(rhs.iter()).all(|(lhs, rhs)| {
-            lhs.source_start == rhs.source_start
-                && lhs.alive == rhs.alive
-                && std::ptr::fn_addr_eq(lhs.op, rhs.op)
-                && lhs.operands.len() == rhs.operands.len()
-                && lhs
-                    .operands
-                    .iter()
-                    .zip(rhs.operands.iter())
-                    .all(|(lhs, rhs)| unsafe { lhs.encoded == rhs.encoded })
-        })
 }
 
 #[derive(Clone)]
@@ -1874,71 +1861,88 @@ struct LicmCandidate {
 
 fn apply_licm(
     program: &BasicBlockProgram,
-    rewrite: &FunctionRewrite,
+    rewrite: &mut FunctionRewrite,
     locals: &mut LocalsData,
-    records_by_block: &mut [Vec<RecordEmit>],
 ) -> Vec<bool> {
     let loops = collect_natural_loops(program);
     let mut modified = vec![false; program.blocks.len()];
     for loop_info in loops {
         let effects = summarize_loop_effects(program, &loop_info.blocks);
-        let header_records = records_by_block[loop_info.header].clone();
-        let default_invariants = LoopInvariantSet::default();
-        let loop_invariants = rewrite
-            .relower
-            .loop_invariants
-            .get(loop_info.header)
-            .unwrap_or(&default_invariants);
-        let candidates = collect_licm_candidates(
-            &header_records,
-            &effects,
-            loop_invariants,
-            rewrite
-                .relower
-                .record_graphs_by_block
-                .get(loop_info.header)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]),
-        );
-        if candidates.is_empty() {
-            continue;
+        let mut candidate_blocks = vec![loop_info.header];
+        if rewrite.relower.block_bodies[loop_info.header]
+            .ops
+            .is_empty()
+            && rewrite.relower.block_bodies[loop_info.header]
+                .terminator
+                .as_ref()
+                .is_some_and(|terminator| record_is(&terminator.record, vm::op_loop as Op))
+        {
+            if let Some(first_loop_block) = program.successors[loop_info.header].first().copied() {
+                candidate_blocks.push(first_loop_block);
+            }
         }
 
-        let mut preheader_insert = Vec::new();
-        let mut new_header = Vec::with_capacity(header_records.len());
-        let mut cursor = 0usize;
-        while cursor < header_records.len() {
-            if let Some(candidate) = candidates
-                .iter()
-                .find(|candidate| candidate.start == cursor)
-            {
-                let temp = LocalSlot::new(
-                    locals.allocate_temp_slot(type_from_slot(candidate.result_size)),
-                    candidate.result_size,
-                );
-                preheader_insert.extend(emit_licm_candidate(candidate, temp, &header_records));
-                new_header.push(RecordEmit {
-                    source_start: candidate.source_start,
-                    op: local_get_op(candidate.result_size),
-                    operands: vec![Operand {
-                        local_addr: temp.addr,
-                    }],
-                    alive: true,
-                });
-                cursor = candidate.end;
-                modified[loop_info.header] = true;
-                modified[loop_info.preheader] = true;
+        for candidate_block in candidate_blocks {
+            let header_body = rewrite.relower.block_bodies[candidate_block].clone();
+            let header_records = relower_block_body(&header_body);
+            let default_invariants = LoopInvariantSet::default();
+            let loop_invariants = rewrite
+                .relower
+                .loop_invariants
+                .get(candidate_block)
+                .unwrap_or(&default_invariants);
+            let candidates = collect_licm_candidates(
+                &rewrite.graph,
+                &header_records,
+                &effects,
+                loop_invariants,
+                &block_body_record_graph(&header_body),
+            );
+            if candidates.is_empty() {
                 continue;
             }
-            new_header.push(header_records[cursor].clone());
-            cursor += 1;
-        }
 
-        if preheader_insert.is_empty() {
-            continue;
+            let mut preheader_insert = Vec::new();
+            let mut new_header = Vec::with_capacity(header_records.len());
+            let mut cursor = 0usize;
+            while cursor < header_records.len() {
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|candidate| candidate.start == cursor)
+                {
+                    let temp = LocalSlot::new(
+                        locals.allocate_temp_slot(type_from_slot(candidate.result_size)),
+                        candidate.result_size,
+                    );
+                    preheader_insert.extend(emit_licm_candidate(candidate, temp, &header_records));
+                    new_header.push(RecordEmit {
+                        source_start: candidate.source_start,
+                        op: local_get_op(candidate.result_size),
+                        operands: vec![Operand {
+                            local_addr: temp.addr,
+                        }],
+                        alive: true,
+                    });
+                    cursor = candidate.end;
+                    modified[candidate_block] = true;
+                    modified[loop_info.preheader] = true;
+                    continue;
+                }
+                new_header.push(header_records[cursor].clone());
+                cursor += 1;
+            }
+
+            if preheader_insert.is_empty() {
+                continue;
+            }
+            let mut preheader_records =
+                relower_block_body(&rewrite.relower.block_bodies[loop_info.preheader]);
+            insert_before_terminal(&mut preheader_records, preheader_insert);
+            rewrite.relower.block_bodies[loop_info.preheader] =
+                block_body_from_records(preheader_records);
+            rewrite.relower.block_bodies[candidate_block] = block_body_from_records(new_header);
+            break;
         }
-        insert_before_terminal(&mut records_by_block[loop_info.preheader], preheader_insert);
-        records_by_block[loop_info.header] = new_header;
     }
     modified
 }
@@ -2019,6 +2023,7 @@ fn summarize_loop_effects(program: &BasicBlockProgram, blocks: &BTreeSet<usize>)
 }
 
 fn collect_licm_candidates(
+    graph: &ValueGraph,
     records: &[RecordEmit],
     effects: &LoopEffects,
     loop_invariants: &LoopInvariantSet,
@@ -2034,9 +2039,14 @@ fn collect_licm_candidates(
         if record_is_control_like(&records[cursor]) {
             break;
         }
-        if let Some(candidate) =
-            match_licm_candidate(records, record_graph, loop_invariants, cursor, effects)
-        {
+        if let Some(candidate) = match_licm_candidate(
+            graph,
+            records,
+            record_graph,
+            loop_invariants,
+            cursor,
+            effects,
+        ) {
             cursor = candidate.end;
             candidates.push(candidate);
             continue;
@@ -2047,6 +2057,7 @@ fn collect_licm_candidates(
 }
 
 fn match_licm_candidate(
+    graph: &ValueGraph,
     records: &[RecordEmit],
     record_graph: &[RecordGraphInfo],
     loop_invariants: &LoopInvariantSet,
@@ -2063,10 +2074,15 @@ fn match_licm_candidate(
             let op = records.get(cursor + 2)?;
             if record_is(op, vm::op_i32_add as Op) || record_is(op, vm::op_i32_sub as Op) {
                 if effects.local_writes.contains(&slot)
-                    || !graph_info_single_use(record_graph, cursor)
-                    || !graph_info_single_use(record_graph, cursor + 1)
-                    || !graph_info_single_use(record_graph, cursor + 2)
-                    || !record_has_invariant_origin(record_graph, loop_invariants, cursor + 2)
+                    || !graph_info_single_use(graph, record_graph, cursor)
+                    || !graph_info_single_use(graph, record_graph, cursor + 1)
+                    || !graph_info_single_use(graph, record_graph, cursor + 2)
+                    || !record_has_invariant_origin(
+                        graph,
+                        record_graph,
+                        loop_invariants,
+                        cursor + 2,
+                    )
                 {
                     return None;
                 }
@@ -2085,10 +2101,15 @@ fn match_licm_candidate(
             {
                 if effects.local_writes.contains(&slot)
                     || effects.local_writes.contains(&rhs)
-                    || !graph_info_single_use(record_graph, cursor)
-                    || !graph_info_single_use(record_graph, cursor + 1)
-                    || !graph_info_single_use(record_graph, cursor + 2)
-                    || !record_has_invariant_origin(record_graph, loop_invariants, cursor + 2)
+                    || !graph_info_single_use(graph, record_graph, cursor)
+                    || !graph_info_single_use(graph, record_graph, cursor + 1)
+                    || !graph_info_single_use(graph, record_graph, cursor + 2)
+                    || !record_has_invariant_origin(
+                        graph,
+                        record_graph,
+                        loop_invariants,
+                        cursor + 2,
+                    )
                 {
                     return None;
                 }
@@ -2176,20 +2197,60 @@ fn insert_before_terminal(records: &mut Vec<RecordEmit>, mut insert: Vec<RecordE
     records.splice(insert_at..insert_at, insert.drain(..));
 }
 
-fn graph_info_single_use(record_graph: &[RecordGraphInfo], idx: usize) -> bool {
+fn block_body_from_records(records: Vec<RecordEmit>) -> BlockBody {
+    let mut body = BlockBody::default();
+    for record in records {
+        if record_ends_basic_block(&record) {
+            body.terminator = Some(BlockTerminator {
+                record,
+                value: None,
+            });
+        } else {
+            body.ops.push(BlockOp {
+                record,
+                value: None,
+            });
+        }
+    }
+    body
+}
+
+fn block_body_record_graph(body: &BlockBody) -> Vec<RecordGraphInfo> {
+    let mut info = body
+        .ops
+        .iter()
+        .map(|op| RecordGraphInfo { value: op.value })
+        .collect::<Vec<_>>();
+    if let Some(terminator) = &body.terminator {
+        info.push(RecordGraphInfo {
+            value: terminator.value,
+        });
+    }
+    info
+}
+
+fn graph_info_single_use(graph: &ValueGraph, record_graph: &[RecordGraphInfo], idx: usize) -> bool {
     record_graph
         .get(idx)
-        .is_some_and(|info| info.origin.is_some() && info.use_count <= 1 && !info.block_param)
+        .and_then(|info| info.value)
+        .is_some_and(|value| value_is_single_use(graph, value))
+}
+
+fn value_is_single_use(graph: &ValueGraph, value: ValueRef) -> bool {
+    let node = &graph[value.0];
+    node.use_count <= 1 && !node.is_block_argument()
 }
 
 fn record_has_invariant_origin(
+    graph: &ValueGraph,
     record_graph: &[RecordGraphInfo],
     loop_invariants: &LoopInvariantSet,
     idx: usize,
 ) -> bool {
     record_graph
         .get(idx)
-        .and_then(|info| info.origin)
+        .and_then(|info| info.value)
+        .map(|value| graph[value.0].origin)
         .is_some_and(|origin| loop_invariants.pure_origins.contains(&origin))
 }
 
@@ -2291,37 +2352,24 @@ enum SelectorPattern {
 
 fn select_superinstructions(
     program: &BasicBlockProgram,
-    rewrite: &FunctionRewrite,
-    records_by_block: &[Vec<RecordEmit>],
-    licm_modified: &[bool],
-) -> Vec<Vec<RecordEmit>> {
-    let mut selected = vec![Vec::new(); program.blocks.len()];
+    rewrite: &mut FunctionRewrite,
+    _licm_modified: &[bool],
+) {
     for block in &program.blocks {
-        let records = &records_by_block[block.id];
-        if licm_modified.get(block.id).copied().unwrap_or(false) {
-            selected[block.id] = records.clone();
-            continue;
-        }
-        let record_graph = rewrite
-            .relower
-            .record_graphs_by_block
-            .get(block.id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        selected[block.id] = select_block_superinstructions(records, record_graph);
+        let body = rewrite.relower.block_bodies[block.id].clone();
+        rewrite.relower.block_bodies[block.id] =
+            select_block_superinstructions(&rewrite.graph, &body);
     }
-    selected
 }
 
-fn select_block_superinstructions(
-    records: &[RecordEmit],
-    record_graph: &[RecordGraphInfo],
-) -> Vec<RecordEmit> {
+fn select_block_superinstructions(graph: &ValueGraph, body: &BlockBody) -> BlockBody {
+    let records = relower_block_body(body);
+    let record_graph = block_body_record_graph(body);
     let mut out = Vec::with_capacity(records.len());
     let mut cursor = 0usize;
     while cursor < records.len() {
         if let Some((fused, consumed)) =
-            match_selector_pattern(&records[cursor..], &record_graph[cursor..])
+            match_selector_pattern(graph, &records[cursor..], &record_graph[cursor..])
         {
             out.push(fused);
             cursor += consumed;
@@ -2330,10 +2378,11 @@ fn select_block_superinstructions(
         out.push(records[cursor].clone());
         cursor += 1;
     }
-    out
+    block_body_from_records(out)
 }
 
 fn match_selector_pattern(
+    graph: &ValueGraph,
     records: &[RecordEmit],
     record_graph: &[RecordGraphInfo],
 ) -> Option<(RecordEmit, usize)> {
@@ -2343,9 +2392,9 @@ fn match_selector_pattern(
         && (record_is(&records[2], vm::op_i32_add as Op)
             || record_is(&records[2], vm::op_i32_sub as Op))
         && record_is(&records[3], vm::op_local_set4 as Op)
-        && graph_info_single_use(record_graph, 0)
-        && graph_info_single_use(record_graph, 1)
-        && graph_info_single_use(record_graph, 2)
+        && graph_info_single_use(graph, record_graph, 0)
+        && graph_info_single_use(graph, record_graph, 1)
+        && graph_info_single_use(graph, record_graph, 2)
         && !next_record_is_call_like(records, 4)
     {
         let imm = if record_is(&records[2], vm::op_i32_sub as Op) {
@@ -2371,9 +2420,9 @@ fn match_selector_pattern(
         && record_is(&records[0], vm::op_local_get4 as Op)
         && record_is(&records[1], vm::op_i32_const as Op)
         && record_is(&records[2], vm::op_i32_add as Op)
-        && graph_info_single_use(record_graph, 0)
-        && graph_info_single_use(record_graph, 1)
-        && graph_info_single_use(record_graph, 2)
+        && graph_info_single_use(graph, record_graph, 0)
+        && graph_info_single_use(graph, record_graph, 1)
+        && graph_info_single_use(graph, record_graph, 2)
         && !next_record_is_call_like(records, 3)
     {
         return Some((
@@ -2392,9 +2441,9 @@ fn match_selector_pattern(
         && (record_is(&records[2], vm::op_i32_add as Op)
             || record_is(&records[2], vm::op_i32_sub as Op))
         && record_is(&records[3], vm::op_local_tee4 as Op)
-        && graph_info_single_use(record_graph, 0)
-        && graph_info_single_use(record_graph, 1)
-        && graph_info_single_use(record_graph, 2)
+        && graph_info_single_use(graph, record_graph, 0)
+        && graph_info_single_use(graph, record_graph, 1)
+        && graph_info_single_use(graph, record_graph, 2)
         && !next_record_is_call_like(records, 4)
     {
         let imm = if record_is(&records[2], vm::op_i32_sub as Op) {
@@ -2421,9 +2470,9 @@ fn match_selector_pattern(
         && record_is(&records[1], vm::op_local_get4 as Op)
         && record_is(&records[2], vm::op_i32_add as Op)
         && record_is(&records[3], vm::op_local_set4 as Op)
-        && graph_info_single_use(record_graph, 0)
-        && graph_info_single_use(record_graph, 1)
-        && graph_info_single_use(record_graph, 2)
+        && graph_info_single_use(graph, record_graph, 0)
+        && graph_info_single_use(graph, record_graph, 1)
+        && graph_info_single_use(graph, record_graph, 2)
         && !next_record_is_call_like(records, 4)
     {
         return Some((
@@ -2444,9 +2493,9 @@ fn match_selector_pattern(
         && record_is(&records[0], vm::op_local_get4 as Op)
         && record_is(&records[1], vm::op_local_get4 as Op)
         && record_is(&records[2], vm::op_i32_add as Op)
-        && graph_info_single_use(record_graph, 0)
-        && graph_info_single_use(record_graph, 1)
-        && graph_info_single_use(record_graph, 2)
+        && graph_info_single_use(graph, record_graph, 0)
+        && graph_info_single_use(graph, record_graph, 1)
+        && graph_info_single_use(graph, record_graph, 2)
         && !next_record_is_call_like(records, 3)
     {
         return Some((
@@ -2464,9 +2513,9 @@ fn match_selector_pattern(
         && record_is(&records[1], vm::op_local_get4 as Op)
         && record_is(&records[2], vm::op_i32_add as Op)
         && record_is(&records[3], vm::op_local_tee4 as Op)
-        && graph_info_single_use(record_graph, 0)
-        && graph_info_single_use(record_graph, 1)
-        && graph_info_single_use(record_graph, 2)
+        && graph_info_single_use(graph, record_graph, 0)
+        && graph_info_single_use(graph, record_graph, 1)
+        && graph_info_single_use(graph, record_graph, 2)
         && !next_record_is_call_like(records, 4)
     {
         return Some((
@@ -2515,7 +2564,7 @@ fn record_is(record: &RecordEmit, op: Op) -> bool {
     std::ptr::fn_addr_eq(record.op, op)
 }
 
-fn reachable_blocks(program: &BasicBlockProgram, records: &[Vec<RecordEmit>]) -> Vec<bool> {
+fn reachable_blocks(program: &BasicBlockProgram, bodies: &[BlockBody]) -> Vec<bool> {
     let mut reachable = vec![false; program.blocks.len()];
     let mut queue = VecDeque::from([0usize]);
     while let Some(block_id) = queue.pop_front() {
@@ -2523,7 +2572,8 @@ fn reachable_blocks(program: &BasicBlockProgram, records: &[Vec<RecordEmit>]) ->
             continue;
         }
         reachable[block_id] = true;
-        for succ in rewritten_successors(program, block_id, &records[block_id]) {
+        for succ in rewritten_successors(program, block_id, &relower_block_body(&bodies[block_id]))
+        {
             if !reachable[succ] {
                 queue.push_back(succ);
             }
@@ -3395,6 +3445,13 @@ mod tests {
         }
     }
 
+    fn snapshot(types: &[ValType]) -> StackSnapshot {
+        StackSnapshot {
+            reachable: true,
+            types: types.to_vec(),
+        }
+    }
+
     #[test]
     fn merge_states_preserves_entry_local_memory_alias_across_join() {
         let first = DecodedInstr {
@@ -3443,16 +3500,21 @@ mod tests {
             },
             ..BlockEntryState::default()
         };
-        lhs.aliases.insert(
-            key_lhs,
-            AbstractValue {
-                ty: ValType::I32,
-                origin: value_origin_lhs,
-                block_param: None,
-                const_value: Some(ConstValue::I32(42)),
-                key: None,
-            },
-        );
+        let mut graph = ValueGraph::default();
+        let lhs_value = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: value_origin_lhs,
+            def: ValueDef::Instr,
+            const_value: Some(ConstValue::I32(42)),
+            key: None,
+            producer_record: None,
+            materialized_record: None,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        lhs.aliases.insert(key_lhs, lhs_value);
         let mut rhs = BlockEntryState {
             reachable: true,
             heap: HeapVersion {
@@ -3462,18 +3524,22 @@ mod tests {
             },
             ..BlockEntryState::default()
         };
-        rhs.aliases.insert(
-            key_rhs,
-            AbstractValue {
-                ty: ValType::I32,
-                origin: value_origin_rhs,
-                block_param: None,
-                const_value: Some(ConstValue::I32(42)),
-                key: None,
-            },
-        );
+        let rhs_value = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: value_origin_rhs,
+            def: ValueDef::Instr,
+            const_value: Some(ConstValue::I32(42)),
+            key: None,
+            producer_record: None,
+            materialized_record: None,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        rhs.aliases.insert(key_rhs, rhs_value);
 
-        let merged = merge_states(7, &first, &[lhs, rhs]);
+        let merged = merge_states(&mut graph, 7, &first, &[lhs, rhs]);
         let merged_key = AliasKey {
             space: AliasSpace::Memory,
             index: 0,
@@ -3488,6 +3554,77 @@ mod tests {
             .aliases
             .get(&merged_key)
             .expect("entry-local alias should survive the join");
-        assert_eq!(merged_value.const_value, Some(ConstValue::I32(42)));
+        assert_eq!(graph[merged_value.0].const_value, Some(ConstValue::I32(42)));
+    }
+
+    #[test]
+    fn merge_states_creates_first_class_block_argument_values() {
+        let first = DecodedInstr {
+            old_start: 0,
+            op: vm::op_end as Op,
+            operands: Vec::new(),
+            stack_before: snapshot(&[ValType::I32]),
+            stack_after: empty_snapshot(),
+        };
+        let mut graph = ValueGraph::default();
+        let lhs_stack = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 10,
+                ordinal: 0,
+                kind: ExprOriginKind::EntryStack,
+            },
+            def: ValueDef::Synthetic,
+            const_value: Some(ConstValue::I32(1)),
+            key: None,
+            producer_record: None,
+            materialized_record: None,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        let rhs_stack = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 11,
+                ordinal: 0,
+                kind: ExprOriginKind::EntryStack,
+            },
+            def: ValueDef::Synthetic,
+            const_value: Some(ConstValue::I32(2)),
+            key: None,
+            producer_record: None,
+            materialized_record: None,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+
+        let lhs = BlockEntryState {
+            reachable: true,
+            stack: vec![lhs_stack],
+            ..BlockEntryState::default()
+        };
+        let rhs = BlockEntryState {
+            reachable: true,
+            stack: vec![rhs_stack],
+            ..BlockEntryState::default()
+        };
+
+        let merged = merge_states(&mut graph, 7, &first, &[lhs, rhs]);
+        let merged_stack = merged.stack[0];
+        assert!(graph[merged_stack.0].is_block_argument());
+        assert_eq!(graph.block_arguments.len(), 1);
+        let block_argument = graph
+            .block_argument(
+                graph[merged_stack.0]
+                    .block_argument()
+                    .expect("block argument id"),
+            )
+            .expect("block argument");
+        assert_eq!(block_argument.block_id, 7);
+        assert_eq!(block_argument.ordinal, 0);
     }
 }
