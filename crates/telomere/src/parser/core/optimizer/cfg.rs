@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::{
-    common::{Instr, Op, Operand},
+    common::{Instr, MemArg, Op, Operand},
     parser::core::type_checker::StackSnapshot,
     runtime::vm,
 };
@@ -54,6 +54,10 @@ impl DecodedInstr {
 
     pub(crate) fn operand_local_addr(&self) -> u32 {
         unsafe { self.operands[0].local_addr }
+    }
+
+    pub(crate) fn operand_memarg(&self, idx: usize) -> MemArg {
+        unsafe { self.operands[idx].memarg }
     }
 
     pub(crate) fn operand_jump_addr(&self, idx: usize) -> usize {

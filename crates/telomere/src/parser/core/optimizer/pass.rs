@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     hash::{Hash, Hasher},
     sync::OnceLock,
     time::{Duration, Instant},
@@ -43,17 +43,27 @@ struct LoopInvariantSet {
     pure_origins: BTreeSet<ExprOrigin>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum JoinAliasAddress {
     Const(u32),
     EntryLocal(usize),
     BlockArgument(usize),
+    Unary {
+        op: PureOpKind,
+        input: Box<JoinAliasAddress>,
+    },
+    Binary {
+        op: PureOpKind,
+        lhs: Box<JoinAliasAddress>,
+        rhs: Box<JoinAliasAddress>,
+    },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct JoinAliasKey {
     space: AliasSpace,
     index: u32,
+    offset: u32,
     width: u8,
     address: JoinAliasAddress,
 }
@@ -611,8 +621,68 @@ fn pure_unary_kind_from_op(op: Op) -> Option<PureOpKind> {
     if std::ptr::fn_addr_eq(op, vm::op_i32_eqz as Op) {
         return Some(PureOpKind::I32Eqz);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_clz as Op) {
+        return Some(PureOpKind::I32Clz);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_ctz as Op) {
+        return Some(PureOpKind::I32Ctz);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_popcnt as Op) {
+        return Some(PureOpKind::I32Popcnt);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_eqz as Op) {
         return Some(PureOpKind::I64Eqz);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_clz as Op) {
+        return Some(PureOpKind::I64Clz);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_ctz as Op) {
+        return Some(PureOpKind::I64Ctz);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_popcnt as Op) {
+        return Some(PureOpKind::I64Popcnt);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_abs as Op) {
+        return Some(PureOpKind::F32Abs);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_neg as Op) {
+        return Some(PureOpKind::F32Neg);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_sqrt as Op) {
+        return Some(PureOpKind::F32Sqrt);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_ceil as Op) {
+        return Some(PureOpKind::F32Ceil);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_floor as Op) {
+        return Some(PureOpKind::F32Floor);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_trunc as Op) {
+        return Some(PureOpKind::F32Trunc);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_nearest as Op) {
+        return Some(PureOpKind::F32Nearest);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_abs as Op) {
+        return Some(PureOpKind::F64Abs);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_neg as Op) {
+        return Some(PureOpKind::F64Neg);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_sqrt as Op) {
+        return Some(PureOpKind::F64Sqrt);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_ceil as Op) {
+        return Some(PureOpKind::F64Ceil);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_floor as Op) {
+        return Some(PureOpKind::F64Floor);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_trunc as Op) {
+        return Some(PureOpKind::F64Trunc);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_nearest as Op) {
+        return Some(PureOpKind::F64Nearest);
     }
     None
 }
@@ -635,6 +705,21 @@ fn pure_binary_kind_from_op(op: Op) -> Option<PureOpKind> {
     }
     if std::ptr::fn_addr_eq(op, vm::op_i32_xor as Op) {
         return Some(PureOpKind::I32Xor);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_shl as Op) {
+        return Some(PureOpKind::I32Shl);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_shr_s as Op) {
+        return Some(PureOpKind::I32ShrS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_shr_u as Op) {
+        return Some(PureOpKind::I32ShrU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_rotl as Op) {
+        return Some(PureOpKind::I32Rotl);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_rotr as Op) {
+        return Some(PureOpKind::I32Rotr);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i32_eq as Op) {
         return Some(PureOpKind::I32Eq);
@@ -671,6 +756,21 @@ fn pure_binary_kind_from_op(op: Op) -> Option<PureOpKind> {
     }
     if std::ptr::fn_addr_eq(op, vm::op_i64_sub as Op) {
         return Some(PureOpKind::I64Sub);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_shl as Op) {
+        return Some(PureOpKind::I64Shl);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_shr_s as Op) {
+        return Some(PureOpKind::I64ShrS);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_shr_u as Op) {
+        return Some(PureOpKind::I64ShrU);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_rotl as Op) {
+        return Some(PureOpKind::I64Rotl);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_rotr as Op) {
+        return Some(PureOpKind::I64Rotr);
     }
     if std::ptr::fn_addr_eq(op, vm::op_f32_add as Op) {
         return Some(PureOpKind::F32Add);
@@ -1155,7 +1255,7 @@ fn merge_aliases(
     preserve_existing_block_arguments: bool,
 ) {
     let mut exact_keys = if let Some(first_entry) = incoming.first() {
-        first_entry.aliases.keys().copied().collect::<BTreeSet<_>>()
+        first_entry.aliases.keys().cloned().collect::<BTreeSet<_>>()
     } else {
         BTreeSet::new()
     };
@@ -1169,7 +1269,7 @@ fn merge_aliases(
         merge_alias_value(
             graph,
             block_id,
-            key,
+            key.clone(),
             incoming
                 .iter()
                 .map(|entry| entry.aliases.get(&key))
@@ -1181,7 +1281,7 @@ fn merge_aliases(
 
     let mut join_keys = BTreeSet::new();
     for entry in incoming {
-        for key in entry.aliases.keys().copied() {
+        for key in entry.aliases.keys() {
             if let Some(join_key) = join_alias_key(key) {
                 join_keys.insert(join_key);
             }
@@ -1191,7 +1291,7 @@ fn merge_aliases(
         if !space_version_stable(join_key.space, incoming, state.heap) {
             continue;
         }
-        let merged_key = alias_key_from_join(block_id, join_key);
+        let merged_key = alias_key_from_join(block_id, join_key.clone());
         if state.aliases.contains_key(&merged_key) {
             continue;
         }
@@ -1202,7 +1302,7 @@ fn merge_aliases(
                 .aliases
                 .iter()
                 .filter_map(|(key, value)| {
-                    (join_alias_key(*key) == Some(join_key)).then_some(value)
+                    (join_alias_key(key) == Some(join_key.clone())).then_some(value)
                 })
                 .collect::<Vec<_>>();
             if matches.len() != 1 {
@@ -1239,7 +1339,7 @@ fn merge_alias_value(
     let merged = merge_value_candidates(
         graph,
         block_id,
-        alias_ordinal(key),
+        alias_ordinal(key.clone()),
         graph[first_value.0].ty,
         &values,
         preserve_existing_block_arguments,
@@ -1345,27 +1445,56 @@ fn alias_ordinal(key: AliasKey) -> usize {
     hasher.finish() as usize
 }
 
-fn join_alias_key(key: AliasKey) -> Option<JoinAliasKey> {
-    let address = match key.address {
-        AliasAddress::Const(value) => JoinAliasAddress::Const(value),
-        AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::EntryLocal => {
-            JoinAliasAddress::EntryLocal(origin.ordinal)
-        }
-        AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::BlockArgument => {
-            JoinAliasAddress::BlockArgument(origin.ordinal)
-        }
-        _ => return None,
-    };
+fn join_alias_key(key: &AliasKey) -> Option<JoinAliasKey> {
+    let address = join_alias_address(&key.address)?;
     Some(JoinAliasKey {
         space: key.space,
         index: key.index,
+        offset: key.offset,
         width: key.width,
         address,
     })
 }
 
+fn join_alias_address(address: &AliasAddress) -> Option<JoinAliasAddress> {
+    match address {
+        AliasAddress::Const(value) => Some(JoinAliasAddress::Const(*value)),
+        AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::EntryLocal => {
+            Some(JoinAliasAddress::EntryLocal(origin.ordinal))
+        }
+        AliasAddress::Origin(origin) if origin.kind == ExprOriginKind::BlockArgument => {
+            Some(JoinAliasAddress::BlockArgument(origin.ordinal))
+        }
+        AliasAddress::Unary { op, input } if alias_address_supports_pure_chain(*op) => {
+            Some(JoinAliasAddress::Unary {
+                op: *op,
+                input: Box::new(join_alias_address(input)?),
+            })
+        }
+        AliasAddress::Binary { op, lhs, rhs } if alias_address_supports_pure_chain(*op) => {
+            Some(JoinAliasAddress::Binary {
+                op: *op,
+                lhs: Box::new(join_alias_address(lhs)?),
+                rhs: Box::new(join_alias_address(rhs)?),
+            })
+        }
+        _ => None,
+    }
+}
+
 fn alias_key_from_join(block_id: usize, key: JoinAliasKey) -> AliasKey {
-    let address = match key.address {
+    let address = alias_address_from_join(block_id, key.address);
+    AliasKey {
+        space: key.space,
+        index: key.index,
+        offset: key.offset,
+        width: key.width,
+        address,
+    }
+}
+
+fn alias_address_from_join(block_id: usize, address: JoinAliasAddress) -> AliasAddress {
+    match address {
         JoinAliasAddress::Const(value) => AliasAddress::Const(value),
         JoinAliasAddress::EntryLocal(ordinal) => AliasAddress::Origin(ExprOrigin {
             block_id,
@@ -1377,12 +1506,15 @@ fn alias_key_from_join(block_id: usize, key: JoinAliasKey) -> AliasKey {
             ordinal,
             kind: ExprOriginKind::BlockArgument,
         }),
-    };
-    AliasKey {
-        space: key.space,
-        index: key.index,
-        width: key.width,
-        address,
+        JoinAliasAddress::Unary { op, input } => AliasAddress::Unary {
+            op,
+            input: Box::new(alias_address_from_join(block_id, *input)),
+        },
+        JoinAliasAddress::Binary { op, lhs, rhs } => AliasAddress::Binary {
+            op,
+            lhs: Box::new(alias_address_from_join(block_id, *lhs)),
+            rhs: Box::new(alias_address_from_join(block_id, *rhs)),
+        },
     }
 }
 fn instr_result_origin_ordinal(ordinal: usize, result_index: usize) -> usize {
@@ -1448,7 +1580,7 @@ fn state_diff_summary(graph: &ValueGraph, lhs: &BlockEntryState, rhs: &BlockEntr
             rhs.aliases.len()
         );
     }
-    let mut alias_keys = lhs.aliases.keys().copied().collect::<Vec<_>>();
+    let mut alias_keys = lhs.aliases.keys().cloned().collect::<Vec<_>>();
     alias_keys.sort();
     for key in alias_keys {
         let Some(rhs_value) = rhs.aliases.get(&key).copied() else {
@@ -1483,7 +1615,7 @@ fn same_value_vec(graph: &ValueGraph, lhs: &[ValueRef], rhs: &[ValueRef]) -> boo
             .all(|(lhs, rhs)| same_value(graph, *lhs, *rhs))
 }
 
-fn same_value_map<K: Eq + std::hash::Hash + Copy>(
+fn same_value_map<K: Eq + std::hash::Hash>(
     graph: &ValueGraph,
     lhs: &HashMap<K, ValueRef>,
     rhs: &HashMap<K, ValueRef>,
@@ -1649,10 +1781,10 @@ impl BlockOptimizer {
         }
 
         let mut aliases = entry.aliases.iter().collect::<Vec<_>>();
-        aliases.sort_by_key(|(key, _)| (key.space as u8, key.index, key.width));
+        aliases.sort_by_key(|(key, _)| (key.space as u8, key.index, key.offset, key.width));
         for (key, value) in aliases {
             self.register_existing_value(*value);
-            self.aliases.insert(*key, *value);
+            self.aliases.insert(key.clone(), *value);
             self.maybe_mark_loop_invariant(*value);
         }
     }
@@ -2128,6 +2260,13 @@ impl BlockOptimizer {
 
     fn visit_global_get(&mut self, record: &DecodedInstr, slot: LocalSlot, ordinal: usize) {
         self.last_local_write = None;
+        let key = Self::global_alias_key(slot);
+        if let Some(source) = self.aliases.get(&key).copied() {
+            if let Some(materialized) = self.try_reuse_alias_value(record.old_start, source) {
+                self.push_stack(materialized);
+                return;
+            }
+        }
         self.bump_effect_epoch();
         let op_idx = self.push_effect_op(record);
         let expr = self.new_expr_with_origin(
@@ -2143,11 +2282,12 @@ impl BlockOptimizer {
             Some(op_idx.0),
             false,
         );
+        self.bind_alias_value(key, expr);
         self.push_stack(expr);
     }
 
     fn visit_global_set(&mut self, record: &DecodedInstr, _slot: LocalSlot) {
-        let Some(_value) = self.pop_stack() else {
+        let Some(value) = self.pop_stack() else {
             self.emit_barrier(record, 0);
             return;
         };
@@ -2156,6 +2296,7 @@ impl BlockOptimizer {
         clear_alias_space_rewrite(&mut self.aliases, &mut self.last_store, AliasSpace::Global);
         self.push_original(record);
         self.heap.global = self.heap.global.saturating_add(1);
+        self.bind_alias_value(Self::global_alias_key(_slot), value);
     }
 
     fn visit_table_get(&mut self, record: &DecodedInstr, _tableidx: u32, ordinal: usize) {
@@ -2201,11 +2342,21 @@ impl BlockOptimizer {
     }
 
     fn visit_memory_load(&mut self, record: &DecodedInstr, access: MemoryAccess, ordinal: usize) {
-        let Some(_address) = self.pop_stack() else {
+        let Some(address) = self.pop_stack() else {
             self.emit_barrier(record, ordinal);
             return;
         };
         self.last_local_write = None;
+        let alias_key = self.memory_alias_key(access, address);
+        if let Some(key) = alias_key.as_ref() {
+            if let Some(source) = self.aliases.get(key).copied() {
+                if let Some(materialized) = self.try_reuse_alias_value(record.old_start, source) {
+                    let _ = self.try_remove_expr(address);
+                    self.push_stack(materialized);
+                    return;
+                }
+            }
+        }
         self.bump_effect_epoch();
         let op_idx = self.push_effect_op(record);
         let expr = self.new_expr_with_origin(
@@ -2221,6 +2372,9 @@ impl BlockOptimizer {
             Some(op_idx.0),
             false,
         );
+        if let Some(key) = alias_key {
+            self.bind_alias_value(key, expr);
+        }
         self.push_stack(expr);
     }
 
@@ -2234,7 +2388,7 @@ impl BlockOptimizer {
             self.emit_barrier(record, 0);
             return;
         };
-        let Some(_address) = self.pop_stack() else {
+        let Some(address) = self.pop_stack() else {
             self.incref(value);
             self.push_stack(value);
             self.emit_barrier(record, 0);
@@ -2243,8 +2397,12 @@ impl BlockOptimizer {
         self.last_local_write = None;
         self.bump_effect_epoch();
         clear_alias_space_rewrite(&mut self.aliases, &mut self.last_store, AliasSpace::Memory);
-        self.push_original(record);
+        let alias_key = self.memory_alias_key(_access, address);
+        let op_idx = self.push_original(record);
         self.heap.memory = self.heap.memory.saturating_add(1);
+        if let Some(key) = alias_key {
+            self.bind_store_alias_value(key, value, op_idx);
+        }
     }
 
     fn emit_barrier(&mut self, record: &DecodedInstr, ordinal: usize) {
@@ -2451,9 +2609,9 @@ impl BlockOptimizer {
         }
 
         let mut aliases = self.aliases.iter().collect::<Vec<_>>();
-        aliases.sort_by_key(|(key, _)| (key.space as u8, key.index, key.width));
+        aliases.sort_by_key(|(key, _)| (key.space as u8, key.index, key.offset, key.width));
         for (key, expr) in aliases {
-            state.aliases.insert(*key, *expr);
+            state.aliases.insert(key.clone(), *expr);
         }
 
         state
@@ -2501,6 +2659,81 @@ impl BlockOptimizer {
             }
         }
         body
+    }
+
+    fn global_alias_key(slot: LocalSlot) -> AliasKey {
+        AliasKey {
+            space: AliasSpace::Global,
+            index: slot.addr,
+            offset: 0,
+            width: slot.size as u8,
+            address: AliasAddress::Const(0),
+        }
+    }
+
+    fn memory_alias_key(&self, access: MemoryAccess, address: ValueRef) -> Option<AliasKey> {
+        Some(AliasKey {
+            space: AliasSpace::Memory,
+            index: access.memidx,
+            offset: access.offset,
+            width: access.width,
+            address: self.alias_address_for_value(address)?,
+        })
+    }
+
+    fn alias_address_for_value(&self, value: ValueRef) -> Option<AliasAddress> {
+        let state = &self.exprs[value.0];
+        if state.ty != ValType::I32 {
+            return None;
+        }
+        if let Some(ConstValue::I32(value)) = state.const_value {
+            return Some(AliasAddress::Const(value as u32));
+        }
+        match state.origin.kind {
+            ExprOriginKind::EntryLocal | ExprOriginKind::BlockArgument => {
+                return Some(AliasAddress::Origin(state.origin));
+            }
+            _ => {}
+        }
+        match state.key {
+            Some(ValueKey::Unary { op, input })
+                if alias_address_supports_pure_chain(op)
+                    && unary_output_type(op) == ValType::I32 =>
+            {
+                let input = self.latest_by_origin.get(&input).copied()?;
+                Some(AliasAddress::Unary {
+                    op,
+                    input: Box::new(self.alias_address_for_value(input)?),
+                })
+            }
+            Some(ValueKey::Binary { op, lhs, rhs })
+                if alias_address_supports_pure_chain(op)
+                    && binary_output_type(op) == ValType::I32 =>
+            {
+                let lhs = self.latest_by_origin.get(&lhs).copied()?;
+                let rhs = self.latest_by_origin.get(&rhs).copied()?;
+                Some(AliasAddress::Binary {
+                    op,
+                    lhs: Box::new(self.alias_address_for_value(lhs)?),
+                    rhs: Box::new(self.alias_address_for_value(rhs)?),
+                })
+            }
+            _ => Some(AliasAddress::Origin(state.origin)),
+        }
+    }
+
+    fn try_reuse_alias_value(&mut self, source_start: usize, source: ValueRef) -> Option<ValueRef> {
+        self.try_materialize_value(source_start, source)
+    }
+
+    fn bind_alias_value(&mut self, key: AliasKey, value: ValueRef) {
+        self.aliases.insert(key, value);
+    }
+
+    fn bind_store_alias_value(&mut self, key: AliasKey, value: ValueRef, producer_op: usize) {
+        self.aliases.insert(key.clone(), value);
+        let _ = producer_op;
+        self.last_store.insert(key, StoreWrite);
     }
 
     fn can_materialize_key(&self, key: Option<ValueKey>) -> bool {
@@ -2799,7 +3032,12 @@ fn apply_licm(
 
         for candidate_block in candidate_blocks {
             let header_body = rewrite.relower.block_bodies[candidate_block].clone();
-            let candidates = collect_licm_candidates(&rewrite.graph, &header_body, &effects);
+            let candidates = collect_licm_candidates(
+                &rewrite.graph,
+                &header_body,
+                &rewrite.relower.loop_invariants[candidate_block],
+                &effects,
+            );
             if candidates.is_empty() {
                 continue;
             }
@@ -2925,74 +3163,84 @@ fn summarize_loop_effects(program: &BasicBlockProgram, blocks: &BTreeSet<usize>)
 fn collect_licm_candidates(
     graph: &ValueGraph,
     body: &BlockBody,
+    loop_invariants: &LoopInvariantSet,
     effects: &LoopEffects,
 ) -> Vec<LicmCandidate> {
-    let mut candidates = Vec::new();
-    let mut cursor = 0usize;
-    while cursor < body.ops.len() {
-        if let Some(candidate) = match_licm_candidate(graph, body, cursor, effects) {
-            cursor = candidate.end;
-            candidates.push(candidate);
-            continue;
+    let producer_indices = licm_producer_indices(body);
+    let origin_values = licm_origin_values(graph);
+    let mut by_start = BTreeMap::new();
+    for cursor in 0..body.ops.len() {
+        if let Some(candidate) = match_licm_candidate(
+            graph,
+            body,
+            loop_invariants,
+            &producer_indices,
+            &origin_values,
+            cursor,
+            effects,
+        ) {
+            by_start.entry(candidate.start).or_insert(candidate);
         }
-        cursor += 1;
     }
-    candidates
+    by_start.into_values().collect()
 }
 
 fn match_licm_candidate(
     graph: &ValueGraph,
     body: &BlockBody,
+    loop_invariants: &LoopInvariantSet,
+    producer_indices: &HashMap<ValueRef, usize>,
+    origin_values: &HashMap<ExprOrigin, ValueRef>,
     cursor: usize,
     effects: &LoopEffects,
 ) -> Option<LicmCandidate> {
-    if let Some(slot) = block_op_local_get_slot(body.ops.get(cursor)?) {
-        if block_op_i32_const(body.ops.get(cursor + 1)?).is_some() {
-            let op = body.ops.get(cursor + 2)?;
-            if matches!(
-                op.kind,
-                BlockOpKind::PureBinary(PureOpKind::I32Add | PureOpKind::I32Sub)
-            ) {
-                if effects.local_writes.contains(&slot)
-                    || !block_op_single_use_for_licm(graph, body.ops.get(cursor)?)
-                    || !block_op_single_use_for_licm(graph, body.ops.get(cursor + 1)?)
-                    || !block_op_single_use_for_licm(graph, body.ops.get(cursor + 2)?)
-                {
-                    return None;
-                }
-                return Some(LicmCandidate {
-                    start: cursor,
-                    end: cursor + 3,
-                    result_size: 4,
-                    source_start: body.ops[cursor].source_start,
-                });
-            }
+    let root = body.ops.get(cursor)?;
+    if root.kind == BlockOpKind::GlobalGet {
+        let slot = block_op_global_get_slot(root)?;
+        if effects.global_writes.contains(&slot) || !block_op_eligible_for_licm(graph, root) {
+            return None;
         }
-        if let Some(rhs) = body.ops.get(cursor + 1).and_then(block_op_local_get_slot) {
-            if body
-                .ops
-                .get(cursor + 2)
-                .is_some_and(|op| matches!(op.kind, BlockOpKind::PureBinary(PureOpKind::I32Add)))
-            {
-                if effects.local_writes.contains(&slot)
-                    || effects.local_writes.contains(&rhs)
-                    || !block_op_single_use_for_licm(graph, body.ops.get(cursor)?)
-                    || !block_op_single_use_for_licm(graph, body.ops.get(cursor + 1)?)
-                    || !block_op_single_use_for_licm(graph, body.ops.get(cursor + 2)?)
-                {
-                    return None;
-                }
-                return Some(LicmCandidate {
-                    start: cursor,
-                    end: cursor + 3,
-                    result_size: 4,
-                    source_start: body.ops[cursor].source_start,
-                });
-            }
-        }
+        return Some(LicmCandidate {
+            start: cursor,
+            end: cursor + 1,
+            result_size: slot.size,
+            source_start: root.source_start,
+        });
     }
-
-    None
+    let root_value = block_op_single_result(root)?;
+    if graph[root_value.0].is_effect_result()
+        || !loop_invariants
+            .pure_origins
+            .contains(&graph[root_value.0].origin)
+        || !block_op_eligible_for_licm(graph, root)
+    {
+        return None;
+    }
+    let mut op_indices = BTreeSet::new();
+    collect_licm_value_ops(
+        graph,
+        body,
+        root_value,
+        producer_indices,
+        origin_values,
+        loop_invariants,
+        effects,
+        &mut op_indices,
+    )?;
+    let start = *op_indices.first()?;
+    let end = op_indices.last()?.saturating_add(1);
+    if start != cursor {
+        return None;
+    }
+    if !(start..end).all(|index| op_indices.contains(&index)) {
+        return None;
+    }
+    Some(LicmCandidate {
+        start,
+        end,
+        result_size: value_type_size(graph[root_value.0].ty)?,
+        source_start: root.source_start,
+    })
 }
 
 fn emit_licm_candidate(
@@ -3024,23 +3272,29 @@ fn insert_before_terminator(body: &mut BlockBody, mut insert: Vec<BlockOp>) {
 }
 
 fn block_op_single_use(graph: &ValueGraph, op: &BlockOp) -> bool {
-    block_op_single_result(op).is_some_and(|value| value_is_single_use(graph, value))
+    block_op_single_result(op).is_some_and(|value| selector_value_is_single_use(graph, op, value))
 }
 
-fn value_is_single_use(graph: &ValueGraph, value: ValueRef) -> bool {
+fn selector_value_is_single_use(graph: &ValueGraph, op: &BlockOp, value: ValueRef) -> bool {
     let node = &graph[value.0];
-    node.use_count <= 1 && !node.is_block_argument() && !node.is_effect_result()
+    node.use_count <= 1
+        && !node.is_effect_result()
+        && (!node.is_block_argument() || op.kind == BlockOpKind::LocalGet)
 }
 
 fn block_op_single_use_for_licm(graph: &ValueGraph, op: &BlockOp) -> bool {
     block_op_single_result(op).is_some_and(|value| {
         let node = &graph[value.0];
-        node.use_count <= 1 && !node.is_effect_result()
+        node.use_count <= 1 && (!node.is_effect_result() || op.kind == BlockOpKind::GlobalGet)
     })
 }
 
 fn block_op_single_result(op: &BlockOp) -> Option<ValueRef> {
-    (op.values.len() == 1).then_some(op.values[0])
+    if op.values.len() == 1 {
+        Some(op.values[0])
+    } else {
+        None
+    }
 }
 
 fn block_op_local_get_slot(op: &BlockOp) -> Option<LocalSlot> {
@@ -3062,6 +3316,25 @@ fn block_op_local_get_slot(op: &BlockOp) -> Option<LocalSlot> {
     None
 }
 
+fn block_op_global_get_slot(op: &BlockOp) -> Option<LocalSlot> {
+    if op.kind != BlockOpKind::GlobalGet {
+        return None;
+    }
+    let BlockOperand::U32(addr) = *op.operands.first()? else {
+        return None;
+    };
+    if std::ptr::fn_addr_eq(op.op, vm::op_global_get4 as Op) {
+        return Some(LocalSlot::new(addr, 4));
+    }
+    if std::ptr::fn_addr_eq(op.op, vm::op_global_get8 as Op) {
+        return Some(LocalSlot::new(addr, 8));
+    }
+    if std::ptr::fn_addr_eq(op.op, vm::op_global_get16 as Op) {
+        return Some(LocalSlot::new(addr, 16));
+    }
+    None
+}
+
 fn block_op_i32_const(op: &BlockOp) -> Option<i32> {
     matches!(op.kind, BlockOpKind::Const).then(|| match op.operands.first()? {
         BlockOperand::I32(value) => Some(*value),
@@ -3069,10 +3342,126 @@ fn block_op_i32_const(op: &BlockOp) -> Option<i32> {
     })?
 }
 
+fn licm_origin_values(graph: &ValueGraph) -> HashMap<ExprOrigin, ValueRef> {
+    let mut origin_values = HashMap::new();
+    for (expr_idx, node) in graph.nodes.iter().enumerate() {
+        origin_values.insert(node.origin, ExprId(expr_idx));
+    }
+    origin_values
+}
+
+fn licm_producer_indices(body: &BlockBody) -> HashMap<ValueRef, usize> {
+    let mut out = HashMap::new();
+    for (index, op) in body.ops.iter().enumerate() {
+        if let Some(value) = block_op_single_result(op) {
+            out.insert(value, index);
+        }
+    }
+    out
+}
+
+fn block_op_eligible_for_licm(graph: &ValueGraph, op: &BlockOp) -> bool {
+    block_op_single_use_for_licm(graph, op)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_licm_value_ops(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    value: ValueRef,
+    producer_indices: &HashMap<ValueRef, usize>,
+    origin_values: &HashMap<ExprOrigin, ValueRef>,
+    loop_invariants: &LoopInvariantSet,
+    effects: &LoopEffects,
+    op_indices: &mut BTreeSet<usize>,
+) -> Option<()> {
+    let node = &graph[value.0];
+    if node.const_value.is_some() || matches!(node.origin.kind, ExprOriginKind::EntryLocal) {
+        let &index = producer_indices.get(&value)?;
+        let op = body.ops.get(index)?;
+        if let Some(slot) = block_op_local_get_slot(op) {
+            if effects.local_writes.contains(&slot) || !block_op_eligible_for_licm(graph, op) {
+                return None;
+            }
+        } else if !matches!(op.kind, BlockOpKind::Const) || !block_op_eligible_for_licm(graph, op) {
+            return None;
+        }
+        op_indices.insert(index);
+        return Some(());
+    }
+    if node.is_block_argument() {
+        return None;
+    }
+    if node.is_effect_result() {
+        let &index = producer_indices.get(&value)?;
+        let op = body.ops.get(index)?;
+        let slot = block_op_global_get_slot(op)?;
+        if effects.global_writes.contains(&slot) || !block_op_eligible_for_licm(graph, op) {
+            return None;
+        }
+        op_indices.insert(index);
+        return Some(());
+    }
+    if !loop_invariants.pure_origins.contains(&node.origin) {
+        return None;
+    }
+    let &index = producer_indices.get(&value)?;
+    let op = body.ops.get(index)?;
+    if !matches!(
+        op.kind,
+        BlockOpKind::PureUnary(_) | BlockOpKind::PureBinary(_)
+    ) || !block_op_eligible_for_licm(graph, op)
+    {
+        return None;
+    }
+    match node.key? {
+        ValueKey::Unary { input, .. } => {
+            let input = origin_values.get(&input).copied()?;
+            collect_licm_value_ops(
+                graph,
+                body,
+                input,
+                producer_indices,
+                origin_values,
+                loop_invariants,
+                effects,
+                op_indices,
+            )?;
+        }
+        ValueKey::Binary { lhs, rhs, .. } => {
+            let lhs = origin_values.get(&lhs).copied()?;
+            let rhs = origin_values.get(&rhs).copied()?;
+            collect_licm_value_ops(
+                graph,
+                body,
+                lhs,
+                producer_indices,
+                origin_values,
+                loop_invariants,
+                effects,
+                op_indices,
+            )?;
+            collect_licm_value_ops(
+                graph,
+                body,
+                rhs,
+                producer_indices,
+                origin_values,
+                loop_invariants,
+                effects,
+                op_indices,
+            )?;
+        }
+    }
+    op_indices.insert(index);
+    Some(())
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
 struct MemoryAccess {
     memidx: u32,
+    offset: u32,
     width: u8,
     ty: ValType,
 }
@@ -3647,6 +4036,7 @@ fn decode_memory_load(record: &DecodedInstr) -> Option<MemoryAccess> {
         || record.op_eq(vm::op_i32_load16_s_local as Op)
         || record.op_eq(vm::op_i32_load16_u_local as Op)
     {
+        let offset = record.operand_memarg(0).offset;
         let width = if record.op_eq(vm::op_i32_load8_s as Op)
             || record.op_eq(vm::op_i32_load8_u as Op)
             || record.op_eq(vm::op_i32_load8_s_shared as Op)
@@ -3676,6 +4066,7 @@ fn decode_memory_load(record: &DecodedInstr) -> Option<MemoryAccess> {
         };
         return Some(MemoryAccess {
             memidx: memory_index(record),
+            offset,
             width,
             ty: ValType::I32,
         });
@@ -3716,6 +4107,7 @@ fn decode_memory_load(record: &DecodedInstr) -> Option<MemoryAccess> {
         || record.op_eq(vm::op_i64_load32_s_local as Op)
         || record.op_eq(vm::op_i64_load32_u_local as Op)
     {
+        let offset = record.operand_memarg(0).offset;
         let width = if record.op_eq(vm::op_i64_load8_s as Op)
             || record.op_eq(vm::op_i64_load8_u as Op)
             || record.op_eq(vm::op_i64_load8_s_shared as Op)
@@ -3757,6 +4149,7 @@ fn decode_memory_load(record: &DecodedInstr) -> Option<MemoryAccess> {
         };
         return Some(MemoryAccess {
             memidx: memory_index(record),
+            offset,
             width,
             ty: ValType::I64,
         });
@@ -3766,8 +4159,10 @@ fn decode_memory_load(record: &DecodedInstr) -> Option<MemoryAccess> {
         || record.op_eq(vm::op_f32_load_indexed_local as Op)
         || record.op_eq(vm::op_f32_load_indexed_shared as Op)
     {
+        let offset = record.operand_memarg(0).offset;
         return Some(MemoryAccess {
             memidx: memory_index(record),
+            offset,
             width: 4,
             ty: ValType::F32,
         });
@@ -3777,8 +4172,10 @@ fn decode_memory_load(record: &DecodedInstr) -> Option<MemoryAccess> {
         || record.op_eq(vm::op_f64_load_indexed_local as Op)
         || record.op_eq(vm::op_f64_load_indexed_shared as Op)
     {
+        let offset = record.operand_memarg(0).offset;
         return Some(MemoryAccess {
             memidx: memory_index(record),
+            offset,
             width: 8,
             ty: ValType::F64,
         });
@@ -3803,6 +4200,7 @@ fn decode_memory_store(record: &DecodedInstr) -> Option<MemoryAccess> {
         || record.op_eq(vm::op_i32_store8_local as Op)
         || record.op_eq(vm::op_i32_store16_local as Op)
     {
+        let offset = record.operand_memarg(0).offset;
         let width = if record.op_eq(vm::op_i32_store8 as Op)
             || record.op_eq(vm::op_i32_store8_shared as Op)
             || record.op_eq(vm::op_i32_store8_indexed_local as Op)
@@ -3822,6 +4220,7 @@ fn decode_memory_store(record: &DecodedInstr) -> Option<MemoryAccess> {
         };
         return Some(MemoryAccess {
             memidx: memory_index(record),
+            offset,
             width,
             ty: ValType::I32,
         });
@@ -3847,6 +4246,7 @@ fn decode_memory_store(record: &DecodedInstr) -> Option<MemoryAccess> {
         || record.op_eq(vm::op_i64_store16_local as Op)
         || record.op_eq(vm::op_i64_store32_local as Op)
     {
+        let offset = record.operand_memarg(0).offset;
         let width = if record.op_eq(vm::op_i64_store8 as Op)
             || record.op_eq(vm::op_i64_store8_shared as Op)
             || record.op_eq(vm::op_i64_store8_indexed_local as Op)
@@ -3873,6 +4273,7 @@ fn decode_memory_store(record: &DecodedInstr) -> Option<MemoryAccess> {
         };
         return Some(MemoryAccess {
             memidx: memory_index(record),
+            offset,
             width,
             ty: ValType::I64,
         });
@@ -3882,8 +4283,10 @@ fn decode_memory_store(record: &DecodedInstr) -> Option<MemoryAccess> {
         || record.op_eq(vm::op_f32_store_indexed_local as Op)
         || record.op_eq(vm::op_f32_store_indexed_shared as Op)
     {
+        let offset = record.operand_memarg(0).offset;
         return Some(MemoryAccess {
             memidx: memory_index(record),
+            offset,
             width: 4,
             ty: ValType::F32,
         });
@@ -3893,8 +4296,10 @@ fn decode_memory_store(record: &DecodedInstr) -> Option<MemoryAccess> {
         || record.op_eq(vm::op_f64_store_indexed_local as Op)
         || record.op_eq(vm::op_f64_store_indexed_shared as Op)
     {
+        let offset = record.operand_memarg(0).offset;
         return Some(MemoryAccess {
             memidx: memory_index(record),
+            offset,
             width: 8,
             ty: ValType::F64,
         });
@@ -3920,150 +4325,76 @@ fn set_to_tee(op: Op, size: u32) -> Option<Op> {
 }
 
 fn decode_pure_unary(record: &DecodedInstr) -> Option<PureOpKind> {
-    if record.op_eq(vm::op_i32_eqz) {
-        return Some(PureOpKind::I32Eqz);
-    }
-    if record.op_eq(vm::op_i64_eqz) {
-        return Some(PureOpKind::I64Eqz);
-    }
-    None
+    pure_unary_kind_from_op(record.op)
 }
 
 fn decode_pure_binary(record: &DecodedInstr) -> Option<PureOpKind> {
-    if record.op_eq(vm::op_i32_add) {
-        return Some(PureOpKind::I32Add);
-    }
-    if record.op_eq(vm::op_i32_sub) {
-        return Some(PureOpKind::I32Sub);
-    }
-    if record.op_eq(vm::op_i32_mul) {
-        return Some(PureOpKind::I32Mul);
-    }
-    if record.op_eq(vm::op_i32_and) {
-        return Some(PureOpKind::I32And);
-    }
-    if record.op_eq(vm::op_i32_or) {
-        return Some(PureOpKind::I32Or);
-    }
-    if record.op_eq(vm::op_i32_xor) {
-        return Some(PureOpKind::I32Xor);
-    }
-    if record.op_eq(vm::op_i32_eq) {
-        return Some(PureOpKind::I32Eq);
-    }
-    if record.op_eq(vm::op_i32_ne) {
-        return Some(PureOpKind::I32Ne);
-    }
-    if record.op_eq(vm::op_i32_lt_s) {
-        return Some(PureOpKind::I32LtS);
-    }
-    if record.op_eq(vm::op_i32_lt_u) {
-        return Some(PureOpKind::I32LtU);
-    }
-    if record.op_eq(vm::op_i32_gt_s) {
-        return Some(PureOpKind::I32GtS);
-    }
-    if record.op_eq(vm::op_i32_gt_u) {
-        return Some(PureOpKind::I32GtU);
-    }
-    if record.op_eq(vm::op_i32_le_s) {
-        return Some(PureOpKind::I32LeS);
-    }
-    if record.op_eq(vm::op_i32_le_u) {
-        return Some(PureOpKind::I32LeU);
-    }
-    if record.op_eq(vm::op_i32_ge_s) {
-        return Some(PureOpKind::I32GeS);
-    }
-    if record.op_eq(vm::op_i32_ge_u) {
-        return Some(PureOpKind::I32GeU);
-    }
-    if record.op_eq(vm::op_i64_add) {
-        return Some(PureOpKind::I64Add);
-    }
-    if record.op_eq(vm::op_i64_sub) {
-        return Some(PureOpKind::I64Sub);
-    }
-    if record.op_eq(vm::op_f32_add) {
-        return Some(PureOpKind::F32Add);
-    }
-    if record.op_eq(vm::op_f32_sub) {
-        return Some(PureOpKind::F32Sub);
-    }
-    if record.op_eq(vm::op_f32_mul) {
-        return Some(PureOpKind::F32Mul);
-    }
-    if record.op_eq(vm::op_f32_div) {
-        return Some(PureOpKind::F32Div);
-    }
-    if record.op_eq(vm::op_f32_eq) {
-        return Some(PureOpKind::F32Eq);
-    }
-    if record.op_eq(vm::op_f32_ne) {
-        return Some(PureOpKind::F32Ne);
-    }
-    if record.op_eq(vm::op_f32_lt) {
-        return Some(PureOpKind::F32Lt);
-    }
-    if record.op_eq(vm::op_f32_gt) {
-        return Some(PureOpKind::F32Gt);
-    }
-    if record.op_eq(vm::op_f32_le) {
-        return Some(PureOpKind::F32Le);
-    }
-    if record.op_eq(vm::op_f32_ge) {
-        return Some(PureOpKind::F32Ge);
-    }
-    if record.op_eq(vm::op_f64_add) {
-        return Some(PureOpKind::F64Add);
-    }
-    if record.op_eq(vm::op_f64_sub) {
-        return Some(PureOpKind::F64Sub);
-    }
-    if record.op_eq(vm::op_f64_mul) {
-        return Some(PureOpKind::F64Mul);
-    }
-    if record.op_eq(vm::op_f64_div) {
-        return Some(PureOpKind::F64Div);
-    }
-    if record.op_eq(vm::op_f64_eq) {
-        return Some(PureOpKind::F64Eq);
-    }
-    if record.op_eq(vm::op_f64_ne) {
-        return Some(PureOpKind::F64Ne);
-    }
-    if record.op_eq(vm::op_f64_lt) {
-        return Some(PureOpKind::F64Lt);
-    }
-    if record.op_eq(vm::op_f64_gt) {
-        return Some(PureOpKind::F64Gt);
-    }
-    if record.op_eq(vm::op_f64_le) {
-        return Some(PureOpKind::F64Le);
-    }
-    if record.op_eq(vm::op_f64_ge) {
-        return Some(PureOpKind::F64Ge);
-    }
-    None
+    pure_binary_kind_from_op(record.op)
 }
 
 fn unary_op(op: PureOpKind) -> Option<Op> {
     match op {
         PureOpKind::I32Eqz => Some(vm::op_i32_eqz as Op),
+        PureOpKind::I32Clz => Some(vm::op_i32_clz as Op),
+        PureOpKind::I32Ctz => Some(vm::op_i32_ctz as Op),
+        PureOpKind::I32Popcnt => Some(vm::op_i32_popcnt as Op),
         PureOpKind::I64Eqz => Some(vm::op_i64_eqz as Op),
+        PureOpKind::I64Clz => Some(vm::op_i64_clz as Op),
+        PureOpKind::I64Ctz => Some(vm::op_i64_ctz as Op),
+        PureOpKind::I64Popcnt => Some(vm::op_i64_popcnt as Op),
+        PureOpKind::F32Abs => Some(vm::op_f32_abs as Op),
+        PureOpKind::F32Neg => Some(vm::op_f32_neg as Op),
+        PureOpKind::F32Sqrt => Some(vm::op_f32_sqrt as Op),
+        PureOpKind::F32Ceil => Some(vm::op_f32_ceil as Op),
+        PureOpKind::F32Floor => Some(vm::op_f32_floor as Op),
+        PureOpKind::F32Trunc => Some(vm::op_f32_trunc as Op),
+        PureOpKind::F32Nearest => Some(vm::op_f32_nearest as Op),
+        PureOpKind::F64Abs => Some(vm::op_f64_abs as Op),
+        PureOpKind::F64Neg => Some(vm::op_f64_neg as Op),
+        PureOpKind::F64Sqrt => Some(vm::op_f64_sqrt as Op),
+        PureOpKind::F64Ceil => Some(vm::op_f64_ceil as Op),
+        PureOpKind::F64Floor => Some(vm::op_f64_floor as Op),
+        PureOpKind::F64Trunc => Some(vm::op_f64_trunc as Op),
+        PureOpKind::F64Nearest => Some(vm::op_f64_nearest as Op),
         _ => None,
     }
 }
 
 fn binary_op(op: PureOpKind) -> Option<Op> {
     match op {
-        PureOpKind::I32Eqz | PureOpKind::I64Eqz => None,
+        PureOpKind::I32Eqz
+        | PureOpKind::I32Clz
+        | PureOpKind::I32Ctz
+        | PureOpKind::I32Popcnt
+        | PureOpKind::I64Eqz
+        | PureOpKind::I64Clz
+        | PureOpKind::I64Ctz
+        | PureOpKind::I64Popcnt
+        | PureOpKind::F32Abs
+        | PureOpKind::F32Neg
+        | PureOpKind::F32Sqrt
+        | PureOpKind::F32Ceil
+        | PureOpKind::F32Floor
+        | PureOpKind::F32Trunc
+        | PureOpKind::F32Nearest
+        | PureOpKind::F64Abs
+        | PureOpKind::F64Neg
+        | PureOpKind::F64Sqrt
+        | PureOpKind::F64Ceil
+        | PureOpKind::F64Floor
+        | PureOpKind::F64Trunc
+        | PureOpKind::F64Nearest => None,
         PureOpKind::I32Add => Some(vm::op_i32_add as Op),
         PureOpKind::I32Sub => Some(vm::op_i32_sub as Op),
         PureOpKind::I32Mul => Some(vm::op_i32_mul as Op),
         PureOpKind::I32And => Some(vm::op_i32_and as Op),
         PureOpKind::I32Or => Some(vm::op_i32_or as Op),
         PureOpKind::I32Xor => Some(vm::op_i32_xor as Op),
+        PureOpKind::I32Shl => Some(vm::op_i32_shl as Op),
+        PureOpKind::I32ShrS => Some(vm::op_i32_shr_s as Op),
+        PureOpKind::I32ShrU => Some(vm::op_i32_shr_u as Op),
+        PureOpKind::I32Rotl => Some(vm::op_i32_rotl as Op),
+        PureOpKind::I32Rotr => Some(vm::op_i32_rotr as Op),
         PureOpKind::I32Eq => Some(vm::op_i32_eq as Op),
         PureOpKind::I32Ne => Some(vm::op_i32_ne as Op),
         PureOpKind::I32LtS => Some(vm::op_i32_lt_s as Op),
@@ -4076,6 +4407,11 @@ fn binary_op(op: PureOpKind) -> Option<Op> {
         PureOpKind::I32GeU => Some(vm::op_i32_ge_u as Op),
         PureOpKind::I64Add => Some(vm::op_i64_add as Op),
         PureOpKind::I64Sub => Some(vm::op_i64_sub as Op),
+        PureOpKind::I64Shl => Some(vm::op_i64_shl as Op),
+        PureOpKind::I64ShrS => Some(vm::op_i64_shr_s as Op),
+        PureOpKind::I64ShrU => Some(vm::op_i64_shr_u as Op),
+        PureOpKind::I64Rotl => Some(vm::op_i64_rotl as Op),
+        PureOpKind::I64Rotr => Some(vm::op_i64_rotr as Op),
         PureOpKind::F32Add => Some(vm::op_f32_add as Op),
         PureOpKind::F32Sub => Some(vm::op_f32_sub as Op),
         PureOpKind::F32Mul => Some(vm::op_f32_mul as Op),
@@ -4223,6 +4559,15 @@ fn type_from_slot(size: u32) -> ValType {
     }
 }
 
+fn value_type_size(ty: ValType) -> Option<u32> {
+    match ty {
+        ValType::I32 | ValType::F32 => Some(4),
+        ValType::I64 | ValType::F64 => Some(8),
+        ValType::V128 => Some(16),
+        _ => None,
+    }
+}
+
 fn local_get_op(size: u32) -> Op {
     match size {
         4 => vm::op_local_get4 as Op,
@@ -4250,9 +4595,29 @@ fn const_value_type(value: ConstValue) -> ValType {
     }
 }
 
+fn alias_address_supports_pure_chain(op: PureOpKind) -> bool {
+    unary_op(op).is_some() || binary_op(op).is_some()
+}
+
 fn unary_output_type(op: PureOpKind) -> ValType {
     match op {
         PureOpKind::I32Eqz | PureOpKind::I64Eqz => ValType::I32,
+        PureOpKind::I32Clz | PureOpKind::I32Ctz | PureOpKind::I32Popcnt => ValType::I32,
+        PureOpKind::I64Clz | PureOpKind::I64Ctz | PureOpKind::I64Popcnt => ValType::I64,
+        PureOpKind::F32Abs
+        | PureOpKind::F32Neg
+        | PureOpKind::F32Sqrt
+        | PureOpKind::F32Ceil
+        | PureOpKind::F32Floor
+        | PureOpKind::F32Trunc
+        | PureOpKind::F32Nearest => ValType::F32,
+        PureOpKind::F64Abs
+        | PureOpKind::F64Neg
+        | PureOpKind::F64Sqrt
+        | PureOpKind::F64Ceil
+        | PureOpKind::F64Floor
+        | PureOpKind::F64Trunc
+        | PureOpKind::F64Nearest => ValType::F64,
         _ => ValType::I32,
     }
 }
@@ -4264,7 +4629,12 @@ fn binary_output_type(op: PureOpKind) -> ValType {
         | PureOpKind::I32Mul
         | PureOpKind::I32And
         | PureOpKind::I32Or
-        | PureOpKind::I32Xor => ValType::I32,
+        | PureOpKind::I32Xor
+        | PureOpKind::I32Shl
+        | PureOpKind::I32ShrS
+        | PureOpKind::I32ShrU
+        | PureOpKind::I32Rotl
+        | PureOpKind::I32Rotr => ValType::I32,
         PureOpKind::I32Eq
         | PureOpKind::I32Ne
         | PureOpKind::I32LtS
@@ -4287,7 +4657,13 @@ fn binary_output_type(op: PureOpKind) -> ValType {
         | PureOpKind::F64Gt
         | PureOpKind::F64Le
         | PureOpKind::F64Ge => ValType::I32,
-        PureOpKind::I64Add | PureOpKind::I64Sub => ValType::I64,
+        PureOpKind::I64Add
+        | PureOpKind::I64Sub
+        | PureOpKind::I64Shl
+        | PureOpKind::I64ShrS
+        | PureOpKind::I64ShrU
+        | PureOpKind::I64Rotl
+        | PureOpKind::I64Rotr => ValType::I64,
         PureOpKind::F32Add | PureOpKind::F32Sub | PureOpKind::F32Mul | PureOpKind::F32Div => {
             ValType::F32
         }
@@ -4301,7 +4677,43 @@ fn binary_output_type(op: PureOpKind) -> ValType {
 fn fold_unary(op: PureOpKind, value: ConstValue) -> Option<ConstValue> {
     match (op, value) {
         (PureOpKind::I32Eqz, ConstValue::I32(value)) => Some(ConstValue::I32((value == 0) as i32)),
+        (PureOpKind::I32Clz, ConstValue::I32(value)) => {
+            Some(ConstValue::I32(value.leading_zeros() as i32))
+        }
+        (PureOpKind::I32Ctz, ConstValue::I32(value)) => {
+            Some(ConstValue::I32(value.trailing_zeros() as i32))
+        }
+        (PureOpKind::I32Popcnt, ConstValue::I32(value)) => {
+            Some(ConstValue::I32(value.count_ones() as i32))
+        }
         (PureOpKind::I64Eqz, ConstValue::I64(value)) => Some(ConstValue::I32((value == 0) as i32)),
+        (PureOpKind::I64Clz, ConstValue::I64(value)) => {
+            Some(ConstValue::I64(value.leading_zeros() as i64))
+        }
+        (PureOpKind::I64Ctz, ConstValue::I64(value)) => {
+            Some(ConstValue::I64(value.trailing_zeros() as i64))
+        }
+        (PureOpKind::I64Popcnt, ConstValue::I64(value)) => {
+            Some(ConstValue::I64(value.count_ones() as i64))
+        }
+        (PureOpKind::F32Abs, ConstValue::F32(value)) => Some(ConstValue::F32(value.abs())),
+        (PureOpKind::F32Neg, ConstValue::F32(value)) => Some(ConstValue::F32(-value)),
+        (PureOpKind::F32Sqrt, ConstValue::F32(value)) => Some(ConstValue::F32(value.sqrt())),
+        (PureOpKind::F32Ceil, ConstValue::F32(value)) => Some(ConstValue::F32(value.ceil())),
+        (PureOpKind::F32Floor, ConstValue::F32(value)) => Some(ConstValue::F32(value.floor())),
+        (PureOpKind::F32Trunc, ConstValue::F32(value)) => Some(ConstValue::F32(value.trunc())),
+        (PureOpKind::F32Nearest, ConstValue::F32(value)) => {
+            Some(ConstValue::F32(value.round_ties_even()))
+        }
+        (PureOpKind::F64Abs, ConstValue::F64(value)) => Some(ConstValue::F64(value.abs())),
+        (PureOpKind::F64Neg, ConstValue::F64(value)) => Some(ConstValue::F64(-value)),
+        (PureOpKind::F64Sqrt, ConstValue::F64(value)) => Some(ConstValue::F64(value.sqrt())),
+        (PureOpKind::F64Ceil, ConstValue::F64(value)) => Some(ConstValue::F64(value.ceil())),
+        (PureOpKind::F64Floor, ConstValue::F64(value)) => Some(ConstValue::F64(value.floor())),
+        (PureOpKind::F64Trunc, ConstValue::F64(value)) => Some(ConstValue::F64(value.trunc())),
+        (PureOpKind::F64Nearest, ConstValue::F64(value)) => {
+            Some(ConstValue::F64(value.round_ties_even()))
+        }
         _ => None,
     }
 }
@@ -4325,6 +4737,21 @@ fn fold_binary(op: PureOpKind, lhs: ConstValue, rhs: ConstValue) -> Option<Const
         }
         (PureOpKind::I32Xor, ConstValue::I32(lhs), ConstValue::I32(rhs)) => {
             Some(ConstValue::I32(lhs ^ rhs))
+        }
+        (PureOpKind::I32Shl, ConstValue::I32(lhs), ConstValue::I32(rhs)) => {
+            Some(ConstValue::I32(lhs.wrapping_shl(rhs as u32)))
+        }
+        (PureOpKind::I32ShrS, ConstValue::I32(lhs), ConstValue::I32(rhs)) => {
+            Some(ConstValue::I32(lhs.wrapping_shr(rhs as u32)))
+        }
+        (PureOpKind::I32ShrU, ConstValue::I32(lhs), ConstValue::I32(rhs)) => Some(ConstValue::I32(
+            ((lhs as u32).wrapping_shr(rhs as u32)) as i32,
+        )),
+        (PureOpKind::I32Rotl, ConstValue::I32(lhs), ConstValue::I32(rhs)) => {
+            Some(ConstValue::I32(lhs.rotate_left(rhs as u32)))
+        }
+        (PureOpKind::I32Rotr, ConstValue::I32(lhs), ConstValue::I32(rhs)) => {
+            Some(ConstValue::I32(lhs.rotate_right(rhs as u32)))
         }
         (PureOpKind::I32Eq, ConstValue::I32(lhs), ConstValue::I32(rhs)) => {
             Some(ConstValue::I32((lhs == rhs) as i32))
@@ -4361,6 +4788,21 @@ fn fold_binary(op: PureOpKind, lhs: ConstValue, rhs: ConstValue) -> Option<Const
         }
         (PureOpKind::I64Sub, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
             Some(ConstValue::I64(lhs.wrapping_sub(rhs)))
+        }
+        (PureOpKind::I64Shl, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I64(lhs.wrapping_shl(rhs as u32)))
+        }
+        (PureOpKind::I64ShrS, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I64(lhs.wrapping_shr(rhs as u32)))
+        }
+        (PureOpKind::I64ShrU, ConstValue::I64(lhs), ConstValue::I64(rhs)) => Some(ConstValue::I64(
+            ((lhs as u64).wrapping_shr(rhs as u32)) as i64,
+        )),
+        (PureOpKind::I64Rotl, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I64(lhs.rotate_left(rhs as u32)))
+        }
+        (PureOpKind::I64Rotr, ConstValue::I64(lhs), ConstValue::I64(rhs)) => {
+            Some(ConstValue::I64(lhs.rotate_right(rhs as u32)))
         }
         (PureOpKind::F32Add, ConstValue::F32(lhs), ConstValue::F32(rhs)) => {
             Some(ConstValue::F32(lhs + rhs))
@@ -4469,6 +4911,11 @@ fn simplify_identity(
     match (op, exprs[lhs.0].const_value, exprs[rhs.0].const_value) {
         (PureOpKind::I32Add, _, Some(ConstValue::I32(0)))
         | (PureOpKind::I32Sub, _, Some(ConstValue::I32(0)))
+        | (PureOpKind::I32Shl, _, Some(ConstValue::I32(0)))
+        | (PureOpKind::I32ShrS, _, Some(ConstValue::I32(0)))
+        | (PureOpKind::I32ShrU, _, Some(ConstValue::I32(0)))
+        | (PureOpKind::I32Rotl, _, Some(ConstValue::I32(0)))
+        | (PureOpKind::I32Rotr, _, Some(ConstValue::I32(0)))
         | (PureOpKind::I32Or, _, Some(ConstValue::I32(0)))
         | (PureOpKind::I32Xor, _, Some(ConstValue::I32(0))) => Some((lhs, rhs)),
         (PureOpKind::I32Add, Some(ConstValue::I32(0)), _)
@@ -4479,7 +4926,12 @@ fn simplify_identity(
         (PureOpKind::I32Mul, Some(ConstValue::I32(1)), _)
         | (PureOpKind::I32And, Some(ConstValue::I32(-1)), _) => Some((rhs, lhs)),
         (PureOpKind::I64Add, _, Some(ConstValue::I64(0)))
-        | (PureOpKind::I64Sub, _, Some(ConstValue::I64(0))) => Some((lhs, rhs)),
+        | (PureOpKind::I64Sub, _, Some(ConstValue::I64(0)))
+        | (PureOpKind::I64Shl, _, Some(ConstValue::I64(0)))
+        | (PureOpKind::I64ShrS, _, Some(ConstValue::I64(0)))
+        | (PureOpKind::I64ShrU, _, Some(ConstValue::I64(0)))
+        | (PureOpKind::I64Rotl, _, Some(ConstValue::I64(0)))
+        | (PureOpKind::I64Rotr, _, Some(ConstValue::I64(0))) => Some((lhs, rhs)),
         (PureOpKind::I64Add, Some(ConstValue::I64(0)), _) => Some((rhs, lhs)),
         _ => None,
     }
@@ -4528,6 +4980,7 @@ mod tests {
         let key_lhs = AliasKey {
             space: AliasSpace::Memory,
             index: 0,
+            offset: 0,
             width: 4,
             address: AliasAddress::Origin(ExprOrigin {
                 block_id: 10,
@@ -4538,6 +4991,7 @@ mod tests {
         let key_rhs = AliasKey {
             space: AliasSpace::Memory,
             index: 0,
+            offset: 0,
             width: 4,
             address: AliasAddress::Origin(ExprOrigin {
                 block_id: 11,
@@ -4597,6 +5051,7 @@ mod tests {
         let merged_key = AliasKey {
             space: AliasSpace::Memory,
             index: 0,
+            offset: 0,
             width: 4,
             address: AliasAddress::Origin(ExprOrigin {
                 block_id: 7,
@@ -4625,6 +5080,7 @@ mod tests {
         let key_lhs = AliasKey {
             space: AliasSpace::Memory,
             index: 0,
+            offset: 0,
             width: 4,
             address: AliasAddress::Origin(ExprOrigin {
                 block_id: 10,
@@ -4635,6 +5091,7 @@ mod tests {
         let key_rhs = AliasKey {
             space: AliasSpace::Memory,
             index: 0,
+            offset: 0,
             width: 4,
             address: AliasAddress::Origin(ExprOrigin {
                 block_id: 11,

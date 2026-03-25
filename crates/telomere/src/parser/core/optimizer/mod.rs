@@ -148,7 +148,28 @@ mod tests {
             vm::op_table_get as crate::common::Op,
             vm::op_table_set as crate::common::Op,
             vm::op_i32_load_local as crate::common::Op,
+            vm::op_i32_load8_s_local as crate::common::Op,
+            vm::op_i32_load8_u_local as crate::common::Op,
+            vm::op_i32_load16_s_local as crate::common::Op,
+            vm::op_i32_load16_u_local as crate::common::Op,
+            vm::op_i64_load_local as crate::common::Op,
+            vm::op_i64_load8_s_local as crate::common::Op,
+            vm::op_i64_load8_u_local as crate::common::Op,
+            vm::op_i64_load16_s_local as crate::common::Op,
+            vm::op_i64_load16_u_local as crate::common::Op,
+            vm::op_i64_load32_s_local as crate::common::Op,
+            vm::op_i64_load32_u_local as crate::common::Op,
+            vm::op_f32_load_local as crate::common::Op,
+            vm::op_f64_load_local as crate::common::Op,
             vm::op_i32_store_local as crate::common::Op,
+            vm::op_i32_store8_local as crate::common::Op,
+            vm::op_i32_store16_local as crate::common::Op,
+            vm::op_i64_store_local as crate::common::Op,
+            vm::op_i64_store8_local as crate::common::Op,
+            vm::op_i64_store16_local as crate::common::Op,
+            vm::op_i64_store32_local as crate::common::Op,
+            vm::op_f32_store_local as crate::common::Op,
+            vm::op_f64_store_local as crate::common::Op,
         ];
         if one
             .iter()
@@ -185,10 +206,40 @@ mod tests {
         }
         if std::ptr::fn_addr_eq(op, vm::op_end as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_add as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_clz as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_ctz as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_popcnt as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_eqz as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_lt_s as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_ge_u as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_sub as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_shl as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_shr_s as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_shr_u as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_rotl as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_rotr as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_clz as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_ctz as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_popcnt as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_shl as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_shr_s as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_shr_u as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_rotl as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_rotr as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_abs as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_neg as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_ceil as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_floor as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_trunc as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_nearest as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_sqrt as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_abs as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_neg as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_ceil as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_floor as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_trunc as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_nearest as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_sqrt as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_ref_null as crate::common::Op)
         {
             return 0;
@@ -662,9 +713,9 @@ mod tests {
         );
         assert_eq!(
             count_op(&expr, vm::op_i32_load_local as crate::common::Op),
-            1
+            0
         );
-        assert!(std::ptr::fn_addr_eq(
+        assert!(!std::ptr::fn_addr_eq(
             last_non_return_op(&expr),
             vm::op_i32_load_local as crate::common::Op
         ));
@@ -693,12 +744,76 @@ mod tests {
         );
         assert_eq!(
             count_op(&expr, vm::op_i32_load_local as crate::common::Op),
-            1
+            0
         );
-        assert!(std::ptr::fn_addr_eq(
+        assert!(!std::ptr::fn_addr_eq(
             last_non_return_op(&expr),
             vm::op_i32_load_local as crate::common::Op
         ));
+    }
+
+    #[test]
+    fn optimizer_does_not_alias_memory_loads_with_different_offsets() {
+        let expr = function_expr(
+            r#"
+            (module
+              (memory 1)
+              (data (i32.const 8) "\01")
+              (data (i32.const 16) "\02")
+              (func (export "f") (result i32)
+                (local $base i32)
+                i32.const 0
+                local.set $base
+                local.get $base
+                i32.load8_u offset=8
+                local.get $base
+                i32.load8_u offset=16
+                i32.add))
+            "#,
+        );
+        assert_eq!(
+            count_op(&expr, vm::op_i32_load8_u_local as crate::common::Op),
+            2,
+            "same base with different offsets must not be commoned"
+        );
+    }
+
+    #[test]
+    fn optimizer_folds_new_pure_numeric_ops_to_const() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (result i32)
+                i32.const 1
+                i32.const 5
+                i32.shl
+                i32.clz))
+            "#,
+        );
+        assert_eq!(count_op(&expr, vm::op_i32_shl as crate::common::Op), 0);
+        assert_eq!(count_op(&expr, vm::op_i32_clz as crate::common::Op), 0);
+        assert_eq!(count_op(&expr, vm::op_i32_const as crate::common::Op), 1);
+    }
+
+    #[test]
+    fn optimizer_reuses_global_get_from_same_value_global_sets_across_merge() {
+        let expr = function_expr(
+            r#"
+            (module
+              (global $g (mut i32) (i32.const 0))
+              (func (export "f") (param i32) (result i32)
+                local.get 0
+                if
+                  i32.const 7
+                  global.set $g
+                else
+                  i32.const 7
+                  global.set $g
+                end
+                global.get $g))
+            "#,
+        );
+        assert_eq!(count_op(&expr, vm::op_global_get4 as crate::common::Op), 0);
     }
 
     #[test]

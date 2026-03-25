@@ -109,16 +109,26 @@ pub(crate) enum AliasSpace {
     Table,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum AliasAddress {
     Const(u32),
     Origin(ExprOrigin),
+    Unary {
+        op: PureOpKind,
+        input: Box<AliasAddress>,
+    },
+    Binary {
+        op: PureOpKind,
+        lhs: Box<AliasAddress>,
+        rhs: Box<AliasAddress>,
+    },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct AliasKey {
     pub(crate) space: AliasSpace,
     pub(crate) index: u32,
+    pub(crate) offset: u32,
     pub(crate) width: u8,
     pub(crate) address: AliasAddress,
 }
@@ -140,16 +150,27 @@ pub(crate) struct HeapVersion {
     pub(crate) table: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum PureOpKind {
     I32Eqz,
+    I32Clz,
+    I32Ctz,
+    I32Popcnt,
     I64Eqz,
+    I64Clz,
+    I64Ctz,
+    I64Popcnt,
     I32Add,
     I32Sub,
     I32Mul,
     I32And,
     I32Or,
     I32Xor,
+    I32Shl,
+    I32ShrS,
+    I32ShrU,
+    I32Rotl,
+    I32Rotr,
     I32Eq,
     I32Ne,
     I32LtS,
@@ -162,10 +183,22 @@ pub(crate) enum PureOpKind {
     I32GeU,
     I64Add,
     I64Sub,
+    I64Shl,
+    I64ShrS,
+    I64ShrU,
+    I64Rotl,
+    I64Rotr,
     F32Add,
     F32Sub,
     F32Mul,
     F32Div,
+    F32Abs,
+    F32Neg,
+    F32Sqrt,
+    F32Ceil,
+    F32Floor,
+    F32Trunc,
+    F32Nearest,
     F32Eq,
     F32Ne,
     F32Lt,
@@ -176,6 +209,13 @@ pub(crate) enum PureOpKind {
     F64Sub,
     F64Mul,
     F64Div,
+    F64Abs,
+    F64Neg,
+    F64Sqrt,
+    F64Ceil,
+    F64Floor,
+    F64Trunc,
+    F64Nearest,
     F64Eq,
     F64Ne,
     F64Lt,
