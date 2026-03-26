@@ -1163,8 +1163,13 @@ pub(crate) fn optimize_function(
         &program,
         &rewrite.relower.block_bodies
     ));
-    let licm_modified = apply_licm(&program, &mut rewrite, locals, param_bytes);
-    select_superinstructions(&program, &mut rewrite, &licm_modified);
+    #[cfg(any(debug_assertions, test))]
+    apply_licm(&program, &mut rewrite, locals, param_bytes);
+    #[cfg(not(any(debug_assertions, test)))]
+    {
+        let licm_modified = apply_licm(&program, &mut rewrite, locals, param_bytes);
+        select_superinstructions(&program, &mut rewrite, &licm_modified);
+    }
     debug_assert!(verify_explicit_effect_ir(
         &program,
         &rewrite.relower.block_bodies
@@ -2030,6 +2035,24 @@ struct MemoryRelowerPlan {
     specialized_ops: HashMap<usize, SpecializedMemoryLowering>,
 }
 
+#[cfg(any(debug_assertions, test))]
+#[derive(Default)]
+struct LocalControlRelowerPlan {
+    skip_ops: HashSet<usize>,
+    specialized_ops: HashMap<usize, SpecializedLocalControlLowering>,
+    specialized_terminator: Option<SpecializedLocalControlLowering>,
+}
+
+#[cfg(any(debug_assertions, test))]
+#[derive(Clone)]
+struct SpecializedLocalControlLowering {
+    source_start: Option<usize>,
+    op: Op,
+    operands: Vec<BlockOperand>,
+    absorbed_ops: BTreeSet<usize>,
+    consumer_after_idx: usize,
+}
+
 #[derive(Clone)]
 struct SpecializedMemoryLowering {
     op: Op,
@@ -2832,46 +2855,141 @@ fn allocate_optimizer_temp_slot(locals: &mut LocalsData, param_bytes: u32, ty: V
     param_bytes + locals.allocate_temp_slot(ty)
 }
 
+#[allow(unreachable_code)]
 fn relower_block_body(
     body: &BlockBody,
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
 ) -> Vec<RecordEmit> {
-    let memory_plan = build_memory_relower_plan(body, graph, spill_plan);
-    debug_verify_memory_relower_plan(body, &memory_plan);
-    let mut records = Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
-    for (op_idx, op) in body.ops.iter().enumerate() {
-        if memory_plan.skip_ops.contains(&op_idx) {
-            continue;
-        }
-        let lowered = if let Some(spec) = memory_plan.specialized_ops.get(&op_idx) {
-            RecordEmit {
-                source_start: op.source_start,
-                op: spec.op,
-                operands: block_operands_to_raw_with_spills_for_op(
-                    spec.op,
-                    &spec.operands,
-                    spill_plan,
-                ),
+    #[cfg(any(debug_assertions, test))]
+    {
+        let local_control_plan = build_local_control_relower_plan(body, graph);
+        debug_assert!(verify_provider_elimination(
+            body,
+            graph,
+            &local_control_plan
+        ));
+        let memory_plan = build_memory_relower_plan(body, graph, spill_plan);
+        debug_assert!(local_control_plan
+            .skip_ops
+            .is_disjoint(&memory_plan.skip_ops));
+        debug_verify_memory_relower_plan(body, &memory_plan);
+        let mut records =
+            Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
+        for (op_idx, op) in body.ops.iter().enumerate() {
+            if local_control_plan.skip_ops.contains(&op_idx)
+                || memory_plan.skip_ops.contains(&op_idx)
+            {
+                continue;
             }
-        } else {
-            relower_block_op(op, spill_plan)
-        };
-        records.push(lowered);
-        if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
-            records.push(RecordEmit {
-                source_start: None,
-                op: local_tee_op(slot.size),
-                operands: vec![Operand {
-                    local_addr: slot.addr,
-                }],
-            });
+            let lowered = if let Some(spec) = local_control_plan.specialized_ops.get(&op_idx) {
+                relower_specialized_local_control_op(spec, spill_plan)
+            } else if let Some(spec) = memory_plan.specialized_ops.get(&op_idx) {
+                RecordEmit {
+                    source_start: op.source_start,
+                    op: spec.op,
+                    operands: block_operands_to_raw_with_spills_for_op(
+                        spec.op,
+                        &spec.operands,
+                        spill_plan,
+                    ),
+                }
+            } else {
+                relower_block_op(op, spill_plan)
+            };
+            records.push(lowered);
+            if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
+                records.push(RecordEmit {
+                    source_start: None,
+                    op: local_tee_op(slot.size),
+                    operands: vec![Operand {
+                        local_addr: slot.addr,
+                    }],
+                });
+            }
         }
+        if let Some(spec) = local_control_plan.specialized_terminator.as_ref() {
+            records.push(relower_specialized_local_control_terminator(
+                spec, spill_plan,
+            ));
+        } else if let Some(terminator) = &body.terminator {
+            records.push(relower_block_terminator(terminator, spill_plan));
+        }
+        return records;
     }
-    if let Some(terminator) = &body.terminator {
-        records.push(relower_block_terminator(terminator, spill_plan));
+
+    #[cfg(not(any(debug_assertions, test)))]
+    {
+        let memory_plan = build_memory_relower_plan(body, graph, spill_plan);
+        debug_verify_memory_relower_plan(body, &memory_plan);
+        let mut records =
+            Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
+        for (op_idx, op) in body.ops.iter().enumerate() {
+            if memory_plan.skip_ops.contains(&op_idx) {
+                continue;
+            }
+            let lowered = if let Some(spec) = memory_plan.specialized_ops.get(&op_idx) {
+                RecordEmit {
+                    source_start: op.source_start,
+                    op: spec.op,
+                    operands: block_operands_to_raw_with_spills_for_op(
+                        spec.op,
+                        &spec.operands,
+                        spill_plan,
+                    ),
+                }
+            } else {
+                relower_block_op(op, spill_plan)
+            };
+            records.push(lowered);
+            if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
+                records.push(RecordEmit {
+                    source_start: None,
+                    op: local_tee_op(slot.size),
+                    operands: vec![Operand {
+                        local_addr: slot.addr,
+                    }],
+                });
+            }
+        }
+        if let Some(terminator) = &body.terminator {
+            records.push(relower_block_terminator(terminator, spill_plan));
+        }
+        return records;
     }
-    records
+    unreachable!("cfg-gated relower_block_body path must return");
+}
+
+#[cfg(any(debug_assertions, test))]
+fn relower_specialized_local_control_op(
+    spec: &SpecializedLocalControlLowering,
+    spill_plan: &EffectResultSpillPlan,
+) -> RecordEmit {
+    RecordEmit {
+        source_start: spec.source_start,
+        op: spec.op,
+        operands: block_operands_to_raw_with_spills_for_op(spec.op, &spec.operands, spill_plan),
+    }
+}
+
+#[cfg(any(debug_assertions, test))]
+fn relower_specialized_local_control_terminator(
+    spec: &SpecializedLocalControlLowering,
+    spill_plan: &EffectResultSpillPlan,
+) -> RecordEmit {
+    let terminator = BlockTerminator {
+        source_start: spec.source_start,
+        op: spec.op,
+        kind: BlockTerminatorKind::BrIf,
+        operands: spec.operands.clone(),
+        inputs: Vec::new(),
+        values: Vec::new(),
+    };
+    RecordEmit {
+        source_start: spec.source_start,
+        op: spec.op,
+        operands: terminator_operands_to_raw_with_spills(&terminator, spill_plan),
+    }
 }
 
 fn spill_slot_for_effect_result(
@@ -2930,6 +3048,46 @@ fn debug_verify_memory_relower_plan(_body: &BlockBody, _plan: &MemoryRelowerPlan
             }
         }
     }
+}
+
+#[cfg(any(debug_assertions, test))]
+#[cold]
+#[inline(never)]
+fn verify_provider_elimination(
+    body: &BlockBody,
+    _graph: &ValueGraph,
+    plan: &LocalControlRelowerPlan,
+) -> bool {
+    let mut seen_absorbed = HashSet::new();
+    for spec in plan
+        .specialized_ops
+        .values()
+        .chain(plan.specialized_terminator.iter())
+    {
+        if spec.consumer_after_idx > body.ops.len() {
+            return false;
+        }
+        for absorbed_idx in &spec.absorbed_ops {
+            if !seen_absorbed.insert(*absorbed_idx) || *absorbed_idx >= spec.consumer_after_idx {
+                return false;
+            }
+            let Some(op) = body.ops.get(*absorbed_idx) else {
+                return false;
+            };
+            if matches!(op.kind, BlockOpKind::LocalSet | BlockOpKind::LocalTee) {
+                continue;
+            }
+            let Some(value) = block_op_single_result(op) else {
+                return false;
+            };
+            if value_used_after(body, spec.consumer_after_idx, value)
+                || value_feeds_memory_address(body, spec.consumer_after_idx, value)
+            {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(debug_assertions)]
@@ -5700,6 +5858,163 @@ struct MemoryAccess {
     ty: ValType,
 }
 
+#[cfg(any(debug_assertions, test))]
+#[cold]
+#[inline(never)]
+fn build_local_control_relower_plan(
+    body: &BlockBody,
+    graph: &ValueGraph,
+) -> LocalControlRelowerPlan {
+    let mut plan = LocalControlRelowerPlan::default();
+    if let Some(terminator) = &body.terminator {
+        if let Some(spec) = build_specialized_br_if_lowering(graph, body, terminator) {
+            plan.skip_ops.extend(spec.absorbed_ops.iter().copied());
+            plan.specialized_terminator = Some(spec);
+        }
+    }
+    for (op_idx, op) in body.ops.iter().enumerate() {
+        if plan.skip_ops.contains(&op_idx) {
+            continue;
+        }
+        let Some(spec) = build_specialized_local_set_tee_lowering(graph, body, op_idx, op) else {
+            continue;
+        };
+        plan.skip_ops.extend(spec.absorbed_ops.iter().copied());
+        plan.specialized_ops.insert(op_idx, spec);
+    }
+    for (op_idx, op) in body.ops.iter().enumerate() {
+        if plan.skip_ops.contains(&op_idx) {
+            continue;
+        }
+        let Some(spec) = build_specialized_local_root_lowering(graph, body, op_idx, op) else {
+            continue;
+        };
+        plan.skip_ops.extend(spec.absorbed_ops.iter().copied());
+        plan.specialized_ops.insert(op_idx, spec);
+    }
+    plan
+}
+
+#[cfg(any(debug_assertions, test))]
+#[cold]
+#[inline(never)]
+fn build_specialized_local_root_lowering(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    op: &BlockOp,
+) -> Option<SpecializedLocalControlLowering> {
+    if next_entry_is_barrier(body, op_idx + 1) {
+        return None;
+    }
+    let start_idx = op_idx.checked_sub(2)?;
+    let (matched, _) = match_selector_root_shape(graph, body, start_idx, op_idx + 1)?;
+    let (specialized_op, operands) = match matched {
+        SelectorRootMatch::LocalConstAdd { base, imm } => (
+            vm::op_local_get4_i32_const_add as Op,
+            vec![base, BlockOperand::I32(imm)],
+        ),
+        SelectorRootMatch::LocalLocalAdd { lhs, rhs } => {
+            (vm::op_local_get4_local_get4_i32_add as Op, vec![lhs, rhs])
+        }
+    };
+    Some(SpecializedLocalControlLowering {
+        source_start: body
+            .ops
+            .get(start_idx)
+            .and_then(|provider| provider.source_start)
+            .or(op.source_start),
+        op: specialized_op,
+        operands,
+        absorbed_ops: absorbed_ops_range(start_idx, op_idx),
+        consumer_after_idx: op_idx + 1,
+    })
+}
+
+#[cfg(any(debug_assertions, test))]
+#[cold]
+#[inline(never)]
+fn build_specialized_local_set_tee_lowering(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    op: &BlockOp,
+) -> Option<SpecializedLocalControlLowering> {
+    if !matches!(op.kind, BlockOpKind::LocalSet | BlockOpKind::LocalTee)
+        || next_entry_is_barrier(body, op_idx + 1)
+    {
+        return None;
+    }
+    let input = *op.inputs.first()?;
+    let start_idx = op_idx.checked_sub(3)?;
+    let (matched, root_value) = match_selector_root_shape(graph, body, start_idx, op_idx + 1)?;
+    if root_value != input || value_used_after(body, op_idx + 1, root_value) {
+        return None;
+    }
+    let dst = *op.operands.first()?;
+    let (specialized_op, operands) = match (op.kind, matched) {
+        (BlockOpKind::LocalSet, SelectorRootMatch::LocalConstAdd { base, imm }) => (
+            vm::op_local_get4_i32_const_add_set4 as Op,
+            vec![base, BlockOperand::I32(imm), dst],
+        ),
+        (BlockOpKind::LocalSet, SelectorRootMatch::LocalLocalAdd { lhs, rhs }) => (
+            vm::op_local_get4_local_get4_i32_add_set4 as Op,
+            vec![lhs, rhs, dst],
+        ),
+        (BlockOpKind::LocalTee, SelectorRootMatch::LocalConstAdd { base, imm }) => (
+            vm::op_local_get4_i32_const_add_tee4 as Op,
+            vec![base, BlockOperand::I32(imm), dst],
+        ),
+        (BlockOpKind::LocalTee, SelectorRootMatch::LocalLocalAdd { lhs, rhs }) => (
+            vm::op_local_get4_local_get4_i32_add_tee4 as Op,
+            vec![lhs, rhs, dst],
+        ),
+        _ => return None,
+    };
+    Some(SpecializedLocalControlLowering {
+        source_start: body
+            .ops
+            .get(start_idx)
+            .and_then(|provider| provider.source_start)
+            .or(op.source_start),
+        op: specialized_op,
+        operands,
+        absorbed_ops: absorbed_ops_range(start_idx, op_idx),
+        consumer_after_idx: op_idx + 1,
+    })
+}
+
+#[cfg(any(debug_assertions, test))]
+#[cold]
+#[inline(never)]
+fn build_specialized_br_if_lowering(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    terminator: &BlockTerminator,
+) -> Option<SpecializedLocalControlLowering> {
+    let (fused, consumed) = match_br_if_pattern(graph, body, terminator)?;
+    let start_idx = body.ops.len().checked_sub(consumed)?;
+    Some(SpecializedLocalControlLowering {
+        source_start: body
+            .ops
+            .get(start_idx)
+            .and_then(|provider| provider.source_start)
+            .or(terminator.source_start),
+        op: fused.op,
+        operands: fused.operands,
+        absorbed_ops: absorbed_ops_range(start_idx, body.ops.len()),
+        consumer_after_idx: body.ops.len(),
+    })
+}
+
+#[cfg(any(debug_assertions, test))]
+#[cold]
+#[inline(never)]
+fn absorbed_ops_range(start_idx: usize, end_exclusive: usize) -> BTreeSet<usize> {
+    (start_idx..end_exclusive).collect()
+}
+
+#[cfg(not(any(debug_assertions, test)))]
 #[derive(Clone, Copy)]
 enum SelectorPattern {
     LocalGet4I32ConstAdd,
@@ -5710,17 +6025,7 @@ enum SelectorPattern {
     LocalGet4LocalGet4I32AddTee4,
 }
 
-#[allow(clippy::enum_variant_names)]
-enum SelectorBranchPattern {
-    LocalGet4BrIf,
-    LocalGet4I32ConstAddBrIf,
-    LocalGet4LocalGet4I32AddBrIf,
-    LocalGet4I32EqzBrIf,
-    LocalGet4I32ConstCompareBrIf,
-    LocalGet4LocalGet4CompareBrIf,
-    LocalGet4I32ConstAddTee4BrIf,
-}
-
+#[cfg(not(any(debug_assertions, test)))]
 fn select_superinstructions(
     program: &BasicBlockProgram,
     rewrite: &mut FunctionRewrite,
@@ -5733,6 +6038,7 @@ fn select_superinstructions(
     }
 }
 
+#[cfg(not(any(debug_assertions, test)))]
 fn select_block_superinstructions(graph: &ValueGraph, body: &BlockBody) -> BlockBody {
     let body = select_block_br_if_superinstruction(graph, body);
     let mut out = Vec::with_capacity(body.ops.len());
@@ -5752,6 +6058,7 @@ fn select_block_superinstructions(graph: &ValueGraph, body: &BlockBody) -> Block
     }
 }
 
+#[cfg(not(any(debug_assertions, test)))]
 fn select_block_br_if_superinstruction(graph: &ValueGraph, body: &BlockBody) -> BlockBody {
     let Some(terminator) = &body.terminator else {
         return body.clone();
@@ -5772,6 +6079,7 @@ fn select_block_br_if_superinstruction(graph: &ValueGraph, body: &BlockBody) -> 
     out
 }
 
+#[cfg(not(any(debug_assertions, test)))]
 fn match_selector_pattern(
     graph: &ValueGraph,
     body: &BlockBody,
@@ -5980,9 +6288,15 @@ fn selector_local_input_operand(
     if node.use_count > 1 {
         return None;
     }
-    match node.loop_value_shape.as_ref()? {
-        LoopValueShape::Local4(slot) if *slot == expected_slot => {}
-        _ => return None,
+    let matches_expected_slot = node
+        .loop_value_shape
+        .as_ref()
+        .and_then(slot_ref_from_loop_value_shape)
+        .or_else(|| effective_slot_shape(graph, value).and_then(|shape| shape.slot))
+        .and_then(materializable_slot)
+        .is_some_and(|slot| slot == expected_slot);
+    if !matches_expected_slot {
+        return None;
     }
     let size = local_get_size_from_op(op.op)?;
     match *op.operands.first()? {
@@ -6043,7 +6357,6 @@ fn match_br_if_pattern(
         matched.insert(0, branch_target_operand(terminator)?);
         return Some((
             fused_br_if_terminator(
-                SelectorBranchPattern::LocalGet4I32ConstAddTee4BrIf,
                 terminator,
                 vm::op_local_get4_i32_const_add_tee4_br_if as Op,
                 matched,
@@ -6057,9 +6370,9 @@ fn match_br_if_pattern(
             match_selector_root_shape(graph, body, body.ops.len() - 3, body.ops.len())
         {
             if root_value == condition {
-                let (pattern, operands) = match matched {
+                let (op, operands) = match matched {
                     SelectorRootMatch::LocalConstAdd { base, imm } => (
-                        SelectorBranchPattern::LocalGet4I32ConstAddBrIf,
+                        vm::op_local_get4_i32_const_add_br_if as Op,
                         vec![
                             branch_target_operand(terminator)?,
                             base,
@@ -6067,33 +6380,22 @@ fn match_br_if_pattern(
                         ],
                     ),
                     SelectorRootMatch::LocalLocalAdd { lhs, rhs } => (
-                        SelectorBranchPattern::LocalGet4LocalGet4I32AddBrIf,
+                        vm::op_local_get4_local_get4_i32_add_br_if as Op,
                         vec![branch_target_operand(terminator)?, lhs, rhs],
                     ),
                 };
-                let op = match pattern {
-                    SelectorBranchPattern::LocalGet4I32ConstAddBrIf => {
-                        vm::op_local_get4_i32_const_add_br_if as Op
-                    }
-                    SelectorBranchPattern::LocalGet4LocalGet4I32AddBrIf => {
-                        vm::op_local_get4_local_get4_i32_add_br_if as Op
-                    }
-                    _ => unreachable!("only add-based branch patterns reach this path"),
-                };
-                return Some((fused_br_if_terminator(pattern, terminator, op, operands), 3));
+                return Some((fused_br_if_terminator(terminator, op, operands), 3));
             }
         }
     }
 
     if let Some((compare, consumed)) = match_compare_br_if_pattern(graph, body, condition) {
-        let (pattern, op, operands) = match compare {
+        let (op, operands) = match compare {
             SelectorCompareMatch::Eqz { input } => (
-                SelectorBranchPattern::LocalGet4I32EqzBrIf,
                 vm::op_local_get4_i32_eqz_br_if as Op,
                 vec![branch_target_operand(terminator)?, input],
             ),
             SelectorCompareMatch::Const { lhs, cmp_kind, imm } => (
-                SelectorBranchPattern::LocalGet4I32ConstCompareBrIf,
                 vm::op_local_get4_i32_const_compare_br_if as Op,
                 vec![
                     branch_target_operand(terminator)?,
@@ -6103,7 +6405,6 @@ fn match_br_if_pattern(
                 ],
             ),
             SelectorCompareMatch::Local { lhs, rhs, cmp_kind } => (
-                SelectorBranchPattern::LocalGet4LocalGet4CompareBrIf,
                 vm::op_local_get4_local_get4_compare_br_if as Op,
                 vec![
                     branch_target_operand(terminator)?,
@@ -6113,10 +6414,7 @@ fn match_br_if_pattern(
                 ],
             ),
         };
-        return Some((
-            fused_br_if_terminator(pattern, terminator, op, operands),
-            consumed,
-        ));
+        return Some((fused_br_if_terminator(terminator, op, operands), consumed));
     }
 
     let local_get = body.ops.last()?;
@@ -6127,7 +6425,6 @@ fn match_br_if_pattern(
     }
     Some((
         fused_br_if_terminator(
-            SelectorBranchPattern::LocalGet4BrIf,
             terminator,
             vm::op_local_get4_br_if as Op,
             vec![branch_target_operand(terminator)?, operand],
@@ -6265,7 +6562,6 @@ fn last_op_is_spill_local_get_for_value(body: &BlockBody, value: ValueRef) -> bo
 }
 
 fn fused_br_if_terminator(
-    _pattern: SelectorBranchPattern,
     terminator: &BlockTerminator,
     op: Op,
     mut operands: Vec<BlockOperand>,
@@ -6347,6 +6643,7 @@ fn br_if_candidate_shape(graph: &ValueGraph, condition: ValueRef) -> Option<Loop
     }
 }
 
+#[cfg(not(any(debug_assertions, test)))]
 fn fused_op(
     pattern: SelectorPattern,
     first: &BlockOp,
@@ -8787,6 +9084,465 @@ mod tests {
             body.ops[0].operands.as_slice(),
             [BlockOperand::LocalAddr(16)]
         ));
+    }
+
+    #[test]
+    fn local_control_relower_specializes_plain_add_at_consumer() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let base = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 1,
+                ordinal: 0,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: None,
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(src),
+                offset_delta: 0,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4(src)),
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(src)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                Some(LoopValueShape::Local4(src)),
+            ),
+            provider_class: ProviderClass::LocalLoad,
+            materialization_cost: MaterializationCost::Local,
+            producer_op: Some(0),
+            materialized_block: Some(1),
+            materialized_op: Some(0),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+        let imm = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 1,
+                ordinal: 1,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Const,
+            const_value: Some(ConstValue::I32(7)),
+            key: None,
+            address_shape: None,
+            loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::Const,
+            materialization_cost: MaterializationCost::Immediate,
+            producer_op: Some(1),
+            materialized_block: Some(1),
+            materialized_op: Some(1),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+        let add = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 1,
+                ordinal: 2,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: Some(ValueKey::Binary {
+                op: PureOpKind::I32Add,
+                lhs: graph[base.0].origin,
+                rhs: graph[imm.0].origin,
+            }),
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(src),
+                offset_delta: 7,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4ConstAdd { base: src, imm: 7 }),
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(src)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 7,
+                }),
+                Some(LoopValueShape::Local4ConstAdd { base: src, imm: 7 }),
+            ),
+            provider_class: ProviderClass::PureBinary,
+            materialization_cost: MaterializationCost::Pure,
+            producer_op: Some(2),
+            materialized_block: Some(1),
+            materialized_op: Some(2),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(10),
+                    op: vm::op_local_get4 as Op,
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![base],
+                },
+                BlockOp {
+                    source_start: Some(12),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(7)],
+                    inputs: Vec::new(),
+                    values: vec![imm],
+                },
+                BlockOp {
+                    source_start: Some(14),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![base, imm],
+                    values: vec![add],
+                },
+                BlockOp {
+                    source_start: Some(16),
+                    op: vm::op_drop as Op,
+                    kind: BlockOpKind::Drop,
+                    operands: Vec::new(),
+                    inputs: vec![add],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let plan = build_local_control_relower_plan(&body, &graph);
+        let spec = plan
+            .specialized_ops
+            .get(&2)
+            .expect("i32.add consumer should specialize");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_local_get4_i32_const_add as Op
+        ));
+        assert_eq!(spec.source_start, Some(10));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
+        assert!(verify_provider_elimination(&body, &graph, &plan));
+    }
+
+    #[test]
+    fn local_control_relower_specializes_local_set_consumer() {
+        let src = LocalSlot::new(0, 4);
+        let dst = LocalSlot::new(4, 4);
+        let mut graph = ValueGraph::default();
+        let base = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 1,
+                ordinal: 0,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: None,
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(src),
+                offset_delta: 0,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4(src)),
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(src)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                Some(LoopValueShape::Local4(src)),
+            ),
+            provider_class: ProviderClass::LocalLoad,
+            materialization_cost: MaterializationCost::Local,
+            producer_op: Some(0),
+            materialized_block: Some(1),
+            materialized_op: Some(0),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+        let imm = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 1,
+                ordinal: 1,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Const,
+            const_value: Some(ConstValue::I32(5)),
+            key: None,
+            address_shape: None,
+            loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::Const,
+            materialization_cost: MaterializationCost::Immediate,
+            producer_op: Some(1),
+            materialized_block: Some(1),
+            materialized_op: Some(1),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+        let add = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 1,
+                ordinal: 2,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: Some(ValueKey::Binary {
+                op: PureOpKind::I32Add,
+                lhs: graph[base.0].origin,
+                rhs: graph[imm.0].origin,
+            }),
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(src),
+                offset_delta: 5,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4ConstAdd { base: src, imm: 5 }),
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(src)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 5,
+                }),
+                Some(LoopValueShape::Local4ConstAdd { base: src, imm: 5 }),
+            ),
+            provider_class: ProviderClass::PureBinary,
+            materialization_cost: MaterializationCost::Pure,
+            producer_op: Some(2),
+            materialized_block: Some(1),
+            materialized_op: Some(2),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(20),
+                    op: vm::op_local_get4 as Op,
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![base],
+                },
+                BlockOp {
+                    source_start: Some(22),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(5)],
+                    inputs: Vec::new(),
+                    values: vec![imm],
+                },
+                BlockOp {
+                    source_start: Some(24),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![base, imm],
+                    values: vec![add],
+                },
+                BlockOp {
+                    source_start: Some(26),
+                    op: vm::op_local_set4 as Op,
+                    kind: BlockOpKind::LocalSet,
+                    operands: vec![BlockOperand::LocalAddr(dst.addr)],
+                    inputs: vec![add],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let plan = build_local_control_relower_plan(&body, &graph);
+        let spec = plan
+            .specialized_ops
+            .get(&3)
+            .expect("local.set consumer should specialize");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_local_get4_i32_const_add_set4 as Op
+        ));
+        assert_eq!(spec.source_start, Some(20));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
+        assert!(verify_provider_elimination(&body, &graph, &plan));
+    }
+
+    #[test]
+    fn local_control_relower_accepts_slot_preserving_block_argument_leaf_for_br_if() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let base = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 7,
+                ordinal: 0,
+                kind: ExprOriginKind::BlockArgument,
+            },
+            def: ValueDef::BlockArgument(crate::parser::core::optimizer::expr::BlockArgumentId(0)),
+            const_value: None,
+            key: None,
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(src),
+                offset_delta: 0,
+            }),
+            loop_value_shape: None,
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(src)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                None,
+            ),
+            provider_class: ProviderClass::LocalLoad,
+            materialization_cost: MaterializationCost::Local,
+            producer_op: Some(0),
+            materialized_block: Some(7),
+            materialized_op: Some(0),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+        let imm = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 7,
+                ordinal: 1,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Const,
+            const_value: Some(ConstValue::I32(3)),
+            key: None,
+            address_shape: None,
+            loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::Const,
+            materialization_cost: MaterializationCost::Immediate,
+            producer_op: Some(1),
+            materialized_block: Some(7),
+            materialized_op: Some(1),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+        let add = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 7,
+                ordinal: 2,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: Some(ValueKey::Binary {
+                op: PureOpKind::I32Add,
+                lhs: graph[base.0].origin,
+                rhs: graph[imm.0].origin,
+            }),
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(src),
+                offset_delta: 3,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4ConstAdd { base: src, imm: 3 }),
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(src)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 3,
+                }),
+                Some(LoopValueShape::Local4ConstAdd { base: src, imm: 3 }),
+            ),
+            provider_class: ProviderClass::PureBinary,
+            materialization_cost: MaterializationCost::Pure,
+            producer_op: Some(2),
+            materialized_block: Some(7),
+            materialized_op: Some(2),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(30),
+                    op: vm::op_local_get4 as Op,
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![base],
+                },
+                BlockOp {
+                    source_start: Some(32),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(3)],
+                    inputs: Vec::new(),
+                    values: vec![imm],
+                },
+                BlockOp {
+                    source_start: Some(34),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![base, imm],
+                    values: vec![add],
+                },
+            ],
+            terminator: Some(BlockTerminator {
+                source_start: Some(36),
+                op: vm::op_br_if as Op,
+                kind: BlockTerminatorKind::BrIf,
+                operands: vec![BlockOperand::JumpTarget(11)],
+                inputs: vec![add],
+                values: Vec::new(),
+            }),
+        };
+
+        let plan = build_local_control_relower_plan(&body, &graph);
+        let spec = plan
+            .specialized_terminator
+            .as_ref()
+            .expect("slot-preserving local-like leaf should specialize br_if");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_local_get4_i32_const_add_br_if as Op
+        ));
+        assert_eq!(spec.source_start, Some(30));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
+        assert!(verify_provider_elimination(&body, &graph, &plan));
     }
 
     #[test]
