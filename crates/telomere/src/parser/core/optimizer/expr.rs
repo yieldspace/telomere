@@ -102,6 +102,46 @@ impl LocalSlot {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SlotClass {
+    EntryLocal,
+    TempLocal,
+    SpillLocal,
+    VirtualStack,
+    ConstPoolRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct SlotRef {
+    pub(crate) slot: LocalSlot,
+    pub(crate) class: SlotClass,
+}
+
+impl SlotRef {
+    pub(crate) const fn new(slot: LocalSlot, class: SlotClass) -> Self {
+        Self { slot, class }
+    }
+
+    pub(crate) const fn entry_local(slot: LocalSlot) -> Self {
+        Self::new(slot, SlotClass::EntryLocal)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn temp_local(slot: LocalSlot) -> Self {
+        Self::new(slot, SlotClass::TempLocal)
+    }
+
+    pub(crate) const fn spill_local(slot: LocalSlot) -> Self {
+        Self::new(slot, SlotClass::SpillLocal)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) const fn virtual_stack(slot: LocalSlot) -> Self {
+        Self::new(slot, SlotClass::VirtualStack)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum AddressBaseKind {
     EntryLocal(LocalSlot),
@@ -138,6 +178,34 @@ pub(crate) enum LoopValueShape {
         op: PureOpKind,
         rhs: LocalSlot,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub(crate) struct SlotShape {
+    pub(crate) slot: Option<SlotRef>,
+    pub(crate) address: Option<AddressShape>,
+    pub(crate) loop_value: Option<LoopValueShape>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub(crate) enum ProviderClass {
+    #[default]
+    None,
+    LocalLoad,
+    Const,
+    PureUnary,
+    PureBinary,
+    EffectResultSpill,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub(crate) enum MaterializationCost {
+    #[default]
+    Unknown,
+    Immediate,
+    Local,
+    Pure,
+    Spill,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -307,6 +375,9 @@ pub(crate) struct ValueNode {
     pub(crate) key: Option<ValueKey>,
     pub(crate) address_shape: Option<AddressShape>,
     pub(crate) loop_value_shape: Option<LoopValueShape>,
+    pub(crate) slot_shape: Option<SlotShape>,
+    pub(crate) provider_class: ProviderClass,
+    pub(crate) materialization_cost: MaterializationCost,
     pub(crate) producer_op: Option<usize>,
     pub(crate) materialized_block: Option<usize>,
     pub(crate) materialized_op: Option<usize>,
@@ -361,6 +432,39 @@ impl ValueNode {
     pub(crate) fn is_block_argument(&self) -> bool {
         matches!(self.def, ValueDef::BlockArgument(_))
     }
+
+    pub(crate) fn refresh_optimizer_metadata(&mut self) {
+        self.provider_class = if self.const_value.is_some() {
+            ProviderClass::Const
+        } else if matches!(self.key, Some(ValueKey::Unary { .. })) {
+            ProviderClass::PureUnary
+        } else if matches!(self.key, Some(ValueKey::Binary { .. })) {
+            ProviderClass::PureBinary
+        } else if self.is_effect_result()
+            && self
+                .slot_shape
+                .as_ref()
+                .and_then(|shape| shape.slot)
+                .is_some_and(|slot| slot.class == SlotClass::SpillLocal)
+        {
+            ProviderClass::EffectResultSpill
+        } else if self
+            .slot_shape
+            .as_ref()
+            .is_some_and(|shape| shape.slot.is_some())
+        {
+            ProviderClass::LocalLoad
+        } else {
+            ProviderClass::None
+        };
+        self.materialization_cost = match self.provider_class {
+            ProviderClass::Const => MaterializationCost::Immediate,
+            ProviderClass::LocalLoad => MaterializationCost::Local,
+            ProviderClass::PureUnary | ProviderClass::PureBinary => MaterializationCost::Pure,
+            ProviderClass::EffectResultSpill => MaterializationCost::Spill,
+            ProviderClass::None => MaterializationCost::Unknown,
+        };
+    }
 }
 
 impl ValueGraph {
@@ -385,6 +489,7 @@ impl ValueGraph {
         key: Option<ValueKey>,
         address_shape: Option<AddressShape>,
         loop_value_shape: Option<LoopValueShape>,
+        slot_shape: Option<SlotShape>,
     ) -> ValueRef {
         if let Some(id) = self
             .block_argument_lookup
@@ -397,6 +502,8 @@ impl ValueGraph {
             node.key = key;
             node.address_shape = address_shape;
             node.loop_value_shape = loop_value_shape;
+            node.slot_shape = slot_shape;
+            node.refresh_optimizer_metadata();
             return value;
         }
 
@@ -414,6 +521,9 @@ impl ValueGraph {
             key,
             address_shape,
             loop_value_shape,
+            slot_shape,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -422,6 +532,7 @@ impl ValueGraph {
             ref_count: 0,
             removable: false,
         });
+        self.nodes[value.0].refresh_optimizer_metadata();
         self.block_arguments.push(BlockArgument {
             id,
             block_id,

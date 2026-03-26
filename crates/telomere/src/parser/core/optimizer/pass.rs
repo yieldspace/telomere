@@ -15,8 +15,8 @@ use super::{
     expr::{
         AddressBaseKind, AddressShape, AliasAddress, AliasKey, AliasSpace, ConstValue,
         EffectBarrier, EffectEpoch, EffectOpId, ExprId, ExprOrigin, ExprOriginKind, ExprState,
-        HeapVersion, LocalSlot, LoopValueShape, PureOpKind, ValueDef, ValueGraph, ValueKey,
-        ValueRef,
+        HeapVersion, LocalSlot, LoopValueShape, MaterializationCost, ProviderClass, PureOpKind,
+        SlotClass, SlotRef, SlotShape, ValueDef, ValueGraph, ValueKey, ValueRef,
     },
     sink::{flatten_packed_stream, pack_records, verify_packed_stream, RecordEmit},
     OptimizedFunction,
@@ -77,10 +77,24 @@ struct BlockRunResult {
     loop_invariants: LoopInvariantSet,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotMergeDecision {
+    Preserve,
+    InsertCopy,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct BlockCopyPlan {
+    stack: BTreeMap<usize, SlotMergeDecision>,
+    locals: BTreeMap<LocalSlot, SlotMergeDecision>,
+    aliases: BTreeMap<AliasKey, SlotMergeDecision>,
+}
+
 #[derive(Default)]
 struct RelowerPlan {
     block_bodies: Vec<BlockBody>,
     loop_invariants: Vec<LoopInvariantSet>,
+    block_copy_plans: Vec<BlockCopyPlan>,
     entry_prefix_ops: Vec<BlockOp>,
 }
 
@@ -1232,6 +1246,7 @@ fn rewrite_program(
         relower: RelowerPlan {
             block_bodies: vec![BlockBody::default(); program.blocks.len()],
             loop_invariants: vec![LoopInvariantSet::default(); program.blocks.len()],
+            block_copy_plans: vec![BlockCopyPlan::default(); program.blocks.len()],
             entry_prefix_ops: Vec::new(),
         },
         graph: ValueGraph::default(),
@@ -1243,7 +1258,9 @@ fn rewrite_program(
 
     while let Some(block_id) = worklist.pop_front() {
         queued[block_id] = false;
-        let Some(entry) = compute_entry_state(program, &mut pass.exprs, &rewrite, block_id) else {
+        let Some((entry, copy_plan)) =
+            compute_entry_state(program, &mut pass.exprs, &rewrite, block_id)
+        else {
             if clear_block_rewrite(&pass.exprs, &mut rewrite, block_id) {
                 enqueue_successors(program, block_id, &mut worklist, &mut queued);
             }
@@ -1264,6 +1281,7 @@ fn rewrite_program(
         if entry_changed {
             rewrite.entries[block_id] = entry.clone();
         }
+        rewrite.relower.block_copy_plans[block_id] = copy_plan;
         let block = program.block(block_id);
         let block_started_at = profiler
             .as_deref_mut()
@@ -1301,6 +1319,7 @@ fn rewrite_program(
     }
 
     rewrite.graph = pass.exprs;
+    debug_assert!(verify_slot_plan(program, &rewrite));
     rewrite
 }
 
@@ -1309,7 +1328,7 @@ fn compute_entry_state(
     graph: &mut ValueGraph,
     rewrite: &FunctionRewrite,
     block_id: usize,
-) -> Option<BlockEntryState> {
+) -> Option<(BlockEntryState, BlockCopyPlan)> {
     let block = program.block(block_id);
     let first = program.records.get(block.start)?;
     let mut incoming = Vec::new();
@@ -1325,7 +1344,9 @@ fn compute_entry_state(
     if incoming.is_empty() {
         return None;
     }
-    Some(merge_states(graph, block_id, first, &incoming))
+    Some(merge_states_with_copy_plan(
+        graph, block_id, first, &incoming,
+    ))
 }
 
 fn clear_block_rewrite(graph: &ValueGraph, rewrite: &mut FunctionRewrite, block_id: usize) -> bool {
@@ -1338,6 +1359,7 @@ fn clear_block_rewrite(graph: &ValueGraph, rewrite: &mut FunctionRewrite, block_
     let body_changed = !block_body_is_empty(&rewrite.relower.block_bodies[block_id]);
     let invariants_changed =
         rewrite.relower.loop_invariants[block_id] != LoopInvariantSet::default();
+    let copy_plan_changed = rewrite.relower.block_copy_plans[block_id] != BlockCopyPlan::default();
     if entry_changed {
         rewrite.entries[block_id] = BlockEntryState::default();
     }
@@ -1350,7 +1372,10 @@ fn clear_block_rewrite(graph: &ValueGraph, rewrite: &mut FunctionRewrite, block_
     if invariants_changed {
         rewrite.relower.loop_invariants[block_id] = LoopInvariantSet::default();
     }
-    entry_changed || exit_changed || body_changed || invariants_changed
+    if copy_plan_changed {
+        rewrite.relower.block_copy_plans[block_id] = BlockCopyPlan::default();
+    }
+    entry_changed || exit_changed || body_changed || invariants_changed || copy_plan_changed
 }
 
 fn enqueue_successors(
@@ -1395,12 +1420,22 @@ fn default_entry_state(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn merge_states(
     graph: &mut ValueGraph,
     block_id: usize,
     first: &DecodedInstr,
     incoming: &[BlockEntryState],
 ) -> BlockEntryState {
+    merge_states_with_copy_plan(graph, block_id, first, incoming).0
+}
+
+fn merge_states_with_copy_plan(
+    graph: &mut ValueGraph,
+    block_id: usize,
+    first: &DecodedInstr,
+    incoming: &[BlockEntryState],
+) -> (BlockEntryState, BlockCopyPlan) {
     let preserve_existing_block_arguments = incoming.len() > 1;
     let mut state = BlockEntryState {
         reachable: true,
@@ -1408,20 +1443,25 @@ fn merge_states(
         heap: merge_heap_versions(incoming),
         ..BlockEntryState::default()
     };
+    let mut copy_plan = BlockCopyPlan::default();
 
     for (ordinal, ty) in first.stack_before.types.iter().enumerate() {
         let values = incoming
             .iter()
             .map(|entry| entry.stack.get(ordinal))
             .collect::<Vec<_>>();
-        state.stack.push(merge_value_candidates(
+        let merged = merge_value_candidates(
             graph,
             block_id,
             ordinal,
             *ty,
             &values,
             preserve_existing_block_arguments,
-        ));
+        );
+        if let Some(decision) = slot_merge_decision(graph, &values, merged) {
+            copy_plan.stack.insert(ordinal, decision);
+        }
+        state.stack.push(merged);
     }
 
     let mut local_slots = BTreeSet::new();
@@ -1433,17 +1473,19 @@ fn merge_states(
             .iter()
             .map(|entry| entry.locals.get(&slot))
             .collect::<Vec<_>>();
-        state.locals.insert(
-            slot,
-            merge_value_candidates(
-                graph,
-                block_id,
-                1024 + slot.addr as usize,
-                type_from_slot(slot.size),
-                &values,
-                preserve_existing_block_arguments,
-            ),
+        let merged = merge_value_candidates(
+            graph,
+            block_id,
+            1024 + slot.addr as usize,
+            type_from_slot(slot.size),
+            &values,
+            preserve_existing_block_arguments,
         );
+        if graph[merged.0].is_block_argument() {
+            set_direct_slot_shape(graph, merged, slot_ref_for_local_slot(slot));
+            copy_plan.locals.insert(slot, SlotMergeDecision::Preserve);
+        }
+        state.locals.insert(slot, merged);
     }
 
     merge_aliases(
@@ -1451,10 +1493,11 @@ fn merge_states(
         block_id,
         incoming,
         &mut state,
+        &mut copy_plan,
         preserve_existing_block_arguments,
     );
 
-    state
+    (state, copy_plan)
 }
 
 fn merge_aliases(
@@ -1462,6 +1505,7 @@ fn merge_aliases(
     block_id: usize,
     incoming: &[BlockEntryState],
     state: &mut BlockEntryState,
+    copy_plan: &mut BlockCopyPlan,
     preserve_existing_block_arguments: bool,
 ) {
     let mut exact_keys = if let Some(first_entry) = incoming.first() {
@@ -1485,6 +1529,7 @@ fn merge_aliases(
                 .map(|entry| entry.aliases.get(&key))
                 .collect::<Vec<_>>(),
             state,
+            copy_plan,
             preserve_existing_block_arguments,
         );
     }
@@ -1530,6 +1575,7 @@ fn merge_aliases(
             merged_key,
             values,
             state,
+            copy_plan,
             preserve_existing_block_arguments,
         );
     }
@@ -1541,6 +1587,7 @@ fn merge_alias_value(
     key: AliasKey,
     values: Vec<Option<&ValueRef>>,
     state: &mut BlockEntryState,
+    copy_plan: &mut BlockCopyPlan,
     preserve_existing_block_arguments: bool,
 ) {
     let Some(first_value) = values.first().and_then(|value| *value).copied() else {
@@ -1554,6 +1601,9 @@ fn merge_alias_value(
         &values,
         preserve_existing_block_arguments,
     );
+    if let Some(decision) = slot_merge_decision(graph, &values, merged) {
+        copy_plan.aliases.insert(key.clone(), decision);
+    }
     state.aliases.insert(key, merged);
 }
 
@@ -1606,10 +1656,11 @@ fn merge_value_candidates(
     preserve_existing_block_arguments: bool,
 ) -> ValueRef {
     let Some(first) = values.first().and_then(|value| *value).copied() else {
-        return graph.ensure_block_argument(block_id, ordinal, ty, None, None, None, None);
+        return graph.ensure_block_argument(block_id, ordinal, ty, None, None, None, None, None);
     };
     let address_shape = merge_address_shape_candidates(graph, values);
     let loop_value_shape = merge_loop_value_shape_candidates(graph, values);
+    let slot_shape = merge_slot_shape_candidates(graph, values);
     let has_block_argument_input = values
         .iter()
         .flatten()
@@ -1638,6 +1689,7 @@ fn merge_value_candidates(
             key,
             address_shape,
             loop_value_shape,
+            slot_shape,
         );
     }
     if values
@@ -1664,6 +1716,7 @@ fn merge_value_candidates(
         key,
         address_shape,
         loop_value_shape,
+        slot_shape,
     )
 }
 
@@ -1691,6 +1744,43 @@ fn merge_loop_value_shape_candidates(
     } else {
         None
     }
+}
+
+fn merge_slot_shape_candidates(
+    graph: &ValueGraph,
+    values: &[Option<&ValueRef>],
+) -> Option<SlotShape> {
+    let mut iter = values
+        .iter()
+        .map(|value| value.and_then(|value| effective_slot_shape(graph, *value)));
+    let first = iter.next()?;
+    if iter.all(|shape| shape == first) {
+        first
+    } else {
+        None
+    }
+}
+
+fn slot_merge_decision(
+    graph: &ValueGraph,
+    values: &[Option<&ValueRef>],
+    merged: ValueRef,
+) -> Option<SlotMergeDecision> {
+    if !graph[merged.0].is_block_argument() {
+        return None;
+    }
+    let shapes = values
+        .iter()
+        .map(|value| value.and_then(|value| effective_slot_shape(graph, *value)))
+        .collect::<Vec<_>>();
+    let first = shapes.first().cloned()?;
+    if shapes.iter().all(|shape| *shape == first) {
+        return first.map(|_| SlotMergeDecision::Preserve);
+    }
+    shapes
+        .iter()
+        .any(|shape| shape.is_some())
+        .then_some(SlotMergeDecision::InsertCopy)
 }
 
 fn alias_ordinal(key: AliasKey) -> usize {
@@ -1856,8 +1946,8 @@ fn state_diff_summary(graph: &ValueGraph, lhs: &BlockEntryState, rhs: &BlockEntr
 fn describe_value(graph: &ValueGraph, value: ValueRef) -> String {
     let value = &graph[value.0];
     format!(
-        "origin={:?} def={:?} const={:?} key={:?}",
-        value.origin, value.def, value.const_value, value.key
+        "origin={:?} def={:?} const={:?} key={:?} slot={:?}",
+        value.origin, value.def, value.const_value, value.key, value.slot_shape
     )
 }
 
@@ -1892,6 +1982,7 @@ fn same_value(graph: &ValueGraph, lhs: ValueRef, rhs: ValueRef) -> bool {
         && lhs.key == rhs.key
         && lhs.address_shape == rhs.address_shape
         && lhs.loop_value_shape == rhs.loop_value_shape
+        && lhs.slot_shape == rhs.slot_shape
 }
 
 fn ensure_seed_value(graph: &mut ValueGraph, ty: ValType, origin: ExprOrigin) -> ValueRef {
@@ -1904,6 +1995,9 @@ fn ensure_seed_value(graph: &mut ValueGraph, ty: ValType, origin: ExprOrigin) ->
         key: None,
         address_shape: None,
         loop_value_shape: None,
+        slot_shape: None,
+        provider_class: ProviderClass::None,
+        materialization_cost: MaterializationCost::Unknown,
         producer_op: None,
         materialized_block: None,
         materialized_op: None,
@@ -1980,6 +2074,96 @@ fn entry_local_loop_value_shape(slot: LocalSlot, ty: ValType) -> Option<LoopValu
 
 fn spill_local_loop_value_shape(slot: LocalSlot, ty: ValType) -> Option<LoopValueShape> {
     (ty == ValType::I32 && slot.size == 4).then_some(LoopValueShape::Local4(slot))
+}
+
+fn slot_ref_for_local_slot(slot: LocalSlot) -> SlotRef {
+    SlotRef::entry_local(slot)
+}
+
+fn slot_ref_from_address_shape(shape: AddressShape) -> Option<SlotRef> {
+    if shape.offset_delta != 0 {
+        return None;
+    }
+    Some(match shape.base {
+        AddressBaseKind::EntryLocal(slot) => SlotRef::entry_local(slot),
+        AddressBaseKind::SpillLocal(slot) => SlotRef::spill_local(slot),
+    })
+}
+
+fn slot_ref_from_loop_value_shape(shape: &LoopValueShape) -> Option<SlotRef> {
+    match shape {
+        LoopValueShape::Local4(slot) => Some(SlotRef::entry_local(*slot)),
+        _ => None,
+    }
+}
+
+fn build_slot_shape(
+    slot: Option<SlotRef>,
+    address: Option<AddressShape>,
+    loop_value: Option<LoopValueShape>,
+) -> Option<SlotShape> {
+    if slot.is_none() && address.is_none() && loop_value.is_none() {
+        None
+    } else {
+        Some(SlotShape {
+            slot,
+            address,
+            loop_value,
+        })
+    }
+}
+
+fn direct_slot_from_shape_parts(
+    address: Option<AddressShape>,
+    loop_value: Option<&LoopValueShape>,
+) -> Option<SlotRef> {
+    address
+        .and_then(slot_ref_from_address_shape)
+        .or_else(|| loop_value.and_then(slot_ref_from_loop_value_shape))
+}
+
+fn effective_slot_shape(graph: &ValueGraph, value: ValueRef) -> Option<SlotShape> {
+    let node = &graph[value.0];
+    node.slot_shape.clone().or_else(|| {
+        build_slot_shape(
+            direct_slot_from_shape_parts(node.address_shape, node.loop_value_shape.as_ref()),
+            node.address_shape,
+            node.loop_value_shape.clone(),
+        )
+    })
+}
+
+fn set_direct_slot_shape(graph: &mut ValueGraph, value: ValueRef, slot: SlotRef) {
+    let node = &mut graph[value.0];
+    node.slot_shape = build_slot_shape(
+        Some(slot),
+        node.address_shape,
+        node.loop_value_shape.clone(),
+    );
+    node.refresh_optimizer_metadata();
+}
+
+fn set_value_slot_shape(
+    graph: &mut ValueGraph,
+    value: ValueRef,
+    slot: Option<SlotRef>,
+    address_shape: Option<AddressShape>,
+    loop_value_shape: Option<LoopValueShape>,
+) {
+    let node = &mut graph[value.0];
+    let direct_slot =
+        slot.or_else(|| direct_slot_from_shape_parts(address_shape, loop_value_shape.as_ref()));
+    node.address_shape = address_shape;
+    node.loop_value_shape = loop_value_shape.clone();
+    node.slot_shape = build_slot_shape(direct_slot, address_shape, loop_value_shape);
+    node.refresh_optimizer_metadata();
+}
+
+fn materializable_slot(slot: SlotRef) -> Option<LocalSlot> {
+    match slot.class {
+        SlotClass::EntryLocal | SlotClass::TempLocal | SlotClass::SpillLocal => Some(slot.slot),
+        SlotClass::VirtualStack | SlotClass::ConstPoolRef => None,
+    }
 }
 
 fn i32_const_expr(exprs: &ValueGraph, value: ValueRef) -> Option<i32> {
@@ -3081,6 +3265,14 @@ impl BlockOptimizer {
 
         for value in &entry.stack {
             self.register_existing_value(*value);
+            if let Some(slot) = effective_slot_shape(&self.exprs, *value)
+                .and_then(|shape| shape.slot)
+                .and_then(materializable_slot)
+            {
+                self.origin_locals
+                    .entry(self.exprs[value.0].origin)
+                    .or_insert(slot);
+            }
             self.push_stack(*value);
             self.seed_cse(*value);
             self.maybe_mark_loop_invariant(*value);
@@ -3264,10 +3456,13 @@ impl BlockOptimizer {
                 Some(op_idx),
                 true,
             );
-            self.set_value_shapes(
+            let ty = self.exprs[expr.0].ty;
+            set_value_slot_shape(
+                &mut self.exprs,
                 expr,
-                entry_local_address_shape(slot, self.exprs[expr.0].ty),
-                entry_local_loop_value_shape(slot, self.exprs[expr.0].ty),
+                Some(slot_ref_for_local_slot(slot)),
+                entry_local_address_shape(slot, ty),
+                entry_local_loop_value_shape(slot, ty),
             );
             expr
         };
@@ -4248,6 +4443,9 @@ impl BlockOptimizer {
             key,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op,
             materialized_block: producer_op.map(|_| self.block_id),
             materialized_op: producer_op,
@@ -4256,6 +4454,7 @@ impl BlockOptimizer {
             ref_count: 0,
             removable,
         });
+        self.exprs.nodes[id.0].refresh_optimizer_metadata();
         self.touch_value(id);
         self.latest_by_origin.insert(origin, id);
         id
@@ -4267,17 +4466,25 @@ impl BlockOptimizer {
         address_shape: Option<AddressShape>,
         loop_value_shape: Option<LoopValueShape>,
     ) {
-        self.exprs[value.0].address_shape = address_shape;
-        self.exprs[value.0].loop_value_shape = loop_value_shape;
+        let slot = self.exprs[value.0]
+            .slot_shape
+            .as_ref()
+            .and_then(|shape| shape.slot);
+        set_value_slot_shape(
+            &mut self.exprs,
+            value,
+            slot,
+            address_shape,
+            loop_value_shape,
+        );
     }
 
     fn copy_value_shapes_from(&mut self, target: ValueRef, source: ValueRef) {
         let source_state = self.exprs[source.0].clone();
-        self.set_value_shapes(
-            target,
-            source_state.address_shape,
-            source_state.loop_value_shape,
-        );
+        self.exprs[target.0].address_shape = source_state.address_shape;
+        self.exprs[target.0].loop_value_shape = source_state.loop_value_shape.clone();
+        self.exprs[target.0].slot_shape = source_state.slot_shape;
+        self.exprs[target.0].refresh_optimizer_metadata();
     }
 
     fn lookup_cse_source(&self, key: ValueKey) -> Option<ValueRef> {
@@ -4394,11 +4601,14 @@ impl BlockOptimizer {
             true,
         );
         let slot = symbolic_spill_slot(source, size);
-        self.set_value_shapes(
+        set_value_slot_shape(
+            &mut self.exprs,
             expr,
+            Some(SlotRef::spill_local(slot)),
             spill_local_address_shape(slot, source_state.ty),
             spill_local_loop_value_shape(slot, source_state.ty),
         );
+        self.exprs[source.0].refresh_optimizer_metadata();
         Some(expr)
     }
 
@@ -6315,6 +6525,68 @@ fn verify_explicit_effect_ir(program: &BasicBlockProgram, bodies: &[BlockBody]) 
     })
 }
 
+fn verify_slot_plan(program: &BasicBlockProgram, rewrite: &FunctionRewrite) -> bool {
+    for block in &program.blocks {
+        let entry = &rewrite.entries[block.id];
+        if !entry.reachable {
+            continue;
+        }
+        let mut incoming = Vec::new();
+        if block.id == 0 {
+            continue;
+        }
+        for pred in &program.predecessors[block.id] {
+            let pred_state = &rewrite.exits[*pred];
+            if pred_state.reachable {
+                incoming.push(pred_state);
+            }
+        }
+        if incoming.is_empty() {
+            continue;
+        }
+        let copy_plan = &rewrite.relower.block_copy_plans[block.id];
+        for (ordinal, merged) in entry.stack.iter().copied().enumerate() {
+            let values = incoming
+                .iter()
+                .map(|state| state.stack.get(ordinal))
+                .collect::<Vec<_>>();
+            if slot_merge_decision(&rewrite.graph, &values, merged)
+                != copy_plan.stack.get(&ordinal).copied()
+            {
+                return false;
+            }
+        }
+        for (slot, merged) in &entry.locals {
+            if !rewrite.graph[merged.0].is_block_argument() {
+                continue;
+            }
+            if rewrite.graph[merged.0]
+                .slot_shape
+                .as_ref()
+                .and_then(|shape| shape.slot)
+                != Some(slot_ref_for_local_slot(*slot))
+            {
+                return false;
+            }
+            if copy_plan.locals.get(slot) != Some(&SlotMergeDecision::Preserve) {
+                return false;
+            }
+        }
+        for (key, merged) in &entry.aliases {
+            let values = incoming
+                .iter()
+                .map(|state| state.aliases.get(key))
+                .collect::<Vec<_>>();
+            if slot_merge_decision(&rewrite.graph, &values, *merged)
+                != copy_plan.aliases.get(key).copied()
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn verify_relower_preserves_call_ops(
     program: &BasicBlockProgram,
     bodies: &[BlockBody],
@@ -7697,6 +7969,9 @@ mod tests {
             key: None,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -7724,6 +7999,9 @@ mod tests {
             key: None,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -7800,6 +8078,9 @@ mod tests {
             key: None,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -7821,6 +8102,9 @@ mod tests {
             key: None,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -7883,6 +8167,9 @@ mod tests {
             key: None,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -7904,6 +8191,9 @@ mod tests {
             key: None,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -7960,11 +8250,13 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let pred_value = graph.ensure_block_argument(
             3,
             1024 + slot.addr as usize,
             ValType::I32,
+            None,
             None,
             None,
             None,
@@ -8010,6 +8302,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let shared_value = ExprId(graph.nodes.len());
         graph.nodes.push(ExprState {
@@ -8036,6 +8329,9 @@ mod tests {
             }),
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8094,6 +8390,9 @@ mod tests {
             key: None,
             address_shape: Some(shape),
             loop_value_shape: Some(loop_shape.clone()),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8115,6 +8414,9 @@ mod tests {
             key: None,
             address_shape: Some(shape),
             loop_value_shape: Some(loop_shape.clone()),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8171,6 +8473,9 @@ mod tests {
                 offset_delta: 4,
             }),
             loop_value_shape: Some(LoopValueShape::Local4ConstAdd { base: slot, imm: 4 }),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8195,6 +8500,9 @@ mod tests {
                 offset_delta: 8,
             }),
             loop_value_shape: Some(LoopValueShape::Local4ConstAdd { base: slot, imm: 8 }),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8223,6 +8531,265 @@ mod tests {
     }
 
     #[test]
+    fn merge_states_marks_stack_slot_join_as_preserve_when_slot_shape_matches() {
+        let first = DecodedInstr {
+            old_start: 0,
+            op: vm::op_end as Op,
+            operands: Vec::new(),
+            stack_before: snapshot(&[ValType::I32]),
+            stack_after: empty_snapshot(),
+            preserved_prefix_len: 0,
+            fresh_result_count: 0,
+        };
+        let slot = LocalSlot::new(12, 4);
+        let slot_shape = build_slot_shape(
+            Some(SlotRef::entry_local(slot)),
+            Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(slot),
+                offset_delta: 0,
+            }),
+            Some(LoopValueShape::Local4(slot)),
+        );
+        let mut graph = ValueGraph::default();
+        let lhs_value = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 1,
+                ordinal: 0,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: None,
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(slot),
+                offset_delta: 0,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4(slot)),
+            slot_shape: slot_shape.clone(),
+            provider_class: ProviderClass::LocalLoad,
+            materialization_cost: MaterializationCost::Local,
+            producer_op: None,
+            materialized_block: None,
+            materialized_op: None,
+            needs_spill: false,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        let rhs_value = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 2,
+                ordinal: 0,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: None,
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(slot),
+                offset_delta: 0,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4(slot)),
+            slot_shape,
+            provider_class: ProviderClass::LocalLoad,
+            materialization_cost: MaterializationCost::Local,
+            producer_op: None,
+            materialized_block: None,
+            materialized_op: None,
+            needs_spill: false,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        let lhs = BlockEntryState {
+            reachable: true,
+            stack: vec![lhs_value],
+            ..BlockEntryState::default()
+        };
+        let rhs = BlockEntryState {
+            reachable: true,
+            stack: vec![rhs_value],
+            ..BlockEntryState::default()
+        };
+
+        let (merged, copy_plan) = merge_states_with_copy_plan(&mut graph, 7, &first, &[lhs, rhs]);
+        let merged_value = merged.stack[0];
+        assert!(graph[merged_value.0].is_block_argument());
+        assert_eq!(copy_plan.stack.get(&0), Some(&SlotMergeDecision::Preserve));
+        assert_eq!(
+            graph[merged_value.0]
+                .slot_shape
+                .as_ref()
+                .and_then(|shape| shape.slot),
+            Some(SlotRef::entry_local(slot))
+        );
+    }
+
+    #[test]
+    fn merge_states_marks_stack_slot_join_for_copy_when_slot_shape_disagrees() {
+        let first = DecodedInstr {
+            old_start: 0,
+            op: vm::op_end as Op,
+            operands: Vec::new(),
+            stack_before: snapshot(&[ValType::I32]),
+            stack_after: empty_snapshot(),
+            preserved_prefix_len: 0,
+            fresh_result_count: 0,
+        };
+        let slot0 = LocalSlot::new(12, 4);
+        let slot1 = LocalSlot::new(20, 4);
+        let mut graph = ValueGraph::default();
+        let lhs_value = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 1,
+                ordinal: 0,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: None,
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(slot0),
+                offset_delta: 0,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4(slot0)),
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(slot0)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(slot0),
+                    offset_delta: 0,
+                }),
+                Some(LoopValueShape::Local4(slot0)),
+            ),
+            provider_class: ProviderClass::LocalLoad,
+            materialization_cost: MaterializationCost::Local,
+            producer_op: None,
+            materialized_block: None,
+            materialized_op: None,
+            needs_spill: false,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        let rhs_value = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 2,
+                ordinal: 0,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: None,
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(slot1),
+                offset_delta: 0,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4(slot1)),
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(slot1)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(slot1),
+                    offset_delta: 0,
+                }),
+                Some(LoopValueShape::Local4(slot1)),
+            ),
+            provider_class: ProviderClass::LocalLoad,
+            materialization_cost: MaterializationCost::Local,
+            producer_op: None,
+            materialized_block: None,
+            materialized_op: None,
+            needs_spill: false,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        let lhs = BlockEntryState {
+            reachable: true,
+            stack: vec![lhs_value],
+            ..BlockEntryState::default()
+        };
+        let rhs = BlockEntryState {
+            reachable: true,
+            stack: vec![rhs_value],
+            ..BlockEntryState::default()
+        };
+
+        let (merged, copy_plan) = merge_states_with_copy_plan(&mut graph, 7, &first, &[lhs, rhs]);
+        let merged_value = merged.stack[0];
+        assert!(graph[merged_value.0].is_block_argument());
+        assert_eq!(
+            copy_plan.stack.get(&0),
+            Some(&SlotMergeDecision::InsertCopy)
+        );
+        assert_eq!(graph[merged_value.0].slot_shape, None);
+    }
+
+    #[test]
+    fn try_materialize_value_uses_slot_preserving_block_argument() {
+        let slot = LocalSlot::new(16, 4);
+        let mut graph = ValueGraph::default();
+        let value = graph.ensure_block_argument(
+            7,
+            0,
+            ValType::I32,
+            None,
+            None,
+            Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(slot),
+                offset_delta: 0,
+            }),
+            Some(LoopValueShape::Local4(slot)),
+            build_slot_shape(
+                Some(SlotRef::entry_local(slot)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(slot),
+                    offset_delta: 0,
+                }),
+                Some(LoopValueShape::Local4(slot)),
+            ),
+        );
+        let entry = BlockEntryState {
+            reachable: true,
+            stack: vec![value],
+            ..BlockEntryState::default()
+        };
+        let mut optimizer = BlockOptimizer {
+            exprs: graph,
+            ..BlockOptimizer::default()
+        };
+        optimizer.reset(
+            BasicBlock {
+                id: 7,
+                start: 0,
+                end: 0,
+            },
+            &entry,
+        );
+        let materialized = optimizer
+            .try_materialize_value(13, value)
+            .expect("slot-preserving block argument should materialize");
+        let body = optimizer.build_block_body();
+        assert_eq!(optimizer.exprs[materialized.0].origin.block_id, 7);
+        assert_eq!(body.ops.len(), 1);
+        assert!(std::ptr::fn_addr_eq(
+            body.ops[0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(matches!(
+            body.ops[0].operands.as_slice(),
+            [BlockOperand::LocalAddr(16)]
+        ));
+    }
+
+    #[test]
     fn br_if_candidate_shape_reads_loop_value_shapes_from_residual_graph() {
         let slot0 = LocalSlot::new(0, 4);
         let slot1 = LocalSlot::new(4, 4);
@@ -8244,6 +8811,9 @@ mod tests {
                 offset_delta: 0,
             }),
             loop_value_shape: Some(LoopValueShape::Local4(slot0)),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8271,6 +8841,9 @@ mod tests {
                 base: slot0,
                 imm: 3,
             }),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8297,6 +8870,9 @@ mod tests {
                     imm: 3,
                 }),
             }),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8322,6 +8898,9 @@ mod tests {
                 op: PureOpKind::I32Eq,
                 rhs: slot1,
             }),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8380,6 +8959,9 @@ mod tests {
                 offset_delta: 0,
             }),
             loop_value_shape: Some(LoopValueShape::Local4(LocalSlot::new(12, 4))),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8401,6 +8983,9 @@ mod tests {
             key: None,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8428,6 +9013,9 @@ mod tests {
                 base: LocalSlot::new(12, 4),
                 imm: 1,
             }),
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
@@ -8449,6 +9037,9 @@ mod tests {
             key: None,
             address_shape: None,
             loop_value_shape: None,
+            slot_shape: None,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,
