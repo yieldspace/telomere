@@ -1946,4 +1946,52 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn optimizer_selector_keeps_lossless_local_shape_across_merge() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32 i32) (result i32)
+                block
+                  local.get 1
+                  if
+                    local.get 0
+                    local.set 0
+                  else
+                    local.get 0
+                    local.set 0
+                  end
+                end
+                local.get 0
+                i32.const 1
+                i32.add
+                local.set 0
+                local.get 0))
+            "#,
+        );
+        assert_eq!(
+            count_op(&expr, vm::op_local_get4_i32_const_add as crate::common::Op)
+                + count_op(
+                    &expr,
+                    vm::op_local_get4_i32_const_add_set4 as crate::common::Op
+                )
+                + count_op(
+                    &expr,
+                    vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
+                ),
+            1
+        );
+        assert_eq!(
+            count_op(&expr, vm::op_local_get4_br_if as crate::common::Op),
+            0
+        );
+        assert_eq!(
+            count_op(
+                &expr,
+                vm::op_local_get4_i32_const_add_br_if as crate::common::Op
+            ),
+            0
+        );
+    }
 }

@@ -102,6 +102,44 @@ impl LocalSlot {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum AddressBaseKind {
+    EntryLocal(LocalSlot),
+    SpillLocal(LocalSlot),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct AddressShape {
+    pub(crate) base: AddressBaseKind,
+    pub(crate) offset_delta: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum LoopValueShape {
+    Local4(LocalSlot),
+    Local4ConstAdd {
+        base: LocalSlot,
+        imm: i32,
+    },
+    Local4Local4Add {
+        lhs: LocalSlot,
+        rhs: LocalSlot,
+    },
+    CompareEqz {
+        input: Box<LoopValueShape>,
+    },
+    CompareConstI32 {
+        lhs: Box<LoopValueShape>,
+        op: PureOpKind,
+        imm: i32,
+    },
+    CompareLocal4 {
+        lhs: LocalSlot,
+        op: PureOpKind,
+        rhs: LocalSlot,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum AliasSpace {
     Memory,
@@ -267,6 +305,8 @@ pub(crate) struct ValueNode {
     pub(crate) def: ValueDef,
     pub(crate) const_value: Option<ConstValue>,
     pub(crate) key: Option<ValueKey>,
+    pub(crate) address_shape: Option<AddressShape>,
+    pub(crate) loop_value_shape: Option<LoopValueShape>,
     pub(crate) producer_op: Option<usize>,
     pub(crate) materialized_block: Option<usize>,
     pub(crate) materialized_op: Option<usize>,
@@ -335,6 +375,7 @@ impl ValueGraph {
             .map(|id| self.block_arguments[id.0].value)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn ensure_block_argument(
         &mut self,
         block_id: usize,
@@ -342,6 +383,8 @@ impl ValueGraph {
         ty: ValType,
         const_value: Option<ConstValue>,
         key: Option<ValueKey>,
+        address_shape: Option<AddressShape>,
+        loop_value_shape: Option<LoopValueShape>,
     ) -> ValueRef {
         if let Some(id) = self
             .block_argument_lookup
@@ -352,6 +395,8 @@ impl ValueGraph {
             let node = &mut self.nodes[value.0];
             node.const_value = const_value;
             node.key = key;
+            node.address_shape = address_shape;
+            node.loop_value_shape = loop_value_shape;
             return value;
         }
 
@@ -367,6 +412,8 @@ impl ValueGraph {
             def: ValueDef::BlockArgument(id),
             const_value,
             key,
+            address_shape,
+            loop_value_shape,
             producer_op: None,
             materialized_block: None,
             materialized_op: None,

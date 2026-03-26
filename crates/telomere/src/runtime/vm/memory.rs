@@ -1697,8 +1697,9 @@ mod tests {
     use crate::{
         common::{
             stack::{CachedMemoryKind, CallFrameCache},
-            store::{InstanceId, LocalMemoryId},
-            ExecuteContext, LocalReference, Memory, ObjectRef, Operand, Store, StoreInner,
+            store::{InstanceId, MemoryHandle},
+            ExecuteContext, LocalMemoryObject, LocalReference, Memory, ObjectRef, Operand, Store,
+            StoreInner,
         },
         runtime::{memory_effect::PendingOp, scheduler::EffectSupplier},
     };
@@ -1721,6 +1722,11 @@ mod tests {
         pending_effects: &'a mut u32,
         queue: &'a mut VecDeque<PendingOp>,
     ) -> ExecuteContext<'a> {
+        let MemoryHandle::Local(memory_id) =
+            gc.alloc_local_memory(LocalMemoryObject::new(1, 1).expect("test local memory"))
+        else {
+            unreachable!("test local memory handle must be local");
+        };
         let local_reference = LocalReference {
             local_top: 0,
             local_size: 0,
@@ -1730,10 +1736,8 @@ mod tests {
             stack,
             local_reference,
             local_base_ptr,
-            default_local_memory_ptr: gc
-                .local_memory_mut(unsafe { LocalMemoryId::from_raw_unchecked(1) })
-                .memory_mut() as *mut Memory,
-            current_frame: frame(CachedMemoryKind::Local, 1),
+            default_local_memory_ptr: gc.local_memory_mut(memory_id).memory_mut() as *mut Memory,
+            current_frame: frame(CachedMemoryKind::Local, memory_id.raw()),
             store,
             gc,
             effect: EffectSupplier::from_parts(1, pending_effects, queue),
