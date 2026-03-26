@@ -1,9 +1,24 @@
 use super::*;
 
+#[cold]
 fn build_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDispatchCache {
-    let (instance, funcidx, body) = {
+    let (instance, funcidx, target, code_base) = {
         let funcinst = ctx.gc.get_func(funcaddr);
-        (funcinst.instance, funcinst.funcidx, funcinst.body.clone())
+        let target = match &funcinst.body {
+            crate::common::store::FunctionBody::Wasm { locals, code } => (
+                CallDispatchTarget::Wasm {
+                    local_size: locals.byte_size() as u32,
+                },
+                code.as_ptr(),
+            ),
+            crate::common::store::FunctionBody::Host(fp) => {
+                (CallDispatchTarget::Host(*fp), std::ptr::null())
+            }
+            crate::common::store::FunctionBody::AsyncHost(fp) => {
+                (CallDispatchTarget::AsyncHost(*fp), std::ptr::null())
+            }
+        };
+        (funcinst.instance, funcinst.funcidx, target.0, target.1)
     };
     let instance_data = ctx.gc.instance(instance);
     let memory0 = instance_data
@@ -14,21 +29,6 @@ fn build_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> C
     let module = ctx.gc.get_module(instance_data.module_addr);
     let typeidx = module.functions[funcidx as usize];
     let param_size = result_type_size(&module.function_types[typeidx.0 as usize].0) as u32;
-    let target = match body {
-        crate::common::store::FunctionBody::Wasm { locals, .. } => CallDispatchTarget::Wasm {
-            local_size: locals.byte_size() as u32,
-        },
-        crate::common::store::FunctionBody::Host(fp) => CallDispatchTarget::Host(fp),
-        crate::common::store::FunctionBody::AsyncHost(fp) => CallDispatchTarget::AsyncHost(fp),
-    };
-    let code_base = match target {
-        CallDispatchTarget::Wasm { .. } => ctx
-            .gc
-            .get_func(funcaddr)
-            .code_pointer()
-            .unwrap_or(std::ptr::null()),
-        CallDispatchTarget::Host(_) | CallDispatchTarget::AsyncHost(_) => std::ptr::null(),
-    };
     CallDispatchCache {
         frame: CallFrameCache::from_cached_parts(funcaddr, instance, code_base, memory0.handle()),
         param_size,
@@ -36,6 +36,7 @@ fn build_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> C
     }
 }
 
+#[inline(always)]
 fn ensure_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDispatchCache {
     if let Some(cache) = ctx.gc.get_func(funcaddr).call_cache {
         return cache;
@@ -80,58 +81,71 @@ unsafe fn internal_op_call(
     );
     let param_size = cache.param_size as usize;
     let return_pc = cached_return_pc(return_addr, ctx);
-    if matches!(
-        cache.target,
-        CallDispatchTarget::Host(_) | CallDispatchTarget::AsyncHost(_)
-    ) {
-        if is_return_call {
-            let local_reference = vm_try!(ctx.stack.function_return_call_cached(
-                &ctx.local_reference,
-                param_size,
-                0,
-                cache.frame,
-            ));
-            ctx.set_local_reference(local_reference);
-        } else {
-            let local_reference = vm_try!(ctx.stack.function_call_cached(
-                param_size,
-                0,
-                cache.frame,
-                ctx.local_reference,
-                return_pc,
-            ));
-            ctx.set_local_reference(local_reference);
+    match cache.target {
+        CallDispatchTarget::Host(fp) => {
+            if is_return_call {
+                let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                    &ctx.local_reference,
+                    param_size,
+                    0,
+                    cache.frame,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+            } else {
+                let local_reference = vm_try!(ctx.stack.function_call_cached(
+                    param_size,
+                    0,
+                    cache.frame,
+                    ctx.local_reference,
+                    return_pc,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+            }
+            invoke_sync_host_function_with(return_addr, ctx, fp)
         }
-        let outcome = match cache.target {
-            CallDispatchTarget::Host(fp) => invoke_sync_host_function_with(return_addr, ctx, fp),
-            CallDispatchTarget::AsyncHost(fp) => start_async_host_call_with(return_addr, ctx, fp),
-            CallDispatchTarget::Wasm { .. } => unreachable!("host path must not use wasm cache"),
-        };
-        outcome
-    } else {
-        let CallDispatchTarget::Wasm { local_size } = cache.target else {
-            unreachable!("wasm path must use wasm cache");
-        };
-        let local_size = local_size as usize;
-        if is_return_call {
-            let local_reference = vm_try!(ctx.stack.function_return_call_cached(
-                &ctx.local_reference,
-                param_size,
-                local_size,
-                cache.frame,
-            ));
-            ctx.set_local_reference(local_reference);
-        } else {
-            let local_reference = vm_try!(ctx.stack.function_call_cached(
-                param_size,
-                local_size,
-                cache.frame,
-                ctx.local_reference,
-                return_pc,
-            ));
-            ctx.set_local_reference(local_reference);
+        CallDispatchTarget::AsyncHost(fp) => {
+            if is_return_call {
+                let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                    &ctx.local_reference,
+                    param_size,
+                    0,
+                    cache.frame,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+            } else {
+                let local_reference = vm_try!(ctx.stack.function_call_cached(
+                    param_size,
+                    0,
+                    cache.frame,
+                    ctx.local_reference,
+                    return_pc,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+            }
+            start_async_host_call_with(return_addr, ctx, fp)
         }
-        VMResult::Success(CallOutcome::Immediate(cache.frame.code_base))
+        CallDispatchTarget::Wasm { local_size } => {
+            let local_size = local_size as usize;
+            if is_return_call {
+                let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                    &ctx.local_reference,
+                    param_size,
+                    local_size,
+                    cache.frame,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+            } else {
+                let local_reference = vm_try!(ctx.stack.function_call_cached(
+                    param_size,
+                    local_size,
+                    cache.frame,
+                    ctx.local_reference,
+                    return_pc,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+            }
+            VMResult::Success(CallOutcome::Immediate(cache.frame.code_base))
+        }
     }
 }
 

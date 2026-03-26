@@ -1036,70 +1036,70 @@ define_shared_scalar_load!(
     op_i32_load8_u_shared,
     "i32.load8_u",
     shared_read_u8_at,
-    push_u32,
+    push_u32_fast,
     u32::from
 );
 define_shared_scalar_load!(
     op_i32_load8_s_shared,
     "i32.load8_s",
     shared_read_i8_at,
-    push_i32,
+    push_i32_fast,
     i32::from
 );
 define_shared_scalar_load!(
     op_i32_load16_s_shared,
     "i32.load16_s",
     shared_read_i16_at,
-    push_i32,
+    push_i32_fast,
     i32::from
 );
 define_shared_scalar_load!(
     op_i32_load16_u_shared,
     "i32.load16_u",
     shared_read_u16_at,
-    push_u32,
+    push_u32_fast,
     u32::from
 );
 define_shared_scalar_load!(
     op_i64_load8_s_shared,
     "i64.load8_s",
     shared_read_i8_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_shared_scalar_load!(
     op_i64_load8_u_shared,
     "i64.load8_u",
     shared_read_u8_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_shared_scalar_load!(
     op_i64_load16_s_shared,
     "i64.load16_s",
     shared_read_i16_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_shared_scalar_load!(
     op_i64_load16_u_shared,
     "i64.load16_u",
     shared_read_u16_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_shared_scalar_load!(
     op_i64_load32_s_shared,
     "i64.load32_s",
     shared_read_i32_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_shared_scalar_load!(
     op_i64_load32_u_shared,
     "i64.load32_u",
     shared_read_u32_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_shared_store_alias!(op_i32_store_shared, "i32.store", |ctx| {
@@ -1160,7 +1160,7 @@ define_indexed_scalar_load!(
     "i32.load8_u",
     local_read_u8_at,
     shared_read_u8_at,
-    push_u32,
+    push_u32_fast,
     u32::from
 );
 define_indexed_scalar_load!(
@@ -1169,7 +1169,7 @@ define_indexed_scalar_load!(
     "i32.load8_s",
     local_read_i8_at,
     shared_read_i8_at,
-    push_i32,
+    push_i32_fast,
     i32::from
 );
 define_indexed_scalar_load!(
@@ -1178,7 +1178,7 @@ define_indexed_scalar_load!(
     "i32.load16_s",
     local_read_i16_at,
     shared_read_i16_at,
-    push_i32,
+    push_i32_fast,
     i32::from
 );
 define_indexed_scalar_load!(
@@ -1187,7 +1187,7 @@ define_indexed_scalar_load!(
     "i32.load16_u",
     local_read_u16_at,
     shared_read_u16_at,
-    push_u32,
+    push_u32_fast,
     u32::from
 );
 define_indexed_scalar_load!(
@@ -1196,7 +1196,7 @@ define_indexed_scalar_load!(
     "i64.load8_s",
     local_read_i8_at,
     shared_read_i8_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_indexed_scalar_load!(
@@ -1205,7 +1205,7 @@ define_indexed_scalar_load!(
     "i64.load8_u",
     local_read_u8_at,
     shared_read_u8_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_indexed_scalar_load!(
@@ -1214,7 +1214,7 @@ define_indexed_scalar_load!(
     "i64.load16_s",
     local_read_i16_at,
     shared_read_i16_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_indexed_scalar_load!(
@@ -1223,7 +1223,7 @@ define_indexed_scalar_load!(
     "i64.load16_u",
     local_read_u16_at,
     shared_read_u16_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_indexed_scalar_load!(
@@ -1232,7 +1232,7 @@ define_indexed_scalar_load!(
     "i64.load32_s",
     local_read_i32_at,
     shared_read_i32_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_indexed_scalar_load!(
@@ -1241,7 +1241,7 @@ define_indexed_scalar_load!(
     "i64.load32_u",
     local_read_u32_at,
     shared_read_u32_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_indexed_store_alias!(
@@ -1307,70 +1307,70 @@ define_local_base_scalar_load!(
     op_i32_load8_u_local_base,
     "i32.load8_u",
     read_u8_at,
-    push_u32,
+    push_u32_fast,
     u32::from
 );
 define_local_base_scalar_load!(
     op_i32_load8_s_local_base,
     "i32.load8_s",
     read_i8_at,
-    push_i32,
+    push_i32_fast,
     i32::from
 );
 define_local_base_scalar_load!(
     op_i32_load16_s_local_base,
     "i32.load16_s",
     read_i16_at,
-    push_i32,
+    push_i32_fast,
     i32::from
 );
 define_local_base_scalar_load!(
     op_i32_load16_u_local_base,
     "i32.load16_u",
     read_u16_at,
-    push_u32,
+    push_u32_fast,
     u32::from
 );
 define_local_base_scalar_load!(
     op_i64_load8_s_local_base,
     "i64.load8_s",
     read_i8_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_local_base_scalar_load!(
     op_i64_load8_u_local_base,
     "i64.load8_u",
     read_u8_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_local_base_scalar_load!(
     op_i64_load16_s_local_base,
     "i64.load16_s",
     read_i16_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_local_base_scalar_load!(
     op_i64_load16_u_local_base,
     "i64.load16_u",
     read_u16_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_local_base_scalar_load!(
     op_i64_load32_s_local_base,
     "i64.load32_s",
     read_i32_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_local_base_scalar_load!(
     op_i64_load32_u_local_base,
     "i64.load32_u",
     read_u32_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_local_base_store_alias!(op_i32_store_local_base, |ctx| {
@@ -1409,70 +1409,70 @@ define_indexed_local_base_scalar_load!(
     op_i32_load8_u_indexed_local_base,
     "i32.load8_u",
     local_read_u8_at,
-    push_u32,
+    push_u32_fast,
     u32::from
 );
 define_indexed_local_base_scalar_load!(
     op_i32_load8_s_indexed_local_base,
     "i32.load8_s",
     local_read_i8_at,
-    push_i32,
+    push_i32_fast,
     i32::from
 );
 define_indexed_local_base_scalar_load!(
     op_i32_load16_s_indexed_local_base,
     "i32.load16_s",
     local_read_i16_at,
-    push_i32,
+    push_i32_fast,
     i32::from
 );
 define_indexed_local_base_scalar_load!(
     op_i32_load16_u_indexed_local_base,
     "i32.load16_u",
     local_read_u16_at,
-    push_u32,
+    push_u32_fast,
     u32::from
 );
 define_indexed_local_base_scalar_load!(
     op_i64_load8_s_indexed_local_base,
     "i64.load8_s",
     local_read_i8_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_indexed_local_base_scalar_load!(
     op_i64_load8_u_indexed_local_base,
     "i64.load8_u",
     local_read_u8_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_indexed_local_base_scalar_load!(
     op_i64_load16_s_indexed_local_base,
     "i64.load16_s",
     local_read_i16_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_indexed_local_base_scalar_load!(
     op_i64_load16_u_indexed_local_base,
     "i64.load16_u",
     local_read_u16_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_indexed_local_base_scalar_load!(
     op_i64_load32_s_indexed_local_base,
     "i64.load32_s",
     local_read_i32_at,
-    push_i64,
+    push_i64_fast,
     i64::from
 );
 define_indexed_local_base_scalar_load!(
     op_i64_load32_u_indexed_local_base,
     "i64.load32_u",
     local_read_u32_at,
-    push_u64,
+    push_u64_fast,
     u64::from
 );
 define_indexed_local_base_store_alias!(op_i32_store_indexed_local_base, |ctx| {

@@ -421,17 +421,79 @@ impl Stack {
         self.add_top(8)
     }
 
+    #[inline(always)]
+    pub fn push_u64_fast(&mut self, v: u64) -> VMResult<()> {
+        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(8), || {
+            VMResult::StackOverflow
+        }));
+        if new_top > self.memory.len() {
+            return VMResult::StackOverflow;
+        }
+        unsafe {
+            self.memory
+                .as_mut_ptr()
+                .add(self.top)
+                .cast::<u64>()
+                .write_unaligned(v.to_le());
+        }
+        self.top = new_top;
+        VMResult::Success(())
+    }
+
     pub fn push_u128(&mut self, v: u128) -> VMResult<()> {
         trusted_write_u128(vm_try!(self.get_memory(16)), v);
         self.add_top(16)
+    }
+
+    #[inline(always)]
+    pub fn push_u128_fast(&mut self, v: u128) -> VMResult<()> {
+        let new_top = vm_try!(VMResult::from_option(self.top.checked_add(16), || {
+            VMResult::StackOverflow
+        }));
+        if new_top > self.memory.len() {
+            return VMResult::StackOverflow;
+        }
+        unsafe {
+            self.memory
+                .as_mut_ptr()
+                .add(self.top)
+                .cast::<u128>()
+                .write_unaligned(v.to_le());
+        }
+        self.top = new_top;
+        VMResult::Success(())
     }
     pub fn pop_u128(&mut self) -> u128 {
         self.sub_top(16);
         trusted_read_u128(&self.memory[self.top..self.top + 16])
     }
+
+    #[inline(always)]
+    pub fn pop_u128_fast(&mut self) -> u128 {
+        self.sub_top(16);
+        u128::from_le(unsafe {
+            self.memory
+                .as_ptr()
+                .add(self.top)
+                .cast::<u128>()
+                .read_unaligned()
+        })
+    }
     pub fn pop_u64(&mut self) -> u64 {
         self.sub_top(8);
         trusted_read_u64(&self.memory[self.top..self.top + 8])
+    }
+
+    #[inline(always)]
+    pub fn pop_u64_fast(&mut self) -> u64 {
+        self.sub_top(8);
+        u64::from_le(unsafe {
+            self.memory
+                .as_ptr()
+                .add(self.top)
+                .cast::<u64>()
+                .read_unaligned()
+        })
     }
     pub fn push_i32(&mut self, v: i32) -> VMResult<()> {
         self.push_u32(v as u32)
@@ -440,6 +502,18 @@ impl Stack {
     #[inline(always)]
     pub fn push_i32_fast(&mut self, v: i32) -> VMResult<()> {
         self.push_u32_fast(v as u32)
+    }
+    #[inline(always)]
+    pub fn push_i64_fast(&mut self, v: i64) -> VMResult<()> {
+        self.push_u64_fast(v as u64)
+    }
+    #[inline(always)]
+    pub fn push_f32_fast(&mut self, v: f32) -> VMResult<()> {
+        self.push_u32_fast(v.to_bits())
+    }
+    #[inline(always)]
+    pub fn push_f64_fast(&mut self, v: f64) -> VMResult<()> {
+        self.push_u64_fast(v.to_bits())
     }
     pub fn push_f32(&mut self, v: f32) -> VMResult<()> {
         self.push_u32(v.to_bits())
@@ -603,6 +677,23 @@ impl Stack {
     #[inline(always)]
     pub unsafe fn local_set4_from_base(&mut self, local_base: *mut u8, local_addr: usize) {
         let value = self.pop_u32_fast();
+        unsafe {
+            Self::local_mut_ptr(local_base, local_addr)
+                .cast::<u32>()
+                .write_unaligned(value.to_le());
+        }
+    }
+
+    /// # Safety
+    /// Caller must ensure `local_base` points at the active locals area for the current frame and
+    /// that `local_addr..local_addr+4` is a valid writable local slot.
+    #[inline(always)]
+    pub unsafe fn local_set4_from_base_value(
+        &mut self,
+        local_base: *mut u8,
+        local_addr: usize,
+        value: u32,
+    ) {
         unsafe {
             Self::local_mut_ptr(local_base, local_addr)
                 .cast::<u32>()

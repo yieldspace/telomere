@@ -53,28 +53,28 @@ unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 
 #[inline(always)]
 unsafe fn internal_op_select4(ctx: &mut ExecuteContext) -> VMResult<()> {
-    let cond = ctx.stack.pop_u32();
-    let a = ctx.stack.pop_u32();
-    let b = ctx.stack.pop_u32();
-    vm_try!(ctx.stack.push_u32(if cond == 0 { a } else { b }));
+    let cond = ctx.stack.pop_u32_fast();
+    let a = ctx.stack.pop_u32_fast();
+    let b = ctx.stack.pop_u32_fast();
+    vm_try!(ctx.stack.push_u32_fast(if cond == 0 { a } else { b }));
     VMResult::Success(())
 }
 
 #[inline(always)]
 unsafe fn internal_op_select8(ctx: &mut ExecuteContext) -> VMResult<()> {
-    let cond = ctx.stack.pop_u32();
-    let a = ctx.stack.pop_u64();
-    let b = ctx.stack.pop_u64();
-    vm_try!(ctx.stack.push_u64(if cond == 0 { a } else { b }));
+    let cond = ctx.stack.pop_u32_fast();
+    let a = ctx.stack.pop_u64_fast();
+    let b = ctx.stack.pop_u64_fast();
+    vm_try!(ctx.stack.push_u64_fast(if cond == 0 { a } else { b }));
     VMResult::Success(())
 }
 
 #[inline(always)]
 unsafe fn internal_op_select16(ctx: &mut ExecuteContext) -> VMResult<()> {
-    let cond = ctx.stack.pop_u32();
-    let a = ctx.stack.pop_u128();
-    let b = ctx.stack.pop_u128();
-    vm_try!(ctx.stack.push_u128(if cond == 0 { a } else { b }));
+    let cond = ctx.stack.pop_u32_fast();
+    let a = ctx.stack.pop_u128_fast();
+    let b = ctx.stack.pop_u128_fast();
+    vm_try!(ctx.stack.push_u128_fast(if cond == 0 { a } else { b }));
     VMResult::Success(())
 }
 

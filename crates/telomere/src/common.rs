@@ -627,6 +627,18 @@ impl ExecuteContext<'_> {
     }
 
     #[inline(always)]
+    pub(crate) fn set_local_reference_with_frame(
+        &mut self,
+        local_reference: LocalReference,
+        frame: CallFrameCache,
+    ) {
+        self.local_reference = local_reference;
+        self.local_base_ptr = unsafe { self.stack.local_area_mut_ptr(&local_reference) };
+        self.current_frame = frame;
+        self.refresh_default_local_memory_ptr();
+    }
+
+    #[inline(always)]
     fn caller_frame_cache(&self) -> Option<CallFrameCache> {
         let caller = self.caller_local_reference()?;
         Some(self.stack.frame_cache(&caller))
