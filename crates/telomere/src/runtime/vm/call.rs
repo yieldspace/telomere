@@ -161,6 +161,16 @@ fn cached_return_pc(return_addr: *const Instr, ctx: &ExecuteContext) -> StablePc
     StablePc::from_relative_index(delta / instr_size)
 }
 
+#[inline(always)]
+unsafe fn decode_direct_call_target(tail_code: *const Instr, ctx: &ExecuteContext) -> ObjectRef {
+    let target = (*tail_code).operand.direct_call_target;
+    if let Some(funcaddr) = target.resolved_funcaddr() {
+        funcaddr
+    } else {
+        ctx.instance().funcs.as_slice()[target.funcidx as usize]
+    }
+}
+
 /// WebAssembly `call`.
 ///
 /// Spec:
@@ -181,8 +191,7 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
+    let funcaddr = decode_direct_call_target(tail_code, ctx);
     let outcome = internal_op_call(tail_code.offset(1), funcaddr, ctx, false);
     match vm_try!(outcome) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
@@ -227,8 +236,7 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
+    let funcaddr = decode_direct_call_target(tail_code, ctx);
     let outcome = internal_op_call(tail_code.offset(1), funcaddr, ctx, true);
     match vm_try!(outcome) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),

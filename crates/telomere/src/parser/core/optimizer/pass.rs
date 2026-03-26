@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    common::{FuncIdx, FuncType, Instr, LocalsData, Op, Operand, ValType},
+    common::{DirectCallTarget, FuncIdx, FuncType, Instr, LocalsData, Op, Operand, ValType},
     runtime::vm,
 };
 
@@ -18,7 +18,8 @@ use super::{
         HeapVersion, LocalSlot, LoopValueShape, PureOpKind, ValueDef, ValueGraph, ValueKey,
         ValueRef,
     },
-    sink::{flatten_records, RecordEmit},
+    sink::{flatten_packed_stream, pack_records, verify_packed_stream, RecordEmit},
+    OptimizedFunction,
 };
 
 trait LocalPass {
@@ -680,28 +681,29 @@ fn typed_operands_from_raw(op: Op, operands: &[Operand]) -> Vec<BlockOperand> {
     operands.iter().copied().map(BlockOperand::Raw).collect()
 }
 
-fn block_operands_to_raw(operands: &[BlockOperand]) -> Vec<Operand> {
-    operands
-        .iter()
-        .map(|operand| match operand {
-            BlockOperand::I32(value) => Operand { i32: *value },
-            BlockOperand::I64(value) => Operand { i64: *value },
-            BlockOperand::F32(value) => Operand { f32: *value },
-            BlockOperand::F64(value) => Operand { f64: *value },
-            BlockOperand::U32(value) => Operand { u32: *value },
-            BlockOperand::LocalAddr(value) => Operand { local_addr: *value },
-            BlockOperand::SpillValue(_) => {
-                unreachable!("spill placeholders must be resolved before raw lowering")
-            }
-            BlockOperand::JumpTarget(value) => Operand {
-                jump_addr: *value as u32,
-            },
-            BlockOperand::Raw(operand) => *operand,
-        })
-        .collect()
+fn block_operand_to_raw_for_op(op: Op, operand: &BlockOperand) -> Operand {
+    match operand {
+        BlockOperand::I32(value) => Operand { i32: *value },
+        BlockOperand::I64(value) => Operand { i64: *value },
+        BlockOperand::F32(value) => Operand { f32: *value },
+        BlockOperand::F64(value) => Operand { f64: *value },
+        BlockOperand::U32(value) if is_direct_call_op(op) => Operand {
+            direct_call_target: DirectCallTarget::from_funcidx(*value),
+        },
+        BlockOperand::U32(value) => Operand { u32: *value },
+        BlockOperand::LocalAddr(value) => Operand { local_addr: *value },
+        BlockOperand::SpillValue(_) => {
+            unreachable!("spill placeholders must be resolved before raw lowering")
+        }
+        BlockOperand::JumpTarget(value) => Operand {
+            jump_addr: *value as u32,
+        },
+        BlockOperand::Raw(operand) => *operand,
+    }
 }
 
-fn block_operands_to_raw_with_spills(
+fn block_operands_to_raw_with_spills_for_op(
+    op: Op,
     operands: &[BlockOperand],
     spill_plan: &EffectResultSpillPlan,
 ) -> Vec<Operand> {
@@ -716,10 +718,7 @@ fn block_operands_to_raw_with_spills(
                     local_addr: slot.addr,
                 }
             }
-            _ => block_operands_to_raw(std::slice::from_ref(operand))
-                .into_iter()
-                .next()
-                .expect("single operand lowering must succeed"),
+            _ => block_operand_to_raw_for_op(op, operand),
         })
         .collect()
 }
@@ -1106,12 +1105,16 @@ fn is_memory_store_op(op: Op) -> bool {
 }
 
 fn is_call_like_op(op: Op) -> bool {
+    is_direct_call_op(op)
+        || std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
+}
+
+fn is_direct_call_op(op: Op) -> bool {
     std::ptr::fn_addr_eq(op, vm::op_call as Op)
         || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
         || std::ptr::fn_addr_eq(op, vm::op_return_call as Op)
         || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
-        || std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op)
-        || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
 }
 
 pub(crate) fn optimize_function(
@@ -1120,14 +1123,21 @@ pub(crate) fn optimize_function(
     locals: &mut LocalsData,
     instrs: Vec<Instr>,
     meta: Vec<InstructionMeta>,
-) -> Vec<Instr> {
+) -> OptimizedFunction {
+    let fallback_op_lens = meta
+        .iter()
+        .map(|entry| u8::try_from(entry.len).expect("instruction length exceeds u8::MAX"))
+        .collect();
     let param_bytes = functype
         .0
         .iter()
         .map(|ty| ty.stack_size().u32())
         .sum::<u32>();
     let Some(program) = build_program(&instrs, meta) else {
-        return instrs;
+        return OptimizedFunction {
+            instrs,
+            op_lens: fallback_op_lens,
+        };
     };
     let mut profiler = optimizer_profile_config()
         .map(|config| OptimizerProfiler::new(config, funcidx, program.blocks.len()));
@@ -1190,12 +1200,25 @@ pub(crate) fn optimize_function(
         &records,
     ));
     if patch_jump_targets(&mut records).is_err() {
-        return instrs;
+        return OptimizedFunction {
+            instrs,
+            op_lens: fallback_op_lens,
+        };
     }
     if let Some(profiler) = profiler.as_ref() {
         profiler.log_function_end(&rewrite);
     }
-    flatten_records(&records)
+    let packed = pack_records(&records);
+    debug_assert!(verify_packed_stream(&packed));
+    let op_lens = packed
+        .ops
+        .iter()
+        .map(|op| u8::try_from(op.len()).expect("packed instruction length exceeds u8::MAX"))
+        .collect();
+    OptimizedFunction {
+        instrs: flatten_packed_stream(&packed),
+        op_lens,
+    }
 }
 
 fn rewrite_program(
@@ -2641,7 +2664,11 @@ fn relower_block_body(
             RecordEmit {
                 source_start: op.source_start,
                 op: spec.op,
-                operands: block_operands_to_raw_with_spills(&spec.operands, spill_plan),
+                operands: block_operands_to_raw_with_spills_for_op(
+                    spec.op,
+                    &spec.operands,
+                    spill_plan,
+                ),
             }
         } else {
             relower_block_op(op, spill_plan)
@@ -2768,7 +2795,7 @@ fn relower_block_op(op: &BlockOp, spill_plan: &EffectResultSpillPlan) -> RecordE
     RecordEmit {
         source_start: op.source_start,
         op: op.op,
-        operands: block_operands_to_raw_with_spills(&op.operands, spill_plan),
+        operands: block_operands_to_raw_with_spills_for_op(op.op, &op.operands, spill_plan),
     }
 }
 
@@ -2789,15 +2816,35 @@ fn terminator_operands_to_raw_with_spills(
 ) -> Vec<Operand> {
     if std::ptr::fn_addr_eq(terminator.op, vm::op_local_get4_br_if as Op) {
         return vec![
-            block_operand_to_raw_with_spills(&terminator.operands[1], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[0], spill_plan),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[1],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[0],
+                spill_plan,
+            ),
         ];
     }
     if std::ptr::fn_addr_eq(terminator.op, vm::op_local_get4_i32_const_add_br_if as Op) {
         return vec![
-            block_operand_to_raw_with_spills(&terminator.operands[1], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[2], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[0], spill_plan),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[1],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[2],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[0],
+                spill_plan,
+            ),
         ];
     }
     if std::ptr::fn_addr_eq(
@@ -2805,15 +2852,35 @@ fn terminator_operands_to_raw_with_spills(
         vm::op_local_get4_local_get4_i32_add_br_if as Op,
     ) {
         return vec![
-            block_operand_to_raw_with_spills(&terminator.operands[1], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[2], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[0], spill_plan),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[1],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[2],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[0],
+                spill_plan,
+            ),
         ];
     }
     if std::ptr::fn_addr_eq(terminator.op, vm::op_local_get4_i32_eqz_br_if as Op) {
         return vec![
-            block_operand_to_raw_with_spills(&terminator.operands[1], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[0], spill_plan),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[1],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[0],
+                spill_plan,
+            ),
         ];
     }
     if std::ptr::fn_addr_eq(
@@ -2821,10 +2888,26 @@ fn terminator_operands_to_raw_with_spills(
         vm::op_local_get4_i32_const_compare_br_if as Op,
     ) {
         return vec![
-            block_operand_to_raw_with_spills(&terminator.operands[1], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[2], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[3], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[0], spill_plan),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[1],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[2],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[3],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[0],
+                spill_plan,
+            ),
         ];
     }
     if std::ptr::fn_addr_eq(
@@ -2832,10 +2915,26 @@ fn terminator_operands_to_raw_with_spills(
         vm::op_local_get4_local_get4_compare_br_if as Op,
     ) {
         return vec![
-            block_operand_to_raw_with_spills(&terminator.operands[1], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[2], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[3], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[0], spill_plan),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[1],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[2],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[3],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[0],
+                spill_plan,
+            ),
         ];
     }
     if std::ptr::fn_addr_eq(
@@ -2843,16 +2942,33 @@ fn terminator_operands_to_raw_with_spills(
         vm::op_local_get4_i32_const_add_tee4_br_if as Op,
     ) {
         return vec![
-            block_operand_to_raw_with_spills(&terminator.operands[1], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[2], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[3], spill_plan),
-            block_operand_to_raw_with_spills(&terminator.operands[0], spill_plan),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[1],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[2],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[3],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[0],
+                spill_plan,
+            ),
         ];
     }
-    block_operands_to_raw_with_spills(&terminator.operands, spill_plan)
+    block_operands_to_raw_with_spills_for_op(terminator.op, &terminator.operands, spill_plan)
 }
 
-fn block_operand_to_raw_with_spills(
+fn block_operand_to_raw_with_spills_for_op(
+    op: Op,
     operand: &BlockOperand,
     spill_plan: &EffectResultSpillPlan,
 ) -> Operand {
@@ -2865,10 +2981,7 @@ fn block_operand_to_raw_with_spills(
                 local_addr: slot.addr,
             }
         }
-        _ => block_operands_to_raw(std::slice::from_ref(operand))
-            .into_iter()
-            .next()
-            .expect("single operand lowering must succeed"),
+        _ => block_operand_to_raw_for_op(op, operand),
     }
 }
 

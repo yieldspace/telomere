@@ -7,13 +7,18 @@ use crate::common::{FuncIdx, FuncType, Instr, LocalsData};
 
 pub(crate) use cfg::InstructionMeta;
 
+pub(crate) struct OptimizedFunction {
+    pub(crate) instrs: Vec<Instr>,
+    pub(crate) op_lens: Vec<u8>,
+}
+
 pub(crate) fn optimize_function(
     funcidx: FuncIdx,
     functype: &FuncType,
     locals: &mut LocalsData,
     instrs: Vec<Instr>,
     meta: Vec<InstructionMeta>,
-) -> Vec<Instr> {
+) -> OptimizedFunction {
     pass::optimize_function(funcidx, functype, locals, instrs, meta)
 }
 

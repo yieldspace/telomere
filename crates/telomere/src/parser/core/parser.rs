@@ -805,7 +805,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             fresh_result_count: 0,
         });
         jump_resolver.evaluate(&mut instrs);
-        let instrs = optimizer::optimize_function(
+        let optimized = optimizer::optimize_function(
             funcidx,
             functype,
             &mut locals_data,
@@ -814,7 +814,8 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         );
         Ok(Func {
             locals: locals_data,
-            expr: instrs,
+            expr: optimized.instrs,
+            op_lens: optimized.op_lens,
         })
     }
     #[allow(clippy::too_many_arguments)]

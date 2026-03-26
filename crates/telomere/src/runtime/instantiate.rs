@@ -1,12 +1,13 @@
 use crate::{
     common::{
-        execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
+        execute_elem_init_const_expr,
+        store::{CallDispatchCache, CallDispatchTarget, FunctionBody as RuntimeFunctionBody},
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
-        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
-        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
+        CodeSection, ConstExpr, DataMode, DataSection, DirectCallTarget, ElemInit, ElemMode,
+        ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
         FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
         ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
-        ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
+        ModuleInstance, NativeModule, ObjectRef, Operand, StablePc, StoreInner, TableIdx, TypeIdx,
         TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
@@ -48,6 +49,86 @@ pub(crate) fn init_global(
     };
     VMResult::Success(res)
 }
+
+fn is_direct_call_op(op: unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>) -> bool {
+    std::ptr::fn_addr_eq(
+        op,
+        vm::op_call as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
+    ) || std::ptr::fn_addr_eq(
+        op,
+        vm::op_call_import as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
+    ) || std::ptr::fn_addr_eq(
+        op,
+        vm::op_return_call as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
+    ) || std::ptr::fn_addr_eq(
+        op,
+        vm::op_return_call_import as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
+    )
+}
+
+fn predecode_direct_call_operands(code: &mut [Instr], op_lens: &[u8], funcs: &[ObjectRef]) {
+    let mut cursor = 0usize;
+    for len in op_lens {
+        let op = unsafe { code[cursor].op };
+        if is_direct_call_op(op) {
+            let target = unsafe { code[cursor + 1].operand.direct_call_target };
+            let funcaddr = funcs[target.funcidx as usize];
+            code[cursor + 1] = Instr {
+                operand: Operand {
+                    direct_call_target: DirectCallTarget::from_funcidx(target.funcidx)
+                        .with_funcaddr(funcaddr),
+                },
+            };
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, code.len());
+}
+
+fn precomputed_call_dispatch_cache(gc: &StoreInner, funcaddr: ObjectRef) -> CallDispatchCache {
+    let funcinst = gc.get_func(funcaddr);
+    let (instance, funcidx, target, code_base) = match &funcinst.body {
+        RuntimeFunctionBody::Wasm { locals, code } => (
+            funcinst.instance,
+            funcinst.funcidx,
+            CallDispatchTarget::Wasm {
+                local_size: locals.byte_size() as u32,
+            },
+            code.as_ptr(),
+        ),
+        RuntimeFunctionBody::Host(fp) => (
+            funcinst.instance,
+            funcinst.funcidx,
+            CallDispatchTarget::Host(*fp),
+            std::ptr::null(),
+        ),
+        RuntimeFunctionBody::AsyncHost(fp) => (
+            funcinst.instance,
+            funcinst.funcidx,
+            CallDispatchTarget::AsyncHost(*fp),
+            std::ptr::null(),
+        ),
+    };
+    let instance_data = gc.instance(instance);
+    let memory0 = instance_data
+        .memory_slots
+        .first()
+        .copied()
+        .unwrap_or(crate::common::store::InstanceMemorySlot::None);
+    let module = gc.get_module(instance_data.module_addr);
+    let typeidx = module.functions[funcidx as usize];
+    let param_size = module.function_types[typeidx.0 as usize]
+        .0
+        .iter()
+        .map(|ty| ty.stack_size().u32())
+        .sum();
+    CallDispatchCache {
+        frame: CallFrameCache::from_cached_parts(funcaddr, instance, code_base, memory0.handle()),
+        param_size,
+        target,
+    }
+}
+
 fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMResult<()> {
     if import_limit.min > real {
         tracing::trace!("invalid import_limit min");
@@ -380,19 +461,25 @@ pub async fn instantiate(
             }
         }
 
+        let mut local_wasm_funcs = Vec::new();
         for func in codes.0.into_iter() {
             let funcidx = funcs.len() as u32;
 
             let func_addr = match func {
-                FunctionBody::Wasm(code) => gc.new_func(&FunctionInstanceData {
-                    instance: inst_id,
-                    body: RuntimeFunctionBody::Wasm {
-                        locals: code.locals,
-                        code: code.expr.into(),
-                    },
-                    funcidx,
-                    call_cache: None,
-                }),
+                FunctionBody::Wasm(code) => {
+                    let op_lens = code.op_lens;
+                    let func_addr = gc.new_func(&FunctionInstanceData {
+                        instance: inst_id,
+                        body: RuntimeFunctionBody::Wasm {
+                            locals: code.locals,
+                            code: code.expr.into(),
+                        },
+                        funcidx,
+                        call_cache: None,
+                    });
+                    local_wasm_funcs.push((func_addr, op_lens));
+                    func_addr
+                }
                 FunctionBody::Host(fp) => gc.new_func(&FunctionInstanceData {
                     instance: inst_id,
                     body: RuntimeFunctionBody::Host(fp),
@@ -403,6 +490,19 @@ pub async fn instantiate(
 
             funcs.push(func_addr);
             tracing::trace!("linking: {funcidx} => {func_addr:?}");
+        }
+
+        for (func_addr, op_lens) in local_wasm_funcs {
+            let mut rewritten = match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { code, .. } => code.to_vec(),
+                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
+            };
+            predecode_direct_call_operands(&mut rewritten, &op_lens, &funcs);
+            let func = gc.get_func_mut(func_addr);
+            let RuntimeFunctionBody::Wasm { code, .. } = &mut func.body else {
+                unreachable!("rewritten local wasm function must remain wasm")
+            };
+            *code = rewritten.into();
         }
 
         for init in &global_init {
@@ -475,6 +575,10 @@ pub async fn instantiate(
             gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
+        for &funcaddr in &instance.funcs {
+            let cache = precomputed_call_dispatch_cache(&gc, funcaddr);
+            gc.get_func_mut(funcaddr).call_cache = Some(cache);
+        }
         let addr = InstanceHandle::new(store, inst_id, instance_id);
 
         let has_start = if let Some(start) = start {
@@ -786,5 +890,22 @@ mod tests {
         let global = gc.new_global_data8(42);
         let result = execute_offset_const_expr(&mut gc, &[global], &[ConstExpr::GlobalGet(0)]);
         assert!(matches!(result, VMResult::Unlinkable));
+    }
+
+    #[test]
+    fn predecode_direct_call_operands_resolves_funcaddr_cache_key() {
+        let mut code = vec![
+            Instr { op: vm::op_call },
+            Instr {
+                operand: Operand {
+                    direct_call_target: DirectCallTarget::from_funcidx(1),
+                },
+            },
+            Instr { op: vm::op_end },
+        ];
+        predecode_direct_call_operands(&mut code, &[2, 1], &[ObjectRef(11), ObjectRef(22)]);
+        let target = unsafe { code[1].operand.direct_call_target };
+        assert_eq!(target.funcidx, 1);
+        assert_eq!(target.resolved_funcaddr(), Some(ObjectRef(22)));
     }
 }

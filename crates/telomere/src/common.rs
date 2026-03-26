@@ -329,6 +329,7 @@ pub struct Global(pub GlobalType, pub Vec<ConstExpr>);
 pub struct Func {
     pub locals: LocalsData,
     pub expr: Vec<Instr>,
+    pub op_lens: Vec<u8>,
 }
 impl Func {
     pub fn local_size(&self) -> usize {
@@ -387,6 +388,35 @@ pub struct BlockReturn {
     pub stack_top: u32,
     pub return_size: u32,
 }
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectCallTarget {
+    pub funcidx: u32,
+    pub funcaddr: u32,
+}
+impl DirectCallTarget {
+    pub const fn from_funcidx(funcidx: u32) -> Self {
+        Self {
+            funcidx,
+            funcaddr: 0,
+        }
+    }
+
+    pub const fn with_funcaddr(self, funcaddr: ObjectRef) -> Self {
+        Self {
+            funcidx: self.funcidx,
+            funcaddr: funcaddr.0,
+        }
+    }
+
+    pub const fn resolved_funcaddr(self) -> Option<ObjectRef> {
+        if self.funcaddr == 0 {
+            None
+        } else {
+            Some(ObjectRef(self.funcaddr))
+        }
+    }
+}
 #[derive(Clone, Copy)]
 pub union Operand {
     pub i32: i32,
@@ -400,6 +430,7 @@ pub union Operand {
     pub drop_size: u32,
     pub local_addr: u32,
     pub select: u32,
+    pub direct_call_target: DirectCallTarget,
     pub memarg: MemArg,
     pub block_return: BlockReturn,
     pub loop_param: LoopParam,
