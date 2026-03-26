@@ -1223,7 +1223,9 @@ pub(crate) fn optimize_function(
         &spill_plan,
         &records,
     ));
-    if patch_jump_targets(&mut records).is_err() {
+    if should_fallback_complex_control_relower(funcidx, &records)
+        || patch_jump_targets(&mut records).is_err()
+    {
         return OptimizedFunction {
             instrs,
             op_lens: fallback_op_lens,
@@ -1243,6 +1245,20 @@ pub(crate) fn optimize_function(
         instrs: flatten_packed_stream(&packed),
         op_lens,
     }
+}
+
+fn should_fallback_complex_control_relower(_funcidx: FuncIdx, records: &[RecordEmit]) -> bool {
+    // Deeply nested loop/block-return relowering is still under-constrained in release; keep
+    // those functions on the original decoded stream until we have a stronger semantic verifier.
+    let special_block_returns = records
+        .iter()
+        .filter(|record| std::ptr::fn_addr_eq(record.op, vm::special_block_return as Op))
+        .count();
+    let loops = records
+        .iter()
+        .filter(|record| std::ptr::fn_addr_eq(record.op, vm::op_loop as Op))
+        .count();
+    loops > 0 && special_block_returns > 8
 }
 
 fn rewrite_program(
@@ -1483,11 +1499,17 @@ fn merge_states_with_copy_plan(
             .iter()
             .map(|entry| entry.locals.get(&slot))
             .collect::<Vec<_>>();
+        let merged_ty = values
+            .iter()
+            .flatten()
+            .next()
+            .map(|value| graph[value.0].ty)
+            .unwrap_or_else(|| type_from_slot(slot.size));
         let merged = merge_value_candidates(
             graph,
             block_id,
             1024 + slot.addr as usize,
-            type_from_slot(slot.size),
+            merged_ty,
             &values,
             preserve_existing_block_arguments,
         );
@@ -2038,6 +2060,8 @@ impl EffectResultSpillPlan {
 struct MemoryRelowerPlan {
     skip_ops: HashSet<usize>,
     specialized_ops: HashMap<usize, SpecializedMemoryLowering>,
+    #[cfg(debug_assertions)]
+    absorbed_by: HashMap<usize, usize>,
 }
 
 #[derive(Default)]
@@ -2402,6 +2426,10 @@ fn build_memory_relower_plan(
         else {
             continue;
         };
+        #[cfg(debug_assertions)]
+        for absorbed_idx in &absorbed_ops {
+            plan.absorbed_by.insert(*absorbed_idx, op_idx);
+        }
         plan.skip_ops.extend(absorbed_ops);
         plan.specialized_ops.insert(op_idx, spec);
     }
@@ -3011,10 +3039,17 @@ fn debug_verify_memory_relower_plan(_body: &BlockBody, _plan: &MemoryRelowerPlan
                             op_idx.checked_sub(1),
                             "store specialization must keep the trailing value suffix immediately before the store",
                         );
-                        for value_idx in value_slice.op_indices {
+                        for value_idx in &value_slice.op_indices {
+                            let absorbed_by = _plan.absorbed_by.get(value_idx).copied();
                             debug_assert!(
-                                !_plan.skip_ops.contains(&value_idx),
-                                "store specialization must not absorb value producer ops",
+                                !_plan.skip_ops.contains(value_idx)
+                                    || absorbed_by
+                                        .is_some_and(|consumer| value_slice.op_indices.contains(&consumer)),
+                                "store specialization must not absorb value producer ops outside the trailing value slice: store_op_idx={op_idx} source_start={:?} value_op_idx={value_idx} value_slice={:?} absorbed={:?} absorbed_by={absorbed_by:?} body={}",
+                                original.source_start,
+                                value_slice.op_indices,
+                                _plan.skip_ops,
+                                debug_body_window(_body, value_slice.start_idx.saturating_sub(3), op_idx + 1),
                             );
                         }
                     }
@@ -3022,6 +3057,37 @@ fn debug_verify_memory_relower_plan(_body: &BlockBody, _plan: &MemoryRelowerPlan
             }
         }
     }
+}
+
+#[cfg(debug_assertions)]
+fn debug_body_window(body: &BlockBody, start_idx: usize, end_inclusive: usize) -> String {
+    let last = end_inclusive.min(body.ops.len().saturating_sub(1));
+    (start_idx..=last)
+        .filter_map(|idx| body.ops.get(idx).map(|op| debug_block_op_summary(idx, op)))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+#[cfg(debug_assertions)]
+fn debug_block_op_summary(idx: usize, op: &BlockOp) -> String {
+    let extra =
+        if let Some(slot) = block_op_any_local_get_slot(op, &EffectResultSpillPlan::default()) {
+            format!(" slot={}+{}", slot.addr, slot.size)
+        } else if let Some(value) = block_op_i32_const(op) {
+            format!(" i32={value}")
+        } else if let Some(memarg) = block_op_memarg(op) {
+            let memidx = block_op_index_memidx(op).unwrap_or_default();
+            format!(
+                " memarg(offset={},align={},memidx={memidx})",
+                memarg.offset, memarg.align
+            )
+        } else {
+            String::new()
+        };
+    format!(
+        "#{idx}:{:?}:src={:?}:inputs={:?}:values={:?}{extra}",
+        op.kind, op.source_start, op.inputs, op.values
+    )
 }
 
 #[cold]
@@ -3583,8 +3649,14 @@ impl BlockOptimizer {
             self.copy_value_shapes_from(expr, source);
             expr
         } else {
+            let ty = record
+                .stack_after
+                .types
+                .last()
+                .copied()
+                .unwrap_or_else(|| type_from_slot(slot.size));
             let expr = self.new_expr_with_origin(
-                type_from_slot(slot.size),
+                ty,
                 ExprOrigin {
                     block_id: self.block_id,
                     ordinal: slot.addr as usize,
@@ -3948,8 +4020,14 @@ impl BlockOptimizer {
         }
         self.bump_effect_epoch();
         let op_idx = self.push_effect_op(record);
+        let ty = record
+            .stack_after
+            .types
+            .last()
+            .copied()
+            .unwrap_or_else(|| type_from_slot(slot.size));
         let expr = self.new_expr_with_origin(
-            type_from_slot(slot.size),
+            ty,
             ExprOrigin {
                 block_id: self.block_id,
                 ordinal,
@@ -4578,7 +4656,18 @@ impl BlockOptimizer {
                 .iter()
                 .zip(record.stack_after.types.iter().take(preserved_prefix_len))
                 .all(|(value, ty)| self.exprs[value.0].ty == *ty),
-            "preserved stack prefix must match stack_after metadata",
+            "preserved stack prefix must match stack_after metadata: block={} source_start={:?} preserved_prefix_len={} stack_before={:?} stack_types={:?} expected_prefix={:?} stack_after={:?} op_ptr={:p}",
+            self.block_id,
+            record.old_start,
+            preserved_prefix_len,
+            record.stack_before.types,
+            self.stack
+                .iter()
+                .map(|value| self.exprs[value.0].ty)
+                .collect::<Vec<_>>(),
+            record.stack_after.types.iter().take(preserved_prefix_len).collect::<Vec<_>>(),
+            record.stack_after.types,
+            record.op,
         );
         if !record.stack_after.reachable {
             return;
@@ -5987,15 +6076,15 @@ fn build_specialized_local_set_tee_lowering(
                 && selector_value_is_single_use(graph, root_op, root_value)
                 && !value_used_after(body, op_idx + 1, root_value)
                 && !value_feeds_memory_address(body, op_idx + 1, root_value))
-                .then(|| {
-                    match_selector_root_shape_from_body(
-                        graph,
-                        root_op,
-                        &body.ops[start_idx],
-                        &body.ops[start_idx + 1],
-                    )
-                })
-                .flatten()
+            .then(|| {
+                match_selector_root_shape_from_body(
+                    graph,
+                    root_op,
+                    &body.ops[start_idx],
+                    &body.ops[start_idx + 1],
+                )
+            })
+            .flatten()
         })?;
     let dst = *op.operands.first()?;
     let (specialized_op, operands) = match (op.kind, matched) {
@@ -8193,6 +8282,35 @@ mod tests {
             reachable: true,
             types: types.to_vec(),
         }
+    }
+
+    #[test]
+    fn complex_control_relower_fallback_triggers_for_loop_heavy_block_returns() {
+        let mut records = Vec::new();
+        for _ in 0..9 {
+            records.push(RecordEmit {
+                source_start: None,
+                op: vm::op_loop as Op,
+                operands: Vec::new(),
+            });
+        }
+        for _ in 0..9 {
+            records.push(RecordEmit {
+                source_start: None,
+                op: vm::special_block_return as Op,
+                operands: Vec::new(),
+            });
+        }
+        assert!(should_fallback_complex_control_relower(
+            FuncIdx(0),
+            &records
+        ));
+
+        records.truncate(8);
+        assert!(!should_fallback_complex_control_relower(
+            FuncIdx(0),
+            &records
+        ));
     }
 
     #[test]
