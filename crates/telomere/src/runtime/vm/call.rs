@@ -1,5 +1,50 @@
 use super::*;
 
+fn build_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDispatchCache {
+    let (instance, funcidx, body) = {
+        let funcinst = ctx.gc.get_func(funcaddr);
+        (funcinst.instance, funcinst.funcidx, funcinst.body.clone())
+    };
+    let instance_data = ctx.gc.instance(instance);
+    let memory0 = instance_data
+        .memory_slots
+        .first()
+        .copied()
+        .unwrap_or(crate::common::store::InstanceMemorySlot::None);
+    let module = ctx.gc.get_module(instance_data.module_addr);
+    let typeidx = module.functions[funcidx as usize];
+    let param_size = result_type_size(&module.function_types[typeidx.0 as usize].0) as u32;
+    let target = match body {
+        crate::common::store::FunctionBody::Wasm { locals, .. } => CallDispatchTarget::Wasm {
+            local_size: locals.byte_size() as u32,
+        },
+        crate::common::store::FunctionBody::Host(fp) => CallDispatchTarget::Host(fp),
+        crate::common::store::FunctionBody::AsyncHost(fp) => CallDispatchTarget::AsyncHost(fp),
+    };
+    let code_base = match target {
+        CallDispatchTarget::Wasm { .. } => ctx
+            .gc
+            .get_func(funcaddr)
+            .code_pointer()
+            .unwrap_or(std::ptr::null()),
+        CallDispatchTarget::Host(_) | CallDispatchTarget::AsyncHost(_) => std::ptr::null(),
+    };
+    CallDispatchCache {
+        frame: CallFrameCache::from_cached_parts(funcaddr, instance, code_base, memory0.handle()),
+        param_size,
+        target,
+    }
+}
+
+fn ensure_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDispatchCache {
+    if let Some(cache) = ctx.gc.get_func(funcaddr).call_cache {
+        return cache;
+    }
+    let cache = build_call_dispatch_cache(funcaddr, ctx);
+    ctx.gc.get_func_mut(funcaddr).call_cache = Some(cache);
+    cache
+}
+
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
@@ -22,78 +67,84 @@ unsafe fn internal_op_call(
     ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
-    let funcinst = ctx.func_by_addr(funcaddr).clone();
-    let instance = ctx.gc.instance(funcinst.instance);
-    let memory0 = instance
-        .memory_slots
-        .first()
-        .copied()
-        .and_then(|slot| slot.handle());
-    let frame = CallFrameCache::from_parts(funcaddr, &funcinst, memory0);
-    let module_addr = instance.module_addr;
-    let module = ctx.gc.get_module(module_addr);
-    let typeidx = module
-        .functions
-        .get(funcinst.funcidx as usize)
-        .unwrap_unchecked();
-    let ft = &module.function_types[typeidx.0 as usize];
-    trace!(
-        "op_call_internal: {:?}({module_addr:?})  {funcaddr:?}",
-        ctx.gc.object_ref_for_instance(funcinst.instance)
-    );
-    let mut param_size = 0usize;
-    for param in ft.0.iter() {
-        param_size += param.stack_size().usize();
-    }
-    let is_host_func = funcinst.is_host_func();
-    if funcinst.is_host_func() {
-        if is_return_call {
-            let local_reference =
-                vm_try!(ctx
-                    .stack
-                    .function_return_call(&ctx.local_reference, param_size, 0, frame));
-            ctx.set_local_reference(local_reference);
-        } else {
-            let local_reference = vm_try!(ctx.stack.function_call(
-                param_size,
-                0,
-                frame,
-                ctx.local_reference,
-                return_addr,
-                ctx.gc,
-            ));
-            ctx.set_local_reference(local_reference);
-        }
-        invoke_host_function(return_addr, ctx)
+    dispatch_profile_count(if is_return_call {
+        "op_return_call"
     } else {
-        let (locals, code_offset) = funcinst.locals_and_code_offset(ctx.gc);
+        "op_call"
+    });
+    let cache = ensure_call_dispatch_cache(funcaddr, ctx);
+    trace!(
+        "op_call_internal: {:?}({:?})  {funcaddr:?}",
+        ctx.gc.object_ref_for_instance(cache.frame.instance),
+        ctx.gc.instance(cache.frame.instance).module_addr
+    );
+    let param_size = cache.param_size as usize;
+    let return_pc = cached_return_pc(return_addr, ctx);
+    if matches!(
+        cache.target,
+        CallDispatchTarget::Host(_) | CallDispatchTarget::AsyncHost(_)
+    ) {
         if is_return_call {
-            let local_reference = vm_try!(ctx.stack.function_return_call(
+            let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                 &ctx.local_reference,
                 param_size,
-                locals.byte_size(),
-                frame
+                0,
+                cache.frame,
             ));
             ctx.set_local_reference(local_reference);
         } else {
-            let local_reference = vm_try!(ctx.stack.function_call(
+            let local_reference = vm_try!(ctx.stack.function_call_cached(
                 param_size,
-                locals.byte_size(),
-                frame,
+                0,
+                cache.frame,
                 ctx.local_reference,
-                return_addr,
-                ctx.gc,
+                return_pc,
             ));
             ctx.set_local_reference(local_reference);
         }
-
-        let ptr = funcinst
-            .code_pointer()
-            .expect("wasm function must expose a code pointer")
-            .wrapping_add(code_offset);
-        debug_assert!(!is_host_func);
-        VMResult::Success(CallOutcome::Immediate(ptr))
+        let outcome = match cache.target {
+            CallDispatchTarget::Host(fp) => invoke_sync_host_function_with(return_addr, ctx, fp),
+            CallDispatchTarget::AsyncHost(fp) => start_async_host_call_with(return_addr, ctx, fp),
+            CallDispatchTarget::Wasm { .. } => unreachable!("host path must not use wasm cache"),
+        };
+        outcome
+    } else {
+        let CallDispatchTarget::Wasm { local_size } = cache.target else {
+            unreachable!("wasm path must use wasm cache");
+        };
+        let local_size = local_size as usize;
+        if is_return_call {
+            let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                &ctx.local_reference,
+                param_size,
+                local_size,
+                cache.frame,
+            ));
+            ctx.set_local_reference(local_reference);
+        } else {
+            let local_reference = vm_try!(ctx.stack.function_call_cached(
+                param_size,
+                local_size,
+                cache.frame,
+                ctx.local_reference,
+                return_pc,
+            ));
+            ctx.set_local_reference(local_reference);
+        }
+        VMResult::Success(CallOutcome::Immediate(cache.frame.code_base))
     }
+}
+
+#[inline(always)]
+fn cached_return_pc(return_addr: *const Instr, ctx: &ExecuteContext) -> StablePc {
+    let code_base = ctx.code();
+    if code_base.is_null() {
+        return StablePc::from_stable_ptr(return_addr);
+    }
+    let instr_size = std::mem::size_of::<Instr>();
+    let delta = (return_addr as usize).wrapping_sub(code_base as usize);
+    debug_assert_eq!(delta % instr_size, 0);
+    StablePc::from_relative_index(delta / instr_size)
 }
 
 /// WebAssembly `call`.
@@ -118,7 +169,8 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     }
     let funcidx = (*tail_code).operand.u32;
     let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false)) {
+    let outcome = internal_op_call(tail_code.offset(1), funcaddr, ctx, false);
+    match vm_try!(outcome) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -163,7 +215,8 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     }
     let funcidx = (*tail_code).operand.u32;
     let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true)) {
+    let outcome = internal_op_call(tail_code.offset(1), funcaddr, ctx, true);
+    match vm_try!(outcome) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -208,6 +261,11 @@ unsafe fn internal_op_call_indirect(
     ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
+    dispatch_profile_count(if is_return_call {
+        "op_return_call_indirect"
+    } else {
+        "op_call_indirect"
+    });
     let i = ctx.stack.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
     let table_addr = *vm_try!(VMResult::from_option(
@@ -267,7 +325,8 @@ pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    match vm_try!(internal_op_call_indirect(tail_code, ctx, false)) {
+    let outcome = internal_op_call_indirect(tail_code, ctx, false);
+    match vm_try!(outcome) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -294,7 +353,8 @@ pub unsafe fn op_return_call_indirect(
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    match vm_try!(internal_op_call_indirect(tail_code, ctx, true)) {
+    let outcome = internal_op_call_indirect(tail_code, ctx, true);
+    match vm_try!(outcome) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }

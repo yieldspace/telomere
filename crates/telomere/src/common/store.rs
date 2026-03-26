@@ -3,8 +3,8 @@
 use super::{
     memory::{AtomicRmwOp, LocalMemoryObject, SharedMemoryObject},
     object_ref::ObjectRef,
-    AsyncHostFunction, Data, Elem, ExportSection, FuncType, GlobalType, HostFunction, Instr,
-    LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
+    AsyncHostFunction, CallFrameCache, Data, Elem, ExportSection, FuncType, GlobalType,
+    HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
 };
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -138,6 +138,20 @@ pub(crate) enum FunctionBody {
     AsyncHost(AsyncHostFunction),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CallDispatchTarget {
+    Wasm { local_size: u32 },
+    Host(HostFunction),
+    AsyncHost(AsyncHostFunction),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallDispatchCache {
+    pub(crate) frame: CallFrameCache,
+    pub(crate) param_size: u32,
+    pub(crate) target: CallDispatchTarget,
+}
+
 impl fmt::Debug for FunctionBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -157,6 +171,7 @@ pub struct FunctionInstanceData {
     pub instance: InstanceId,
     pub funcidx: u32,
     pub body: FunctionBody,
+    pub(crate) call_cache: Option<CallDispatchCache>,
 }
 
 impl FunctionInstanceData {
@@ -213,10 +228,12 @@ impl FunctionInstanceData {
 
     pub(crate) fn replace_host_code_pointer(&mut self, fp: HostFunction) {
         self.body = FunctionBody::Host(fp);
+        self.call_cache = None;
     }
 
     pub(crate) fn replace_async_host_code_pointer(&mut self, fp: AsyncHostFunction) {
         self.body = FunctionBody::AsyncHost(fp);
+        self.call_cache = None;
     }
 }
 

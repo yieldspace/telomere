@@ -549,6 +549,8 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     pub local_reference: LocalReference,
+    pub(crate) local_base_ptr: *mut u8,
+    pub(crate) default_local_memory_ptr: *mut Memory,
     pub(crate) current_frame: CallFrameCache,
     pub store: &'a Store,
     pub gc: &'a mut StoreInner,
@@ -587,6 +589,18 @@ fn snapshot_memory_kind(kind: CachedMemoryKind) -> SnapshotMemoryKind {
 }
 
 impl ExecuteContext<'_> {
+    fn refresh_default_local_memory_ptr(&mut self) {
+        self.default_local_memory_ptr = match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_memory_mut(unsafe {
+                    LocalMemoryId::from_raw_unchecked(self.current_frame.memory0_raw)
+                })
+                .memory_mut() as *mut Memory,
+            CachedMemoryKind::None | CachedMemoryKind::Shared => std::ptr::null_mut(),
+        };
+    }
+
     pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
         let default_memory = snapshot_memory_kind(self.current_frame.memory0_kind);
         let caller_memory = self
@@ -603,11 +617,13 @@ impl ExecuteContext<'_> {
 
     pub fn set_local_reference(&mut self, local_reference: LocalReference) {
         self.local_reference = local_reference;
+        self.local_base_ptr = unsafe { self.stack.local_area_mut_ptr(&local_reference) };
         if local_reference.local_size as usize
             >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
         {
             self.current_frame = self.stack.frame_cache(&local_reference);
         }
+        self.refresh_default_local_memory_ptr();
     }
 
     #[inline(always)]
@@ -644,6 +660,22 @@ impl ExecuteContext<'_> {
     }
     pub fn memory_addr(&self) -> Option<MemoryHandle> {
         self.current_frame.memory0_handle()
+    }
+
+    /// # Safety
+    /// The active frame must have a default local memory and the cached pointer must have been
+    /// refreshed from the current frame after the last frame transition.
+    pub unsafe fn default_local_memory_unchecked(&self) -> &Memory {
+        debug_assert!(!self.default_local_memory_ptr.is_null());
+        unsafe { &*self.default_local_memory_ptr }
+    }
+
+    /// # Safety
+    /// The active frame must have a default local memory and the cached pointer must have been
+    /// refreshed from the current frame after the last frame transition.
+    pub unsafe fn default_local_memory_mut_unchecked(&mut self) -> &mut Memory {
+        debug_assert!(!self.default_local_memory_ptr.is_null());
+        unsafe { &mut *self.default_local_memory_ptr }
     }
     #[inline(always)]
     fn memory_slot_at(&self, memidx: u32) -> Option<InstanceMemorySlot> {

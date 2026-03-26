@@ -440,10 +440,7 @@ fn classify_block_op_kind(op: Op) -> BlockOpKind {
     {
         return BlockOpKind::Const;
     }
-    if std::ptr::fn_addr_eq(op, vm::op_local_get4 as Op)
-        || std::ptr::fn_addr_eq(op, vm::op_local_get8 as Op)
-        || std::ptr::fn_addr_eq(op, vm::op_local_get16 as Op)
-    {
+    if local_get_size_from_op(op).is_some() {
         return BlockOpKind::LocalGet;
     }
     if std::ptr::fn_addr_eq(op, vm::op_local_set4 as Op)
@@ -568,9 +565,7 @@ fn typed_operands_from_raw(op: Op, operands: &[Operand]) -> Vec<BlockOperand> {
     if std::ptr::fn_addr_eq(op, vm::op_f64_const as Op) {
         return vec![BlockOperand::F64(unsafe { operands[0].f64 })];
     }
-    if std::ptr::fn_addr_eq(op, vm::op_local_get4 as Op)
-        || std::ptr::fn_addr_eq(op, vm::op_local_get8 as Op)
-        || std::ptr::fn_addr_eq(op, vm::op_local_get16 as Op)
+    if local_get_size_from_op(op).is_some()
         || std::ptr::fn_addr_eq(op, vm::op_local_set4 as Op)
         || std::ptr::fn_addr_eq(op, vm::op_local_set8 as Op)
         || std::ptr::fn_addr_eq(op, vm::op_local_set16 as Op)
@@ -1787,79 +1782,87 @@ impl EffectResultSpillPlan {
 #[derive(Default)]
 struct MemoryRelowerPlan {
     skip_ops: HashSet<usize>,
-    folded_offsets: HashMap<usize, u32>,
+    specialized_ops: HashMap<usize, SpecializedMemoryLowering>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AddressBase {
-    EntryValue(ValueRef),
-    MaterializedValue(ValueRef),
+#[derive(Clone)]
+struct SpecializedMemoryLowering {
+    op: Op,
+    operands: Vec<BlockOperand>,
 }
 
 #[derive(Clone, Debug)]
 struct AddressShape {
-    #[allow(dead_code)]
-    base: AddressBase,
-    offset_delta: i64,
+    base: LocalSlot,
+    offset_delta: i32,
     absorbed_ops: BTreeSet<usize>,
 }
 
-fn build_memory_relower_plan(body: &BlockBody, graph: &ValueGraph) -> MemoryRelowerPlan {
-    let producer_indices = licm_producer_indices(body);
-    let body_origin_values = block_origin_values(body, graph);
-    let graph_origin_values = licm_origin_values(graph);
+fn build_memory_relower_plan(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+) -> MemoryRelowerPlan {
     let mut plan = MemoryRelowerPlan::default();
     for (op_idx, op) in body.ops.iter().enumerate() {
-        if !matches!(op.kind, BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore) {
-            continue;
-        }
-        let Some(address) = memory_address_input(op) else {
-            continue;
-        };
-        let Some(memarg) = block_op_memarg(op) else {
+        let Some((spec, absorbed_ops)) =
+            build_specialized_memory_lowering(body, graph, spill_plan, op_idx, op)
+        else {
             continue;
         };
-        let Some(shape) = resolve_address_shape(
-            graph,
-            body,
-            &producer_indices,
-            &body_origin_values,
-            &graph_origin_values,
-            address,
-        ) else {
-            continue;
-        };
-        if shape.absorbed_ops.is_empty() {
-            continue;
-        }
-        let offset = i64::from(memarg.offset).checked_add(shape.offset_delta);
-        let Some(offset) = offset.and_then(|value| u32::try_from(value).ok()) else {
-            continue;
-        };
-        plan.skip_ops.extend(shape.absorbed_ops.iter().copied());
-        plan.folded_offsets.insert(op_idx, offset);
+        plan.skip_ops.extend(absorbed_ops);
+        plan.specialized_ops.insert(op_idx, spec);
     }
     plan
 }
 
-fn block_origin_values(body: &BlockBody, graph: &ValueGraph) -> HashMap<ExprOrigin, ValueRef> {
-    let mut out = HashMap::new();
-    for op in &body.ops {
-        for value in &op.values {
-            out.insert(graph[value.0].origin, *value);
+fn build_specialized_memory_lowering(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
+    op: &BlockOp,
+) -> Option<(SpecializedMemoryLowering, BTreeSet<usize>)> {
+    let opcode = specialized_memory_op(op.op)?;
+    let memarg = block_op_memarg(op)?;
+    let shape = match op.kind {
+        BlockOpKind::MemoryLoad => {
+            let address = memory_address_input(op)?;
+            match_memory_address_shape(body, graph, spill_plan, op_idx, address)?
         }
-    }
-    if let Some(terminator) = &body.terminator {
-        for value in &terminator.values {
-            out.insert(graph[value.0].origin, *value);
+        BlockOpKind::MemoryStore => {
+            let address = memory_address_input(op)?;
+            let value = memory_store_value_input(op)?;
+            match_store_address_shape(body, graph, spill_plan, op_idx, address, value)?
         }
+        _ => return None,
+    };
+    let mut operands = vec![
+        BlockOperand::LocalAddr(shape.base.addr),
+        BlockOperand::I32(shape.offset_delta),
+        BlockOperand::Raw(Operand { memarg }),
+    ];
+    if let Some(memidx) = block_op_index_memidx(op) {
+        operands.push(BlockOperand::U32(memidx));
     }
-    out
+    Some((
+        SpecializedMemoryLowering {
+            op: opcode,
+            operands,
+        },
+        shape.absorbed_ops,
+    ))
 }
 
 fn memory_address_input(op: &BlockOp) -> Option<ValueRef> {
     matches!(op.kind, BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore)
         .then(|| op.inputs.first().copied())
+        .flatten()
+}
+
+fn memory_store_value_input(op: &BlockOp) -> Option<ValueRef> {
+    (op.kind == BlockOpKind::MemoryStore)
+        .then(|| op.inputs.get(1).copied())
         .flatten()
 }
 
@@ -1870,159 +1873,252 @@ fn block_op_memarg(op: &BlockOp) -> Option<crate::common::MemArg> {
     Some(unsafe { operand.memarg })
 }
 
-fn value_for_origin<'a>(
-    body_origin_values: &'a HashMap<ExprOrigin, ValueRef>,
-    graph_origin_values: &'a HashMap<ExprOrigin, ValueRef>,
-    origin: ExprOrigin,
-) -> Option<ValueRef> {
-    body_origin_values
-        .get(&origin)
-        .copied()
-        .or_else(|| graph_origin_values.get(&origin).copied())
+fn block_op_index_memidx(op: &BlockOp) -> Option<u32> {
+    match *op.operands.get(1)? {
+        BlockOperand::U32(memidx) => Some(memidx),
+        BlockOperand::Raw(operand) => Some(unsafe { operand.u32 }),
+        _ => None,
+    }
 }
 
-fn resolve_address_shape(
-    graph: &ValueGraph,
+fn match_memory_address_shape(
     body: &BlockBody,
-    producer_indices: &HashMap<ValueRef, usize>,
-    body_origin_values: &HashMap<ExprOrigin, ValueRef>,
-    graph_origin_values: &HashMap<ExprOrigin, ValueRef>,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
     value: ValueRef,
 ) -> Option<AddressShape> {
-    let node = &graph[value.0];
-    if node.ty != ValType::I32 {
-        return None;
-    }
-    if let Some(op_idx) = producer_indices.get(&value).copied() {
-        let producer = body.ops.get(op_idx)?;
-        if producer.kind == BlockOpKind::LocalGet {
-            return Some(AddressShape {
-                base: AddressBase::MaterializedValue(value),
-                offset_delta: 0,
-                absorbed_ops: BTreeSet::new(),
-            });
-        }
-    }
-    if matches!(
-        node.origin.kind,
-        ExprOriginKind::EntryLocal | ExprOriginKind::EntryStack | ExprOriginKind::BlockArgument
-    ) {
-        return Some(AddressShape {
-            base: AddressBase::EntryValue(value),
-            offset_delta: 0,
-            absorbed_ops: BTreeSet::new(),
-        });
-    }
-
-    let ValueKey::Binary { op, lhs, rhs } = node.key? else {
-        return None;
-    };
-    match op {
-        PureOpKind::I32Add => {
-            let lhs_value = value_for_origin(body_origin_values, graph_origin_values, lhs)?;
-            let rhs_value = value_for_origin(body_origin_values, graph_origin_values, rhs)?;
-            if let Some(delta) = absorbable_address_const(graph, body, producer_indices, rhs_value)
-            {
-                return extend_address_shape(
-                    graph,
-                    body,
-                    producer_indices,
-                    body_origin_values,
-                    graph_origin_values,
-                    value,
-                    lhs_value,
-                    rhs_value,
-                    i64::from(delta),
-                );
-            }
-            if let Some(delta) = absorbable_address_const(graph, body, producer_indices, lhs_value)
-            {
-                return extend_address_shape(
-                    graph,
-                    body,
-                    producer_indices,
-                    body_origin_values,
-                    graph_origin_values,
-                    value,
-                    rhs_value,
-                    lhs_value,
-                    i64::from(delta),
-                );
-            }
-        }
-        PureOpKind::I32Sub => {
-            let lhs_value = value_for_origin(body_origin_values, graph_origin_values, lhs)?;
-            let rhs_value = value_for_origin(body_origin_values, graph_origin_values, rhs)?;
-            let delta = absorbable_address_const(graph, body, producer_indices, rhs_value)?;
-            return extend_address_shape(
-                graph,
-                body,
-                producer_indices,
-                body_origin_values,
-                graph_origin_values,
-                value,
-                lhs_value,
-                rhs_value,
-                -i64::from(delta),
-            );
-        }
-        _ => {}
-    }
-    None
+    match_direct_address_shape(body, graph, spill_plan, op_idx, value)
+        .or_else(|| match_offset_address_shape(body, graph, spill_plan, op_idx, value))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn extend_address_shape(
-    graph: &ValueGraph,
+fn match_store_address_shape(
     body: &BlockBody,
-    producer_indices: &HashMap<ValueRef, usize>,
-    body_origin_values: &HashMap<ExprOrigin, ValueRef>,
-    graph_origin_values: &HashMap<ExprOrigin, ValueRef>,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
+    address: ValueRef,
     value: ValueRef,
-    base_value: ValueRef,
-    const_value: ValueRef,
-    delta: i64,
 ) -> Option<AddressShape> {
-    let current_idx = *producer_indices.get(&value)?;
-    let current_op = body.ops.get(current_idx)?;
-    if !matches!(
-        current_op.kind,
-        BlockOpKind::PureBinary(PureOpKind::I32Add | PureOpKind::I32Sub)
-    ) || !block_op_single_use(graph, current_op)
+    match_store_direct_address_shape(body, graph, spill_plan, op_idx, address, value).or_else(
+        || match_store_offset_address_shape(body, graph, spill_plan, op_idx, address, value),
+    )
+}
+
+fn match_direct_address_shape(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
+    value: ValueRef,
+) -> Option<AddressShape> {
+    let base_idx = op_idx.checked_sub(1)?;
+    let base_op = body.ops.get(base_idx)?;
+    if block_op_single_result(base_op) != Some(value)
+        || !block_op_address_base_single_use(graph, base_op)
     {
         return None;
     }
-    let const_idx = *producer_indices.get(&const_value)?;
-    let const_op = body.ops.get(const_idx)?;
-    if const_op.kind != BlockOpKind::Const || !block_op_single_use(graph, const_op) {
-        return None;
-    }
-    let mut shape = resolve_address_shape(
-        graph,
-        body,
-        producer_indices,
-        body_origin_values,
-        graph_origin_values,
-        base_value,
-    )?;
-    shape.offset_delta = shape.offset_delta.checked_add(delta)?;
-    shape.absorbed_ops.insert(current_idx);
-    shape.absorbed_ops.insert(const_idx);
-    Some(shape)
+    let base = block_op_any_local_get_slot(base_op, spill_plan)?;
+    Some(AddressShape {
+        base,
+        offset_delta: 0,
+        absorbed_ops: BTreeSet::from([base_idx]),
+    })
 }
 
-fn absorbable_address_const(
-    graph: &ValueGraph,
+fn match_store_direct_address_shape(
     body: &BlockBody,
-    producer_indices: &HashMap<ValueRef, usize>,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
+    address: ValueRef,
     value: ValueRef,
-) -> Option<i32> {
-    let ConstValue::I32(delta) = graph[value.0].const_value? else {
+) -> Option<AddressShape> {
+    let value_idx = op_idx.checked_sub(1)?;
+    let value_op = body.ops.get(value_idx)?;
+    if block_op_single_result(value_op) != Some(value) {
         return None;
+    }
+    let base_idx = value_idx.checked_sub(1)?;
+    let base_op = body.ops.get(base_idx)?;
+    if block_op_single_result(base_op) != Some(address)
+        || !block_op_address_base_single_use(graph, base_op)
+    {
+        return None;
+    }
+    let base = block_op_any_local_get_slot(base_op, spill_plan)?;
+    Some(AddressShape {
+        base,
+        offset_delta: 0,
+        absorbed_ops: BTreeSet::from([base_idx]),
+    })
+}
+
+fn match_offset_address_shape(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
+    value: ValueRef,
+) -> Option<AddressShape> {
+    let binary_idx = op_idx.checked_sub(1)?;
+    let binary_op = body.ops.get(binary_idx)?;
+    if block_op_single_result(binary_op) != Some(value) || !block_op_single_use(graph, binary_op) {
+        return None;
+    }
+    let (lhs, rhs) = match binary_op.inputs.as_slice() {
+        [lhs, rhs] => (*lhs, *rhs),
+        _ => return None,
     };
-    let op_idx = *producer_indices.get(&value)?;
-    let op = body.ops.get(op_idx)?;
-    (op.kind == BlockOpKind::Const && block_op_single_use(graph, op)).then_some(delta)
+    match binary_op.kind {
+        BlockOpKind::PureBinary(PureOpKind::I32Add) => {
+            match_adjacent_base_and_const(body, graph, spill_plan, binary_idx, lhs, rhs, false)
+                .or_else(|| {
+                    match_adjacent_base_and_const(
+                        body, graph, spill_plan, binary_idx, rhs, lhs, false,
+                    )
+                })
+        }
+        BlockOpKind::PureBinary(PureOpKind::I32Sub) => {
+            match_adjacent_base_and_const(body, graph, spill_plan, binary_idx, lhs, rhs, true)
+        }
+        _ => None,
+    }
+}
+
+fn match_store_offset_address_shape(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
+    address: ValueRef,
+    value: ValueRef,
+) -> Option<AddressShape> {
+    let value_idx = op_idx.checked_sub(1)?;
+    let value_op = body.ops.get(value_idx)?;
+    if block_op_single_result(value_op) != Some(value) {
+        return None;
+    }
+    let binary_idx = value_idx.checked_sub(1)?;
+    let binary_op = body.ops.get(binary_idx)?;
+    if block_op_single_result(binary_op) != Some(address) || !block_op_single_use(graph, binary_op)
+    {
+        return None;
+    }
+    let (lhs, rhs) = match binary_op.inputs.as_slice() {
+        [lhs, rhs] => (*lhs, *rhs),
+        _ => return None,
+    };
+    match binary_op.kind {
+        BlockOpKind::PureBinary(PureOpKind::I32Add) => match_store_adjacent_base_and_const(
+            body, graph, spill_plan, binary_idx, lhs, rhs, false,
+        )
+        .or_else(|| {
+            match_store_adjacent_base_and_const(
+                body, graph, spill_plan, binary_idx, rhs, lhs, false,
+            )
+        }),
+        BlockOpKind::PureBinary(PureOpKind::I32Sub) => {
+            match_store_adjacent_base_and_const(body, graph, spill_plan, binary_idx, lhs, rhs, true)
+        }
+        _ => None,
+    }
+}
+
+fn match_store_adjacent_base_and_const(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    binary_idx: usize,
+    base_value: ValueRef,
+    const_value: ValueRef,
+    negate_delta: bool,
+) -> Option<AddressShape> {
+    let lhs_idx = binary_idx.checked_sub(2)?;
+    let rhs_idx = binary_idx.checked_sub(1)?;
+    let first = body.ops.get(lhs_idx)?;
+    let second = body.ops.get(rhs_idx)?;
+    let (base_idx, base_op, const_idx, const_op) = match_adjacent_base_and_const_ops(
+        first,
+        lhs_idx,
+        second,
+        rhs_idx,
+        base_value,
+        const_value,
+    )?;
+    if !block_op_address_base_single_use(graph, base_op) || !block_op_single_use(graph, const_op) {
+        return None;
+    }
+    let base = block_op_any_local_get_slot(base_op, spill_plan)?;
+    let delta = block_op_i32_const(const_op)?;
+    Some(AddressShape {
+        base,
+        offset_delta: if negate_delta {
+            delta.wrapping_neg()
+        } else {
+            delta
+        },
+        absorbed_ops: BTreeSet::from([base_idx, const_idx, binary_idx]),
+    })
+}
+
+fn match_adjacent_base_and_const(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    binary_idx: usize,
+    base_value: ValueRef,
+    const_value: ValueRef,
+    negate_delta: bool,
+) -> Option<AddressShape> {
+    let lhs_idx = binary_idx.checked_sub(2)?;
+    let rhs_idx = binary_idx.checked_sub(1)?;
+    let first = body.ops.get(lhs_idx)?;
+    let second = body.ops.get(rhs_idx)?;
+    let (base_idx, base_op, const_idx, const_op) = match_adjacent_base_and_const_ops(
+        first,
+        lhs_idx,
+        second,
+        rhs_idx,
+        base_value,
+        const_value,
+    )?;
+    if !block_op_address_base_single_use(graph, base_op) || !block_op_single_use(graph, const_op) {
+        return None;
+    }
+    let base = block_op_any_local_get_slot(base_op, spill_plan)?;
+    let delta = block_op_i32_const(const_op)?;
+    Some(AddressShape {
+        base,
+        offset_delta: if negate_delta {
+            delta.wrapping_neg()
+        } else {
+            delta
+        },
+        absorbed_ops: BTreeSet::from([base_idx, const_idx, binary_idx]),
+    })
+}
+
+fn match_adjacent_base_and_const_ops<'a>(
+    first: &'a BlockOp,
+    first_idx: usize,
+    second: &'a BlockOp,
+    second_idx: usize,
+    base_value: ValueRef,
+    const_value: ValueRef,
+) -> Option<(usize, &'a BlockOp, usize, &'a BlockOp)> {
+    if block_op_single_result(first) == Some(base_value)
+        && block_op_single_result(second) == Some(const_value)
+    {
+        return Some((first_idx, first, second_idx, second));
+    }
+    if block_op_single_result(second) == Some(base_value)
+        && block_op_single_result(first) == Some(const_value)
+    {
+        return Some((second_idx, second, first_idx, first));
+    }
+    None
 }
 
 fn build_effect_result_spill_plan(
@@ -2060,18 +2156,22 @@ fn relower_block_body(
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
 ) -> Vec<RecordEmit> {
-    let memory_plan = build_memory_relower_plan(body, graph);
+    let memory_plan = build_memory_relower_plan(body, graph, spill_plan);
+    debug_verify_memory_relower_plan(body, &memory_plan);
     let mut records = Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
     for (op_idx, op) in body.ops.iter().enumerate() {
         if memory_plan.skip_ops.contains(&op_idx) {
             continue;
         }
-        let mut lowered = relower_block_op(op, spill_plan);
-        if let Some(offset) = memory_plan.folded_offsets.get(&op_idx).copied() {
-            if let Some(memarg) = lowered.operands.first_mut() {
-                memarg.memarg.offset = offset;
+        let lowered = if let Some(spec) = memory_plan.specialized_ops.get(&op_idx) {
+            RecordEmit {
+                source_start: op.source_start,
+                op: spec.op,
+                operands: block_operands_to_raw_with_spills(&spec.operands, spill_plan),
             }
-        }
+        } else {
+            relower_block_op(op, spill_plan)
+        };
         records.push(lowered);
         if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
             records.push(RecordEmit {
@@ -2111,7 +2211,82 @@ fn spill_slot_for_effect_result(
     spilled.into_iter().next()
 }
 
+fn debug_verify_memory_relower_plan(_body: &BlockBody, _plan: &MemoryRelowerPlan) {
+    #[cfg(debug_assertions)]
+    {
+        for (op_idx, spec) in &_plan.specialized_ops {
+            let original = &_body.ops[*op_idx];
+            debug_assert!(matches!(
+                original.kind,
+                BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore
+            ));
+            debug_assert!(specialized_memory_op(original.op)
+                .is_some_and(|candidate| std::ptr::fn_addr_eq(candidate, spec.op)));
+            debug_assert!(same_memarg(block_op_memarg(original), spec_memarg(spec)));
+            debug_assert_eq!(block_op_index_memidx(original), spec_memidx(spec));
+            if original.kind == BlockOpKind::MemoryStore {
+                if let Some(value) = memory_store_value_input(original) {
+                    if let Some(value_idx) = op_idx.checked_sub(1) {
+                        debug_assert_eq!(
+                            block_op_single_result(&_body.ops[value_idx]),
+                            Some(value),
+                            "store specialization must keep the value producer immediately before the store",
+                        );
+                        debug_assert!(
+                            !_plan.skip_ops.contains(&value_idx),
+                            "store specialization must not absorb the value producer",
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn same_memarg(lhs: Option<crate::common::MemArg>, rhs: Option<crate::common::MemArg>) -> bool {
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => lhs.align == rhs.align && lhs.offset == rhs.offset,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+#[cfg(debug_assertions)]
+fn spec_memarg(spec: &SpecializedMemoryLowering) -> Option<crate::common::MemArg> {
+    let BlockOperand::Raw(operand) = *spec.operands.get(2)? else {
+        return None;
+    };
+    Some(unsafe { operand.memarg })
+}
+
+#[cfg(debug_assertions)]
+fn spec_memidx(spec: &SpecializedMemoryLowering) -> Option<u32> {
+    match *spec.operands.get(3)? {
+        BlockOperand::U32(memidx) => Some(memidx),
+        BlockOperand::Raw(operand) => Some(unsafe { operand.u32 }),
+        _ => None,
+    }
+}
+
 fn relower_block_op(op: &BlockOp, spill_plan: &EffectResultSpillPlan) -> RecordEmit {
+    if op.kind == BlockOpKind::Select {
+        if let Some(size) = block_op_select_size(op) {
+            let typed_op = match size {
+                4 => Some(vm::op_select4 as Op),
+                8 => Some(vm::op_select8 as Op),
+                16 => Some(vm::op_select16 as Op),
+                _ => None,
+            };
+            if let Some(opcode) = typed_op {
+                return RecordEmit {
+                    source_start: op.source_start,
+                    op: opcode,
+                    operands: Vec::new(),
+                };
+            }
+        }
+    }
     RecordEmit {
         source_start: op.source_start,
         op: op.op,
@@ -2563,6 +2738,9 @@ impl BlockOptimizer {
             }
         }
         let op_idx = self.push_original(record);
+        if let Some(entry) = self.builder.entry_mut(op_idx) {
+            entry.inputs = vec![value];
+        }
         let expr = self.new_expr_with_origin(
             unary_output_type(op),
             ExprOrigin {
@@ -2637,6 +2815,9 @@ impl BlockOptimizer {
         }
 
         let op_idx = self.push_original(record);
+        if let Some(entry) = self.builder.entry_mut(op_idx) {
+            entry.inputs = vec![lhs, rhs];
+        }
         let expr = self.new_expr_with_origin(
             binary_output_type(op),
             ExprOrigin {
@@ -3853,6 +4034,26 @@ fn block_op_single_use(graph: &ValueGraph, op: &BlockOp) -> bool {
     block_op_single_result(op).is_some_and(|value| selector_value_is_single_use(graph, op, value))
 }
 
+fn block_op_address_base_single_use(graph: &ValueGraph, op: &BlockOp) -> bool {
+    if op.kind != BlockOpKind::LocalGet {
+        return false;
+    }
+    block_op_single_result(op).is_some_and(|value| {
+        let node = &graph[value.0];
+        node.use_count <= 1 && op.source_start.is_some()
+    })
+}
+
+fn block_op_select_size(op: &BlockOp) -> Option<u32> {
+    if op.kind != BlockOpKind::Select {
+        return None;
+    }
+    let BlockOperand::Raw(operand) = *op.operands.first()? else {
+        return None;
+    };
+    Some(unsafe { operand.select })
+}
+
 fn selector_value_is_single_use(graph: &ValueGraph, op: &BlockOp, value: ValueRef) -> bool {
     let node = &graph[value.0];
     node.use_count <= 1
@@ -3890,16 +4091,27 @@ fn block_op_local_get_slot(op: &BlockOp) -> Option<LocalSlot> {
     let BlockOperand::LocalAddr(addr) = *op.operands.first()? else {
         return None;
     };
-    if std::ptr::fn_addr_eq(op.op, vm::op_local_get4 as Op) {
-        return Some(LocalSlot::new(addr, 4));
+    Some(LocalSlot::new(addr, local_get_size_from_op(op.op)?))
+}
+
+fn block_op_any_local_get_slot(
+    op: &BlockOp,
+    spill_plan: &EffectResultSpillPlan,
+) -> Option<LocalSlot> {
+    block_op_spill_local_get_slot(op, spill_plan).or_else(|| block_op_local_get_slot(op))
+}
+
+fn block_op_spill_local_get_slot(
+    op: &BlockOp,
+    spill_plan: &EffectResultSpillPlan,
+) -> Option<LocalSlot> {
+    if op.kind != BlockOpKind::LocalGet {
+        return None;
     }
-    if std::ptr::fn_addr_eq(op.op, vm::op_local_get8 as Op) {
-        return Some(LocalSlot::new(addr, 8));
-    }
-    if std::ptr::fn_addr_eq(op.op, vm::op_local_get16 as Op) {
-        return Some(LocalSlot::new(addr, 16));
-    }
-    None
+    let BlockOperand::SpillValue(source) = *op.operands.first()? else {
+        return None;
+    };
+    spill_plan.slot(source)
 }
 
 fn block_op_global_get_slot(op: &BlockOp) -> Option<LocalSlot> {
@@ -3917,6 +4129,148 @@ fn block_op_global_get_slot(op: &BlockOp) -> Option<LocalSlot> {
     }
     if std::ptr::fn_addr_eq(op.op, vm::op_global_get16 as Op) {
         return Some(LocalSlot::new(addr, 16));
+    }
+    None
+}
+
+fn specialized_memory_op(op: Op) -> Option<Op> {
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load_local as Op) {
+        return Some(vm::op_i32_load_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load_local as Op) {
+        return Some(vm::op_i64_load_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_load_local as Op) {
+        return Some(vm::op_f32_load_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_load_local as Op) {
+        return Some(vm::op_f64_load_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s_local as Op) {
+        return Some(vm::op_i32_load8_s_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_local as Op) {
+        return Some(vm::op_i32_load8_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_local as Op) {
+        return Some(vm::op_i32_load16_s_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_local as Op) {
+        return Some(vm::op_i32_load16_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s_local as Op) {
+        return Some(vm::op_i64_load8_s_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u_local as Op) {
+        return Some(vm::op_i64_load8_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s_local as Op) {
+        return Some(vm::op_i64_load16_s_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u_local as Op) {
+        return Some(vm::op_i64_load16_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s_local as Op) {
+        return Some(vm::op_i64_load32_s_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u_local as Op) {
+        return Some(vm::op_i64_load32_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store_local as Op) {
+        return Some(vm::op_i32_store_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store_local as Op) {
+        return Some(vm::op_i64_store_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_store_local as Op) {
+        return Some(vm::op_f32_store_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_store_local as Op) {
+        return Some(vm::op_f64_store_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store8_local as Op) {
+        return Some(vm::op_i32_store8_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store16_local as Op) {
+        return Some(vm::op_i32_store16_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store8_local as Op) {
+        return Some(vm::op_i64_store8_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store16_local as Op) {
+        return Some(vm::op_i64_store16_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store32_local as Op) {
+        return Some(vm::op_i64_store32_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load_indexed_local as Op) {
+        return Some(vm::op_i32_load_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load_indexed_local as Op) {
+        return Some(vm::op_i64_load_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_load_indexed_local as Op) {
+        return Some(vm::op_f32_load_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_load_indexed_local as Op) {
+        return Some(vm::op_f64_load_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s_indexed_local as Op) {
+        return Some(vm::op_i32_load8_s_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_indexed_local as Op) {
+        return Some(vm::op_i32_load8_u_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_indexed_local as Op) {
+        return Some(vm::op_i32_load16_s_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_indexed_local as Op) {
+        return Some(vm::op_i32_load16_u_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s_indexed_local as Op) {
+        return Some(vm::op_i64_load8_s_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u_indexed_local as Op) {
+        return Some(vm::op_i64_load8_u_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s_indexed_local as Op) {
+        return Some(vm::op_i64_load16_s_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u_indexed_local as Op) {
+        return Some(vm::op_i64_load16_u_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s_indexed_local as Op) {
+        return Some(vm::op_i64_load32_s_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u_indexed_local as Op) {
+        return Some(vm::op_i64_load32_u_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store_indexed_local as Op) {
+        return Some(vm::op_i32_store_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store_indexed_local as Op) {
+        return Some(vm::op_i64_store_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_store_indexed_local as Op) {
+        return Some(vm::op_f32_store_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_store_indexed_local as Op) {
+        return Some(vm::op_f64_store_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store8_indexed_local as Op) {
+        return Some(vm::op_i32_store8_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store16_indexed_local as Op) {
+        return Some(vm::op_i32_store16_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store8_indexed_local as Op) {
+        return Some(vm::op_i64_store8_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store16_indexed_local as Op) {
+        return Some(vm::op_i64_store16_indexed_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store32_indexed_local as Op) {
+        return Some(vm::op_i64_store32_indexed_local_base as Op);
     }
     None
 }
@@ -4435,11 +4789,20 @@ pub(crate) fn patch_jump_targets(records: &mut [RecordEmit]) -> Result<(), ()> {
             || std::ptr::fn_addr_eq(record.op, vm::op_else as Op)
             || std::ptr::fn_addr_eq(record.op, vm::op_br as Op)
             || std::ptr::fn_addr_eq(record.op, vm::op_br_if as Op)
+            || std::ptr::fn_addr_eq(record.op, vm::op_local_get4_br_if as Op)
+            || std::ptr::fn_addr_eq(record.op, vm::op_local_get4_i32_const_add_br_if as Op)
             || std::ptr::fn_addr_eq(record.op, vm::op_return as Op)
         {
-            let target = unsafe { record.operands[0].jump_addr as usize };
+            let target_index = if std::ptr::fn_addr_eq(record.op, vm::op_local_get4_br_if as Op) {
+                1
+            } else if std::ptr::fn_addr_eq(record.op, vm::op_local_get4_i32_const_add_br_if as Op) {
+                2
+            } else {
+                0
+            };
+            let target = unsafe { record.operands[target_index].jump_addr as usize };
             let patched = *old_to_new.get(&target).ok_or(())?;
-            record.operands[0] = Operand {
+            record.operands[target_index] = Operand {
                 jump_addr: patched as u32,
             };
         } else if std::ptr::fn_addr_eq(record.op, vm::op_br_table as Op) {
@@ -4512,6 +4875,7 @@ fn verify_relower_preserves_effect_result_spills(
     spill_plan: &EffectResultSpillPlan,
     records: &[RecordEmit],
 ) -> bool {
+    let mut expected_reads = HashMap::new();
     for body in bodies {
         for op in &body.ops {
             for operand in &op.operands {
@@ -4521,18 +4885,33 @@ fn verify_relower_preserves_effect_result_spills(
                 let Some(slot) = spill_plan.slot(source) else {
                     return false;
                 };
-                let lowered = records
-                    .iter()
-                    .filter(|record| {
-                        record.source_start == op.source_start
-                            && std::ptr::fn_addr_eq(record.op, local_get_op(slot.size))
-                            && unsafe { record.operands[0].local_addr } == slot.addr
-                    })
-                    .count();
-                if lowered == 0 {
-                    return false;
-                }
+                *expected_reads
+                    .entry((slot.addr, slot.size))
+                    .or_insert(0usize) += 1;
             }
+        }
+    }
+
+    let mut actual_reads = HashMap::new();
+    for record in records {
+        let Some(first) = record.operands.first() else {
+            continue;
+        };
+        for &(addr, size) in expected_reads.keys() {
+            if unsafe { first.local_addr } != addr {
+                continue;
+            }
+            if std::ptr::fn_addr_eq(record.op, local_tee_op(size)) {
+                continue;
+            }
+            *actual_reads.entry((addr, size)).or_insert(0usize) += 1;
+            break;
+        }
+    }
+
+    for (slot_key, expected) in expected_reads {
+        if actual_reads.get(&slot_key).copied().unwrap_or_default() < expected {
+            return false;
         }
     }
 
@@ -4616,16 +4995,8 @@ fn decode_const(record: &DecodedInstr) -> Option<(ValType, ConstValue)> {
 }
 
 fn decode_local_get(record: &DecodedInstr) -> Option<LocalSlot> {
-    if record.op_eq(vm::op_local_get4) {
-        return Some(LocalSlot::new(record.operand_local_addr(), 4));
-    }
-    if record.op_eq(vm::op_local_get8) {
-        return Some(LocalSlot::new(record.operand_local_addr(), 8));
-    }
-    if record.op_eq(vm::op_local_get16) {
-        return Some(LocalSlot::new(record.operand_local_addr(), 16));
-    }
-    None
+    let size = local_get_size_from_op(record.op)?;
+    Some(LocalSlot::new(record.operand_local_addr(), size))
 }
 
 fn decode_local_set(record: &DecodedInstr) -> Option<LocalSlot> {
@@ -5272,6 +5643,25 @@ fn local_get_op(size: u32) -> Op {
         16 => vm::op_local_get16 as Op,
         _ => vm::op_local_get4 as Op,
     }
+}
+
+fn local_get_size_from_op(op: Op) -> Option<u32> {
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_get4_profiled as Op)
+    {
+        return Some(4);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_get8_profiled as Op)
+    {
+        return Some(8);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get16 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_get16_profiled as Op)
+    {
+        return Some(16);
+    }
+    None
 }
 
 fn local_set_op(size: u32) -> Op {

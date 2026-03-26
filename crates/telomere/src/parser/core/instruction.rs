@@ -1155,17 +1155,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 );
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 
-                match ty.stack_size() {
-                    ValueSize::Byte4 => instrs.push(Instr {
-                        op: vm::op_local_get4,
-                    }),
-                    ValueSize::Byte8 => instrs.push(Instr {
-                        op: vm::op_local_get8,
-                    }),
-                    ValueSize::Byte16 => instrs.push(Instr {
-                        op: vm::op_local_get16,
-                    }),
+                let op = match ty.stack_size() {
+                    ValueSize::Byte4 => vm::local_get_dispatch_op(4),
+                    ValueSize::Byte8 => vm::local_get_dispatch_op(8),
+                    ValueSize::Byte16 => vm::local_get_dispatch_op(16),
                 };
+                instrs.push(Instr { op });
                 instrs.push(Instr {
                     operand: Operand { local_addr: addr },
                 });
@@ -4284,11 +4279,11 @@ mod tests {
     fn parser_specializes_default_memory_load_handler() {
         let local = op_at(
             r#"(module (memory 1) (func (export "f") (param i32) (result i32) local.get 0 i32.load))"#,
-            2,
+            0,
         );
         assert!(std::ptr::fn_addr_eq(
             local,
-            vm::op_i32_load_local as crate::common::Op
+            vm::op_i32_load_local_base as crate::common::Op
         ));
     }
 
@@ -4316,11 +4311,11 @@ mod tests {
                 local.get 0
                 i32.load $m))
             "#,
-            2,
+            0,
         );
         assert!(std::ptr::fn_addr_eq(
             local,
-            vm::op_i32_load_indexed_local as crate::common::Op
+            vm::op_i32_load_indexed_local_base as crate::common::Op
         ));
     }
 

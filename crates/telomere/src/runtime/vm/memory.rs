@@ -1,5 +1,4 @@
 use super::*;
-
 #[inline(always)]
 fn truncate_u32_to_u8_bytes(value: u32) -> [u8; 1] {
     [(value & 0xff) as u8]
@@ -53,6 +52,15 @@ unsafe fn load_start(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRes
 }
 
 #[inline(always)]
+unsafe fn default_local_push_to_stack<const N: usize>(
+    ctx: &mut ExecuteContext,
+    offset: usize,
+) -> VMResult<()> {
+    debug_assert!(!ctx.default_local_memory_ptr.is_null());
+    unsafe { (&*ctx.default_local_memory_ptr).push_to_stack::<N>(ctx.stack, offset) }
+}
+
+#[inline(always)]
 unsafe fn load_start_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -68,6 +76,86 @@ unsafe fn load_start_indexed(
     );
     let start = vm_try!(compute_memory_offset(memarg, offset));
     VMResult::Success((start, memidx))
+}
+
+#[inline(always)]
+unsafe fn load_start_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<usize> {
+    debug_assert!(ctx.snapshot().has_default_memory());
+    let local_addr = (*tail_code).operand.local_addr as usize;
+    let delta = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    let offset = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, local_addr)
+        .wrapping_add(delta);
+    compute_memory_offset(memarg, offset)
+}
+
+#[inline(always)]
+unsafe fn load_start_indexed_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32)> {
+    let local_addr = (*tail_code).operand.local_addr as usize;
+    let delta = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    let memidx = (*tail_code.add(3)).operand.u32;
+    let offset = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, local_addr)
+        .wrapping_add(delta);
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    VMResult::Success((start, memidx))
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn store_internal_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    _label: &'static str,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let local_addr = (*tail_code).operand.local_addr as usize;
+    let delta = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    let operation = make_operation(ctx);
+    let offset = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, local_addr)
+        .wrapping_add(delta);
+    let bytes = operation.as_slice();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    vm_try!(unsafe { ctx.default_local_memory_mut_unchecked() }.write_bytes(start, bytes));
+    call_next(tail_code, 3, ctx)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn store_internal_indexed_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    _label: &'static str,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let local_addr = (*tail_code).operand.local_addr as usize;
+    let delta = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    let memidx = (*tail_code.add(3)).operand.u32;
+    let operation = make_operation(ctx);
+    let offset = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, local_addr)
+        .wrapping_add(delta);
+    let bytes = operation.as_slice();
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.local_memory_id_at_unchecked(memidx), start, bytes));
+    call_next(tail_code, 4, ctx)
 }
 
 macro_rules! define_indexed_push_load {
@@ -88,6 +176,7 @@ macro_rules! define_indexed_push_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            dispatch_profile_count(stringify!($local));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
                 ctx.local_memory_id_at_unchecked(memidx),
@@ -113,6 +202,7 @@ macro_rules! define_indexed_push_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            dispatch_profile_count(stringify!($shared));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
                 ctx.shared_memory_id_at_unchecked(memidx),
@@ -142,6 +232,7 @@ macro_rules! define_indexed_scalar_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            dispatch_profile_count(stringify!($local));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -166,6 +257,7 @@ macro_rules! define_indexed_scalar_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            dispatch_profile_count(stringify!($shared));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -194,7 +286,7 @@ macro_rules! define_indexed_store_alias {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            store_internal_local_indexed(tail_code, ctx, $make_operation)
+            store_internal_local_indexed(tail_code, ctx, stringify!($local), $make_operation)
         }
 
         #[doc = concat!("WebAssembly `", $mnemonic, "` on indexed shared memory.")]
@@ -213,7 +305,79 @@ macro_rules! define_indexed_store_alias {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            store_internal_shared_indexed(tail_code, ctx, $make_operation)
+            store_internal_shared_indexed(tail_code, ctx, stringify!($shared), $make_operation)
+        }
+    };
+}
+
+macro_rules! define_local_base_push_load {
+    ($name:ident, $mnemonic:literal, $bytes:expr) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on default local memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            dispatch_profile_count(stringify!($name));
+            let start = vm_try!(load_start_local_base(tail_code, ctx));
+            vm_try!(default_local_push_to_stack::<$bytes>(ctx, start));
+            call_next(tail_code, 3, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_local_base_push_load {
+    ($name:ident, $mnemonic:literal, $bytes:expr) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed local memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            dispatch_profile_count(stringify!($name));
+            let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
+            vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
+                ctx.local_memory_id_at_unchecked(memidx),
+                ctx.stack,
+                start,
+            ));
+            call_next(tail_code, 4, ctx)
+        }
+    };
+}
+
+macro_rules! define_local_base_scalar_load {
+    ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on default local memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            dispatch_profile_count(stringify!($name));
+            let start = vm_try!(load_start_local_base(tail_code, ctx));
+            let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.$reader(start));
+            vm_try!(ctx.stack.$push($convert(value)));
+            call_next(tail_code, 3, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_local_base_scalar_load {
+    ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed local memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            dispatch_profile_count(stringify!($name));
+            let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
+            let value = vm_try!(ctx.gc.$reader(ctx.local_memory_id_at_unchecked(memidx), start));
+            vm_try!(ctx.stack.$push($convert(value)));
+            call_next(tail_code, 4, ctx)
+        }
+    };
+}
+
+macro_rules! define_local_base_store_alias {
+    ($name:ident, $make_operation:expr) => {
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            store_internal_local_base(tail_code, ctx, stringify!($name), $make_operation)
+        }
+    };
+}
+
+macro_rules! define_indexed_local_base_store_alias {
+    ($name:ident, $make_operation:expr) => {
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            store_internal_indexed_local_base(tail_code, ctx, stringify!($name), $make_operation)
         }
     };
 }
@@ -234,12 +398,10 @@ macro_rules! define_indexed_store_alias {
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i32_load");
     let start = vm_try!(load_start(tail_code, ctx));
-    vm_try!(ctx.gc.local_push_memory_to_stack::<4>(
-        ctx.default_local_memory_id_unchecked(),
-        ctx.stack,
-        start,
-    ));
+    vm_try!(default_local_push_to_stack::<4>(ctx, start));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -259,12 +421,10 @@ pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i64_load");
     let start = vm_try!(load_start(tail_code, ctx));
-    vm_try!(ctx.gc.local_push_memory_to_stack::<8>(
-        ctx.default_local_memory_id_unchecked(),
-        ctx.stack,
-        start,
-    ));
+    vm_try!(default_local_push_to_stack::<8>(ctx, start));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -284,12 +444,10 @@ pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_f32_load");
     let start = vm_try!(load_start(tail_code, ctx));
-    vm_try!(ctx.gc.local_push_memory_to_stack::<4>(
-        ctx.default_local_memory_id_unchecked(),
-        ctx.stack,
-        start,
-    ));
+    vm_try!(default_local_push_to_stack::<4>(ctx, start));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -309,12 +467,10 @@ pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_f64_load");
     let start = vm_try!(load_start(tail_code, ctx));
-    vm_try!(ctx.gc.local_push_memory_to_stack::<8>(
-        ctx.default_local_memory_id_unchecked(),
-        ctx.stack,
-        start,
-    ));
+    vm_try!(default_local_push_to_stack::<8>(ctx, start));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -334,11 +490,11 @@ pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i32_load8_u");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start,));
-    vm_try!(ctx.stack.push_u32(u32::from(value)));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start));
+    vm_try!(ctx.stack.push_u32_fast(u32::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -358,11 +514,11 @@ pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i32_load8_s");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_i8_at(ctx.default_local_memory_id_unchecked(), start,));
-    vm_try!(ctx.stack.push_i32(i32::from(value)));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i8_at(start));
+    vm_try!(ctx.stack.push_i32_fast(i32::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -382,11 +538,11 @@ pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i32_load16_s");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_i16_at(ctx.default_local_memory_id_unchecked(), start,));
-    vm_try!(ctx.stack.push_i32(i32::from(value)));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i16_at(start));
+    vm_try!(ctx.stack.push_i32_fast(i32::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -406,11 +562,11 @@ pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i32_load16_u");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_u16_at(ctx.default_local_memory_id_unchecked(), start,));
-    vm_try!(ctx.stack.push_u32(u32::from(value)));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(start));
+    vm_try!(ctx.stack.push_u32_fast(u32::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -430,11 +586,11 @@ pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i64_load8_s");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_i8_at(ctx.default_local_memory_id_unchecked(), start,));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i8_at(start));
     vm_try!(ctx.stack.push_i64(i64::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -454,11 +610,11 @@ pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i64_load8_u");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_u8_at(ctx.default_local_memory_id_unchecked(), start,));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start));
     vm_try!(ctx.stack.push_u64(u64::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -478,11 +634,11 @@ pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i64_load16_s");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_i16_at(ctx.default_local_memory_id_unchecked(), start,));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i16_at(start));
     vm_try!(ctx.stack.push_i64(i64::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -502,11 +658,11 @@ pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i64_load16_u");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_u16_at(ctx.default_local_memory_id_unchecked(), start,));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(start));
     vm_try!(ctx.stack.push_u64(u64::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -526,11 +682,11 @@ pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i64_load32_s");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_i32_at(ctx.default_local_memory_id_unchecked(), start,));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i32_at(start));
     vm_try!(ctx.stack.push_i64(i64::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -550,11 +706,11 @@ pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let profile = dispatch_profile_begin("op_i64_load32_u");
     let start = vm_try!(load_start(tail_code, ctx));
-    let value = vm_try!(ctx
-        .gc
-        .local_read_u32_at(ctx.default_local_memory_id_unchecked(), start,));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(start));
     vm_try!(ctx.stack.push_u64(u64::from(value)));
+    dispatch_profile_end(profile);
     call_next(tail_code, 1, ctx)
 }
 
@@ -574,7 +730,7 @@ pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_i32_store", |ctx| {
         StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
     })
 }
@@ -595,7 +751,7 @@ pub unsafe fn op_i32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_i64_store", |ctx| {
         StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
     })
 }
@@ -616,7 +772,7 @@ pub unsafe fn op_i64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_f32_store", |ctx| {
         StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
     })
 }
@@ -637,7 +793,7 @@ pub unsafe fn op_f32_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_f64_store", |ctx| {
         StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
     })
 }
@@ -658,7 +814,7 @@ pub unsafe fn op_f64_store(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_i32_store8", |ctx| {
         StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
     })
 }
@@ -679,7 +835,7 @@ pub unsafe fn op_i32_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_i32_store16", |ctx| {
         StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
     })
 }
@@ -700,7 +856,7 @@ pub unsafe fn op_i32_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_i64_store8", |ctx| {
         StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
     })
 }
@@ -721,7 +877,7 @@ pub unsafe fn op_i64_store8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_i64_store16", |ctx| {
         StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
     })
 }
@@ -742,7 +898,7 @@ pub unsafe fn op_i64_store16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "op_i64_store32", |ctx| {
         StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
     })
 }
@@ -763,10 +919,7 @@ pub unsafe fn op_i64_store32(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_mem_size(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let page_size = ctx
-        .gc
-        .local_memory(ctx.default_local_memory_id_unchecked())
-        .page_size();
+    let page_size = unsafe { ctx.default_local_memory_unchecked() }.page_size();
     vm_try!(ctx.stack.push_u32(page_size));
     call_next(tail_code, 0, ctx)
 }
@@ -870,7 +1023,7 @@ macro_rules! define_shared_store_alias {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            store_internal_shared(tail_code, ctx, $make_operation)
+            store_internal_shared(tail_code, ctx, stringify!($name), $make_operation)
         }
     };
 }
@@ -1146,6 +1299,210 @@ define_indexed_store_alias!(
     |ctx| { StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64())) }
 );
 
+define_local_base_push_load!(op_i32_load_local_base, "i32.load", 4);
+define_local_base_push_load!(op_i64_load_local_base, "i64.load", 8);
+define_local_base_push_load!(op_f32_load_local_base, "f32.load", 4);
+define_local_base_push_load!(op_f64_load_local_base, "f64.load", 8);
+define_local_base_scalar_load!(
+    op_i32_load8_u_local_base,
+    "i32.load8_u",
+    read_u8_at,
+    push_u32,
+    u32::from
+);
+define_local_base_scalar_load!(
+    op_i32_load8_s_local_base,
+    "i32.load8_s",
+    read_i8_at,
+    push_i32,
+    i32::from
+);
+define_local_base_scalar_load!(
+    op_i32_load16_s_local_base,
+    "i32.load16_s",
+    read_i16_at,
+    push_i32,
+    i32::from
+);
+define_local_base_scalar_load!(
+    op_i32_load16_u_local_base,
+    "i32.load16_u",
+    read_u16_at,
+    push_u32,
+    u32::from
+);
+define_local_base_scalar_load!(
+    op_i64_load8_s_local_base,
+    "i64.load8_s",
+    read_i8_at,
+    push_i64,
+    i64::from
+);
+define_local_base_scalar_load!(
+    op_i64_load8_u_local_base,
+    "i64.load8_u",
+    read_u8_at,
+    push_u64,
+    u64::from
+);
+define_local_base_scalar_load!(
+    op_i64_load16_s_local_base,
+    "i64.load16_s",
+    read_i16_at,
+    push_i64,
+    i64::from
+);
+define_local_base_scalar_load!(
+    op_i64_load16_u_local_base,
+    "i64.load16_u",
+    read_u16_at,
+    push_u64,
+    u64::from
+);
+define_local_base_scalar_load!(
+    op_i64_load32_s_local_base,
+    "i64.load32_s",
+    read_i32_at,
+    push_i64,
+    i64::from
+);
+define_local_base_scalar_load!(
+    op_i64_load32_u_local_base,
+    "i64.load32_u",
+    read_u32_at,
+    push_u64,
+    u64::from
+);
+define_local_base_store_alias!(op_i32_store_local_base, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_local_base_store_alias!(op_i64_store_local_base, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_local_base_store_alias!(op_f32_store_local_base, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_local_base_store_alias!(op_f64_store_local_base, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_local_base_store_alias!(op_i32_store8_local_base, |ctx| {
+    StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
+});
+define_local_base_store_alias!(op_i32_store16_local_base, |ctx| {
+    StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
+});
+define_local_base_store_alias!(op_i64_store8_local_base, |ctx| {
+    StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
+});
+define_local_base_store_alias!(op_i64_store16_local_base, |ctx| {
+    StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
+});
+define_local_base_store_alias!(op_i64_store32_local_base, |ctx| {
+    StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
+});
+
+define_indexed_local_base_push_load!(op_i32_load_indexed_local_base, "i32.load", 4);
+define_indexed_local_base_push_load!(op_i64_load_indexed_local_base, "i64.load", 8);
+define_indexed_local_base_push_load!(op_f32_load_indexed_local_base, "f32.load", 4);
+define_indexed_local_base_push_load!(op_f64_load_indexed_local_base, "f64.load", 8);
+define_indexed_local_base_scalar_load!(
+    op_i32_load8_u_indexed_local_base,
+    "i32.load8_u",
+    local_read_u8_at,
+    push_u32,
+    u32::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i32_load8_s_indexed_local_base,
+    "i32.load8_s",
+    local_read_i8_at,
+    push_i32,
+    i32::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i32_load16_s_indexed_local_base,
+    "i32.load16_s",
+    local_read_i16_at,
+    push_i32,
+    i32::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i32_load16_u_indexed_local_base,
+    "i32.load16_u",
+    local_read_u16_at,
+    push_u32,
+    u32::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i64_load8_s_indexed_local_base,
+    "i64.load8_s",
+    local_read_i8_at,
+    push_i64,
+    i64::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i64_load8_u_indexed_local_base,
+    "i64.load8_u",
+    local_read_u8_at,
+    push_u64,
+    u64::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i64_load16_s_indexed_local_base,
+    "i64.load16_s",
+    local_read_i16_at,
+    push_i64,
+    i64::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i64_load16_u_indexed_local_base,
+    "i64.load16_u",
+    local_read_u16_at,
+    push_u64,
+    u64::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i64_load32_s_indexed_local_base,
+    "i64.load32_s",
+    local_read_i32_at,
+    push_i64,
+    i64::from
+);
+define_indexed_local_base_scalar_load!(
+    op_i64_load32_u_indexed_local_base,
+    "i64.load32_u",
+    local_read_u32_at,
+    push_u64,
+    u64::from
+);
+define_indexed_local_base_store_alias!(op_i32_store_indexed_local_base, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_indexed_local_base_store_alias!(op_i64_store_indexed_local_base, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_indexed_local_base_store_alias!(op_f32_store_indexed_local_base, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_indexed_local_base_store_alias!(op_f64_store_indexed_local_base, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_indexed_local_base_store_alias!(op_i32_store8_indexed_local_base, |ctx| {
+    StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
+});
+define_indexed_local_base_store_alias!(op_i32_store16_indexed_local_base, |ctx| {
+    StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
+});
+define_indexed_local_base_store_alias!(op_i64_store8_indexed_local_base, |ctx| {
+    StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
+});
+define_indexed_local_base_store_alias!(op_i64_store16_indexed_local_base, |ctx| {
+    StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
+});
+define_indexed_local_base_store_alias!(op_i64_store32_indexed_local_base, |ctx| {
+    StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
+});
+
 /// WebAssembly `memory.size` on shared default memory.
 ///
 /// Spec:
@@ -1340,8 +1697,8 @@ mod tests {
     use crate::{
         common::{
             stack::{CachedMemoryKind, CallFrameCache},
-            store::InstanceId,
-            ExecuteContext, LocalReference, ObjectRef, Operand, Store, StoreInner,
+            store::{InstanceId, LocalMemoryId},
+            ExecuteContext, LocalReference, Memory, ObjectRef, Operand, Store, StoreInner,
         },
         runtime::{memory_effect::PendingOp, scheduler::EffectSupplier},
     };
@@ -1364,12 +1721,18 @@ mod tests {
         pending_effects: &'a mut u32,
         queue: &'a mut VecDeque<PendingOp>,
     ) -> ExecuteContext<'a> {
+        let local_reference = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let local_base_ptr = unsafe { stack.local_area_mut_ptr(&local_reference) };
         ExecuteContext {
             stack,
-            local_reference: LocalReference {
-                local_top: 0,
-                local_size: 0,
-            },
+            local_reference,
+            local_base_ptr,
+            default_local_memory_ptr: gc
+                .local_memory_mut(unsafe { LocalMemoryId::from_raw_unchecked(1) })
+                .memory_mut() as *mut Memory,
             current_frame: frame(CachedMemoryKind::Local, 1),
             store,
             gc,

@@ -16,6 +16,7 @@ mod superinstructions;
 mod tables;
 
 use crate::{
+    common::store::{CallDispatchCache, CallDispatchTarget},
     common::{
         execute_elem_init_const_expr, CallFrameCache, ElemInit, ExecuteContext, ExportDesc,
         InstanceHandle, Instr, LocalReference, MemArg, ObjectRef, ResultType, ResultValue,
@@ -27,6 +28,158 @@ use crate::{
     },
     Store,
 };
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
+
+thread_local! {
+    static DISPATCH_PROFILE_SESSION: RefCell<Option<DispatchProfileSession>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Copy)]
+struct DispatchProfileConfig {
+    enabled: bool,
+    top_n: usize,
+}
+
+#[derive(Default, Clone, Copy)]
+struct DispatchProfileStat {
+    count: u64,
+}
+
+struct DispatchProfileSession {
+    started_at: Instant,
+    total_instrs: u64,
+    stats: HashMap<&'static str, DispatchProfileStat>,
+}
+
+impl DispatchProfileSession {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            total_instrs: 0,
+            stats: HashMap::new(),
+        }
+    }
+}
+
+struct DispatchProfileSnapshot {
+    elapsed: Duration,
+    total_instrs: u64,
+    stats: Vec<(&'static str, DispatchProfileStat)>,
+}
+
+struct DispatchProfileRunGuard {
+    active: bool,
+}
+
+impl DispatchProfileRunGuard {
+    fn new() -> Self {
+        let active = dispatch_profile_config().enabled;
+        if active {
+            DISPATCH_PROFILE_SESSION.with(|session| {
+                *session.borrow_mut() = Some(DispatchProfileSession::new());
+            });
+        }
+        Self { active }
+    }
+}
+
+impl Drop for DispatchProfileRunGuard {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let Some(snapshot) = finish_dispatch_profile_session() else {
+            return;
+        };
+        eprintln!(
+            "[telomere-vm-profile] total_instrs={} elapsed_ms={:.3}",
+            snapshot.total_instrs,
+            snapshot.elapsed.as_secs_f64() * 1000.0
+        );
+        for (label, stat) in snapshot.stats {
+            let share = if snapshot.total_instrs == 0 {
+                0.0
+            } else {
+                stat.count as f64 / snapshot.total_instrs as f64 * 100.0
+            };
+            let approx_elapsed_ms = if snapshot.total_instrs == 0 {
+                0.0
+            } else {
+                snapshot.elapsed.as_secs_f64() * 1000.0 * stat.count as f64
+                    / snapshot.total_instrs as f64
+            };
+            eprintln!(
+                "[telomere-vm-profile] family={} count={} elapsed_ms={:.3} share_pct={:.2}",
+                label, stat.count, approx_elapsed_ms, share
+            );
+        }
+    }
+}
+
+fn dispatch_profile_config() -> DispatchProfileConfig {
+    static CONFIG: OnceLock<DispatchProfileConfig> = OnceLock::new();
+    *CONFIG.get_or_init(|| {
+        let enabled = std::env::var("TELOMERE_VM_PROFILE")
+            .ok()
+            .is_some_and(|value| value != "0");
+        let top_n = std::env::var("TELOMERE_VM_PROFILE_TOP")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value != 0)
+            .unwrap_or(16);
+        DispatchProfileConfig { enabled, top_n }
+    })
+}
+
+fn finish_dispatch_profile_session() -> Option<DispatchProfileSnapshot> {
+    DISPATCH_PROFILE_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        let profile = session.take()?;
+        let now = Instant::now();
+        let mut stats = profile.stats.into_iter().collect::<Vec<_>>();
+        stats.sort_by_key(|(_, stat)| std::cmp::Reverse(stat.count));
+        stats.truncate(dispatch_profile_config().top_n);
+        Some(DispatchProfileSnapshot {
+            elapsed: now.saturating_duration_since(profile.started_at),
+            total_instrs: profile.total_instrs,
+            stats,
+        })
+    })
+}
+
+#[inline(always)]
+pub(crate) fn dispatch_profile_count(label: &'static str) {
+    if !dispatch_profile_config().enabled {
+        return;
+    }
+    DISPATCH_PROFILE_SESSION.with(|session| {
+        let mut session = session.borrow_mut();
+        let Some(profile) = session.as_mut() else {
+            return;
+        };
+        let stat = profile.stats.entry(label).or_default();
+        stat.count = stat.count.saturating_add(1);
+        profile.total_instrs = profile.total_instrs.saturating_add(1);
+    });
+}
+
+#[inline(always)]
+pub(crate) fn dispatch_profile_begin(label: &'static str) -> Option<&'static str> {
+    dispatch_profile_config().enabled.then_some(label)
+}
+
+#[inline(always)]
+pub(crate) fn dispatch_profile_end(sample: Option<&'static str>) {
+    let Some(label) = sample else {
+        return;
+    };
+    dispatch_profile_count(label);
+}
 
 #[inline(always)]
 fn wasm_shift_mask32(rhs: u32) -> u32 {
@@ -189,17 +342,34 @@ fn pop_result_values(stack: &mut Stack, ty: &ResultType) -> ResultValue {
     ResultValue::new(result)
 }
 
-fn start_async_host_call(
+fn start_async_host_call_with(
     return_addr: *const Instr,
     ctx: &mut ExecuteContext,
+    async_host: crate::common::AsyncHostFunction,
 ) -> VMResult<CallOutcome> {
-    let async_host = ctx.func().async_host_code_pointer();
     let task_id = ctx.task_id;
     let future = async_host(ctx);
     ctx.effect
         .push_pending(PendingOp::HostCall(HostCallPending { task_id, future }));
     ctx.cont = return_addr;
     VMResult::Success(CallOutcome::Pending)
+}
+
+fn start_async_host_call(
+    return_addr: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<CallOutcome> {
+    let async_host = ctx.func().async_host_code_pointer();
+    start_async_host_call_with(return_addr, ctx, async_host)
+}
+
+fn invoke_sync_host_function_with(
+    _return_addr: *const Instr,
+    ctx: &mut ExecuteContext,
+    fp: crate::common::HostFunction,
+) -> VMResult<CallOutcome> {
+    let return_addr = vm_try!(fp(ctx));
+    VMResult::Success(CallOutcome::Immediate(return_addr))
 }
 
 fn invoke_host_function(
@@ -210,8 +380,7 @@ fn invoke_host_function(
         start_async_host_call(return_addr, ctx)
     } else {
         let fp = ctx.func().host_code_pointer();
-        let return_addr = vm_try!(fp(ctx));
-        VMResult::Success(CallOutcome::Immediate(return_addr))
+        invoke_sync_host_function_with(return_addr, ctx, fp)
     }
 }
 
@@ -255,6 +424,7 @@ pub(crate) use tables::*;
 pub(crate) unsafe fn store_internal_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
@@ -263,9 +433,7 @@ pub(crate) unsafe fn store_internal_local(
     trace!("op_store: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
-    vm_try!(ctx
-        .gc
-        .local_write_bytes(ctx.default_local_memory_id_unchecked(), start, bytes,));
+    vm_try!(unsafe { ctx.default_local_memory_mut_unchecked() }.write_bytes(start, bytes));
     call_next(tail_code, 1, ctx)
 }
 
@@ -287,6 +455,7 @@ pub(crate) unsafe fn store_internal_local(
 pub(crate) unsafe fn store_internal_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
@@ -318,6 +487,7 @@ pub(crate) unsafe fn store_internal_shared(
 pub(crate) unsafe fn store_internal_local_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
@@ -349,6 +519,7 @@ pub(crate) unsafe fn store_internal_local_indexed(
 pub(crate) unsafe fn store_internal_shared_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
@@ -387,6 +558,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
     args: &ResultValue,
     driver: &mut D,
 ) -> VMResult<ResultValue> {
+    let _dispatch_profile_guard = DispatchProfileRunGuard::new();
     if store.has_active_gc_on_current_thread() {
         tracing::error!(
             "run_module_function is unsupported while the same store GC is already active"
@@ -477,6 +649,7 @@ pub(crate) fn run_module_function_sync_with_gc(
     name: &str,
     args: &ResultValue,
 ) -> Result<VMResult<ResultValue>, SyncRunError> {
+    let _dispatch_profile_guard = DispatchProfileRunGuard::new();
     let mut scheduler: Scheduler<'_> = Scheduler::new(store);
 
     let ft = {

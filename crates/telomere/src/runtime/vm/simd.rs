@@ -558,7 +558,7 @@ define_indexed_shared_simd_memory_handler!(
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn v128_store(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    store_internal_local(tail_code, ctx, |ctx| {
+    store_internal_local(tail_code, ctx, "v128_store", |ctx| {
         StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
     })
 }
@@ -582,7 +582,7 @@ pub unsafe fn v128_store_indexed_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    store_internal_local_indexed(tail_code, ctx, |ctx| {
+    store_internal_local_indexed(tail_code, ctx, "v128_store_indexed_local", |ctx| {
         StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
     })
 }
@@ -609,7 +609,7 @@ unsafe fn v128_store_shared_impl<const SHARED: bool, const INDEXED: bool>(
 ) -> VMResult<()> {
     debug_assert!(SHARED);
     debug_assert!(!INDEXED);
-    store_internal_shared(tail_code, ctx, |ctx| {
+    store_internal_shared(tail_code, ctx, "v128_store_shared", |ctx| {
         StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
     })
 }
@@ -633,7 +633,7 @@ pub unsafe fn v128_store_indexed_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    store_internal_shared_indexed(tail_code, ctx, |ctx| {
+    store_internal_shared_indexed(tail_code, ctx, "v128_store_indexed_shared", |ctx| {
         StoreBytes::Write16(ctx.stack.pop_u128().to_le_bytes())
     })
 }

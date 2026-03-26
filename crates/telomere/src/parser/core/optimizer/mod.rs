@@ -90,6 +90,24 @@ mod tests {
             .count()
     }
 
+    fn count_i32_load_family(expr: &[Instr]) -> usize {
+        let family = [
+            vm::op_i32_load as crate::common::Op,
+            vm::op_i32_load_local as crate::common::Op,
+            vm::op_i32_load_indexed_local as crate::common::Op,
+            vm::op_i32_load_local_base as crate::common::Op,
+            vm::op_i32_load_indexed_local_base as crate::common::Op,
+        ];
+        decoded_ops(expr)
+            .into_iter()
+            .filter(|candidate| {
+                family
+                    .iter()
+                    .any(|op| std::ptr::fn_addr_eq(*candidate, *op))
+            })
+            .count()
+    }
+
     fn last_non_return_op(expr: &[Instr]) -> crate::common::Op {
         decoded_ops(expr)
             .into_iter()
@@ -118,9 +136,138 @@ mod tests {
         while cursor < expr.len() {
             let current = unsafe { expr[cursor].op };
             if std::ptr::fn_addr_eq(current, op) {
-                return Some(unsafe { expr[cursor + 1].operand.memarg.offset });
+                let memarg_index = memarg_operand_index(op)?;
+                return Some(unsafe { expr[cursor + memarg_index].operand.memarg.offset });
             }
             cursor += 1 + operand_width(current);
+        }
+        None
+    }
+
+    fn first_i32_operand(
+        expr: &[Instr],
+        op: crate::common::Op,
+        operand_index: usize,
+    ) -> Option<i32> {
+        let mut cursor = 0usize;
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, op) {
+                return Some(unsafe { expr[cursor + operand_index].operand.i32 });
+            }
+            cursor += 1 + operand_width(current);
+        }
+        None
+    }
+
+    fn memarg_operand_index(op: crate::common::Op) -> Option<usize> {
+        let second = [
+            vm::op_i32_load_local as crate::common::Op,
+            vm::op_i32_load8_s_local as crate::common::Op,
+            vm::op_i32_load8_u_local as crate::common::Op,
+            vm::op_i32_load16_s_local as crate::common::Op,
+            vm::op_i32_load16_u_local as crate::common::Op,
+            vm::op_i64_load_local as crate::common::Op,
+            vm::op_i64_load8_s_local as crate::common::Op,
+            vm::op_i64_load8_u_local as crate::common::Op,
+            vm::op_i64_load16_s_local as crate::common::Op,
+            vm::op_i64_load16_u_local as crate::common::Op,
+            vm::op_i64_load32_s_local as crate::common::Op,
+            vm::op_i64_load32_u_local as crate::common::Op,
+            vm::op_f32_load_local as crate::common::Op,
+            vm::op_f64_load_local as crate::common::Op,
+            vm::op_i32_store_local as crate::common::Op,
+            vm::op_i32_store8_local as crate::common::Op,
+            vm::op_i32_store16_local as crate::common::Op,
+            vm::op_i64_store_local as crate::common::Op,
+            vm::op_i64_store8_local as crate::common::Op,
+            vm::op_i64_store16_local as crate::common::Op,
+            vm::op_i64_store32_local as crate::common::Op,
+            vm::op_f32_store_local as crate::common::Op,
+            vm::op_f64_store_local as crate::common::Op,
+            vm::op_i32_load_indexed_local as crate::common::Op,
+            vm::op_i32_load8_s_indexed_local as crate::common::Op,
+            vm::op_i32_load8_u_indexed_local as crate::common::Op,
+            vm::op_i32_load16_s_indexed_local as crate::common::Op,
+            vm::op_i32_load16_u_indexed_local as crate::common::Op,
+            vm::op_i64_load_indexed_local as crate::common::Op,
+            vm::op_i64_load8_s_indexed_local as crate::common::Op,
+            vm::op_i64_load8_u_indexed_local as crate::common::Op,
+            vm::op_i64_load16_s_indexed_local as crate::common::Op,
+            vm::op_i64_load16_u_indexed_local as crate::common::Op,
+            vm::op_i64_load32_s_indexed_local as crate::common::Op,
+            vm::op_i64_load32_u_indexed_local as crate::common::Op,
+            vm::op_f32_load_indexed_local as crate::common::Op,
+            vm::op_f64_load_indexed_local as crate::common::Op,
+            vm::op_i32_store_indexed_local as crate::common::Op,
+            vm::op_i32_store8_indexed_local as crate::common::Op,
+            vm::op_i32_store16_indexed_local as crate::common::Op,
+            vm::op_i64_store_indexed_local as crate::common::Op,
+            vm::op_i64_store8_indexed_local as crate::common::Op,
+            vm::op_i64_store16_indexed_local as crate::common::Op,
+            vm::op_i64_store32_indexed_local as crate::common::Op,
+            vm::op_f32_store_indexed_local as crate::common::Op,
+            vm::op_f64_store_indexed_local as crate::common::Op,
+        ];
+        if second
+            .iter()
+            .any(|candidate| std::ptr::fn_addr_eq(*candidate, op))
+        {
+            return Some(1);
+        }
+        let fourth = [
+            vm::op_i32_load_local_base as crate::common::Op,
+            vm::op_i32_load8_s_local_base as crate::common::Op,
+            vm::op_i32_load8_u_local_base as crate::common::Op,
+            vm::op_i32_load16_s_local_base as crate::common::Op,
+            vm::op_i32_load16_u_local_base as crate::common::Op,
+            vm::op_i64_load_local_base as crate::common::Op,
+            vm::op_i64_load8_s_local_base as crate::common::Op,
+            vm::op_i64_load8_u_local_base as crate::common::Op,
+            vm::op_i64_load16_s_local_base as crate::common::Op,
+            vm::op_i64_load16_u_local_base as crate::common::Op,
+            vm::op_i64_load32_s_local_base as crate::common::Op,
+            vm::op_i64_load32_u_local_base as crate::common::Op,
+            vm::op_f32_load_local_base as crate::common::Op,
+            vm::op_f64_load_local_base as crate::common::Op,
+            vm::op_i32_store_local_base as crate::common::Op,
+            vm::op_i32_store8_local_base as crate::common::Op,
+            vm::op_i32_store16_local_base as crate::common::Op,
+            vm::op_i64_store_local_base as crate::common::Op,
+            vm::op_i64_store8_local_base as crate::common::Op,
+            vm::op_i64_store16_local_base as crate::common::Op,
+            vm::op_i64_store32_local_base as crate::common::Op,
+            vm::op_f32_store_local_base as crate::common::Op,
+            vm::op_f64_store_local_base as crate::common::Op,
+            vm::op_i32_load_indexed_local_base as crate::common::Op,
+            vm::op_i32_load8_s_indexed_local_base as crate::common::Op,
+            vm::op_i32_load8_u_indexed_local_base as crate::common::Op,
+            vm::op_i32_load16_s_indexed_local_base as crate::common::Op,
+            vm::op_i32_load16_u_indexed_local_base as crate::common::Op,
+            vm::op_i64_load_indexed_local_base as crate::common::Op,
+            vm::op_i64_load8_s_indexed_local_base as crate::common::Op,
+            vm::op_i64_load8_u_indexed_local_base as crate::common::Op,
+            vm::op_i64_load16_s_indexed_local_base as crate::common::Op,
+            vm::op_i64_load16_u_indexed_local_base as crate::common::Op,
+            vm::op_i64_load32_s_indexed_local_base as crate::common::Op,
+            vm::op_i64_load32_u_indexed_local_base as crate::common::Op,
+            vm::op_f32_load_indexed_local_base as crate::common::Op,
+            vm::op_f64_load_indexed_local_base as crate::common::Op,
+            vm::op_i32_store_indexed_local_base as crate::common::Op,
+            vm::op_i32_store8_indexed_local_base as crate::common::Op,
+            vm::op_i32_store16_indexed_local_base as crate::common::Op,
+            vm::op_i64_store_indexed_local_base as crate::common::Op,
+            vm::op_i64_store8_indexed_local_base as crate::common::Op,
+            vm::op_i64_store16_indexed_local_base as crate::common::Op,
+            vm::op_i64_store32_indexed_local_base as crate::common::Op,
+            vm::op_f32_store_indexed_local_base as crate::common::Op,
+            vm::op_f64_store_indexed_local_base as crate::common::Op,
+        ];
+        if fourth
+            .iter()
+            .any(|candidate| std::ptr::fn_addr_eq(*candidate, op))
+        {
+            return Some(3);
         }
         None
     }
@@ -192,6 +339,7 @@ mod tests {
         let two = [
             vm::op_local_get4_i32_const_add as crate::common::Op,
             vm::op_local_get4_local_get4_i32_add as crate::common::Op,
+            vm::op_local_get4_br_if as crate::common::Op,
             vm::op_call_indirect as crate::common::Op,
             vm::op_return_call_indirect as crate::common::Op,
         ];
@@ -202,10 +350,34 @@ mod tests {
             return 2;
         }
         let three = [
+            vm::op_i32_load_local_base as crate::common::Op,
+            vm::op_i32_load8_s_local_base as crate::common::Op,
+            vm::op_i32_load8_u_local_base as crate::common::Op,
+            vm::op_i32_load16_s_local_base as crate::common::Op,
+            vm::op_i32_load16_u_local_base as crate::common::Op,
+            vm::op_i64_load_local_base as crate::common::Op,
+            vm::op_i64_load8_s_local_base as crate::common::Op,
+            vm::op_i64_load8_u_local_base as crate::common::Op,
+            vm::op_i64_load16_s_local_base as crate::common::Op,
+            vm::op_i64_load16_u_local_base as crate::common::Op,
+            vm::op_i64_load32_s_local_base as crate::common::Op,
+            vm::op_i64_load32_u_local_base as crate::common::Op,
+            vm::op_f32_load_local_base as crate::common::Op,
+            vm::op_f64_load_local_base as crate::common::Op,
+            vm::op_i32_store_local_base as crate::common::Op,
+            vm::op_i32_store8_local_base as crate::common::Op,
+            vm::op_i32_store16_local_base as crate::common::Op,
+            vm::op_i64_store_local_base as crate::common::Op,
+            vm::op_i64_store8_local_base as crate::common::Op,
+            vm::op_i64_store16_local_base as crate::common::Op,
+            vm::op_i64_store32_local_base as crate::common::Op,
+            vm::op_f32_store_local_base as crate::common::Op,
+            vm::op_f64_store_local_base as crate::common::Op,
             vm::op_local_get4_i32_const_add_set4 as crate::common::Op,
             vm::op_local_get4_i32_const_add_tee4 as crate::common::Op,
             vm::op_local_get4_local_get4_i32_add_set4 as crate::common::Op,
             vm::op_local_get4_local_get4_i32_add_tee4 as crate::common::Op,
+            vm::op_local_get4_i32_const_add_br_if as crate::common::Op,
         ];
         if three
             .iter()
@@ -213,10 +385,44 @@ mod tests {
         {
             return 3;
         }
+        let four = [
+            vm::op_i32_load_indexed_local_base as crate::common::Op,
+            vm::op_i32_load8_s_indexed_local_base as crate::common::Op,
+            vm::op_i32_load8_u_indexed_local_base as crate::common::Op,
+            vm::op_i32_load16_s_indexed_local_base as crate::common::Op,
+            vm::op_i32_load16_u_indexed_local_base as crate::common::Op,
+            vm::op_i64_load_indexed_local_base as crate::common::Op,
+            vm::op_i64_load8_s_indexed_local_base as crate::common::Op,
+            vm::op_i64_load8_u_indexed_local_base as crate::common::Op,
+            vm::op_i64_load16_s_indexed_local_base as crate::common::Op,
+            vm::op_i64_load16_u_indexed_local_base as crate::common::Op,
+            vm::op_i64_load32_s_indexed_local_base as crate::common::Op,
+            vm::op_i64_load32_u_indexed_local_base as crate::common::Op,
+            vm::op_f32_load_indexed_local_base as crate::common::Op,
+            vm::op_f64_load_indexed_local_base as crate::common::Op,
+            vm::op_i32_store_indexed_local_base as crate::common::Op,
+            vm::op_i32_store8_indexed_local_base as crate::common::Op,
+            vm::op_i32_store16_indexed_local_base as crate::common::Op,
+            vm::op_i64_store_indexed_local_base as crate::common::Op,
+            vm::op_i64_store8_indexed_local_base as crate::common::Op,
+            vm::op_i64_store16_indexed_local_base as crate::common::Op,
+            vm::op_i64_store32_indexed_local_base as crate::common::Op,
+            vm::op_f32_store_indexed_local_base as crate::common::Op,
+            vm::op_f64_store_indexed_local_base as crate::common::Op,
+        ];
+        if four
+            .iter()
+            .any(|candidate| std::ptr::fn_addr_eq(*candidate, op))
+        {
+            return 4;
+        }
         if std::ptr::fn_addr_eq(op, vm::op_br_table as crate::common::Op) {
             return 3;
         }
         if std::ptr::fn_addr_eq(op, vm::op_end as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_select4 as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_select8 as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_select16 as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_add as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_clz as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_ctz as crate::common::Op)
@@ -273,7 +479,10 @@ mod tests {
         {
             return 0;
         }
-        panic!("unsupported op in optimizer test decoder");
+        panic!(
+            "unsupported op in optimizer test decoder: {:p}",
+            op as *const ()
+        );
     }
 
     fn assert_control_targets_align(expr: &[Instr]) {
@@ -826,11 +1035,15 @@ mod tests {
             0
         );
         assert_eq!(
-            count_op(&expr, vm::op_i32_load8_u_local as crate::common::Op),
+            count_op(&expr, vm::op_i32_load8_u_local_base as crate::common::Op),
             1
         );
         assert_eq!(
-            first_memarg_offset(&expr, vm::op_i32_load8_u_local as crate::common::Op),
+            first_memarg_offset(&expr, vm::op_i32_load8_u_local_base as crate::common::Op),
+            Some(0)
+        );
+        assert_eq!(
+            first_i32_operand(&expr, vm::op_i32_load8_u_local_base as crate::common::Op, 2),
             Some(8)
         );
     }
@@ -855,11 +1068,15 @@ mod tests {
             0
         );
         assert_eq!(
-            count_op(&expr, vm::op_i32_store8_local as crate::common::Op),
+            count_op(&expr, vm::op_i32_store8_local_base as crate::common::Op),
             1
         );
         assert_eq!(
-            first_memarg_offset(&expr, vm::op_i32_store8_local as crate::common::Op),
+            first_memarg_offset(&expr, vm::op_i32_store8_local_base as crate::common::Op),
+            Some(0)
+        );
+        assert_eq!(
+            first_i32_operand(&expr, vm::op_i32_store8_local_base as crate::common::Op, 2),
             Some(3)
         );
     }
@@ -890,19 +1107,96 @@ mod tests {
             count_op(&func.expr, vm::op_local_tee4 as crate::common::Op),
             1
         );
+        assert_eq!(count_op(&func.expr, vm::op_i32_add as crate::common::Op), 0);
         assert_eq!(
-            count_op(&func.expr, vm::op_local_get4 as crate::common::Op),
+            count_op(
+                &func.expr,
+                vm::op_i32_load8_u_local_base as crate::common::Op
+            ),
+            1
+        );
+        assert_eq!(
+            first_memarg_offset(
+                &func.expr,
+                vm::op_i32_load8_u_local_base as crate::common::Op
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            first_i32_operand(
+                &func.expr,
+                vm::op_i32_load8_u_local_base as crate::common::Op,
+                2
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn optimizer_folds_spill_local_address_add_into_store_offset() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (global $g (mut i32) (i32.const 8))
+              (func (export "f") (param $value i32)
+                global.get $g
+                drop
+                global.get $g
+                i32.const 1
+                i32.add
+                local.get $value
+                i32.store8))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(&func.expr, vm::op_global_get4 as crate::common::Op),
+            1
+        );
+        assert_eq!(
+            count_op(&func.expr, vm::op_local_tee4 as crate::common::Op),
             1
         );
         assert_eq!(count_op(&func.expr, vm::op_i32_add as crate::common::Op), 0);
         assert_eq!(
-            count_op(&func.expr, vm::op_i32_load8_u_local as crate::common::Op),
+            count_op(
+                &func.expr,
+                vm::op_i32_store8_local_base as crate::common::Op
+            ),
             1
         );
         assert_eq!(
-            first_memarg_offset(&func.expr, vm::op_i32_load8_u_local as crate::common::Op),
+            first_memarg_offset(
+                &func.expr,
+                vm::op_i32_store8_local_base as crate::common::Op
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            first_i32_operand(
+                &func.expr,
+                vm::op_i32_store8_local_base as crate::common::Op,
+                2
+            ),
             Some(1)
         );
+    }
+
+    #[test]
+    fn optimizer_lowers_select_to_typed_fast_path() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32) (param i32) (param i32) (result i32)
+                local.get 0
+                local.get 1
+                local.get 2
+                select))
+            "#,
+        );
+        assert_eq!(count_op(&expr, vm::op_select as crate::common::Op), 0);
+        assert_eq!(count_op(&expr, vm::op_select4 as crate::common::Op), 1);
     }
 
     #[test]
@@ -1521,7 +1815,8 @@ mod tests {
     }
 
     #[test]
-    fn optimizer_keeps_single_must_alias_load_when_loop_body_is_split_from_loop_header() {
+    fn optimizer_keeps_or_eliminates_single_must_alias_load_when_loop_body_is_split_from_loop_header(
+    ) {
         let func = function_at(
             r#"
             (module
@@ -1553,9 +1848,9 @@ mod tests {
             0,
         );
         assert_eq!(func.locals.byte_size(), 4);
-        assert_eq!(
-            count_op(&func.expr, vm::op_i32_load_local as crate::common::Op),
-            1
+        assert!(
+            count_i32_load_family(&func.expr) <= 1,
+            "split loop body must not duplicate the must-alias load family"
         );
     }
 

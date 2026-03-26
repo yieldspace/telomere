@@ -391,11 +391,13 @@ pub async fn instantiate(
                         code: code.expr.into(),
                     },
                     funcidx,
+                    call_cache: None,
                 }),
                 FunctionBody::Host(fp) => gc.new_func(&FunctionInstanceData {
                     instance: inst_id,
                     body: RuntimeFunctionBody::Host(fp),
                     funcidx,
+                    call_cache: None,
                 }),
             };
 
