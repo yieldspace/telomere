@@ -169,19 +169,6 @@ pub(crate) fn dispatch_profile_count(label: &'static str) {
 }
 
 #[inline(always)]
-pub(crate) fn dispatch_profile_begin(label: &'static str) -> Option<&'static str> {
-    dispatch_profile_config().enabled.then_some(label)
-}
-
-#[inline(always)]
-pub(crate) fn dispatch_profile_end(sample: Option<&'static str>) {
-    let Some(label) = sample else {
-        return;
-    };
-    dispatch_profile_count(label);
-}
-
-#[inline(always)]
 fn wasm_shift_mask32(rhs: u32) -> u32 {
     rhs & 31
 }

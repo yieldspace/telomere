@@ -575,3 +575,362 @@ async fn optimizer_store_specializations_remain_correct() {
         }
     }
 }
+
+#[tokio::test]
+async fn optimizer_preserves_multi_value_block_drop_order() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $dummy)
+
+          (func (export "multi") (result i32)
+            (block (call $dummy) (call $dummy) (call $dummy) (call $dummy))
+            (block (result i32)
+              (call $dummy) (call $dummy) (call $dummy) (i32.const 7) (call $dummy)
+            )
+            (drop)
+            (block (result i32 i64 i32)
+              (call $dummy) (call $dummy) (call $dummy) (i32.const 8) (call $dummy)
+              (call $dummy) (call $dummy) (call $dummy) (i64.const 7) (call $dummy)
+              (call $dummy) (call $dummy) (call $dummy) (i32.const 9) (call $dummy)
+            )
+            (drop)
+            (drop))
+        )
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(&instance, &store, "multi", &ResultValue::new(vec![])).await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(8)]));
+        }
+        other => panic!("multi-value block case must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_preserves_nested_br_if_value_merges() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            (block (result i32)
+              (drop
+                (br_if 0
+                  (i32.const 2)
+                  (br_if 0 (i32.const 1) (local.get 0))))
+              (i32.const 4)))
+        )
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (input, expected) in [(0, 2), (1, 1)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(input)]),
+        )
+        .await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("nested br_if merge case {input} must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_large_br_table_metadata_remains_representable() {
+    let table = std::iter::repeat_n("0", 300).collect::<Vec<_>>().join(" ");
+    let wat = format!(
+        r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            (block (result i32)
+              (i32.const 42)
+              (local.get 0)
+              (br_table {table}))))
+        "#
+    );
+
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&wat, &store, &registry).await;
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+        }
+        other => panic!("large br_table case must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_preserves_loop_result_values_across_side_effects() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $dummy)
+
+          (func (export "first") (result i32)
+            (loop (result i32)
+              (block (result i32) (i32.const 1))
+              (call $dummy)
+              (call $dummy)))
+
+          (func (export "mid") (result i32)
+            (loop (result i32)
+              (call $dummy)
+              (block (result i32) (i32.const 1))
+              (call $dummy)))
+
+          (func (export "last") (result i32)
+            (loop (result i32)
+              (call $dummy)
+              (call $dummy)
+              (block (result i32) (i32.const 1)))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for name in ["first", "mid", "last"] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(1)]));
+            }
+            other => panic!("{name} loop result case must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_preserves_block_values_in_call_indirect_and_control_operands() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $func (param i32 i32) (result i32) (local.get 0))
+          (type $check (func (param i32 i32) (result i32)))
+          (table funcref (elem $func))
+
+          (func (export "call_indirect_first") (result i32)
+            (block (result i32)
+              (call_indirect (type $check)
+                (block (result i32) (i32.const 1))
+                (i32.const 2)
+                (i32.const 0))))
+
+          (func (export "call_indirect_mid") (result i32)
+            (block (result i32)
+              (call_indirect (type $check)
+                (i32.const 2)
+                (block (result i32) (i32.const 1))
+                (i32.const 0))))
+
+          (func (export "call_indirect_last") (result i32)
+            (block (result i32)
+              (call_indirect (type $check)
+                (i32.const 1)
+                (i32.const 2)
+                (block (result i32) (i32.const 0)))))
+
+          (func (export "return_value") (result i32)
+            (block (result i32) (i32.const 1))
+            (return))
+
+          (func (export "br_value") (result i32)
+            (block (result i32)
+              (br 0 (block (result i32) (i32.const 1))))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, expected) in [
+        ("call_indirect_first", 1),
+        ("call_indirect_mid", 2),
+        ("call_indirect_last", 1),
+        ("return_value", 1),
+        ("br_value", 1),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("{name} block operand case must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_preserves_break_and_block_param_flows() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "break_bare") (result i32)
+            (block (br 0) (unreachable))
+            (block (br_if 0 (i32.const 1)) (unreachable))
+            (block (br_table 0 (i32.const 0)) (unreachable))
+            (block (br_table 0 0 0 (i32.const 1)) (unreachable))
+            (i32.const 19))
+
+          (func (export "break_value") (result i32)
+            (block (result i32)
+              (br 0 (i32.const 18))
+              (i32.const 19)))
+
+          (func (export "break_multi_value") (result i32 i32 i64)
+            (block (result i32 i32 i64)
+              (br 0 (i32.const 18) (i32.const -18) (i64.const 18))
+              (i32.const 19)
+              (i32.const -19)
+              (i64.const 19)))
+
+          (func (export "break_repeated") (result i32)
+            (block (result i32)
+              (br 0 (i32.const 18))
+              (br 0 (i32.const 19))
+              (drop (br_if 0 (i32.const 20) (i32.const 0)))
+              (drop (br_if 0 (i32.const 20) (i32.const 1)))
+              (br 0 (i32.const 21))
+              (br_table 0 (i32.const 22) (i32.const 4))
+              (br_table 0 0 0 (i32.const 23) (i32.const 1))
+              (i32.const 21)))
+
+          (func (export "break_inner") (result i32)
+            (local i32)
+            (local.set 0 (i32.const 0))
+            (local.set 0 (i32.add (local.get 0) (block (result i32) (block (result i32) (br 1 (i32.const 0x1))))))
+            (local.set 0 (i32.add (local.get 0) (block (result i32) (block (br 0)) (i32.const 0x2))))
+            (local.set 0 (i32.add (local.get 0) (block (result i32) (i32.ctz (br 0 (i32.const 0x4))))))
+            (local.set 0 (i32.add (local.get 0) (block (result i32) (i32.ctz (block (result i32) (br 1 (i32.const 0x8)))))))
+            (local.get 0))
+
+          (func (export "param") (result i32)
+            (i32.const 1)
+            (block (param i32) (result i32)
+              (i32.const 2)
+              (i32.add)))
+
+          (func (export "params") (result i32)
+            (i32.const 1)
+            (i32.const 2)
+            (block (param i32 i32) (result i32)
+              (i32.add)))
+
+          (func (export "params_id") (result i32)
+            (i32.const 1)
+            (i32.const 2)
+            (block (param i32 i32) (result i32 i32))
+            (i32.add))
+
+          (func (export "param_break") (result i32)
+            (i32.const 1)
+            (block (param i32) (result i32)
+              (i32.const 2)
+              (i32.add)
+              (br 0)))
+
+          (func (export "params_break") (result i32)
+            (i32.const 1)
+            (i32.const 2)
+            (block (param i32 i32) (result i32)
+              (i32.add)
+              (br 0)))
+
+          (func (export "params_id_break") (result i32)
+            (i32.const 1)
+            (i32.const 2)
+            (block (param i32 i32) (result i32 i32)
+              (br 0))
+            (i32.add))
+
+          (func (export "effects") (result i32)
+            (local i32)
+            (block
+              (local.set 0 (i32.const 1))
+              (local.set 0 (i32.mul (local.get 0) (i32.const 3)))
+              (local.set 0 (i32.sub (local.get 0) (i32.const 5)))
+              (local.set 0 (i32.mul (local.get 0) (i32.const 7)))
+              (br 0)
+              (local.set 0 (i32.mul (local.get 0) (i32.const 100))))
+            (i32.eq (local.get 0) (i32.const -14))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, expected) in [
+        ("break_bare", 19),
+        ("break_value", 18),
+        ("break_repeated", 18),
+        ("break_inner", 0x0f),
+        ("param", 3),
+        ("params", 3),
+        ("params_id", 3),
+        ("param_break", 3),
+        ("params_break", 3),
+        ("params_id_break", 3),
+        ("effects", 1),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("{name} break/param flow case must succeed, got {other:?}"),
+        }
+    }
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "break_multi_value",
+        &ResultValue::new(vec![]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(
+                values,
+                ResultValue::new(vec![
+                    WasmValue::I32(18),
+                    WasmValue::I32(-18),
+                    WasmValue::I64(18),
+                ])
+            );
+        }
+        other => panic!("break_multi_value must succeed, got {other:?}"),
+    }
+}

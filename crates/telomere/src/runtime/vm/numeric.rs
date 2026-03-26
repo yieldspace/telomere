@@ -17,7 +17,6 @@ use std::ops::BitXor;
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    dispatch_profile_count("op_i32_const");
     let v = (*tail_code).operand.i32;
     trace!("op_i32_const: {v}");
     vm_try!(ctx.stack.push_i32_fast(v));
@@ -40,7 +39,6 @@ pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    dispatch_profile_count("op_i32_add");
     let _ = ctx.stack.reduce_top_i32_add();
     trace!("op_i32_add");
     call_next(tail_code, 0, ctx)
@@ -62,7 +60,6 @@ pub unsafe fn op_i32_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    dispatch_profile_count("op_i32_sub");
     let _ = ctx.stack.reduce_top_i32_sub();
     trace!("op_i32_sub");
     call_next(tail_code, 0, ctx)

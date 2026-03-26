@@ -1140,7 +1140,7 @@ pub(crate) fn optimize_function(
 ) -> OptimizedFunction {
     let fallback_op_lens = meta
         .iter()
-        .map(|entry| u8::try_from(entry.len).expect("instruction length exceeds u8::MAX"))
+        .map(|entry| u16::try_from(entry.len).expect("instruction length exceeds u16::MAX"))
         .collect();
     let param_bytes = functype
         .0
@@ -1163,13 +1163,7 @@ pub(crate) fn optimize_function(
         &program,
         &rewrite.relower.block_bodies
     ));
-    #[cfg(any(debug_assertions, test))]
     apply_licm(&program, &mut rewrite, locals, param_bytes);
-    #[cfg(not(any(debug_assertions, test)))]
-    {
-        let licm_modified = apply_licm(&program, &mut rewrite, locals, param_bytes);
-        select_superinstructions(&program, &mut rewrite, &licm_modified);
-    }
     debug_assert!(verify_explicit_effect_ir(
         &program,
         &rewrite.relower.block_bodies
@@ -1200,6 +1194,17 @@ pub(crate) fn optimize_function(
     }
     for block in &program.blocks {
         if reachable[block.id] {
+            if let Some(loop_header) = program
+                .records
+                .get(block.start)
+                .filter(|record| record.op_eq(vm::op_loop))
+            {
+                records.push(RecordEmit {
+                    source_start: Some(loop_header.old_start),
+                    op: loop_header.op,
+                    operands: loop_header.operands.clone(),
+                });
+            }
             records.extend(relower_block_body(
                 &rewrite.relower.block_bodies[block.id],
                 &rewrite.graph,
@@ -1232,7 +1237,7 @@ pub(crate) fn optimize_function(
     let op_lens = packed
         .ops
         .iter()
-        .map(|op| u8::try_from(op.len()).expect("packed instruction length exceeds u8::MAX"))
+        .map(|op| u16::try_from(op.len()).expect("packed instruction length exceeds u16::MAX"))
         .collect();
     OptimizedFunction {
         instrs: flatten_packed_stream(&packed),
@@ -2035,7 +2040,6 @@ struct MemoryRelowerPlan {
     specialized_ops: HashMap<usize, SpecializedMemoryLowering>,
 }
 
-#[cfg(any(debug_assertions, test))]
 #[derive(Default)]
 struct LocalControlRelowerPlan {
     skip_ops: HashSet<usize>,
@@ -2043,7 +2047,6 @@ struct LocalControlRelowerPlan {
     specialized_terminator: Option<SpecializedLocalControlLowering>,
 }
 
-#[cfg(any(debug_assertions, test))]
 #[derive(Clone)]
 struct SpecializedLocalControlLowering {
     source_start: Option<usize>,
@@ -2855,112 +2858,65 @@ fn allocate_optimizer_temp_slot(locals: &mut LocalsData, param_bytes: u32, ty: V
     param_bytes + locals.allocate_temp_slot(ty)
 }
 
-#[allow(unreachable_code)]
 fn relower_block_body(
     body: &BlockBody,
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
 ) -> Vec<RecordEmit> {
-    #[cfg(any(debug_assertions, test))]
-    {
-        let local_control_plan = build_local_control_relower_plan(body, graph);
-        debug_assert!(verify_provider_elimination(
-            body,
-            graph,
-            &local_control_plan
+    let local_control_plan = build_local_control_relower_plan(body, graph);
+    debug_assert!(verify_provider_elimination(
+        body,
+        graph,
+        &local_control_plan
+    ));
+    let memory_plan = build_memory_relower_plan(body, graph, spill_plan);
+    debug_assert!(local_control_plan
+        .skip_ops
+        .is_disjoint(&memory_plan.skip_ops));
+    debug_verify_memory_relower_plan(body, &memory_plan);
+    let mut records = Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
+    for (op_idx, op) in body.ops.iter().enumerate() {
+        if local_control_plan.skip_ops.contains(&op_idx) || memory_plan.skip_ops.contains(&op_idx) {
+            continue;
+        }
+        let lowered = if let Some(spec) = local_control_plan.specialized_ops.get(&op_idx) {
+            relower_specialized_local_control_op(spec, spill_plan)
+        } else if let Some(spec) = memory_plan.specialized_ops.get(&op_idx) {
+            RecordEmit {
+                source_start: op.source_start,
+                op: spec.op,
+                operands: block_operands_to_raw_with_spills_for_op(
+                    spec.op,
+                    &spec.operands,
+                    spill_plan,
+                ),
+            }
+        } else {
+            relower_block_op(op, spill_plan)
+        };
+        records.push(lowered);
+        if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
+            records.push(RecordEmit {
+                source_start: None,
+                op: local_tee_op(slot.size),
+                operands: vec![Operand {
+                    local_addr: slot.addr,
+                }],
+            });
+        }
+    }
+    if let Some(spec) = local_control_plan.specialized_terminator.as_ref() {
+        records.push(relower_specialized_local_control_terminator(
+            spec, spill_plan,
         ));
-        let memory_plan = build_memory_relower_plan(body, graph, spill_plan);
-        debug_assert!(local_control_plan
-            .skip_ops
-            .is_disjoint(&memory_plan.skip_ops));
-        debug_verify_memory_relower_plan(body, &memory_plan);
-        let mut records =
-            Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
-        for (op_idx, op) in body.ops.iter().enumerate() {
-            if local_control_plan.skip_ops.contains(&op_idx)
-                || memory_plan.skip_ops.contains(&op_idx)
-            {
-                continue;
-            }
-            let lowered = if let Some(spec) = local_control_plan.specialized_ops.get(&op_idx) {
-                relower_specialized_local_control_op(spec, spill_plan)
-            } else if let Some(spec) = memory_plan.specialized_ops.get(&op_idx) {
-                RecordEmit {
-                    source_start: op.source_start,
-                    op: spec.op,
-                    operands: block_operands_to_raw_with_spills_for_op(
-                        spec.op,
-                        &spec.operands,
-                        spill_plan,
-                    ),
-                }
-            } else {
-                relower_block_op(op, spill_plan)
-            };
-            records.push(lowered);
-            if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
-                records.push(RecordEmit {
-                    source_start: None,
-                    op: local_tee_op(slot.size),
-                    operands: vec![Operand {
-                        local_addr: slot.addr,
-                    }],
-                });
-            }
-        }
-        if let Some(spec) = local_control_plan.specialized_terminator.as_ref() {
-            records.push(relower_specialized_local_control_terminator(
-                spec, spill_plan,
-            ));
-        } else if let Some(terminator) = &body.terminator {
+    } else if let Some(terminator) = &body.terminator {
+        if terminator.kind != BlockTerminatorKind::Loop {
             records.push(relower_block_terminator(terminator, spill_plan));
         }
-        return records;
     }
-
-    #[cfg(not(any(debug_assertions, test)))]
-    {
-        let memory_plan = build_memory_relower_plan(body, graph, spill_plan);
-        debug_verify_memory_relower_plan(body, &memory_plan);
-        let mut records =
-            Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
-        for (op_idx, op) in body.ops.iter().enumerate() {
-            if memory_plan.skip_ops.contains(&op_idx) {
-                continue;
-            }
-            let lowered = if let Some(spec) = memory_plan.specialized_ops.get(&op_idx) {
-                RecordEmit {
-                    source_start: op.source_start,
-                    op: spec.op,
-                    operands: block_operands_to_raw_with_spills_for_op(
-                        spec.op,
-                        &spec.operands,
-                        spill_plan,
-                    ),
-                }
-            } else {
-                relower_block_op(op, spill_plan)
-            };
-            records.push(lowered);
-            if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
-                records.push(RecordEmit {
-                    source_start: None,
-                    op: local_tee_op(slot.size),
-                    operands: vec![Operand {
-                        local_addr: slot.addr,
-                    }],
-                });
-            }
-        }
-        if let Some(terminator) = &body.terminator {
-            records.push(relower_block_terminator(terminator, spill_plan));
-        }
-        return records;
-    }
-    unreachable!("cfg-gated relower_block_body path must return");
+    records
 }
 
-#[cfg(any(debug_assertions, test))]
 fn relower_specialized_local_control_op(
     spec: &SpecializedLocalControlLowering,
     spill_plan: &EffectResultSpillPlan,
@@ -2972,7 +2928,6 @@ fn relower_specialized_local_control_op(
     }
 }
 
-#[cfg(any(debug_assertions, test))]
 fn relower_specialized_local_control_terminator(
     spec: &SpecializedLocalControlLowering,
     spill_plan: &EffectResultSpillPlan,
@@ -3014,6 +2969,25 @@ fn spill_slot_for_effect_result(
     spilled.into_iter().next()
 }
 
+fn preserved_values_cross_control_boundary(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::op_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_else as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_loop as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_end as Op)
+        || std::ptr::fn_addr_eq(op, vm::special_block_return as Op)
+}
+
+fn full_stack_live_on_unreachable_control_transfer(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::op_br as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_br_table as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return as Op)
+        || std::ptr::fn_addr_eq(op, vm::special_function_return as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
+}
+
 fn debug_verify_memory_relower_plan(_body: &BlockBody, _plan: &MemoryRelowerPlan) {
     #[cfg(debug_assertions)]
     {
@@ -3050,7 +3024,6 @@ fn debug_verify_memory_relower_plan(_body: &BlockBody, _plan: &MemoryRelowerPlan
     }
 }
 
-#[cfg(any(debug_assertions, test))]
 #[cold]
 #[inline(never)]
 fn verify_provider_elimination(
@@ -3078,6 +3051,15 @@ fn verify_provider_elimination(
                 continue;
             }
             let Some(value) = block_op_single_result(op) else {
+                if matches!(
+                    op.kind,
+                    BlockOpKind::Const
+                        | BlockOpKind::LocalGet
+                        | BlockOpKind::PureUnary(_)
+                        | BlockOpKind::PureBinary(_)
+                ) {
+                    continue;
+                }
                 return false;
             };
             if value_used_after(body, spec.consumer_after_idx, value)
@@ -4344,7 +4326,10 @@ impl BlockOptimizer {
 
     fn can_remove_expr(&self, expr: ValueRef) -> bool {
         let state = &self.exprs[expr.0];
-        state.ref_count == 0 && state.removable && state.producer_op.is_some()
+        state.ref_count == 0
+            && state.removable
+            && state.producer_op.is_some()
+            && state.materialized_block == Some(self.block_id)
     }
 
     fn can_materialize(&self, expr: ValueRef) -> bool {
@@ -4357,6 +4342,18 @@ impl BlockOptimizer {
     fn bump_effect_epoch(&mut self) {
         self.effect_epoch += 1;
         self.cse.clear();
+    }
+
+    fn pin_stack_prefix_values(&mut self, prefix_len: usize) {
+        let preserved = self
+            .stack
+            .iter()
+            .take(prefix_len)
+            .copied()
+            .collect::<Vec<_>>();
+        for value in preserved {
+            self.incref(value);
+        }
     }
 
     fn snapshot_exit_state(&self) -> BlockEntryState {
@@ -4547,6 +4544,28 @@ impl BlockOptimizer {
         op_id: EffectOpId,
         ordinal: usize,
     ) {
+        let pin_prefix_len = if !record.stack_after.reachable {
+            if full_stack_live_on_unreachable_control_transfer(record.op) {
+                self.stack.len()
+            } else if preserved_values_cross_control_boundary(record.op) {
+                record
+                    .preserved_prefix_len
+                    .min(self.stack.len())
+                    .min(record.stack_after.types.len())
+            } else {
+                0
+            }
+        } else if preserved_values_cross_control_boundary(record.op) {
+            record
+                .preserved_prefix_len
+                .min(self.stack.len())
+                .min(record.stack_after.types.len())
+        } else {
+            0
+        };
+        if pin_prefix_len > 0 {
+            self.pin_stack_prefix_values(pin_prefix_len);
+        }
         let preserved_prefix_len = record
             .preserved_prefix_len
             .min(self.stack.len())
@@ -4561,6 +4580,9 @@ impl BlockOptimizer {
                 .all(|(value, ty)| self.exprs[value.0].ty == *ty),
             "preserved stack prefix must match stack_after metadata",
         );
+        if !record.stack_after.reachable {
+            return;
+        }
         let fresh_types = &record.stack_after.types[preserved_prefix_len..];
         debug_assert_eq!(fresh_types.len(), record.fresh_result_count);
         for (result_idx, ty) in fresh_types.iter().enumerate() {
@@ -5441,12 +5463,9 @@ fn block_op_select_size(op: &BlockOp) -> Option<u32> {
     Some(unsafe { operand.select })
 }
 
-fn selector_value_is_single_use(graph: &ValueGraph, op: &BlockOp, value: ValueRef) -> bool {
+fn selector_value_is_single_use(graph: &ValueGraph, _op: &BlockOp, value: ValueRef) -> bool {
     let node = &graph[value.0];
-    node.use_count <= 1
-        && op.source_start.is_some()
-        && !node.is_effect_result()
-        && !node.is_block_argument()
+    node.use_count <= 1 && !node.is_effect_result() && !node.is_block_argument()
 }
 
 fn block_op_single_use_for_licm(graph: &ValueGraph, op: &BlockOp) -> bool {
@@ -5858,7 +5877,6 @@ struct MemoryAccess {
     ty: ValType,
 }
 
-#[cfg(any(debug_assertions, test))]
 #[cold]
 #[inline(never)]
 fn build_local_control_relower_plan(
@@ -5895,7 +5913,6 @@ fn build_local_control_relower_plan(
     plan
 }
 
-#[cfg(any(debug_assertions, test))]
 #[cold]
 #[inline(never)]
 fn build_specialized_local_root_lowering(
@@ -5931,7 +5948,6 @@ fn build_specialized_local_root_lowering(
     })
 }
 
-#[cfg(any(debug_assertions, test))]
 #[cold]
 #[inline(never)]
 fn build_specialized_local_set_tee_lowering(
@@ -5940,17 +5956,47 @@ fn build_specialized_local_set_tee_lowering(
     op_idx: usize,
     op: &BlockOp,
 ) -> Option<SpecializedLocalControlLowering> {
-    if !matches!(op.kind, BlockOpKind::LocalSet | BlockOpKind::LocalTee)
-        || next_entry_is_barrier(body, op_idx + 1)
+    if !matches!(op.kind, BlockOpKind::LocalSet | BlockOpKind::LocalTee) {
+        return None;
+    }
+    if body
+        .ops
+        .get(op_idx + 1)
+        .is_some_and(|_| next_entry_is_barrier(body, op_idx + 1))
     {
         return None;
     }
-    let input = *op.inputs.first()?;
     let start_idx = op_idx.checked_sub(3)?;
-    let (matched, root_value) = match_selector_root_shape(graph, body, start_idx, op_idx + 1)?;
-    if root_value != input || value_used_after(body, op_idx + 1, root_value) {
-        return None;
-    }
+    let input = *op.inputs.first()?;
+    let root_op = &body.ops[start_idx + 2];
+    let matched = match_selector_root_shape(graph, body, start_idx, op_idx + 1)
+        .and_then(|(matched, root_value)| {
+            (root_value == input && !value_used_after(body, op_idx + 1, root_value))
+                .then_some(matched)
+        })
+        .or_else(|| {
+            if op_idx + 1 == body.ops.len() {
+                return match_selector_root_shape_from_body_allow_block_argument(
+                    root_op,
+                    &body.ops[start_idx],
+                    &body.ops[start_idx + 1],
+                );
+            }
+            let root_value = block_op_single_result(root_op)?;
+            (root_value == input
+                && selector_value_is_single_use(graph, root_op, root_value)
+                && !value_used_after(body, op_idx + 1, root_value)
+                && !value_feeds_memory_address(body, op_idx + 1, root_value))
+                .then(|| {
+                    match_selector_root_shape_from_body(
+                        graph,
+                        root_op,
+                        &body.ops[start_idx],
+                        &body.ops[start_idx + 1],
+                    )
+                })
+                .flatten()
+        })?;
     let dst = *op.operands.first()?;
     let (specialized_op, operands) = match (op.kind, matched) {
         (BlockOpKind::LocalSet, SelectorRootMatch::LocalConstAdd { base, imm }) => (
@@ -5984,7 +6030,6 @@ fn build_specialized_local_set_tee_lowering(
     })
 }
 
-#[cfg(any(debug_assertions, test))]
 #[cold]
 #[inline(never)]
 fn build_specialized_br_if_lowering(
@@ -6007,194 +6052,10 @@ fn build_specialized_br_if_lowering(
     })
 }
 
-#[cfg(any(debug_assertions, test))]
 #[cold]
 #[inline(never)]
 fn absorbed_ops_range(start_idx: usize, end_exclusive: usize) -> BTreeSet<usize> {
     (start_idx..end_exclusive).collect()
-}
-
-#[cfg(not(any(debug_assertions, test)))]
-#[derive(Clone, Copy)]
-enum SelectorPattern {
-    LocalGet4I32ConstAdd,
-    LocalGet4I32ConstAddSet4,
-    LocalGet4I32ConstAddTee4,
-    LocalGet4LocalGet4I32Add,
-    LocalGet4LocalGet4I32AddSet4,
-    LocalGet4LocalGet4I32AddTee4,
-}
-
-#[cfg(not(any(debug_assertions, test)))]
-fn select_superinstructions(
-    program: &BasicBlockProgram,
-    rewrite: &mut FunctionRewrite,
-    _licm_modified: &[bool],
-) {
-    for block in &program.blocks {
-        let body = rewrite.relower.block_bodies[block.id].clone();
-        rewrite.relower.block_bodies[block.id] =
-            select_block_superinstructions(&rewrite.graph, &body);
-    }
-}
-
-#[cfg(not(any(debug_assertions, test)))]
-fn select_block_superinstructions(graph: &ValueGraph, body: &BlockBody) -> BlockBody {
-    let body = select_block_br_if_superinstruction(graph, body);
-    let mut out = Vec::with_capacity(body.ops.len());
-    let mut cursor = 0usize;
-    while cursor < body.ops.len() {
-        if let Some((fused, consumed)) = match_selector_pattern(graph, &body, cursor) {
-            out.push(fused);
-            cursor += consumed;
-            continue;
-        }
-        out.push(body.ops[cursor].clone());
-        cursor += 1;
-    }
-    BlockBody {
-        ops: out,
-        terminator: body.terminator.clone(),
-    }
-}
-
-#[cfg(not(any(debug_assertions, test)))]
-fn select_block_br_if_superinstruction(graph: &ValueGraph, body: &BlockBody) -> BlockBody {
-    let Some(terminator) = &body.terminator else {
-        return body.clone();
-    };
-    if terminator.kind != BlockTerminatorKind::BrIf {
-        return body.clone();
-    }
-    let Some((mut fused, consumed)) = match_br_if_pattern(graph, body, terminator) else {
-        return body.clone();
-    };
-    let consumed_start = body.ops.len().saturating_sub(consumed);
-    if let Some(source_start) = body.ops.get(consumed_start).and_then(|op| op.source_start) {
-        fused.source_start = Some(source_start);
-    }
-    let mut out = body.clone();
-    out.ops.truncate(out.ops.len().saturating_sub(consumed));
-    out.terminator = Some(fused);
-    out
-}
-
-#[cfg(not(any(debug_assertions, test)))]
-fn match_selector_pattern(
-    graph: &ValueGraph,
-    body: &BlockBody,
-    cursor: usize,
-) -> Option<(BlockOp, usize)> {
-    let ops = &body.ops;
-    if ops.len() >= cursor + 4
-        && ops[cursor + 3].kind == BlockOpKind::LocalSet
-        && !next_entry_is_barrier(body, cursor + 4)
-    {
-        if let Some((matched, root_value)) =
-            match_selector_root_shape(graph, body, cursor, cursor + 4)
-        {
-            if value_used_after(body, cursor + 4, root_value) {
-                return None;
-            }
-            match matched {
-                SelectorRootMatch::LocalConstAdd { base, imm } => {
-                    return Some((
-                        fused_op(
-                            SelectorPattern::LocalGet4I32ConstAddSet4,
-                            &ops[cursor],
-                            vm::op_local_get4_i32_const_add_set4 as Op,
-                            vec![base, BlockOperand::I32(imm), ops[cursor + 3].operands[0]],
-                            Vec::new(),
-                        ),
-                        4,
-                    ));
-                }
-                SelectorRootMatch::LocalLocalAdd { lhs, rhs } => {
-                    return Some((
-                        fused_op(
-                            SelectorPattern::LocalGet4LocalGet4I32AddSet4,
-                            &ops[cursor],
-                            vm::op_local_get4_local_get4_i32_add_set4 as Op,
-                            vec![lhs, rhs, ops[cursor + 3].operands[0]],
-                            Vec::new(),
-                        ),
-                        4,
-                    ));
-                }
-            }
-        }
-    }
-    if ops.len() >= cursor + 4
-        && ops[cursor + 3].kind == BlockOpKind::LocalTee
-        && !next_entry_is_barrier(body, cursor + 4)
-    {
-        if let Some((matched, root_value)) =
-            match_selector_root_shape(graph, body, cursor, cursor + 4)
-        {
-            if value_used_after(body, cursor + 4, root_value) {
-                return None;
-            }
-            match matched {
-                SelectorRootMatch::LocalConstAdd { base, imm } => {
-                    return Some((
-                        fused_op(
-                            SelectorPattern::LocalGet4I32ConstAddTee4,
-                            &ops[cursor],
-                            vm::op_local_get4_i32_const_add_tee4 as Op,
-                            vec![base, BlockOperand::I32(imm), ops[cursor + 3].operands[0]],
-                            ops[cursor + 2].values.clone(),
-                        ),
-                        4,
-                    ));
-                }
-                SelectorRootMatch::LocalLocalAdd { lhs, rhs } => {
-                    return Some((
-                        fused_op(
-                            SelectorPattern::LocalGet4LocalGet4I32AddTee4,
-                            &ops[cursor],
-                            vm::op_local_get4_local_get4_i32_add_tee4 as Op,
-                            vec![lhs, rhs, ops[cursor + 3].operands[0]],
-                            ops[cursor + 2].values.clone(),
-                        ),
-                        4,
-                    ));
-                }
-            }
-        }
-    }
-    if ops.len() >= cursor + 3 && !next_entry_is_barrier(body, cursor + 3) {
-        if let Some((matched, _root_value)) =
-            match_selector_root_shape(graph, body, cursor, cursor + 3)
-        {
-            match matched {
-                SelectorRootMatch::LocalConstAdd { base, imm } => {
-                    return Some((
-                        fused_op(
-                            SelectorPattern::LocalGet4I32ConstAdd,
-                            &ops[cursor],
-                            vm::op_local_get4_i32_const_add as Op,
-                            vec![base, BlockOperand::I32(imm)],
-                            ops[cursor + 2].values.clone(),
-                        ),
-                        3,
-                    ));
-                }
-                SelectorRootMatch::LocalLocalAdd { lhs, rhs } => {
-                    return Some((
-                        fused_op(
-                            SelectorPattern::LocalGet4LocalGet4I32Add,
-                            &ops[cursor],
-                            vm::op_local_get4_local_get4_i32_add as Op,
-                            vec![lhs, rhs],
-                            ops[cursor + 2].values.clone(),
-                        ),
-                        3,
-                    ));
-                }
-            }
-        }
-    }
-    None
 }
 
 #[derive(Clone, Copy)]
@@ -6241,8 +6102,8 @@ fn match_selector_root_shape(
     if value_feeds_memory_address(body, next_idx, root_value) {
         return None;
     }
-    match graph[root_value.0].loop_value_shape.as_ref()? {
-        LoopValueShape::Local4ConstAdd { base, imm } => {
+    match graph[root_value.0].loop_value_shape.as_ref() {
+        Some(LoopValueShape::Local4ConstAdd { base, imm }) => {
             let base_operand = selector_local_input_operand(graph, ops.get(cursor)?, *base)?;
             let const_op = ops.get(cursor + 1)?;
             let expected_imm = selector_const_delta(root_op, const_op)?;
@@ -6257,7 +6118,7 @@ fn match_selector_root_shape(
                 root_value,
             ))
         }
-        LoopValueShape::Local4Local4Add { lhs, rhs } => {
+        Some(LoopValueShape::Local4Local4Add { lhs, rhs }) => {
             if root_op.kind != BlockOpKind::PureBinary(PureOpKind::I32Add) {
                 return None;
             }
@@ -6271,8 +6132,41 @@ fn match_selector_root_shape(
                 root_value,
             ))
         }
-        _ => None,
+        _ => match_selector_root_shape_from_body(
+            graph,
+            root_op,
+            ops.get(cursor)?,
+            ops.get(cursor + 1)?,
+        )
+        .map(|matched| (matched, root_value)),
     }
+}
+
+fn match_selector_root_shape_from_body(
+    graph: &ValueGraph,
+    root_op: &BlockOp,
+    first: &BlockOp,
+    second: &BlockOp,
+) -> Option<SelectorRootMatch> {
+    if let Some(base) = selector_non_block_argument_local_get4_operand(graph, first) {
+        if let Some(imm) = selector_const_delta(root_op, second) {
+            return Some(SelectorRootMatch::LocalConstAdd { base, imm });
+        }
+    }
+    if root_op.kind == BlockOpKind::PureBinary(PureOpKind::I32Add) {
+        if let Some(base) = selector_non_block_argument_local_get4_operand(graph, second) {
+            if let Some(imm) = block_op_i32_const(first) {
+                return Some(SelectorRootMatch::LocalConstAdd { base, imm });
+            }
+        }
+        if let (Some(lhs), Some(rhs)) = (
+            selector_non_block_argument_local_get4_operand(graph, first),
+            selector_non_block_argument_local_get4_operand(graph, second),
+        ) {
+            return Some(SelectorRootMatch::LocalLocalAdd { lhs, rhs });
+        }
+    }
+    None
 }
 
 fn selector_local_input_operand(
@@ -6280,7 +6174,7 @@ fn selector_local_input_operand(
     op: &BlockOp,
     expected_slot: LocalSlot,
 ) -> Option<BlockOperand> {
-    if op.kind != BlockOpKind::LocalGet || op.source_start.is_none() {
+    if op.kind != BlockOpKind::LocalGet {
         return None;
     }
     let value = block_op_single_result(op)?;
@@ -6316,7 +6210,7 @@ fn selector_local_input_operand(
 }
 
 fn selector_any_local_get4_operand(op: &BlockOp) -> Option<BlockOperand> {
-    if op.kind != BlockOpKind::LocalGet || op.source_start.is_none() {
+    if op.kind != BlockOpKind::LocalGet {
         return None;
     }
     if local_get_size_from_op(op.op)? != 4 {
@@ -6327,6 +6221,43 @@ fn selector_any_local_get4_operand(op: &BlockOp) -> Option<BlockOperand> {
         BlockOperand::SpillValue(source) => Some(BlockOperand::SpillValue(source)),
         _ => None,
     }
+}
+
+fn selector_non_block_argument_local_get4_operand(
+    graph: &ValueGraph,
+    op: &BlockOp,
+) -> Option<BlockOperand> {
+    let value = block_op_single_result(op)?;
+    if graph[value.0].is_block_argument() {
+        return None;
+    }
+    selector_any_local_get4_operand(op)
+}
+
+fn match_selector_root_shape_from_body_allow_block_argument(
+    root_op: &BlockOp,
+    first: &BlockOp,
+    second: &BlockOp,
+) -> Option<SelectorRootMatch> {
+    if let Some(base) = selector_any_local_get4_operand(first) {
+        if let Some(imm) = selector_const_delta(root_op, second) {
+            return Some(SelectorRootMatch::LocalConstAdd { base, imm });
+        }
+    }
+    if root_op.kind == BlockOpKind::PureBinary(PureOpKind::I32Add) {
+        if let Some(base) = selector_any_local_get4_operand(second) {
+            if let Some(imm) = block_op_i32_const(first) {
+                return Some(SelectorRootMatch::LocalConstAdd { base, imm });
+            }
+        }
+        if let (Some(lhs), Some(rhs)) = (
+            selector_any_local_get4_operand(first),
+            selector_any_local_get4_operand(second),
+        ) {
+            return Some(SelectorRootMatch::LocalLocalAdd { lhs, rhs });
+        }
+    }
+    None
 }
 
 fn selector_const_delta(root_op: &BlockOp, const_op: &BlockOp) -> Option<i32> {
@@ -6462,8 +6393,8 @@ fn match_compare_br_if_pattern(
     body: &BlockBody,
     condition: ValueRef,
 ) -> Option<(SelectorCompareMatch, usize)> {
-    match graph[condition.0].loop_value_shape.as_ref()? {
-        LoopValueShape::CompareEqz { input } => {
+    match graph[condition.0].loop_value_shape.as_ref() {
+        Some(LoopValueShape::CompareEqz { input }) => {
             let LoopValueShape::Local4(slot) = input.as_ref() else {
                 return None;
             };
@@ -6486,7 +6417,7 @@ fn match_compare_br_if_pattern(
                 2,
             ))
         }
-        LoopValueShape::CompareConstI32 { lhs, op, imm } => {
+        Some(LoopValueShape::CompareConstI32 { lhs, op, imm }) => {
             let LoopValueShape::Local4(slot) = lhs.as_ref() else {
                 return None;
             };
@@ -6516,7 +6447,7 @@ fn match_compare_br_if_pattern(
                 3,
             ))
         }
-        LoopValueShape::CompareLocal4 { lhs, op, rhs } => {
+        Some(LoopValueShape::CompareLocal4 { lhs, op, rhs }) => {
             if body.ops.len() < 3 {
                 return None;
             }
@@ -6543,6 +6474,76 @@ fn match_compare_br_if_pattern(
         }
         _ => None,
     }
+    .or_else(|| match_compare_br_if_pattern_from_body(graph, body, condition))
+}
+
+fn match_compare_br_if_pattern_from_body(
+    _graph: &ValueGraph,
+    body: &BlockBody,
+    _condition: ValueRef,
+) -> Option<(SelectorCompareMatch, usize)> {
+    if body.ops.len() >= 2 {
+        let local_get = &body.ops[body.ops.len() - 2];
+        let eqz = body.ops.last()?;
+        if eqz.kind == BlockOpKind::PureUnary(PureOpKind::I32Eqz) {
+            let operand = selector_any_local_get4_operand(local_get)?;
+            return Some((SelectorCompareMatch::Eqz { input: operand }, 2));
+        }
+    }
+
+    if body.ops.len() < 3 {
+        return None;
+    }
+    let lhs_op = &body.ops[body.ops.len() - 3];
+    let rhs_op = &body.ops[body.ops.len() - 2];
+    let compare = body.ops.last()?;
+    let BlockOpKind::PureBinary(op) = compare.kind else {
+        return None;
+    };
+    if !i32_compare_op(op) {
+        return None;
+    }
+    if let (Some(lhs), Some(imm)) = (
+        selector_any_local_get4_operand(lhs_op),
+        block_op_i32_const(rhs_op),
+    ) {
+        return Some((
+            SelectorCompareMatch::Const {
+                lhs,
+                cmp_kind: encode_i32_compare_kind(op)?,
+                imm,
+            },
+            3,
+        ));
+    }
+    if let (Some(rhs), Some(imm), Some(flipped)) = (
+        selector_any_local_get4_operand(rhs_op),
+        block_op_i32_const(lhs_op),
+        flip_i32_compare_op(op),
+    ) {
+        return Some((
+            SelectorCompareMatch::Const {
+                lhs: rhs,
+                cmp_kind: encode_i32_compare_kind(flipped)?,
+                imm,
+            },
+            3,
+        ));
+    }
+    if let (Some(lhs), Some(rhs)) = (
+        selector_any_local_get4_operand(lhs_op),
+        selector_any_local_get4_operand(rhs_op),
+    ) {
+        return Some((
+            SelectorCompareMatch::Local {
+                lhs,
+                rhs,
+                cmp_kind: encode_i32_compare_kind(op)?,
+            },
+            3,
+        ));
+    }
+    None
 }
 
 fn branch_target_operand(terminator: &BlockTerminator) -> Option<BlockOperand> {
@@ -6643,44 +6644,6 @@ fn br_if_candidate_shape(graph: &ValueGraph, condition: ValueRef) -> Option<Loop
     }
 }
 
-#[cfg(not(any(debug_assertions, test)))]
-fn fused_op(
-    pattern: SelectorPattern,
-    first: &BlockOp,
-    op: Op,
-    operands: Vec<BlockOperand>,
-    values: Vec<ValueRef>,
-) -> BlockOp {
-    let kind = match pattern {
-        SelectorPattern::LocalGet4I32ConstAdd => {
-            BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAdd)
-        }
-        SelectorPattern::LocalGet4I32ConstAddSet4 => {
-            BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAddSet4)
-        }
-        SelectorPattern::LocalGet4I32ConstAddTee4 => {
-            BlockOpKind::Fused(FusedOpKind::LocalGet4I32ConstAddTee4)
-        }
-        SelectorPattern::LocalGet4LocalGet4I32Add => {
-            BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32Add)
-        }
-        SelectorPattern::LocalGet4LocalGet4I32AddSet4 => {
-            BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32AddSet4)
-        }
-        SelectorPattern::LocalGet4LocalGet4I32AddTee4 => {
-            BlockOpKind::Fused(FusedOpKind::LocalGet4LocalGet4I32AddTee4)
-        }
-    };
-    BlockOp {
-        source_start: first.source_start,
-        op,
-        kind,
-        operands,
-        inputs: Vec::new(),
-        values,
-    }
-}
-
 fn reachable_blocks(program: &BasicBlockProgram, bodies: &[BlockBody]) -> Vec<bool> {
     let mut reachable = vec![false; program.blocks.len()];
     let mut queue = VecDeque::from([0usize]);
@@ -6756,7 +6719,9 @@ fn table_targets(program: &BasicBlockProgram, terminator: &BlockTerminator) -> V
 pub(crate) fn patch_jump_targets(records: &mut [RecordEmit]) -> Result<(), ()> {
     let mut old_to_new = HashMap::new();
     let mut cursor = 0usize;
+    let mut record_positions = Vec::with_capacity(records.len());
     for record in records.iter() {
+        record_positions.push((record.source_start, cursor));
         if let Some(old_start) = record.source_start {
             old_to_new.insert(old_start, cursor);
         }
@@ -6765,7 +6730,11 @@ pub(crate) fn patch_jump_targets(records: &mut [RecordEmit]) -> Result<(), ()> {
     for record in records.iter_mut() {
         if let Some(target_index) = record_jump_target_operand_index(record.op) {
             let target = unsafe { record.operands[target_index].jump_addr as usize };
-            let Some(patched) = old_to_new.get(&target).copied() else {
+            let Some(patched) = old_to_new
+                .get(&target)
+                .copied()
+                .or_else(|| infer_missing_target_cursor(&record_positions, target))
+            else {
                 return Err(());
             };
             record.operands[target_index] = Operand {
@@ -6785,6 +6754,28 @@ pub(crate) fn patch_jump_targets(records: &mut [RecordEmit]) -> Result<(), ()> {
         }
     }
     Ok(())
+}
+
+fn infer_missing_target_cursor(
+    record_positions: &[(Option<usize>, usize)],
+    target: usize,
+) -> Option<usize> {
+    let next_known = record_positions
+        .iter()
+        .position(|(source_start, _)| source_start.is_some_and(|start| start > target))?;
+    let first_unknown_before_next = record_positions[..next_known]
+        .iter()
+        .rposition(|(source_start, _)| source_start.is_some())
+        .map_or(0, |idx| idx + 1);
+    if let Some(cursor) = record_positions
+        .get(first_unknown_before_next..next_known)?
+        .iter()
+        .find(|(source_start, _)| source_start.is_none())
+        .map(|(_, cursor)| *cursor)
+    {
+        return Some(cursor);
+    }
+    record_positions.get(next_known).map(|(_, cursor)| *cursor)
 }
 
 fn record_jump_target_operand_index(op: Op) -> Option<usize> {
@@ -9542,6 +9533,117 @@ mod tests {
         ));
         assert_eq!(spec.source_start, Some(30));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
+        assert!(verify_provider_elimination(&body, &graph, &plan));
+    }
+
+    #[test]
+    fn local_control_relower_specializes_eqz_br_if_without_provider_source_spans() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let base = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 5,
+                ordinal: 0,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: None,
+            address_shape: Some(AddressShape {
+                base: AddressBaseKind::EntryLocal(src),
+                offset_delta: 0,
+            }),
+            loop_value_shape: Some(LoopValueShape::Local4(src)),
+            slot_shape: build_slot_shape(
+                Some(SlotRef::entry_local(src)),
+                Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                Some(LoopValueShape::Local4(src)),
+            ),
+            provider_class: ProviderClass::LocalLoad,
+            materialization_cost: MaterializationCost::Local,
+            producer_op: Some(0),
+            materialized_block: Some(5),
+            materialized_op: Some(0),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+        let compare = ExprId(graph.nodes.len());
+        graph.nodes.push(ExprState {
+            ty: ValType::I32,
+            origin: ExprOrigin {
+                block_id: 5,
+                ordinal: 1,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Instr,
+            const_value: None,
+            key: Some(ValueKey::Unary {
+                op: PureOpKind::I32Eqz,
+                input: graph[base.0].origin,
+            }),
+            address_shape: None,
+            loop_value_shape: Some(LoopValueShape::CompareEqz {
+                input: Box::new(LoopValueShape::Local4(src)),
+            }),
+            slot_shape: None,
+            provider_class: ProviderClass::PureUnary,
+            materialization_cost: MaterializationCost::Pure,
+            producer_op: Some(1),
+            materialized_block: Some(5),
+            materialized_op: Some(1),
+            needs_spill: false,
+            use_count: 1,
+            ref_count: 0,
+            removable: true,
+        });
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: None,
+                    op: vm::op_local_get4 as Op,
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![base],
+                },
+                BlockOp {
+                    source_start: None,
+                    op: vm::op_i32_eqz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Eqz),
+                    operands: Vec::new(),
+                    inputs: vec![base],
+                    values: vec![compare],
+                },
+            ],
+            terminator: Some(BlockTerminator {
+                source_start: Some(24),
+                op: vm::op_br_if as Op,
+                kind: BlockTerminatorKind::BrIf,
+                operands: vec![BlockOperand::JumpTarget(11)],
+                inputs: vec![compare],
+                values: Vec::new(),
+            }),
+        };
+
+        let plan = build_local_control_relower_plan(&body, &graph);
+        let spec = plan
+            .specialized_terminator
+            .as_ref()
+            .expect("eqz br_if should specialize even after source spans are stripped");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_local_get4_i32_eqz_br_if as Op
+        ));
+        assert_eq!(spec.source_start, Some(24));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
         assert!(verify_provider_elimination(&body, &graph, &plan));
     }
 

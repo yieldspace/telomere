@@ -9,7 +9,7 @@ pub(crate) use cfg::InstructionMeta;
 
 pub(crate) struct OptimizedFunction {
     pub(crate) instrs: Vec<Instr>,
-    pub(crate) op_lens: Vec<u8>,
+    pub(crate) op_lens: Vec<u16>,
 }
 
 pub(crate) fn optimize_function(
@@ -121,8 +121,34 @@ mod tests {
             ("op_local_tee4", vm::op_local_tee4 as crate::common::Op),
             ("op_i32_const", vm::op_i32_const as crate::common::Op),
             ("op_i32_add", vm::op_i32_add as crate::common::Op),
+            (
+                "op_local_get4_i32_const_add",
+                vm::op_local_get4_i32_const_add as crate::common::Op,
+            ),
+            (
+                "op_local_get4_i32_const_add_set4",
+                vm::op_local_get4_i32_const_add_set4 as crate::common::Op,
+            ),
+            (
+                "op_local_get4_local_get4_i32_add_set4",
+                vm::op_local_get4_local_get4_i32_add_set4 as crate::common::Op,
+            ),
             ("op_i32_eq", vm::op_i32_eq as crate::common::Op),
             ("op_i32_eqz", vm::op_i32_eqz as crate::common::Op),
+            ("op_br", vm::op_br as crate::common::Op),
+            ("op_call", vm::op_call as crate::common::Op),
+            ("op_loop", vm::op_loop as crate::common::Op),
+            ("op_end", vm::op_end as crate::common::Op),
+            (
+                "special_block_return",
+                vm::special_block_return as crate::common::Op,
+            ),
+            (
+                "special_function_return",
+                vm::special_function_return as crate::common::Op,
+            ),
+            ("op_i32_load", vm::op_i32_load as crate::common::Op),
+            ("op_i32_store", vm::op_i32_store as crate::common::Op),
             ("op_i32_load8_u", vm::op_i32_load8_u as crate::common::Op),
             (
                 "op_i32_load8_u_local_base",
@@ -584,6 +610,12 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn jump_target_for_start(expr: &[Instr], start: usize) -> Option<usize> {
+        let op = unsafe { expr[start].op };
+        let target_word = control_target_word_index(op)?;
+        Some(unsafe { expr[start + target_word].operand.jump_addr as usize })
     }
 
     fn control_target_word_index(op: crate::common::Op) -> Option<usize> {
@@ -2422,6 +2454,158 @@ mod tests {
                 vm::op_local_get4_local_get4_compare_br_if as crate::common::Op
             ),
             1
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_loop_threading_families_for_memory_loop() {
+        let expr = function_expr(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $remaining i32) (result i32)
+                i32.const 0
+                i32.const 0
+                i32.store
+                block $done
+                  loop $loop
+                    local.get $remaining
+                    i32.eqz
+                    br_if $done
+
+                    i32.const 0
+                    i32.const 0
+                    i32.load
+                    i32.const 1
+                    i32.add
+                    i32.store
+
+                    local.get $remaining
+                    i32.const 1
+                    i32.sub
+                    local.set $remaining
+                    br $loop
+                  end
+                end
+                i32.const 0
+                i32.load))
+            "#,
+        );
+        let ops = debug_decoded_ops(&expr);
+        let direct_br_if_count =
+            count_op(&expr, vm::op_local_get4_i32_eqz_br_if as crate::common::Op)
+                + count_op(&expr, vm::op_local_get4_br_if as crate::common::Op);
+        assert_control_targets_align(&expr);
+        assert_eq!(
+            count_op(&expr, vm::op_loop as crate::common::Op),
+            1,
+            "memory loop must retain an explicit loop header: {ops:?}"
+        );
+        assert_eq!(
+            direct_br_if_count, 1,
+            "memory loop should retain a direct local br_if family: {ops:?}"
+        );
+        assert_eq!(
+            count_op(&expr, vm::op_br_if as crate::common::Op),
+            0,
+            "generic br_if must be eliminated for tail-threading-sensitive loops: {ops:?}"
+        );
+
+        let starts = decoded_starts(&expr);
+        let loop_start = starts
+            .iter()
+            .copied()
+            .find(|start| {
+                std::ptr::fn_addr_eq(unsafe { expr[*start].op }, vm::op_loop as crate::common::Op)
+            })
+            .expect("memory loop must contain op_loop");
+        let br_start = starts
+            .iter()
+            .copied()
+            .find(|start| {
+                std::ptr::fn_addr_eq(unsafe { expr[*start].op }, vm::op_br as crate::common::Op)
+            })
+            .expect("memory loop must contain op_br");
+        assert_eq!(
+            jump_target_for_start(&expr, br_start),
+            Some(loop_start),
+            "memory loop backedge must target loop header: {ops:?}"
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_loop_threading_families_for_call_loop() {
+        let expr = function_expr_at(
+            r#"
+            (module
+              (func $step (param i32) (result i32)
+                local.get 0
+                i32.const 1
+                i32.add)
+              (func (export "run") (param $remaining i32) (result i32)
+                (local $acc i32)
+                i32.const 0
+                local.set $acc
+                block $done
+                  loop $loop
+                    local.get $remaining
+                    i32.eqz
+                    br_if $done
+
+                    local.get $acc
+                    call $step
+                    local.set $acc
+
+                    local.get $remaining
+                    i32.const 1
+                    i32.sub
+                    local.set $remaining
+                    br $loop
+                  end
+                end
+                local.get $acc))
+            "#,
+            1,
+        );
+        let ops = debug_decoded_ops(&expr);
+        let direct_br_if_count =
+            count_op(&expr, vm::op_local_get4_i32_eqz_br_if as crate::common::Op)
+                + count_op(&expr, vm::op_local_get4_br_if as crate::common::Op);
+        assert_control_targets_align(&expr);
+        assert_eq!(
+            count_op(&expr, vm::op_loop as crate::common::Op),
+            1,
+            "call loop must retain an explicit loop header: {ops:?}"
+        );
+        assert_eq!(
+            direct_br_if_count, 1,
+            "call loop should retain a direct local br_if family: {ops:?}"
+        );
+        assert_eq!(
+            count_op(&expr, vm::op_call as crate::common::Op),
+            1,
+            "call loop should keep the direct local call fast path: {ops:?}"
+        );
+
+        let starts = decoded_starts(&expr);
+        let loop_start = starts
+            .iter()
+            .copied()
+            .find(|start| {
+                std::ptr::fn_addr_eq(unsafe { expr[*start].op }, vm::op_loop as crate::common::Op)
+            })
+            .expect("call loop must contain op_loop");
+        let br_start = starts
+            .iter()
+            .copied()
+            .find(|start| {
+                std::ptr::fn_addr_eq(unsafe { expr[*start].op }, vm::op_br as crate::common::Op)
+            })
+            .expect("call loop must contain op_br");
+        assert_eq!(
+            jump_target_for_start(&expr, br_start),
+            Some(loop_start),
+            "call loop backedge must target loop header: {ops:?}"
         );
     }
 

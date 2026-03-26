@@ -329,7 +329,7 @@ pub struct Global(pub GlobalType, pub Vec<ConstExpr>);
 pub struct Func {
     pub locals: LocalsData,
     pub expr: Vec<Instr>,
-    pub op_lens: Vec<u8>,
+    pub op_lens: Vec<u16>,
 }
 impl Func {
     pub fn local_size(&self) -> usize {

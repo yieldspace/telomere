@@ -105,7 +105,6 @@ pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    dispatch_profile_count("op_br_if");
     let cond = ctx.stack.pop_u32_fast();
     trace!("op_br_if: {cond}");
 

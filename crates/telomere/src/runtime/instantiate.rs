@@ -66,7 +66,7 @@ fn is_direct_call_op(op: unsafe fn(*const Instr, &mut ExecuteContext) -> VMResul
     )
 }
 
-fn predecode_direct_call_operands(code: &mut [Instr], op_lens: &[u8], funcs: &[ObjectRef]) {
+fn predecode_direct_call_operands(code: &mut [Instr], op_lens: &[u16], funcs: &[ObjectRef]) {
     let mut cursor = 0usize;
     for len in op_lens {
         let op = unsafe { code[cursor].op };
