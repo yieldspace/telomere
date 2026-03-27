@@ -309,7 +309,6 @@ impl<'a> Scheduler<'a> {
                 ..
             } = task;
             let fp = pc.resolve(gc, &stack, local_reference);
-
             let (res, cont, local_reference) = {
                 let current_frame = if local_reference.local_size as usize
                     >= std::mem::size_of::<crate::common::stack::CallStackInfo>()

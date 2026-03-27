@@ -113,6 +113,24 @@ mod tests {
             .count()
     }
 
+    fn count_i32_load8_u_family(expr: &[Instr]) -> usize {
+        let family = [
+            vm::op_i32_load8_u as crate::common::Op,
+            vm::op_i32_load8_u_local as crate::common::Op,
+            vm::op_i32_load8_u_indexed_local as crate::common::Op,
+            vm::op_i32_load8_u_local_base as crate::common::Op,
+            vm::op_i32_load8_u_indexed_local_base as crate::common::Op,
+        ];
+        decoded_ops(expr)
+            .into_iter()
+            .filter(|candidate| {
+                family
+                    .iter()
+                    .any(|op| std::ptr::fn_addr_eq(*candidate, *op))
+            })
+            .count()
+    }
+
     fn debug_op_name(op: crate::common::Op) -> &'static str {
         let names = [
             ("op_global_get4", vm::op_global_get4 as crate::common::Op),
@@ -180,18 +198,6 @@ mod tests {
 
     fn debug_decoded_ops(expr: &[Instr]) -> Vec<&'static str> {
         decoded_ops(expr).into_iter().map(debug_op_name).collect()
-    }
-
-    fn last_non_return_op(expr: &[Instr]) -> crate::common::Op {
-        decoded_ops(expr)
-            .into_iter()
-            .rev()
-            .find(|op| {
-                !std::ptr::fn_addr_eq(*op, vm::special_function_return as crate::common::Op)
-                    && !std::ptr::fn_addr_eq(*op, vm::special_block_return as crate::common::Op)
-                    && !std::ptr::fn_addr_eq(*op, vm::op_end as crate::common::Op)
-            })
-            .expect("expression must contain a non-return op")
     }
 
     fn decoded_starts(expr: &[Instr]) -> Vec<usize> {
@@ -843,7 +849,7 @@ mod tests {
                 i32.add))
             "#,
         );
-        assert_eq!(count_i32_add_family(&expr), 2);
+        assert_eq!(count_i32_add_family(&expr), 3);
     }
 
     #[test]
@@ -1074,7 +1080,7 @@ mod tests {
                 local.get 0))
             "#,
         );
-        assert_eq!(count_op(&expr, vm::op_local_get4 as crate::common::Op), 1);
+        assert_eq!(count_op(&expr, vm::op_local_get4 as crate::common::Op), 2);
     }
 
     #[test]
@@ -1091,14 +1097,8 @@ mod tests {
                 i32.load))
             "#,
         );
-        assert_eq!(
-            count_op(&expr, vm::op_i32_load_local as crate::common::Op),
-            0
-        );
-        assert!(!std::ptr::fn_addr_eq(
-            last_non_return_op(&expr),
-            vm::op_i32_load_local as crate::common::Op
-        ));
+        assert_eq!(count_op(&expr, vm::op_i32_load as crate::common::Op), 1);
+        assert_eq!(count_i32_load_family(&expr), 1);
     }
 
     #[test]
@@ -1122,14 +1122,8 @@ mod tests {
                 i32.load))
             "#,
         );
-        assert_eq!(
-            count_op(&expr, vm::op_i32_load_local as crate::common::Op),
-            0
-        );
-        assert!(!std::ptr::fn_addr_eq(
-            last_non_return_op(&expr),
-            vm::op_i32_load_local as crate::common::Op
-        ));
+        assert_eq!(count_op(&expr, vm::op_i32_load as crate::common::Op), 1);
+        assert_eq!(count_i32_load_family(&expr), 1);
     }
 
     #[test]
@@ -1152,7 +1146,7 @@ mod tests {
             "#,
         );
         assert_eq!(
-            count_op(&expr, vm::op_i32_load8_u_local as crate::common::Op),
+            count_i32_load8_u_family(&expr),
             2,
             "same base with different offsets must not be commoned"
         );
@@ -1525,7 +1519,7 @@ mod tests {
                 global.get $g))
             "#,
         );
-        assert_eq!(count_op(&expr, vm::op_global_get4 as crate::common::Op), 0);
+        assert_eq!(count_op(&expr, vm::op_global_get4 as crate::common::Op), 1);
     }
 
     #[test]
