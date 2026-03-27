@@ -2228,6 +2228,35 @@ fn materializable_slot(slot: SlotRef) -> Option<LocalSlot> {
     }
 }
 
+fn slot_shape_local_operand(shape: &SlotShape, expected_size: u32) -> Option<BlockOperand> {
+    let slot = shape.slot.and_then(materializable_slot)?;
+    (slot.size == expected_size).then_some(BlockOperand::LocalAddr(slot.addr))
+}
+
+fn selector_value_slot_ref_operand(
+    graph: &ValueGraph,
+    value: ValueRef,
+    expected_size: u32,
+) -> Option<BlockOperand> {
+    if graph[value.0].is_effect_result() {
+        return None;
+    }
+    effective_slot_shape(graph, value)
+        .and_then(|shape| slot_shape_local_operand(&shape, expected_size))
+}
+
+fn shared_select_slot_shape(
+    graph: &ValueGraph,
+    lhs: ValueRef,
+    rhs: ValueRef,
+    expected_size: u32,
+) -> Option<SlotShape> {
+    let lhs_shape = effective_slot_shape(graph, lhs)?;
+    let rhs_shape = effective_slot_shape(graph, rhs)?;
+    (lhs_shape == rhs_shape && slot_shape_local_operand(&lhs_shape, expected_size).is_some())
+        .then_some(lhs_shape)
+}
+
 fn i32_const_expr(exprs: &ValueGraph, value: ValueRef) -> Option<i32> {
     match exprs[value.0].const_value {
         Some(ConstValue::I32(value)) => Some(value),
@@ -3819,6 +3848,15 @@ impl BlockOptimizer {
             Some(op_idx.0),
             false,
         );
+        if let Some(shape) = shared_select_slot_shape(&self.exprs, lhs, rhs, select_size) {
+            set_value_slot_shape(
+                &mut self.exprs,
+                expr,
+                shape.slot,
+                shape.address,
+                shape.loop_value,
+            );
+        }
         self.push_stack(expr);
     }
 
@@ -6626,7 +6664,112 @@ fn match_compare_br_if_pattern(
         })(),
         _ => None,
     }
+    .or_else(|| match_compare_br_if_pattern_from_slot_refs(graph, body, condition))
     .or_else(|| match_compare_br_if_pattern_from_body(graph, body, condition))
+}
+
+fn value_defined_in_body_before(body: &BlockBody, consumer_idx: usize, value: ValueRef) -> bool {
+    body.ops
+        .iter()
+        .take(consumer_idx)
+        .any(|op| block_op_single_result(op) == Some(value))
+}
+
+fn trailing_const_input_consumed(
+    body: &BlockBody,
+    compare_idx: usize,
+    value: ValueRef,
+    imm: i32,
+) -> Option<usize> {
+    let const_idx = compare_idx.checked_sub(1)?;
+    let const_op = body.ops.get(const_idx)?;
+    (const_op.kind == BlockOpKind::Const
+        && block_op_single_result(const_op) == Some(value)
+        && block_op_i32_const(const_op) == Some(imm))
+    .then_some(2)
+}
+
+fn match_compare_br_if_pattern_from_slot_refs(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    condition: ValueRef,
+) -> Option<(SelectorCompareMatch, usize)> {
+    let compare_idx = body.ops.len().checked_sub(1)?;
+    let compare = body.ops.get(compare_idx)?;
+    if block_op_single_result(compare) != Some(condition) || !block_op_single_use(graph, compare) {
+        return None;
+    }
+    match compare.kind {
+        BlockOpKind::PureUnary(PureOpKind::I32Eqz) => {
+            let input = *compare.inputs.first()?;
+            if value_defined_in_body_before(body, compare_idx, input) {
+                return None;
+            }
+            let input = selector_value_slot_ref_operand(graph, input, 4)?;
+            Some((SelectorCompareMatch::Eqz { input }, 1))
+        }
+        BlockOpKind::PureBinary(op) if i32_compare_op(op) => {
+            let lhs = *compare.inputs.first()?;
+            let rhs = *compare.inputs.get(1)?;
+            if let (Some(lhs_operand), Some(imm)) = (
+                selector_value_slot_ref_operand(graph, lhs, 4),
+                i32_const_expr(graph, rhs),
+            ) {
+                if value_defined_in_body_before(body, compare_idx, lhs) {
+                    return None;
+                }
+                let consumed =
+                    trailing_const_input_consumed(body, compare_idx, rhs, imm).or_else(|| {
+                        (!value_defined_in_body_before(body, compare_idx, rhs)).then_some(1)
+                    })?;
+                return Some((
+                    SelectorCompareMatch::Const {
+                        lhs: lhs_operand,
+                        cmp_kind: encode_i32_compare_kind(op)?,
+                        imm,
+                    },
+                    consumed,
+                ));
+            }
+            if let (Some(rhs_operand), Some(imm), Some(flipped)) = (
+                selector_value_slot_ref_operand(graph, rhs, 4),
+                i32_const_expr(graph, lhs),
+                flip_i32_compare_op(op),
+            ) {
+                if value_defined_in_body_before(body, compare_idx, rhs) {
+                    return None;
+                }
+                let consumed =
+                    trailing_const_input_consumed(body, compare_idx, lhs, imm).or_else(|| {
+                        (!value_defined_in_body_before(body, compare_idx, lhs)).then_some(1)
+                    })?;
+                return Some((
+                    SelectorCompareMatch::Const {
+                        lhs: rhs_operand,
+                        cmp_kind: encode_i32_compare_kind(flipped)?,
+                        imm,
+                    },
+                    consumed,
+                ));
+            }
+            if value_defined_in_body_before(body, compare_idx, lhs)
+                || value_defined_in_body_before(body, compare_idx, rhs)
+            {
+                return None;
+            }
+            let lhs = selector_value_slot_ref_operand(graph, lhs, 4)?;
+            let rhs = selector_value_slot_ref_operand(graph, rhs, 4)?;
+            Some((
+                SelectorCompareMatch::Local {
+                    lhs,
+                    rhs,
+                    cmp_kind: encode_i32_compare_kind(op)?,
+                },
+                1,
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn match_compare_br_if_pattern_from_body(
@@ -6795,18 +6938,20 @@ fn next_entry_is_barrier(body: &BlockBody, idx: usize) -> bool {
 
 #[cfg_attr(not(test), allow(dead_code))]
 fn br_if_candidate_shape(graph: &ValueGraph, condition: ValueRef) -> Option<LoopValueShape> {
-    match graph[condition.0].loop_value_shape.as_ref()? {
+    let candidate = graph[condition.0].loop_value_shape.clone().or_else(|| {
+        effective_slot_shape(graph, condition)
+            .and_then(|shape| shape.slot)
+            .and_then(materializable_slot)
+            .filter(|slot| slot.size == 4)
+            .map(LoopValueShape::Local4)
+    })?;
+    match &candidate {
         LoopValueShape::Local4(_)
         | LoopValueShape::Local4ConstAdd { .. }
         | LoopValueShape::Local4Local4Add { .. }
         | LoopValueShape::CompareEqz { .. }
         | LoopValueShape::CompareConstI32 { .. }
-        | LoopValueShape::CompareLocal4 { .. } => Some(
-            graph[condition.0]
-                .loop_value_shape
-                .clone()
-                .expect("shape checked"),
-        ),
+        | LoopValueShape::CompareLocal4 { .. } => Some(candidate),
     }
 }
 
@@ -8360,6 +8505,13 @@ mod tests {
             reachable: true,
             types: types.to_vec(),
         }
+    }
+
+    fn push_test_state(graph: &mut ValueGraph, state: ExprState) -> ValueRef {
+        let value = ExprId(graph.nodes.len());
+        graph.nodes.push(state);
+        graph.nodes[value.0].refresh_optimizer_metadata();
+        value
     }
 
     #[test]
@@ -10348,6 +10500,482 @@ mod tests {
     }
 
     #[test]
+    fn visit_select_preserves_lossless_slot_shape() {
+        let slot = LocalSlot::new(0, 4);
+        let address_shape = AddressShape {
+            base: AddressBaseKind::EntryLocal(slot),
+            offset_delta: 0,
+        };
+        let slot_shape = build_slot_shape(
+            Some(SlotRef::entry_local(slot)),
+            Some(address_shape),
+            Some(LoopValueShape::Local4(slot)),
+        )
+        .expect("slot shape");
+        let mut optimizer = BlockOptimizer {
+            block_id: 7,
+            ..BlockOptimizer::default()
+        };
+        let lhs = push_test_state(
+            &mut optimizer.exprs,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 7,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: Some(slot_shape.clone()),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let rhs = push_test_state(
+            &mut optimizer.exprs,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 7,
+                    ordinal: 1,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(1),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: Some(slot_shape.clone()),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let cond = push_test_state(
+            &mut optimizer.exprs,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 7,
+                    ordinal: 2,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(2),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        optimizer.push_stack(lhs);
+        optimizer.push_stack(rhs);
+        optimizer.push_stack(cond);
+
+        let record = DecodedInstr {
+            old_start: 12,
+            op: vm::op_select as Op,
+            operands: vec![Operand { select: 4 }],
+            stack_before: snapshot(&[ValType::I32, ValType::I32, ValType::I32]),
+            stack_after: snapshot(&[ValType::I32]),
+            preserved_prefix_len: 0,
+            fresh_result_count: 1,
+        };
+
+        optimizer.visit_select(&record, 0);
+
+        let result = *optimizer.stack.last().expect("select result");
+        assert_eq!(
+            effective_slot_shape(&optimizer.exprs, result),
+            Some(slot_shape)
+        );
+        assert_eq!(optimizer.builder.entries.len(), 1);
+        assert!(std::ptr::fn_addr_eq(
+            optimizer.builder.entries[0].op,
+            vm::op_select as Op
+        ));
+    }
+
+    #[test]
+    fn local_control_relower_specializes_eqz_br_if_from_slot_ref_without_provider_ops() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let base = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(Some(SlotRef::entry_local(src)), None, None),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let base_origin = graph[base.0].origin;
+        let compare = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Unary {
+                    op: PureOpKind::I32Eqz,
+                    input: base_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(5),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![BlockOp {
+                source_start: Some(22),
+                op: vm::op_i32_eqz as Op,
+                kind: BlockOpKind::PureUnary(PureOpKind::I32Eqz),
+                operands: Vec::new(),
+                inputs: vec![base],
+                values: vec![compare],
+            }],
+            terminator: Some(BlockTerminator {
+                source_start: Some(24),
+                op: vm::op_br_if as Op,
+                kind: BlockTerminatorKind::BrIf,
+                operands: vec![BlockOperand::JumpTarget(11)],
+                inputs: vec![compare],
+                values: Vec::new(),
+            }),
+        };
+
+        let plan = build_local_control_relower_plan(&body, &graph);
+        let spec = plan
+            .specialized_terminator
+            .as_ref()
+            .expect("slot-ref eqz br_if should specialize");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_local_get4_i32_eqz_br_if as Op
+        ));
+        assert_eq!(spec.source_start, Some(22));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
+        assert!(verify_provider_elimination(&body, &graph, &plan));
+    }
+
+    #[test]
+    fn local_control_relower_specializes_const_compare_br_if_from_slot_ref_without_provider_ops() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let lhs = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(Some(SlotRef::entry_local(src)), None, None),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let imm = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 1,
+                    kind: ExprOriginKind::SyntheticConst,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(7)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let lhs_origin = graph[lhs.0].origin;
+        let imm_origin = graph[imm.0].origin;
+        let compare = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Binary {
+                    op: PureOpKind::I32Eq,
+                    lhs: lhs_origin,
+                    rhs: imm_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(5),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![BlockOp {
+                source_start: Some(22),
+                op: vm::op_i32_eq as Op,
+                kind: BlockOpKind::PureBinary(PureOpKind::I32Eq),
+                operands: Vec::new(),
+                inputs: vec![lhs, imm],
+                values: vec![compare],
+            }],
+            terminator: Some(BlockTerminator {
+                source_start: Some(24),
+                op: vm::op_br_if as Op,
+                kind: BlockTerminatorKind::BrIf,
+                operands: vec![BlockOperand::JumpTarget(11)],
+                inputs: vec![compare],
+                values: Vec::new(),
+            }),
+        };
+
+        let plan = build_local_control_relower_plan(&body, &graph);
+        let spec = plan
+            .specialized_terminator
+            .as_ref()
+            .expect("slot-ref const compare br_if should specialize");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_local_get4_i32_const_compare_br_if as Op
+        ));
+        assert_eq!(spec.source_start, Some(22));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
+        assert!(verify_provider_elimination(&body, &graph, &plan));
+    }
+
+    #[test]
+    fn local_control_relower_specializes_local_compare_br_if_from_slot_ref_without_provider_ops() {
+        let lhs_slot = LocalSlot::new(0, 4);
+        let rhs_slot = LocalSlot::new(4, 4);
+        let mut graph = ValueGraph::default();
+        let lhs = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(Some(SlotRef::entry_local(lhs_slot)), None, None),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let rhs = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 1,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(1),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(Some(SlotRef::entry_local(rhs_slot)), None, None),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let lhs_origin = graph[lhs.0].origin;
+        let rhs_origin = graph[rhs.0].origin;
+        let compare = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Binary {
+                    op: PureOpKind::I32LtS,
+                    lhs: lhs_origin,
+                    rhs: rhs_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(5),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![BlockOp {
+                source_start: Some(22),
+                op: vm::op_i32_lt_s as Op,
+                kind: BlockOpKind::PureBinary(PureOpKind::I32LtS),
+                operands: Vec::new(),
+                inputs: vec![lhs, rhs],
+                values: vec![compare],
+            }],
+            terminator: Some(BlockTerminator {
+                source_start: Some(24),
+                op: vm::op_br_if as Op,
+                kind: BlockTerminatorKind::BrIf,
+                operands: vec![BlockOperand::JumpTarget(11)],
+                inputs: vec![compare],
+                values: Vec::new(),
+            }),
+        };
+
+        let plan = build_local_control_relower_plan(&body, &graph);
+        let spec = plan
+            .specialized_terminator
+            .as_ref()
+            .expect("slot-ref local compare br_if should specialize");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_local_get4_local_get4_compare_br_if as Op
+        ));
+        assert_eq!(spec.source_start, Some(22));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
+        assert!(verify_provider_elimination(&body, &graph, &plan));
+    }
+
+    #[test]
     fn local_control_relower_does_not_specialize_special_function_return_as_br_if() {
         let src = LocalSlot::new(0, 4);
         let mut graph = ValueGraph::default();
@@ -10561,6 +11189,45 @@ mod tests {
                 op: PureOpKind::I32Eq,
                 rhs: slot1,
             })
+        );
+    }
+
+    #[test]
+    fn br_if_candidate_shape_reads_slot_ref_from_residual_graph() {
+        let slot = LocalSlot::new(12, 4);
+        let mut graph = ValueGraph::default();
+        let value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 1,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(Some(SlotRef::entry_local(slot)), None, None),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        assert_eq!(
+            br_if_candidate_shape(&graph, value),
+            Some(LoopValueShape::Local4(slot))
         );
     }
 
