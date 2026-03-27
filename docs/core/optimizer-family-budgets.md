@@ -1,7 +1,9 @@
 # Optimizer Family Budgets
 
+全体像と各 phase の as-built 説明は [`current-optimizer.md`](./current-optimizer.md) を参照。
+
 This document fixes the Phase 0 family-selection contract and the Phase 7
-handler-layout contract referenced from `PLAN.md`.
+handler-layout contract used by the current optimizer implementation.
 
 ## Phase 0
 

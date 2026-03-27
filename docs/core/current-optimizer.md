@@ -1,0 +1,329 @@
+# Current Core Optimizer
+
+このドキュメントは、現行 core optimizer を「現コードベースで何をやっているか」という観点で説明する as-built spec である。現在の正本実装、守っている制約、非目標、検証方法、出典をまとめる。
+
+前提は次のとおり。
+
+- 対象は core Wasm 実行系であり、component model optimizer の説明ではない。
+- 最重要制約は direct-threaded runtime の `call_next` / `call_code` 契約を壊さないこと。
+- `op_call` / `op_return_call` / indirect call の handler identity は維持する。
+- 最適化は runtime 実行中に自己書換えしない。quickening は load-time only である。
+- `RecordEmit` は debug/test の flatten 用に残るが、runtime 正本は packed operand stream である。
+
+## 1. 全体像
+
+現 optimizer は、「decode した `Instr` をそのまま小手先に fuse する pass」ではない。現在の流れは、parser-stage で residual IR を作り、そこで provenance を保ったまま rewrite/LICM を行い、最後に consumer-driven relower が `PackedOp` を選ぶ構成である。
+
+```mermaid
+flowchart LR
+    A["decoded Instr + meta"] --> B["build_program"]
+    B --> C["BasicBlockProgram"]
+    C --> D["rewrite_program"]
+    D --> E["ValueGraph + BlockBody + BlockArgument"]
+    E --> F["apply_licm"]
+    F --> G["effect-result spill planning"]
+    G --> H["relower_block_body"]
+    H --> I["PackedOp list"]
+    I --> J["build_packed_stream"]
+    J --> K["PackedOpStream"]
+    K --> L["flatten to Instr + op_lens"]
+    L --> M["instantiate-time direct-call predecode"]
+    M --> N["runtime direct-threaded execution"]
+```
+
+正本関数は以下である。
+
+- optimizer 入口: [`optimize_function`](../../crates/telomere/src/parser/core/optimizer/pass.rs)
+- residual IR 構築: [`rewrite_program`](../../crates/telomere/src/parser/core/optimizer/pass.rs)
+- consumer-driven relower: [`relower_block_body`](../../crates/telomere/src/parser/core/optimizer/pass.rs)
+- packed canonicalization: [`build_packed_stream`](../../crates/telomere/src/parser/core/optimizer/sink.rs)
+- call recipe predecode: [`predecode_direct_call_operands`](../../crates/telomere/src/runtime/instantiate.rs)
+- direct call dispatch: [`op_call`](../../crates/telomere/src/runtime/vm/call.rs), [`op_return_call`](../../crates/telomere/src/runtime/vm/call.rs)
+
+## 2. 守っている制約
+
+この optimizer が守る hard constraints は、現コードでは次のように保っている。
+
+- tail-call threading は維持する。
+  - runtime の dispatch 入口は依然として [`runtime/vm.rs`](../../crates/telomere/src/runtime/vm.rs) の direct-threaded 実装であり、optimizer は handler identity を変えない。
+- `call/control/trap-sensitive/table` は explicit に残す。
+  - optimizer は pure 値と effect 値を分けて扱い、trap-sensitive 数値 op や `call` は verifier と barrier で保護する。
+- runtime-growing side table は入れない。
+  - `CallRecipe`、`ConstPool`、`PackedOpStream`、`BlockCopyPlan` はすべて function-size proportional な load-time metadata に閉じる。
+- JIT/tier-up は scope 外に保つ。
+  - WAMR を参考にしているのは fast interpreter の load-time rewrite であり、execution engine 自体は置換していない。
+
+## 3. 現在の正本 IR
+
+### 3.1 Residual IR
+
+optimizer の正本 IR は [`expr.rs`](../../crates/telomere/src/parser/core/optimizer/expr.rs) と [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) にある。
+
+- `ValueGraph`
+  - pure value と effect result の provenance を保持する。
+- `BlockBody`
+  - raw emit 列ではなく、後段の consumer-driven relower が読む residual body。
+- `BlockArgument`
+  - merge の正本。slot 化しても消さない。
+- `SlotShape`
+  - `slot`, `address`, `loop_value` を lossless に持つ。
+- `ProviderClass`
+  - `LocalLoad`, `Const`, `PureUnary`, `PureBinary`, `EffectResultSpill` を区別する。
+- `MaterializationCost`
+  - `Immediate`, `Local`, `Pure`, `Spill` を持ち、rematerialization の aggressiveness を制御する。
+
+### 3.2 Slot モデル
+
+slot 正本化は [`SlotRef`](../../crates/telomere/src/parser/core/optimizer/expr.rs) と [`BlockCopyPlan`](../../crates/telomere/src/parser/core/optimizer/pass.rs) を中心に実装している。
+
+- `SlotClass`
+  - `EntryLocal`
+  - `TempLocal`
+  - `SpillLocal`
+  - `VirtualStack`
+  - `ConstPoolRef`
+- `BlockCopyPlan`
+  - merge で slot-preserving にできるか、copy を入れるべきかを block ごとに固定する。
+- `EffectResultSpillPlan`
+  - effect result を explicit spill local に割り当て、relower で再利用できるようにする。
+
+重要なのは、「slot は `BlockArgument` の代替ではなく lowering 先」であることだ。join はあくまで block argument 正本で行い、slot-preserving できるときだけ local-like な lowering に落とす。
+
+## 4. Packed Operand 正本
+
+Phase 1 の中心は [`PackedOpStream`](../../crates/telomere/src/parser/core/optimizer/sink.rs) である。runtime が読む operand はここで fixed-shape 化される。
+
+- `PackedOperand::I32/I64/F32/F64/U32`
+- `PackedOperand::ConstPoolRef`
+- `PackedOperand::CallRecipeRef`
+- `PackedOperand::LocalAddr`
+- `PackedOperand::SelectWidth`
+- `PackedOperand::JumpTarget`
+- `PackedOperand::MemArg`
+- `PackedOperand::BlockReturn`
+- `PackedOperand::LoopParam`
+
+現在の packed canonicalization は次を行う。
+
+- `i32.const` / `i64.const` の function-local const pool 化
+  - policy は `reused >= 2`
+- branch target ordinal の前計算
+- `memarg` の packed 化
+- typed `select4/8/16` の width 正本化
+- direct call operand の `CallRecipeRef` 化
+- specialized memory family の `LocalAddr + immediate + MemArg` 正本化
+
+packed stream の verifier は [`verify_packed_stream`](../../crates/telomere/src/parser/core/optimizer/sink.rs) にあり、jump target、const pool ref、call recipe ref、specialized fused operand の形崩れを reject する。
+
+## 5. Call/Frame の predecode
+
+Phase 5 の call path は [`CallRecipeRef`](../../crates/telomere/src/common.rs) と [`CallRecipe`](../../crates/telomere/src/common/store.rs) に寄せている。
+
+- instantiate 時に [`predecode_direct_call_operands`](../../crates/telomere/src/runtime/instantiate.rs) が direct call operand を recipe slot 付き `CallRecipeRef` に変換する。
+- store は [`build_call_recipe`](../../crates/telomere/src/common/store.rs) で `param_size`, `local_size`, `return_arity`, `frame`, `target` を構築する。
+- runtime は [`decode_direct_call_recipe`](../../crates/telomere/src/runtime/vm/call.rs) で recipe slot を 1 回読むだけで callee を復元する。
+
+これにより、direct call hot path は repeated lookup を避けつつ、`op_call` / `op_return_call` の handler identity は保っている。
+
+## 6. Consumer-Driven Relower
+
+現在の relower は、旧来の「selector pass が `BlockBody` を書き換えてから flatten する」構成ではない。`relower_block_body` が residual body を逆順に見ながら、consumer が必要とする provider を吸収して `PackedOp` を出す。
+
+### 6.1 Local/Control family
+
+ローカル系の specialization は [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) の consumer-driven builder 群で行う。
+
+- `local.set4`
+- `local.tee4`
+- `br_if`
+- `eqz/compare + br_if`
+- `local_get4 + i32.const + add/sub`
+- `local_get4 + local_get4 + i32.add`
+
+provider elimination の条件は保守的に固定している。
+
+- single-use
+- barrier 非跨ぎ
+- hoisted value ではない
+- effect result 直値ではない
+- memory address producer と共有しない
+
+### 6.2 Memory family
+
+memory は `AddressShape` を候補抽出に使いつつ、最終判定は `SlotRef` で行う。
+
+- `local/spill + load`
+- `local/spill + const + add/sub + load`
+- `local/spill + store`
+- `local/spill + const + add/sub + store`
+
+address provider と value provider は独立に消去判定する。generic semantics を壊す可能性がある場合は常に generic path へフォールバックする。
+
+### 6.3 Select / Compare-Control
+
+typed `select4/8/16` と compare/control は Phase 6 として拡張している。
+
+- `select4/8/16` は arm 両側が lossless `SlotShape` を持つ場合に provenance を引き継ぐ。
+- `eqz/compare + br_if` は `LoopValueShape` と `SlotRef` の両方から成立判定できる。
+
+### 6.4 Trap-sensitive barrier
+
+trap-sensitive な純粋数値 op は「pure だから消せる」扱いにしない。`drop(i32.div_s ...)` のようなケースで trap を消さないため、explicit barrier へ落としている。これは Wasm の observable trap semantics を優先した実装である。
+
+## 7. 実装ステップごとの対応
+
+実装時の phase ラベルを、現コードに対応付けると次のとおり。
+
+| Phase | 現在の実装 | 正本コード |
+| --- | --- | --- |
+| 0 | family 候補群、`top-k=16`、budget、logical layout order を固定 | [`runtime/vm.rs`](../../crates/telomere/src/runtime/vm.rs), [`optimizer-family-budgets.md`](./optimizer-family-budgets.md) |
+| 1 | `PackedOpStream`、const pool、typed operand pack、branch target predecode | [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs) |
+| 2 | `SlotRef`、`SlotShape`、`BlockCopyPlan`、effect spill slot | [`expr.rs`](../../crates/telomere/src/parser/core/optimizer/expr.rs), [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
+| 3 | local/control provider elimination を consumer-driven lowering へ移行 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
+| 4 | specialized memory family を slot-based に再構成 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs), [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs) |
+| 5 | `CallRecipeRef` / `CallRecipe` による direct call predecode | [`common.rs`](../../crates/telomere/src/common.rs), [`common/store.rs`](../../crates/telomere/src/common/store.rs), [`runtime/instantiate.rs`](../../crates/telomere/src/runtime/instantiate.rs), [`runtime/vm/call.rs`](../../crates/telomere/src/runtime/vm/call.rs) |
+| 6 | typed select と compare/control provider elimination を拡張 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
+| 7 | handler adjacency の計測、family-group 集計、logical layout order の固定 | [`runtime/vm.rs`](../../crates/telomere/src/runtime/vm.rs), [`optimizer-family-budgets.md`](./optimizer-family-budgets.md) |
+| 8 | selector を独立 pass として持たず、`relower_block_body` に内包 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs), [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs) |
+
+補足すると、Phase 8 の「`rewrite_program` の中で PackedOp 候補まで育てる」は、現コードでは `rewrite_program` が residual IR を構築し、`relower_block_body` がその IR から直接 `PackedOp` を選ぶ形で実現している。つまり selector は独立 pass ではないが、PackedOp selection 自体は relower 側にある。
+
+## 8. Profiling と budget
+
+Phase 0 と Phase 7 の運用は [`optimizer-family-budgets.md`](./optimizer-family-budgets.md) に固定している。
+
+### 8.1 Optimizer-side profiling
+
+optimizer 側は [`OptimizerProfiler`](../../crates/telomere/src/parser/core/optimizer/pass.rs) が担当する。
+
+- hot block visit
+- packed stream growth
+- family group ごとの candidate count
+- expected provider elimination 数
+
+family group は次の 3 群で固定する。
+
+- `local/control`
+- `memory`
+- `call/select`
+
+### 8.2 Runtime-side profiling
+
+runtime 側は `vm-profile` feature 配下の [`DispatchProfileRunGuard`](../../crates/telomere/src/runtime/vm.rs) が担当する。
+
+- top op
+- top pair
+- top triple
+- `layout_span`
+- family group ごとの集計
+
+通常 build では profiling を完全 no-op にし、bench / production binary の hot path を汚さない。profile build だけが環境変数で集計を有効化する。
+
+## 9. 何を intentionally やっていないか
+
+以下は現 optimizer の non-goal であり、現コードも意図的に採用していない。
+
+- runtime 中の adaptive quickening
+- self-modifying opcode rewrite
+- speculative deopt / OSR
+- runtime-growing inline cache
+- handler replication
+- JIT / AOT / tier-up への engine 置換
+- interprocedural summary
+- memory/table の aggressive LICM beyond current proofs
+
+この optimizer は「あくまで parser-stage optimizer + load-time predecode + runtime operand layout の改善」であって、新しい execution engine ではない。
+
+## 10. 固定 gate と運用
+
+現 optimizer を変更するときの固定 gate は次を使う。
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --tests -- -D warnings`
+- `cargo test -p telomere parser::core::optimizer -- --test-threads=1`
+- `cargo test --bin telomere-cli core_wasi_preview1 -- --test-threads=1`
+- `cargo test -p telomere --release release_call_loop_keeps_direct_threading -- --exact`
+- `cargo test -p telomere --release release_memory_loop_keeps_tail_call_threading -- --exact`
+- `cargo test -p telomere --release`
+- `cargo bench -p telomere --bench telomere_bench fib -- --sample-size 10 --measurement-time 1`
+- `cargo run --release -- /Users/sizumita/Workspace/misc/coremark/coremark.wasm`
+
+回帰の見方は次の優先度で固定する。
+
+1. semantics regression を止める
+2. tail-threading / preview1 を壊さない
+3. `fib` 非劣化
+4. CoreMark 改善
+5. profiler 上の generic path 比率低下
+
+## 11. 出典と採用点
+
+この optimizer は単一文献の写経ではなく、複数の系統を明示的に統合している。以下が現在の source basis である。
+
+### 11.1 Abstract interpretation / SSA 系
+
+- [POPL23] `SSA Translation Is an Abstract Interpretation`
+  - `BlockArgument` 正本の merge、lossless provenance、SSA-like local/stack propagation の基礎。
+- [PLDI24] `Compiling with Abstract Interpretation`
+  - residual CFG を解析結果と一体で育てる考え方、pass 境界を薄くする方向、selector を relower に寄せる構成。
+
+### 11.2 Quickening / inline caching 系
+
+- [POPL84] `Efficient Implementation of the Smalltalk-80 System`
+  - inline cache と common-case optimization の原点。現コードでは runtime-growing cache は採用せず、load-time `CallRecipe` に制約している。
+- [DLS10] `Efficient interpretation using quickening`
+  - load-time only quickening の設計根拠。現コードでは self-modifying runtime quickening をやらず、packed stream への一方向 rewrite だけ採用する。
+- [ECOOP10] `Inline Caching Meets Quickening`
+  - direct call operand を `CallRecipeRef` に置く設計根拠。polymorphic cache line は作らず、recipe slot に限定している。
+
+### 11.3 Stack-vs-register / superinstruction 系
+
+- [TACO08] `Virtual machine showdown: Stack versus registers`
+  - stack producer を slot 正本へ変換し、executed VM op 数を減らす方向の根拠。
+- [SCOPES03] `Towards Superinstructions for Java Interpreters`
+  - family を consumer 側から選び、dispatch 削減を structural rule に落とす考え方。
+- [IMT10] `How to Select Superinstructions for Ruby`
+  - top trace 駆動で family を採用し、hot path に出ない family を増やさない運用。
+
+### 11.4 Threaded interpreter / layout 系
+
+- [JILP03] `The Structure and Performance of Efficient Interpreters`
+  - threaded interpreter を前提に最適化を積む方針。`call_next` / `call_code` を不変に保つ根拠。
+- [TOPLAS07] `Optimizing Indirect Branch Prediction Accuracy in Virtual Machine Interpreters`
+  - family 爆発と adjacency を budget 管理する根拠。現コードでは `layout_span` と logical group order に落としている。
+- [CC11] `Interpreter Instruction Scheduling`
+  - handler layout を最後の phase に回し、family 集合が安定してから adjacency を調整する順序づけの根拠。
+
+### 11.5 WAMR Fast Interpreter 系
+
+- [WAMR-README]
+  - fast interpreter と classic interpreter の差、small footprint と internal opcode rewrite の位置づけ。
+- [WAMR-FI]
+  - fast interpreter が Wasm opcode を internal opcode へ前処理する設計と、load-time rewrite の考え方。
+- [WAMR-MODES]
+  - runtime running mode を load-time / startup 時に固定する考え方。
+
+この repo で WAMR から採っているのは fast interpreter の「load-time rewrite」と「fixed-shape internal operand」の思想だけであり、WAMR の execution engine をそのまま移植しているわけではない。
+
+### 11.6 `microJIT` という語について
+
+設計メモでは source basis の 1 つとして `microJIT` を挙げていたが、現コードで直接採用しているのは「expression-array 的な provider/consumer 管理」と「slot-oriented な lowering」という抽象側のアイデアである。文献上の位置づけとしては [TACO08], [SCOPES03], [JILP03], [DLS10] の組み合わせに近い。
+
+したがって、この文書では `microJIT` を個別実装名として追うより、slot 化・provider 消去・quickening の 3 軸に分解して説明する。
+
+## 12. References
+
+- [POPL84] L. Peter Deutsch, Allan M. Schiffman, _Efficient Implementation of the Smalltalk-80 System_, POPL 1984. <https://dblp.org/rec/conf/popl/DeutschS84>
+- [POPL23] Matthieu Lemerre, _SSA Translation Is an Abstract Interpretation_, Proc. ACM Program. Lang. 7(POPL), 2023. <https://dblp.org/rec/journals/pacmpl/Lemerre23>
+- [PLDI24] Dorian Lesbre, Matthieu Lemerre, _Compiling with Abstract Interpretation_, Proc. ACM Program. Lang. 8(PLDI), 2024. <https://dblp.org/rec/journals/pacmpl/LesbreL24.html>
+- [DLS10] Stefan Brunthaler, _Efficient interpretation using quickening_, DLS 2010. <https://dblp.org/rec/conf/dls/Brunthaler10>
+- [ECOOP10] Stefan Brunthaler, _Inline Caching Meets Quickening_, ECOOP 2010. <https://dblp.org/rec/conf/ecoop/Brunthaler10>
+- [CC11] Stefan Brunthaler, _Interpreter Instruction Scheduling_, CC 2011. <https://dblp.org/rec/conf/cc/Brunthaler11>
+- [JILP03] M. Anton Ertl, David Gregg, _The Structure and Performance of Efficient Interpreters_, JILP 5, 2003. <https://dblp.org/rec/journals/jilp/ErtlG03>
+- [SCOPES03] Kevin Casey, David Gregg, M. Anton Ertl, Andrew Nisbet, _Towards Superinstructions for Java Interpreters_, SCOPES 2003. <https://dblp.org/rec/conf/scopes/CaseyGEN03>
+- [IMT10] Salikh Zakirov, Shigeru Chiba, Etsuya Shibayama, _How to Select Superinstructions for Ruby_, Information and Media Technologies 5, 2010. <https://dblp.org/rec/journals/imt/ZakirovCS10>
+- [TACO08] Yunhe Shi, Kevin Casey, M. Anton Ertl, David Gregg, _Virtual machine showdown: Stack versus registers_, ACM TACO 4(4), 2008. <https://dblp.org/rec/journals/taco/ShiCEG08>
+- [TOPLAS07] Kevin Casey, M. Anton Ertl, David Gregg, _Optimizing indirect branch prediction accuracy in virtual machine interpreters_, ACM TOPLAS 29(6), 2007. <https://dblp.org/rec/journals/toplas/CaseyEG07>
+- [WAMR-README] _WebAssembly Micro Runtime (WAMR) README_. <https://github.com/bytecodealliance/wasm-micro-runtime>
+- [WAMR-FI] _WAMR fast interpreter introduction_, WAMR Blog. <https://bytecodealliance.github.io/wamr.dev/blog/wamr-fast-interpreter-introduction/>
+- [WAMR-MODES] Tianlong Liang, _Introduction to WAMR running modes_, WAMR Blog, 2023. <https://bytecodealliance.github.io/wamr.dev/blog/introduction-to-wamr-running-modes/>
