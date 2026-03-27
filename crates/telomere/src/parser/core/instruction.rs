@@ -21,7 +21,7 @@ use crate::parser::core::type_checker::MaybeUnreachable;
 use crate::runtime::vm;
 use crate::{
     common::{
-        BlockType, ConstExpr, DataCountVerifier, DirectCallTarget, Elem, FuncIdx, FuncType, Instr,
+        BlockType, CallRecipeRef, ConstExpr, DataCountVerifier, Elem, FuncIdx, FuncType, Instr,
         LocalReassignTable, MemType, Op, Operand, TableType, TypeIdx, TypeSection, ValType,
         ValueSize,
     },
@@ -979,7 +979,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 });
                 instrs.push(Instr {
                     operand: Operand {
-                        direct_call_target: DirectCallTarget::from_funcidx(idx),
+                        call_recipe_ref: CallRecipeRef::from_funcidx(idx),
                     },
                 });
 
@@ -1037,7 +1037,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 });
                 instrs.push(Instr {
                     operand: Operand {
-                        direct_call_target: DirectCallTarget::from_funcidx(idx),
+                        call_recipe_ref: CallRecipeRef::from_funcidx(idx),
                     },
                 });
 

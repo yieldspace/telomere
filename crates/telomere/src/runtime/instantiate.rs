@@ -1,9 +1,8 @@
 use crate::{
     common::{
-        execute_elem_init_const_expr,
-        store::{CallDispatchCache, CallDispatchTarget, FunctionBody as RuntimeFunctionBody},
+        execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
-        CodeSection, ConstExpr, DataMode, DataSection, DirectCallTarget, ElemInit, ElemMode,
+        CallRecipeRef, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
         ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
         FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
         ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
@@ -66,67 +65,23 @@ fn is_direct_call_op(op: unsafe fn(*const Instr, &mut ExecuteContext) -> VMResul
     )
 }
 
-fn predecode_direct_call_operands(code: &mut [Instr], op_lens: &[u16], funcs: &[ObjectRef]) {
+fn predecode_direct_call_operands(code: &mut [Instr], op_lens: &[u16], recipe_slots: &[u32]) {
     let mut cursor = 0usize;
     for len in op_lens {
         let op = unsafe { code[cursor].op };
         if is_direct_call_op(op) {
-            let target = unsafe { code[cursor + 1].operand.direct_call_target };
-            let funcaddr = funcs[target.funcidx as usize];
+            let target = unsafe { code[cursor + 1].operand.call_recipe_ref };
+            let recipe_slot = recipe_slots[target.funcidx as usize];
             code[cursor + 1] = Instr {
                 operand: Operand {
-                    direct_call_target: DirectCallTarget::from_funcidx(target.funcidx)
-                        .with_funcaddr(funcaddr),
+                    call_recipe_ref: CallRecipeRef::from_funcidx(target.funcidx)
+                        .with_recipe_slot(recipe_slot),
                 },
             };
         }
         cursor += usize::from(*len);
     }
     debug_assert_eq!(cursor, code.len());
-}
-
-fn precomputed_call_dispatch_cache(gc: &StoreInner, funcaddr: ObjectRef) -> CallDispatchCache {
-    let funcinst = gc.get_func(funcaddr);
-    let (instance, funcidx, target, code_base) = match &funcinst.body {
-        RuntimeFunctionBody::Wasm { locals, code } => (
-            funcinst.instance,
-            funcinst.funcidx,
-            CallDispatchTarget::Wasm {
-                local_size: locals.byte_size() as u32,
-            },
-            code.as_ptr(),
-        ),
-        RuntimeFunctionBody::Host(fp) => (
-            funcinst.instance,
-            funcinst.funcidx,
-            CallDispatchTarget::Host(*fp),
-            std::ptr::null(),
-        ),
-        RuntimeFunctionBody::AsyncHost(fp) => (
-            funcinst.instance,
-            funcinst.funcidx,
-            CallDispatchTarget::AsyncHost(*fp),
-            std::ptr::null(),
-        ),
-    };
-    let instance_data = gc.instance(instance);
-    let memory0 = instance_data
-        .memory_slots
-        .first()
-        .copied()
-        .unwrap_or(crate::common::store::InstanceMemorySlot::None);
-    let module = gc.get_module(instance_data.module_addr);
-    let typeidx = module.functions[funcidx as usize];
-    let param_size = module.function_types[typeidx.0 as usize]
-        .0
-        .iter()
-        .map(|ty| ty.stack_size().u32())
-        .sum();
-    CallDispatchCache {
-        frame: CallFrameCache::from_cached_parts(funcaddr, instance, code_base, memory0.handle()),
-        param_size,
-        target,
-    }
 }
 
 fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMResult<()> {
@@ -475,7 +430,6 @@ pub async fn instantiate(
                             code: code.expr.into(),
                         },
                         funcidx,
-                        call_cache: None,
                     });
                     local_wasm_funcs.push((func_addr, op_lens));
                     func_addr
@@ -484,25 +438,11 @@ pub async fn instantiate(
                     instance: inst_id,
                     body: RuntimeFunctionBody::Host(fp),
                     funcidx,
-                    call_cache: None,
                 }),
             };
 
             funcs.push(func_addr);
             tracing::trace!("linking: {funcidx} => {func_addr:?}");
-        }
-
-        for (func_addr, op_lens) in local_wasm_funcs {
-            let mut rewritten = match &gc.get_func(func_addr).body {
-                RuntimeFunctionBody::Wasm { code, .. } => code.to_vec(),
-                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
-            };
-            predecode_direct_call_operands(&mut rewritten, &op_lens, &funcs);
-            let func = gc.get_func_mut(func_addr);
-            let RuntimeFunctionBody::Wasm { code, .. } = &mut func.body else {
-                unreachable!("rewritten local wasm function must remain wasm")
-            };
-            *code = rewritten.into();
         }
 
         for init in &global_init {
@@ -575,9 +515,26 @@ pub async fn instantiate(
             gc.place_instance_unchecked(inst_addr, &instance);
         }
         vm_try!(res);
+        let recipe_slots = instance
+            .funcs
+            .iter()
+            .map(|&funcaddr| gc.call_recipe_slot_for_func(funcaddr))
+            .collect::<Vec<_>>();
+        for (func_addr, op_lens) in local_wasm_funcs {
+            let mut rewritten = match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { code, .. } => code.to_vec(),
+                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
+            };
+            predecode_direct_call_operands(&mut rewritten, &op_lens, &recipe_slots);
+            let func = gc.get_func_mut(func_addr);
+            let RuntimeFunctionBody::Wasm { code, .. } = &mut func.body else {
+                unreachable!("rewritten local wasm function must remain wasm")
+            };
+            *code = rewritten.into();
+        }
         for &funcaddr in &instance.funcs {
-            let cache = precomputed_call_dispatch_cache(&gc, funcaddr);
-            gc.get_func_mut(funcaddr).call_cache = Some(cache);
+            let recipe = gc.build_call_recipe(funcaddr);
+            gc.set_call_recipe_for_func(funcaddr, recipe);
         }
         let addr = InstanceHandle::new(store, inst_id, instance_id);
 
@@ -788,8 +745,12 @@ pub fn link_host_function_with_function_idx(
     };
     let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
     let funcaddr = instance.funcs.as_slice()[funcidx as usize];
-    let func = gc.get_func_mut(funcaddr);
-    func.replace_host_code_pointer(f);
+    {
+        let func = gc.get_func_mut(funcaddr);
+        func.replace_host_code_pointer(f);
+    }
+    let recipe = gc.build_call_recipe(funcaddr);
+    gc.set_call_recipe_for_func(funcaddr, recipe);
 }
 pub fn link_host_function_with_export_name(
     addr: &InstanceHandle,
@@ -838,8 +799,12 @@ pub fn link_async_host_function_with_function_idx(
     };
     let instance = unsafe { &*gc.get_instance_unchecked(object_ref) };
     let funcaddr = instance.funcs.as_slice()[funcidx as usize];
-    let func = gc.get_func_mut(funcaddr);
-    func.replace_async_host_code_pointer(f);
+    {
+        let func = gc.get_func_mut(funcaddr);
+        func.replace_async_host_code_pointer(f);
+    }
+    let recipe = gc.build_call_recipe(funcaddr);
+    gc.set_call_recipe_for_func(funcaddr, recipe);
 }
 
 pub fn link_async_host_function_with_export_name(
@@ -893,19 +858,19 @@ mod tests {
     }
 
     #[test]
-    fn predecode_direct_call_operands_resolves_funcaddr_cache_key() {
+    fn predecode_direct_call_operands_resolves_recipe_slot() {
         let mut code = vec![
             Instr { op: vm::op_call },
             Instr {
                 operand: Operand {
-                    direct_call_target: DirectCallTarget::from_funcidx(1),
+                    call_recipe_ref: CallRecipeRef::from_funcidx(1),
                 },
             },
             Instr { op: vm::op_end },
         ];
-        predecode_direct_call_operands(&mut code, &[2, 1], &[ObjectRef(11), ObjectRef(22)]);
-        let target = unsafe { code[1].operand.direct_call_target };
+        predecode_direct_call_operands(&mut code, &[2, 1], &[7, 13]);
+        let target = unsafe { code[1].operand.call_recipe_ref };
         assert_eq!(target.funcidx, 1);
-        assert_eq!(target.resolved_funcaddr(), Some(ObjectRef(22)));
+        assert_eq!(target.resolved_recipe_slot(), Some(13));
     }
 }

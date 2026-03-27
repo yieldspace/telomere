@@ -417,6 +417,41 @@ impl DirectCallTarget {
         }
     }
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallRecipeRef {
+    pub funcidx: u32,
+    recipe_slot_plus_one: u32,
+}
+
+impl CallRecipeRef {
+    pub const fn from_funcidx(funcidx: u32) -> Self {
+        Self {
+            funcidx,
+            recipe_slot_plus_one: 0,
+        }
+    }
+
+    pub const fn with_recipe_slot(self, recipe_slot: u32) -> Self {
+        Self {
+            funcidx: self.funcidx,
+            recipe_slot_plus_one: match recipe_slot.checked_add(1) {
+                Some(value) => value,
+                None => panic!("call recipe slot overflow"),
+            },
+        }
+    }
+
+    pub const fn resolved_recipe_slot(self) -> Option<u32> {
+        if self.recipe_slot_plus_one == 0 {
+            None
+        } else {
+            Some(self.recipe_slot_plus_one - 1)
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub union Operand {
     pub i32: i32,
@@ -430,6 +465,7 @@ pub union Operand {
     pub drop_size: u32,
     pub local_addr: u32,
     pub select: u32,
+    pub call_recipe_ref: CallRecipeRef,
     pub direct_call_target: DirectCallTarget,
     pub memarg: MemArg,
     pub block_return: BlockReturn,

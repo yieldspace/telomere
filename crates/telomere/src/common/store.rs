@@ -146,11 +146,15 @@ pub(crate) enum CallDispatchTarget {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CallDispatchCache {
+pub(crate) struct CallRecipe {
     pub(crate) frame: CallFrameCache,
     pub(crate) param_size: u32,
+    pub(crate) local_size: u32,
+    pub(crate) return_arity: u32,
     pub(crate) target: CallDispatchTarget,
 }
+
+pub(crate) type CallDispatchCache = CallRecipe;
 
 impl fmt::Debug for FunctionBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -171,7 +175,6 @@ pub struct FunctionInstanceData {
     pub instance: InstanceId,
     pub funcidx: u32,
     pub body: FunctionBody,
-    pub(crate) call_cache: Option<CallDispatchCache>,
 }
 
 impl FunctionInstanceData {
@@ -228,12 +231,10 @@ impl FunctionInstanceData {
 
     pub(crate) fn replace_host_code_pointer(&mut self, fp: HostFunction) {
         self.body = FunctionBody::Host(fp);
-        self.call_cache = None;
     }
 
     pub(crate) fn replace_async_host_code_pointer(&mut self, fp: AsyncHostFunction) {
         self.body = FunctionBody::AsyncHost(fp);
-        self.call_cache = None;
     }
 }
 
@@ -325,6 +326,7 @@ pub struct StoreInner {
     modules: Vec<ModuleInstance>,
     instances: Vec<InstanceData>,
     funcs: Vec<FunctionInstanceData>,
+    call_recipes: Vec<Option<CallRecipe>>,
     tables: Vec<super::TableInstance>,
     globals: Vec<GlobalValue>,
     local_memories: Vec<LocalMemoryObject>,
@@ -566,6 +568,7 @@ impl StoreInner {
     pub(crate) fn alloc_func(&mut self, func: FunctionInstanceData) -> FuncId {
         let id = FuncId::from_index(self.funcs.len());
         self.funcs.push(func);
+        self.call_recipes.push(None);
         id
     }
 
@@ -592,6 +595,76 @@ impl StoreInner {
     pub(crate) fn new_func(&mut self, func: &FunctionInstanceData) -> ObjectRef {
         let id = self.alloc_func(func.clone());
         encode_object_ref(ObjectKind::Function, id.raw())
+    }
+
+    fn call_recipe_slot_for_func_addr(&self, addr: ObjectRef) -> usize {
+        let (kind, index) = decode_object_ref(addr);
+        assert_eq!(kind, ObjectKind::Function);
+        index
+    }
+
+    pub(crate) fn call_recipe_slot_for_func(&self, addr: ObjectRef) -> u32 {
+        u32::try_from(self.call_recipe_slot_for_func_addr(addr))
+            .expect("call recipe slot exceeds u32::MAX")
+    }
+
+    pub(crate) fn call_recipe(&self, slot: u32) -> Option<CallRecipe> {
+        self.call_recipes.get(slot as usize).copied().flatten()
+    }
+
+    pub(crate) fn set_call_recipe_for_func(&mut self, addr: ObjectRef, recipe: CallRecipe) {
+        let slot = self.call_recipe_slot_for_func_addr(addr);
+        self.call_recipes[slot] = Some(recipe);
+    }
+
+    pub(crate) fn build_call_recipe(&self, funcaddr: ObjectRef) -> CallRecipe {
+        let funcinst = self.get_func(funcaddr);
+        let (target, code_base, local_size) = match &funcinst.body {
+            FunctionBody::Wasm { locals, code } => (
+                CallDispatchTarget::Wasm {
+                    local_size: locals.byte_size() as u32,
+                },
+                code.as_ptr(),
+                locals.byte_size() as u32,
+            ),
+            FunctionBody::Host(fp) => (CallDispatchTarget::Host(*fp), std::ptr::null(), 0),
+            FunctionBody::AsyncHost(fp) => {
+                (CallDispatchTarget::AsyncHost(*fp), std::ptr::null(), 0)
+            }
+        };
+        let instance_data = self.instance(funcinst.instance);
+        let memory0 = instance_data
+            .memory_slots
+            .first()
+            .copied()
+            .unwrap_or(InstanceMemorySlot::None);
+        let module = self.get_module(instance_data.module_addr);
+        let typeidx = module.functions[funcinst.funcidx as usize];
+        let functype = &module.function_types[typeidx.0 as usize];
+        let param_size = functype.0.iter().map(|ty| ty.stack_size().u32()).sum();
+        let return_arity = u32::try_from(functype.1 .0.len()).expect("return arity exceeds u32");
+        CallRecipe {
+            frame: CallFrameCache::from_cached_parts(
+                funcaddr,
+                funcinst.instance,
+                code_base,
+                memory0.handle(),
+            ),
+            param_size,
+            local_size,
+            return_arity,
+            target,
+        }
+    }
+
+    pub(crate) fn ensure_call_recipe_for_func(&mut self, funcaddr: ObjectRef) -> CallRecipe {
+        let slot = self.call_recipe_slot_for_func_addr(funcaddr);
+        if let Some(recipe) = self.call_recipes[slot] {
+            return recipe;
+        }
+        let recipe = self.build_call_recipe(funcaddr);
+        self.call_recipes[slot] = Some(recipe);
+        recipe
     }
 
     pub(crate) fn alloc_table(&mut self, table: super::TableInstance) -> TableId {

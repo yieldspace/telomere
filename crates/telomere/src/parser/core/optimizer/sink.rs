@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ptr;
 
-use crate::common::{DirectCallTarget, Instr, Op, Operand};
+use crate::common::{CallRecipeRef, Instr, Op, Operand};
 use crate::{
     common::{BlockReturn, LoopParam, MemArg},
     runtime::vm,
@@ -63,7 +63,7 @@ pub(crate) enum PackedOperand {
     F32(f32),
     F64(f64),
     U32(u32),
-    DirectCallTarget(DirectCallTarget),
+    CallRecipeRef(CallRecipeRef),
     LocalAddr(u32),
     SelectWidth(u32),
     JumpTarget(u32),
@@ -87,8 +87,8 @@ impl PackedOperand {
             Self::F32(value) => Operand { f32: value },
             Self::F64(value) => Operand { f64: value },
             Self::U32(value) => Operand { u32: value },
-            Self::DirectCallTarget(value) => Operand {
-                direct_call_target: value,
+            Self::CallRecipeRef(value) => Operand {
+                call_recipe_ref: value,
             },
             Self::LocalAddr(value) => Operand { local_addr: value },
             Self::SelectWidth(value) => Operand { select: value },
@@ -197,7 +197,7 @@ fn pack_operands(
     if is_direct_call_op(op) {
         return operands
             .iter()
-            .map(|operand| PackedOperand::DirectCallTarget(unsafe { operand.direct_call_target }))
+            .map(|operand| PackedOperand::CallRecipeRef(unsafe { operand.call_recipe_ref }))
             .collect();
     }
     if let Some(packed) = pack_fused_local_control_operands(op, operands) {
@@ -427,7 +427,7 @@ pub(crate) fn verify_packed_stream(stream: &PackedOpStream) -> bool {
             && !op
                 .operands
                 .iter()
-                .all(|operand| matches!(operand, PackedOperand::DirectCallTarget(_)))
+                .all(|operand| matches!(operand, PackedOperand::CallRecipeRef(_)))
         {
             return false;
         }
@@ -888,7 +888,7 @@ mod tests {
                 source_start: Some(6),
                 op: vm::op_call as Op,
                 operands: vec![Operand {
-                    direct_call_target: DirectCallTarget::from_funcidx(7),
+                    call_recipe_ref: CallRecipeRef::from_funcidx(7),
                 }],
             },
         ];
@@ -907,7 +907,7 @@ mod tests {
         ));
         assert!(matches!(
             packed.ops[3].operands[0],
-            PackedOperand::DirectCallTarget(target) if target == DirectCallTarget::from_funcidx(7)
+            PackedOperand::CallRecipeRef(target) if target == CallRecipeRef::from_funcidx(7)
         ));
     }
 

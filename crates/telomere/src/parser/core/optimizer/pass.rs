@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    common::{DirectCallTarget, FuncIdx, FuncType, Instr, LocalsData, Op, Operand, ValType},
+    common::{CallRecipeRef, FuncIdx, FuncType, Instr, LocalsData, Op, Operand, ValType},
     runtime::vm,
 };
 
@@ -700,7 +700,7 @@ fn block_operand_to_raw_for_op(op: Op, operand: &BlockOperand) -> Operand {
         BlockOperand::F32(value) => Operand { f32: *value },
         BlockOperand::F64(value) => Operand { f64: *value },
         BlockOperand::U32(value) if is_direct_call_op(op) => Operand {
-            direct_call_target: DirectCallTarget::from_funcidx(*value),
+            call_recipe_ref: CallRecipeRef::from_funcidx(*value),
         },
         BlockOperand::U32(value) => Operand { u32: *value },
         BlockOperand::LocalAddr(value) => Operand { local_addr: *value },

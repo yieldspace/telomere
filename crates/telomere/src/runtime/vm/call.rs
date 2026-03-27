@@ -1,49 +1,8 @@
 use super::*;
 
 #[cold]
-fn build_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDispatchCache {
-    let (instance, funcidx, target, code_base) = {
-        let funcinst = ctx.gc.get_func(funcaddr);
-        let target = match &funcinst.body {
-            crate::common::store::FunctionBody::Wasm { locals, code } => (
-                CallDispatchTarget::Wasm {
-                    local_size: locals.byte_size() as u32,
-                },
-                code.as_ptr(),
-            ),
-            crate::common::store::FunctionBody::Host(fp) => {
-                (CallDispatchTarget::Host(*fp), std::ptr::null())
-            }
-            crate::common::store::FunctionBody::AsyncHost(fp) => {
-                (CallDispatchTarget::AsyncHost(*fp), std::ptr::null())
-            }
-        };
-        (funcinst.instance, funcinst.funcidx, target.0, target.1)
-    };
-    let instance_data = ctx.gc.instance(instance);
-    let memory0 = instance_data
-        .memory_slots
-        .first()
-        .copied()
-        .unwrap_or(crate::common::store::InstanceMemorySlot::None);
-    let module = ctx.gc.get_module(instance_data.module_addr);
-    let typeidx = module.functions[funcidx as usize];
-    let param_size = result_type_size(&module.function_types[typeidx.0 as usize].0) as u32;
-    CallDispatchCache {
-        frame: CallFrameCache::from_cached_parts(funcaddr, instance, code_base, memory0.handle()),
-        param_size,
-        target,
-    }
-}
-
-#[inline(always)]
-fn ensure_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDispatchCache {
-    if let Some(cache) = ctx.gc.get_func(funcaddr).call_cache {
-        return cache;
-    }
-    let cache = build_call_dispatch_cache(funcaddr, ctx);
-    ctx.gc.get_func_mut(funcaddr).call_cache = Some(cache);
-    cache
+fn ensure_call_recipe(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDispatchCache {
+    ctx.gc.ensure_call_recipe_for_func(funcaddr)
 }
 
 // Required for direct function call threading.
@@ -64,7 +23,7 @@ fn ensure_call_dispatch_cache(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> 
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
 unsafe fn internal_op_call(
     return_addr: *const Instr,
-    funcaddr: ObjectRef,
+    recipe: CallDispatchCache,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
@@ -73,33 +32,33 @@ unsafe fn internal_op_call(
     } else {
         "op_call"
     });
-    let cache = ensure_call_dispatch_cache(funcaddr, ctx);
     trace!(
-        "op_call_internal: {:?}({:?})  {funcaddr:?}",
-        ctx.gc.object_ref_for_instance(cache.frame.instance),
-        ctx.gc.instance(cache.frame.instance).module_addr
+        "op_call_internal: {:?}({:?})  {:?}",
+        ctx.gc.object_ref_for_instance(recipe.frame.instance),
+        ctx.gc.instance(recipe.frame.instance).module_addr,
+        recipe.frame.code_addr
     );
-    let param_size = cache.param_size as usize;
+    let param_size = recipe.param_size as usize;
     let return_pc = cached_return_pc(return_addr, ctx);
-    match cache.target {
+    match recipe.target {
         CallDispatchTarget::Host(fp) => {
             if is_return_call {
                 let local_reference = vm_try!(ctx.stack.function_return_call_cached(
                     &ctx.local_reference,
                     param_size,
                     0,
-                    cache.frame,
+                    recipe.frame,
                 ));
-                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             } else {
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
                     0,
-                    cache.frame,
+                    recipe.frame,
                     ctx.local_reference,
                     return_pc,
                 ));
-                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             }
             invoke_sync_host_function_with(return_addr, ctx, fp)
         }
@@ -109,18 +68,18 @@ unsafe fn internal_op_call(
                     &ctx.local_reference,
                     param_size,
                     0,
-                    cache.frame,
+                    recipe.frame,
                 ));
-                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             } else {
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
                     0,
-                    cache.frame,
+                    recipe.frame,
                     ctx.local_reference,
                     return_pc,
                 ));
-                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             }
             start_async_host_call_with(return_addr, ctx, fp)
         }
@@ -131,20 +90,20 @@ unsafe fn internal_op_call(
                     &ctx.local_reference,
                     param_size,
                     local_size,
-                    cache.frame,
+                    recipe.frame,
                 ));
-                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             } else {
                 let local_reference = vm_try!(ctx.stack.function_call_cached(
                     param_size,
                     local_size,
-                    cache.frame,
+                    recipe.frame,
                     ctx.local_reference,
                     return_pc,
                 ));
-                ctx.set_local_reference_with_frame(local_reference, cache.frame);
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
             }
-            VMResult::Success(CallOutcome::Immediate(cache.frame.code_base))
+            VMResult::Success(CallOutcome::Immediate(recipe.frame.code_base))
         }
     }
 }
@@ -162,12 +121,32 @@ fn cached_return_pc(return_addr: *const Instr, ctx: &ExecuteContext) -> StablePc
 }
 
 #[inline(always)]
-unsafe fn decode_direct_call_target(tail_code: *const Instr, ctx: &ExecuteContext) -> ObjectRef {
-    let target = (*tail_code).operand.direct_call_target;
-    if let Some(funcaddr) = target.resolved_funcaddr() {
-        funcaddr
+unsafe fn decode_direct_call_recipe(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> CallDispatchCache {
+    let recipe_ref = (*tail_code).operand.call_recipe_ref;
+    if let Some(recipe_slot) = recipe_ref.resolved_recipe_slot() {
+        if let Some(recipe) = ctx.gc.call_recipe(recipe_slot) {
+            return recipe;
+        }
+    }
+    let funcaddr = ctx.instance().funcs.as_slice()[recipe_ref.funcidx as usize];
+    ensure_call_recipe(funcaddr, ctx)
+}
+
+#[inline(always)]
+unsafe fn ensure_indirect_call_recipe(
+    funcaddr: ObjectRef,
+    ctx: &mut ExecuteContext,
+) -> CallDispatchCache {
+    if let Some(recipe) = ctx
+        .gc
+        .call_recipe(ctx.gc.call_recipe_slot_for_func(funcaddr))
+    {
+        recipe
     } else {
-        ctx.instance().funcs.as_slice()[target.funcidx as usize]
+        ensure_call_recipe(funcaddr, ctx)
     }
 }
 
@@ -191,8 +170,8 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    let funcaddr = decode_direct_call_target(tail_code, ctx);
-    let outcome = internal_op_call(tail_code.offset(1), funcaddr, ctx, false);
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    let outcome = internal_op_call(tail_code.offset(1), recipe, ctx, false);
     match vm_try!(outcome) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
@@ -236,8 +215,8 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    let funcaddr = decode_direct_call_target(tail_code, ctx);
-    let outcome = internal_op_call(tail_code.offset(1), funcaddr, ctx, true);
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    let outcome = internal_op_call(tail_code.offset(1), recipe, ctx, true);
     match vm_try!(outcome) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
@@ -318,9 +297,10 @@ unsafe fn internal_op_call_indirect(
     if actual_ft != expected_ft {
         return VMResult::CallIndirectInvalidType;
     }
+    let recipe = ensure_indirect_call_recipe(func_addr, ctx);
     let outcome = vm_try!(internal_op_call(
         tail_code.offset(2),
-        func_addr,
+        recipe,
         ctx,
         is_return_call
     ));
