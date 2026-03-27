@@ -2068,21 +2068,6 @@ impl EffectResultSpillPlan {
     }
 }
 
-#[derive(Default)]
-struct MemoryRelowerPlan {
-    skip_ops: HashSet<usize>,
-    specialized_ops: HashMap<usize, SpecializedMemoryLowering>,
-    #[cfg(debug_assertions)]
-    absorbed_by: HashMap<usize, usize>,
-}
-
-#[derive(Default)]
-struct LocalControlRelowerPlan {
-    skip_ops: HashSet<usize>,
-    specialized_ops: HashMap<usize, SpecializedLocalControlLowering>,
-    specialized_terminator: Option<SpecializedLocalControlLowering>,
-}
-
 #[derive(Clone)]
 struct SpecializedLocalControlLowering {
     source_start: Option<usize>,
@@ -2453,28 +2438,6 @@ fn derive_i32_compare_loop_value_shape(
         }
         _ => None,
     }
-}
-
-fn build_memory_relower_plan(
-    body: &BlockBody,
-    graph: &ValueGraph,
-    spill_plan: &EffectResultSpillPlan,
-) -> MemoryRelowerPlan {
-    let mut plan = MemoryRelowerPlan::default();
-    for (op_idx, op) in body.ops.iter().enumerate() {
-        let Some((spec, absorbed_ops)) =
-            build_specialized_memory_lowering(body, graph, spill_plan, op_idx, op)
-        else {
-            continue;
-        };
-        #[cfg(debug_assertions)]
-        for absorbed_idx in &absorbed_ops {
-            plan.absorbed_by.insert(*absorbed_idx, op_idx);
-        }
-        plan.skip_ops.extend(absorbed_ops);
-        plan.specialized_ops.insert(op_idx, spec);
-    }
-    plan
 }
 
 fn build_specialized_memory_lowering(
@@ -2891,25 +2854,46 @@ fn relower_block_body(
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
 ) -> Vec<RecordEmit> {
-    let local_control_plan = build_local_control_relower_plan(body, graph);
-    debug_assert!(verify_provider_elimination(
-        body,
-        graph,
-        &local_control_plan
-    ));
-    let memory_plan = build_memory_relower_plan(body, graph, spill_plan);
-    debug_assert!(local_control_plan
-        .skip_ops
-        .is_disjoint(&memory_plan.skip_ops));
-    debug_verify_memory_relower_plan(body, &memory_plan);
-    let mut records = Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
-    for (op_idx, op) in body.ops.iter().enumerate() {
-        if local_control_plan.skip_ops.contains(&op_idx) || memory_plan.skip_ops.contains(&op_idx) {
+    let mut skipped_ops = HashSet::new();
+    let mut records_rev =
+        Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
+
+    if let Some(terminator) = &body.terminator {
+        if let Some(spec) = build_specialized_br_if_lowering(graph, body, terminator) {
+            debug_assert!(verify_specialized_local_control_lowering(body, &spec));
+            skipped_ops.extend(spec.absorbed_ops.iter().copied());
+            records_rev.push(relower_specialized_local_control_terminator(
+                &spec, spill_plan,
+            ));
+        } else if terminator.kind != BlockTerminatorKind::Loop {
+            records_rev.push(relower_block_terminator(terminator, spill_plan));
+        }
+    }
+
+    for (op_idx, op) in body.ops.iter().enumerate().rev() {
+        if skipped_ops.contains(&op_idx) {
             continue;
         }
-        let lowered = if let Some(spec) = local_control_plan.specialized_ops.get(&op_idx) {
-            relower_specialized_local_control_op(spec, spill_plan)
-        } else if let Some(spec) = memory_plan.specialized_ops.get(&op_idx) {
+
+        let lowered = if let Some(spec) =
+            build_specialized_local_set_tee_lowering(graph, body, op_idx, op)
+                .or_else(|| build_specialized_local_root_lowering(graph, body, op_idx, op))
+        {
+            debug_assert!(verify_specialized_local_control_lowering(body, &spec));
+            debug_assert!(spec
+                .absorbed_ops
+                .iter()
+                .all(|absorbed_idx| !skipped_ops.contains(absorbed_idx)));
+            skipped_ops.extend(spec.absorbed_ops.iter().copied());
+            relower_specialized_local_control_op(&spec, spill_plan)
+        } else if let Some((spec, absorbed_ops)) =
+            build_specialized_memory_lowering(body, graph, spill_plan, op_idx, op)
+        {
+            debug_verify_specialized_memory_lowering(body, op_idx, &spec, &absorbed_ops);
+            debug_assert!(absorbed_ops
+                .iter()
+                .all(|absorbed_idx| !skipped_ops.contains(absorbed_idx)));
+            skipped_ops.extend(absorbed_ops);
             RecordEmit {
                 source_start: op.source_start,
                 op: spec.op,
@@ -2922,9 +2906,9 @@ fn relower_block_body(
         } else {
             relower_block_op(op, spill_plan)
         };
-        records.push(lowered);
+
         if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
-            records.push(RecordEmit {
+            records_rev.push(RecordEmit {
                 source_start: None,
                 op: local_tee_op(slot.size),
                 operands: vec![Operand {
@@ -2932,17 +2916,11 @@ fn relower_block_body(
                 }],
             });
         }
+        records_rev.push(lowered);
     }
-    if let Some(spec) = local_control_plan.specialized_terminator.as_ref() {
-        records.push(relower_specialized_local_control_terminator(
-            spec, spill_plan,
-        ));
-    } else if let Some(terminator) = &body.terminator {
-        if terminator.kind != BlockTerminatorKind::Loop {
-            records.push(relower_block_terminator(terminator, spill_plan));
-        }
-    }
-    records
+
+    records_rev.reverse();
+    records_rev
 }
 
 fn relower_specialized_local_control_op(
@@ -3016,42 +2994,41 @@ fn full_stack_live_on_unreachable_control_transfer(op: Op) -> bool {
         || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
 }
 
-fn debug_verify_memory_relower_plan(_body: &BlockBody, _plan: &MemoryRelowerPlan) {
+fn debug_verify_specialized_memory_lowering(
+    _body: &BlockBody,
+    _op_idx: usize,
+    _spec: &SpecializedMemoryLowering,
+    _absorbed_ops: &BTreeSet<usize>,
+) {
     #[cfg(debug_assertions)]
     {
-        for (op_idx, spec) in &_plan.specialized_ops {
-            let original = &_body.ops[*op_idx];
-            debug_assert!(matches!(
-                original.kind,
-                BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore
-            ));
-            debug_assert!(specialized_memory_op(original.op)
-                .is_some_and(|candidate| std::ptr::fn_addr_eq(candidate, spec.op)));
-            debug_assert!(same_memarg(block_op_memarg(original), spec_memarg(spec)));
-            debug_assert_eq!(block_op_index_memidx(original), spec_memidx(spec));
-            if original.kind == BlockOpKind::MemoryStore {
-                if let Some(value) = memory_store_value_input(original) {
-                    if let Some(value_slice) =
-                        find_contiguous_trailing_value_slice(_body, *op_idx, value)
-                    {
-                        debug_assert_eq!(
-                            value_slice.op_indices.last().copied(),
-                            op_idx.checked_sub(1),
-                            "store specialization must keep the trailing value suffix immediately before the store",
+        let original = &_body.ops[_op_idx];
+        debug_assert!(matches!(
+            original.kind,
+            BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore
+        ));
+        debug_assert!(specialized_memory_op(original.op)
+            .is_some_and(|candidate| std::ptr::fn_addr_eq(candidate, _spec.op)));
+        debug_assert!(same_memarg(block_op_memarg(original), spec_memarg(_spec)));
+        debug_assert_eq!(block_op_index_memidx(original), spec_memidx(_spec));
+        if original.kind == BlockOpKind::MemoryStore {
+            if let Some(value) = memory_store_value_input(original) {
+                if let Some(value_slice) =
+                    find_contiguous_trailing_value_slice(_body, _op_idx, value)
+                {
+                    debug_assert_eq!(
+                        value_slice.op_indices.last().copied(),
+                        _op_idx.checked_sub(1),
+                        "store specialization must keep the trailing value suffix immediately before the store",
+                    );
+                    for value_idx in &value_slice.op_indices {
+                        debug_assert!(
+                            !_absorbed_ops.contains(value_idx),
+                            "store specialization must not absorb value producer ops from the trailing value slice: store_op_idx={_op_idx} source_start={:?} value_op_idx={value_idx} value_slice={:?} absorbed={_absorbed_ops:?} body={}",
+                            original.source_start,
+                            value_slice.op_indices,
+                            debug_body_window(_body, value_slice.start_idx.saturating_sub(3), _op_idx + 1),
                         );
-                        for value_idx in &value_slice.op_indices {
-                            let absorbed_by = _plan.absorbed_by.get(value_idx).copied();
-                            debug_assert!(
-                                !_plan.skip_ops.contains(value_idx)
-                                    || absorbed_by
-                                        .is_some_and(|consumer| value_slice.op_indices.contains(&consumer)),
-                                "store specialization must not absorb value producer ops outside the trailing value slice: store_op_idx={op_idx} source_start={:?} value_op_idx={value_idx} value_slice={:?} absorbed={:?} absorbed_by={absorbed_by:?} body={}",
-                                original.source_start,
-                                value_slice.op_indices,
-                                _plan.skip_ops,
-                                debug_body_window(_body, value_slice.start_idx.saturating_sub(3), op_idx + 1),
-                            );
-                        }
                     }
                 }
             }
@@ -3092,47 +3069,40 @@ fn debug_block_op_summary(idx: usize, op: &BlockOp) -> String {
 
 #[cold]
 #[inline(never)]
-fn verify_provider_elimination(
+fn verify_specialized_local_control_lowering(
     body: &BlockBody,
-    _graph: &ValueGraph,
-    plan: &LocalControlRelowerPlan,
+    spec: &SpecializedLocalControlLowering,
 ) -> bool {
+    if spec.consumer_after_idx > body.ops.len() {
+        return false;
+    }
     let mut seen_absorbed = HashSet::new();
-    for spec in plan
-        .specialized_ops
-        .values()
-        .chain(plan.specialized_terminator.iter())
-    {
-        if spec.consumer_after_idx > body.ops.len() {
+    for absorbed_idx in &spec.absorbed_ops {
+        if !seen_absorbed.insert(*absorbed_idx) || *absorbed_idx >= spec.consumer_after_idx {
             return false;
         }
-        for absorbed_idx in &spec.absorbed_ops {
-            if !seen_absorbed.insert(*absorbed_idx) || *absorbed_idx >= spec.consumer_after_idx {
-                return false;
-            }
-            let Some(op) = body.ops.get(*absorbed_idx) else {
-                return false;
-            };
-            if matches!(op.kind, BlockOpKind::LocalSet | BlockOpKind::LocalTee) {
+        let Some(op) = body.ops.get(*absorbed_idx) else {
+            return false;
+        };
+        if matches!(op.kind, BlockOpKind::LocalSet | BlockOpKind::LocalTee) {
+            continue;
+        }
+        let Some(value) = block_op_single_result(op) else {
+            if matches!(
+                op.kind,
+                BlockOpKind::Const
+                    | BlockOpKind::LocalGet
+                    | BlockOpKind::PureUnary(_)
+                    | BlockOpKind::PureBinary(_)
+            ) {
                 continue;
             }
-            let Some(value) = block_op_single_result(op) else {
-                if matches!(
-                    op.kind,
-                    BlockOpKind::Const
-                        | BlockOpKind::LocalGet
-                        | BlockOpKind::PureUnary(_)
-                        | BlockOpKind::PureBinary(_)
-                ) {
-                    continue;
-                }
-                return false;
-            };
-            if value_used_after(body, spec.consumer_after_idx, value)
-                || value_feeds_memory_address(body, spec.consumer_after_idx, value)
-            {
-                return false;
-            }
+            return false;
+        };
+        if value_used_after(body, spec.consumer_after_idx, value)
+            || value_feeds_memory_address(body, spec.consumer_after_idx, value)
+        {
+            return false;
         }
     }
     true
@@ -6070,42 +6040,6 @@ struct MemoryAccess {
 
 #[cold]
 #[inline(never)]
-fn build_local_control_relower_plan(
-    body: &BlockBody,
-    graph: &ValueGraph,
-) -> LocalControlRelowerPlan {
-    let mut plan = LocalControlRelowerPlan::default();
-    if let Some(terminator) = &body.terminator {
-        if let Some(spec) = build_specialized_br_if_lowering(graph, body, terminator) {
-            plan.skip_ops.extend(spec.absorbed_ops.iter().copied());
-            plan.specialized_terminator = Some(spec);
-        }
-    }
-    for (op_idx, op) in body.ops.iter().enumerate() {
-        if plan.skip_ops.contains(&op_idx) {
-            continue;
-        }
-        let Some(spec) = build_specialized_local_set_tee_lowering(graph, body, op_idx, op) else {
-            continue;
-        };
-        plan.skip_ops.extend(spec.absorbed_ops.iter().copied());
-        plan.specialized_ops.insert(op_idx, spec);
-    }
-    for (op_idx, op) in body.ops.iter().enumerate() {
-        if plan.skip_ops.contains(&op_idx) {
-            continue;
-        }
-        let Some(spec) = build_specialized_local_root_lowering(graph, body, op_idx, op) else {
-            continue;
-        };
-        plan.skip_ops.extend(spec.absorbed_ops.iter().copied());
-        plan.specialized_ops.insert(op_idx, spec);
-    }
-    plan
-}
-
-#[cold]
-#[inline(never)]
 fn build_specialized_local_root_lowering(
     graph: &ValueGraph,
     body: &BlockBody,
@@ -8514,6 +8448,28 @@ mod tests {
         value
     }
 
+    fn expect_specialized_local_control_consumer(
+        graph: &ValueGraph,
+        body: &BlockBody,
+        op_idx: usize,
+    ) -> SpecializedLocalControlLowering {
+        let op = &body.ops[op_idx];
+        build_specialized_local_set_tee_lowering(graph, body, op_idx, op)
+            .or_else(|| build_specialized_local_root_lowering(graph, body, op_idx, op))
+            .expect("consumer should specialize")
+    }
+
+    fn expect_specialized_br_if(
+        graph: &ValueGraph,
+        body: &BlockBody,
+    ) -> SpecializedLocalControlLowering {
+        let terminator = body
+            .terminator
+            .as_ref()
+            .expect("body should have terminator");
+        build_specialized_br_if_lowering(graph, body, terminator).expect("br_if should specialize")
+    }
+
     #[test]
     fn merge_states_preserves_entry_local_memory_alias_across_join() {
         let first = DecodedInstr {
@@ -9851,18 +9807,14 @@ mod tests {
             terminator: None,
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_ops
-            .get(&2)
-            .expect("i32.add consumer should specialize");
+        let spec = expect_specialized_local_control_consumer(&graph, &body, 2);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_i32_const_add as Op
         ));
         assert_eq!(spec.source_start, Some(10));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -10005,18 +9957,14 @@ mod tests {
             terminator: None,
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_ops
-            .get(&3)
-            .expect("local.set consumer should specialize");
+        let spec = expect_specialized_local_control_consumer(&graph, &body, 3);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_i32_const_add_set4 as Op
         ));
         assert_eq!(spec.source_start, Some(20));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -10157,18 +10105,14 @@ mod tests {
             }),
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_terminator
-            .as_ref()
-            .expect("slot-preserving local-like leaf should specialize br_if");
+        let spec = expect_specialized_br_if(&graph, &body);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_i32_const_add_br_if as Op
         ));
         assert_eq!(spec.source_start, Some(30));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -10268,18 +10212,14 @@ mod tests {
             }),
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_terminator
-            .as_ref()
-            .expect("eqz br_if should specialize even after source spans are stripped");
+        let spec = expect_specialized_br_if(&graph, &body);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_i32_eqz_br_if as Op
         ));
         assert_eq!(spec.source_start, Some(24));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -10379,18 +10319,14 @@ mod tests {
             }),
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_terminator
-            .as_ref()
-            .expect("block-argument eqz br_if should specialize");
+        let spec = expect_specialized_br_if(&graph, &body);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_i32_eqz_br_if as Op
         ));
         assert_eq!(spec.source_start, Some(20));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -10485,18 +10421,14 @@ mod tests {
             }),
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_terminator
-            .as_ref()
-            .expect("block-argument eqz br_if should specialize from raw body shape");
+        let spec = expect_specialized_br_if(&graph, &body);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_i32_eqz_br_if as Op
         ));
         assert_eq!(spec.source_start, Some(20));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -10710,18 +10642,14 @@ mod tests {
             }),
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_terminator
-            .as_ref()
-            .expect("slot-ref eqz br_if should specialize");
+        let spec = expect_specialized_br_if(&graph, &body);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_i32_eqz_br_if as Op
         ));
         assert_eq!(spec.source_start, Some(22));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -10834,18 +10762,14 @@ mod tests {
             }),
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_terminator
-            .as_ref()
-            .expect("slot-ref const compare br_if should specialize");
+        let spec = expect_specialized_br_if(&graph, &body);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_i32_const_compare_br_if as Op
         ));
         assert_eq!(spec.source_start, Some(22));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -10961,18 +10885,14 @@ mod tests {
             }),
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
-        let spec = plan
-            .specialized_terminator
-            .as_ref()
-            .expect("slot-ref local compare br_if should specialize");
+        let spec = expect_specialized_br_if(&graph, &body);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
             vm::op_local_get4_local_get4_compare_br_if as Op
         ));
         assert_eq!(spec.source_start, Some(22));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
-        assert!(verify_provider_elimination(&body, &graph, &plan));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
     }
 
     #[test]
@@ -11033,12 +10953,15 @@ mod tests {
             }),
         };
 
-        let plan = build_local_control_relower_plan(&body, &graph);
         assert!(
-            plan.specialized_terminator.is_none(),
+            build_specialized_br_if_lowering(
+                &graph,
+                &body,
+                body.terminator.as_ref().expect("terminator")
+            )
+            .is_none(),
             "special function return must not be specialized as br_if"
         );
-        assert!(verify_provider_elimination(&body, &graph, &plan));
     }
 
     #[test]
