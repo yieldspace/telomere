@@ -2542,11 +2542,11 @@ fn match_direct_address_shape(
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
     op_idx: usize,
-    value: ValueRef,
+    _value: ValueRef,
 ) -> Option<MatchedAddressLowering> {
     let base_idx = op_idx.checked_sub(1)?;
     let base_op = body.ops.get(base_idx)?;
-    if block_op_single_result(base_op) != Some(value)
+    if block_op_any_local_get_slot(base_op, spill_plan).is_none()
         || !block_op_address_base_single_use(graph, body, op_idx + 1, base_op)
     {
         return None;
@@ -2564,13 +2564,13 @@ fn match_store_direct_address_shape(
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
     op_idx: usize,
-    address: ValueRef,
+    _address: ValueRef,
     value: ValueRef,
 ) -> Option<MatchedAddressLowering> {
     let value_slice = find_contiguous_trailing_value_slice(body, op_idx, value)?;
     let base_idx = value_slice.start_idx.checked_sub(1)?;
     let base_op = body.ops.get(base_idx)?;
-    if block_op_single_result(base_op) != Some(address)
+    if block_op_any_local_get_slot(base_op, spill_plan).is_none()
         || !block_op_address_base_single_use(graph, body, op_idx + 1, base_op)
     {
         return None;
@@ -2595,43 +2595,27 @@ fn match_offset_address_shape(
     if block_op_single_result(binary_op) != Some(value) || !block_op_single_use(graph, binary_op) {
         return None;
     }
-    let (lhs, rhs) = match binary_op.inputs.as_slice() {
-        [lhs, rhs] => (*lhs, *rhs),
+    match binary_op.inputs.as_slice() {
+        [_, _] => {}
         _ => return None,
-    };
+    }
     match binary_op.kind {
-        BlockOpKind::PureBinary(PureOpKind::I32Add) => match_adjacent_base_and_const(
-            body,
-            graph,
-            spill_plan,
-            op_idx + 1,
-            binary_idx,
-            lhs,
-            rhs,
-            false,
-        )
-        .or_else(|| {
-            match_adjacent_base_and_const(
-                body,
-                graph,
-                spill_plan,
-                op_idx + 1,
-                binary_idx,
-                rhs,
-                lhs,
-                false,
-            )
-        }),
-        BlockOpKind::PureBinary(PureOpKind::I32Sub) => match_adjacent_base_and_const(
-            body,
-            graph,
-            spill_plan,
-            op_idx + 1,
-            binary_idx,
-            lhs,
-            rhs,
-            true,
-        ),
+        BlockOpKind::PureBinary(PureOpKind::I32Add) => {
+            match_adjacent_base_and_const(body, graph, spill_plan, op_idx + 1, binary_idx, false)
+                .or_else(|| {
+                    match_adjacent_base_and_const(
+                        body,
+                        graph,
+                        spill_plan,
+                        op_idx + 1,
+                        binary_idx,
+                        false,
+                    )
+                })
+        }
+        BlockOpKind::PureBinary(PureOpKind::I32Sub) => {
+            match_adjacent_base_and_const(body, graph, spill_plan, op_idx + 1, binary_idx, true)
+        }
         _ => None,
     }
 }
@@ -2651,10 +2635,10 @@ fn match_store_offset_address_shape(
     {
         return None;
     }
-    let (lhs, rhs) = match binary_op.inputs.as_slice() {
-        [lhs, rhs] => (*lhs, *rhs),
+    match binary_op.inputs.as_slice() {
+        [_, _] => {}
         _ => return None,
-    };
+    }
     match binary_op.kind {
         BlockOpKind::PureBinary(PureOpKind::I32Add) => match_store_adjacent_base_and_const(
             body,
@@ -2662,8 +2646,6 @@ fn match_store_offset_address_shape(
             spill_plan,
             op_idx + 1,
             binary_idx,
-            lhs,
-            rhs,
             false,
         )
         .or_else(|| {
@@ -2673,8 +2655,6 @@ fn match_store_offset_address_shape(
                 spill_plan,
                 op_idx + 1,
                 binary_idx,
-                rhs,
-                lhs,
                 false,
             )
         }),
@@ -2684,37 +2664,26 @@ fn match_store_offset_address_shape(
             spill_plan,
             op_idx + 1,
             binary_idx,
-            lhs,
-            rhs,
             true,
         ),
         _ => None,
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn match_store_adjacent_base_and_const(
     body: &BlockBody,
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
     after_idx: usize,
     binary_idx: usize,
-    base_value: ValueRef,
-    const_value: ValueRef,
     negate_delta: bool,
 ) -> Option<MatchedAddressLowering> {
     let lhs_idx = binary_idx.checked_sub(2)?;
     let rhs_idx = binary_idx.checked_sub(1)?;
     let first = body.ops.get(lhs_idx)?;
     let second = body.ops.get(rhs_idx)?;
-    let (base_idx, base_op, const_idx, const_op) = match_adjacent_base_and_const_ops(
-        first,
-        lhs_idx,
-        second,
-        rhs_idx,
-        base_value,
-        const_value,
-    )?;
+    let (base_idx, base_op, const_idx, const_op) =
+        match_adjacent_base_and_const_ops(spill_plan, first, lhs_idx, second, rhs_idx)?;
     if !block_op_address_base_single_use(graph, body, after_idx, base_op)
         || !block_op_single_use(graph, const_op)
     {
@@ -2734,29 +2703,20 @@ fn match_store_adjacent_base_and_const(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn match_adjacent_base_and_const(
     body: &BlockBody,
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
     after_idx: usize,
     binary_idx: usize,
-    base_value: ValueRef,
-    const_value: ValueRef,
     negate_delta: bool,
 ) -> Option<MatchedAddressLowering> {
     let lhs_idx = binary_idx.checked_sub(2)?;
     let rhs_idx = binary_idx.checked_sub(1)?;
     let first = body.ops.get(lhs_idx)?;
     let second = body.ops.get(rhs_idx)?;
-    let (base_idx, base_op, const_idx, const_op) = match_adjacent_base_and_const_ops(
-        first,
-        lhs_idx,
-        second,
-        rhs_idx,
-        base_value,
-        const_value,
-    )?;
+    let (base_idx, base_op, const_idx, const_op) =
+        match_adjacent_base_and_const_ops(spill_plan, first, lhs_idx, second, rhs_idx)?;
     if !block_op_address_base_single_use(graph, body, after_idx, base_op)
         || !block_op_single_use(graph, const_op)
     {
@@ -2833,20 +2793,19 @@ fn producer_op_index_before(
 }
 
 fn match_adjacent_base_and_const_ops<'a>(
+    spill_plan: &EffectResultSpillPlan,
     first: &'a BlockOp,
     first_idx: usize,
     second: &'a BlockOp,
     second_idx: usize,
-    base_value: ValueRef,
-    const_value: ValueRef,
 ) -> Option<(usize, &'a BlockOp, usize, &'a BlockOp)> {
-    if block_op_single_result(first) == Some(base_value)
-        && block_op_single_result(second) == Some(const_value)
+    if block_op_any_local_get_slot(first, spill_plan).is_some()
+        && block_op_i32_const(second).is_some()
     {
         return Some((first_idx, first, second_idx, second));
     }
-    if block_op_single_result(second) == Some(base_value)
-        && block_op_single_result(first) == Some(const_value)
+    if block_op_any_local_get_slot(second, spill_plan).is_some()
+        && block_op_i32_const(first).is_some()
     {
         return Some((second_idx, second, first_idx, first));
     }
@@ -5625,24 +5584,22 @@ fn block_op_single_use(graph: &ValueGraph, op: &BlockOp) -> bool {
 
 fn block_op_address_base_single_use(
     graph: &ValueGraph,
-    body: &BlockBody,
-    next_idx: usize,
+    _body: &BlockBody,
+    _next_idx: usize,
     op: &BlockOp,
 ) -> bool {
     if op.kind != BlockOpKind::LocalGet {
         return false;
     }
-    block_op_single_result(op).is_some_and(|value| {
-        let node = &graph[value.0];
-        op.source_start.is_some()
-            && !value_feeds_memory_address(body, next_idx, value)
-            && !value_used_after(body, next_idx, value)
-            && (!node.is_effect_result()
-                || matches!(
-                    op.operands.first(),
-                    Some(BlockOperand::SpillValue(_) | BlockOperand::LocalAddr(_))
-                ))
-    })
+    let Some(value) = block_op_primary_result(op) else {
+        return false;
+    };
+    let node = &graph[value.0];
+    !node.is_effect_result()
+        || matches!(
+            op.operands.first(),
+            Some(BlockOperand::SpillValue(_) | BlockOperand::LocalAddr(_))
+        )
 }
 
 fn block_op_select_size(op: &BlockOp) -> Option<u32> {
@@ -5673,6 +5630,10 @@ fn block_op_single_result(op: &BlockOp) -> Option<ValueRef> {
     } else {
         None
     }
+}
+
+fn block_op_primary_result(op: &BlockOp) -> Option<ValueRef> {
+    op.values.last().copied()
 }
 
 fn value_feeds_memory_address(body: &BlockBody, start_idx: usize, value: ValueRef) -> bool {

@@ -167,6 +167,14 @@ mod tests {
             ),
             ("op_i32_load", vm::op_i32_load as crate::common::Op),
             ("op_i32_store", vm::op_i32_store as crate::common::Op),
+            (
+                "op_i32_load_local_base",
+                vm::op_i32_load_local_base as crate::common::Op,
+            ),
+            (
+                "op_i32_store_local_base",
+                vm::op_i32_store_local_base as crate::common::Op,
+            ),
             ("op_i32_load8_u", vm::op_i32_load8_u as crate::common::Op),
             (
                 "op_i32_load8_u_local_base",
@@ -2524,6 +2532,64 @@ mod tests {
             jump_target_for_start(&expr, br_start),
             Some(loop_start),
             "memory loop backedge must target loop header: {ops:?}"
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_local_base_memory_families_for_loop_invariant_base() {
+        let expr = function_expr(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $base i32) (param $remaining i32) (result i32)
+                local.get $base
+                i32.const 0
+                i32.store
+                block $done
+                  loop $loop
+                    local.get $remaining
+                    i32.eqz
+                    br_if $done
+
+                    local.get $base
+                    local.get $base
+                    i32.load
+                    i32.const 1
+                    i32.add
+                    i32.store
+
+                    local.get $remaining
+                    i32.const 1
+                    i32.sub
+                    local.set $remaining
+                    br $loop
+                  end
+                end
+                local.get $base
+                i32.load))
+            "#,
+        );
+        let ops = debug_decoded_ops(&expr);
+        let specialized_load = count_op(&expr, vm::op_i32_load_local_base as crate::common::Op);
+        let specialized_store = count_op(&expr, vm::op_i32_store_local_base as crate::common::Op);
+        let generic_load = count_op(&expr, vm::op_i32_load as crate::common::Op);
+        let generic_store = count_op(&expr, vm::op_i32_store as crate::common::Op);
+
+        assert!(
+            specialized_load >= 2,
+            "loop-invariant load must use local-base families: {ops:?}"
+        );
+        assert!(
+            specialized_store >= 2,
+            "loop-invariant store must use local-base families: {ops:?}"
+        );
+        assert!(
+            specialized_load >= generic_load,
+            "specialized load families must dominate generic load path: {ops:?}"
+        );
+        assert!(
+            specialized_store >= generic_store,
+            "specialized store families must dominate generic store path: {ops:?}"
         );
     }
 

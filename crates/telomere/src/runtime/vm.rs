@@ -28,6 +28,8 @@ use crate::{
     },
     Store,
 };
+#[cfg(test)]
+use std::cell::Cell;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -37,6 +39,10 @@ use std::{
 
 thread_local! {
     static DISPATCH_PROFILE_SESSION: RefCell<Option<DispatchProfileSession>> = const { RefCell::new(None) };
+    #[cfg(test)]
+    static DISPATCH_PROFILE_TEST_ENABLED: Cell<bool> = const { Cell::new(false) };
+    #[cfg(test)]
+    static LAST_DISPATCH_PROFILE_SNAPSHOT: RefCell<Option<DispatchProfileSnapshot>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy)]
@@ -45,7 +51,7 @@ struct DispatchProfileConfig {
     top_n: usize,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 struct DispatchProfileStat {
     count: u64,
 }
@@ -66,6 +72,7 @@ impl DispatchProfileSession {
     }
 }
 
+#[derive(Clone)]
 struct DispatchProfileSnapshot {
     elapsed: Duration,
     total_instrs: u64,
@@ -78,7 +85,7 @@ struct DispatchProfileRunGuard {
 
 impl DispatchProfileRunGuard {
     fn new() -> Self {
-        let active = dispatch_profile_config().enabled;
+        let active = dispatch_profile_enabled();
         if active {
             DISPATCH_PROFILE_SESSION.with(|session| {
                 *session.borrow_mut() = Some(DispatchProfileSession::new());
@@ -96,6 +103,13 @@ impl Drop for DispatchProfileRunGuard {
         let Some(snapshot) = finish_dispatch_profile_session() else {
             return;
         };
+        #[cfg(test)]
+        LAST_DISPATCH_PROFILE_SNAPSHOT.with(|last| {
+            *last.borrow_mut() = Some(snapshot.clone());
+        });
+        if cfg!(test) {
+            return;
+        }
         eprintln!(
             "[telomere-vm-profile] total_instrs={} elapsed_ms={:.3}",
             snapshot.total_instrs,
@@ -153,8 +167,17 @@ fn finish_dispatch_profile_session() -> Option<DispatchProfileSnapshot> {
 }
 
 #[inline(always)]
+fn dispatch_profile_enabled() -> bool {
+    #[cfg(test)]
+    if DISPATCH_PROFILE_TEST_ENABLED.with(|enabled| enabled.get()) {
+        return true;
+    }
+    dispatch_profile_config().enabled
+}
+
+#[inline(always)]
 pub(crate) fn dispatch_profile_count(label: &'static str) {
-    if !dispatch_profile_config().enabled {
+    if !dispatch_profile_enabled() {
         return;
     }
     DISPATCH_PROFILE_SESSION.with(|session| {
@@ -166,6 +189,38 @@ pub(crate) fn dispatch_profile_count(label: &'static str) {
         stat.count = stat.count.saturating_add(1);
         profile.total_instrs = profile.total_instrs.saturating_add(1);
     });
+}
+
+#[cfg(test)]
+struct DispatchProfileTestOverride {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl DispatchProfileTestOverride {
+    fn enable() -> Self {
+        LAST_DISPATCH_PROFILE_SNAPSHOT.with(|last| {
+            last.borrow_mut().take();
+        });
+        let previous = DISPATCH_PROFILE_TEST_ENABLED.with(|enabled| {
+            let previous = enabled.get();
+            enabled.set(true);
+            previous
+        });
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for DispatchProfileTestOverride {
+    fn drop(&mut self) {
+        DISPATCH_PROFILE_TEST_ENABLED.with(|enabled| enabled.set(self.previous));
+    }
+}
+
+#[cfg(test)]
+fn take_last_dispatch_profile_snapshot_for_test() -> Option<DispatchProfileSnapshot> {
+    LAST_DISPATCH_PROFILE_SNAPSHOT.with(|last| last.borrow_mut().take())
 }
 
 #[inline(always)]
@@ -411,9 +466,10 @@ pub(crate) use tables::*;
 pub(crate) unsafe fn store_internal_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    _label: &'static str,
+    label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
+    dispatch_profile_count(label);
     let memarg = (*tail_code).operand.memarg;
     let operation = make_operation(ctx);
     let offset = ctx.stack.pop_u32();
@@ -442,9 +498,10 @@ pub(crate) unsafe fn store_internal_local(
 pub(crate) unsafe fn store_internal_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    _label: &'static str,
+    label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
+    dispatch_profile_count(label);
     let memarg = (*tail_code).operand.memarg;
     let operation = make_operation(ctx);
     let offset = ctx.stack.pop_u32();
@@ -474,9 +531,10 @@ pub(crate) unsafe fn store_internal_shared(
 pub(crate) unsafe fn store_internal_local_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    _label: &'static str,
+    label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
+    dispatch_profile_count(label);
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
     let operation = make_operation(ctx);
@@ -506,9 +564,10 @@ pub(crate) unsafe fn store_internal_local_indexed(
 pub(crate) unsafe fn store_internal_shared_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    _label: &'static str,
+    label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
+    dispatch_profile_count(label);
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
     let operation = make_operation(ctx);

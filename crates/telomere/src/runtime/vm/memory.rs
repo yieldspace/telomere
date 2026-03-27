@@ -1,4 +1,10 @@
 use super::*;
+
+#[inline(always)]
+fn profile_memory_family(label: &'static str) {
+    dispatch_profile_count(label);
+}
+
 #[inline(always)]
 fn truncate_u32_to_u8_bytes(value: u32) -> [u8; 1] {
     [(value & 0xff) as u8]
@@ -116,9 +122,10 @@ unsafe fn load_start_indexed_local_base(
 unsafe fn store_internal_local_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    _label: &'static str,
+    label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
+    profile_memory_family(label);
     let local_addr = (*tail_code).operand.local_addr as usize;
     let delta = (*tail_code.add(1)).operand.i32 as u32;
     let memarg = (*tail_code.add(2)).operand.memarg;
@@ -138,9 +145,10 @@ unsafe fn store_internal_local_base(
 unsafe fn store_internal_indexed_local_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    _label: &'static str,
+    label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
+    profile_memory_family(label);
     let local_addr = (*tail_code).operand.local_addr as usize;
     let delta = (*tail_code.add(1)).operand.i32 as u32;
     let memarg = (*tail_code.add(2)).operand.memarg;
@@ -176,6 +184,7 @@ macro_rules! define_indexed_push_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($local));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
                 ctx.local_memory_id_at_unchecked(memidx),
@@ -201,6 +210,7 @@ macro_rules! define_indexed_push_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($shared));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
                 ctx.shared_memory_id_at_unchecked(memidx),
@@ -230,6 +240,7 @@ macro_rules! define_indexed_scalar_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($local));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -254,6 +265,7 @@ macro_rules! define_indexed_scalar_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($shared));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -310,6 +322,7 @@ macro_rules! define_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on default local memory.")]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
             vm_try!(default_local_push_to_stack::<$bytes>(ctx, start));
             call_next(tail_code, 3, ctx)
@@ -321,6 +334,7 @@ macro_rules! define_indexed_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed local memory.")]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
             vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
                 ctx.local_memory_id_at_unchecked(memidx),
@@ -336,6 +350,7 @@ macro_rules! define_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on default local memory.")]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
             let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.$reader(start));
             vm_try!(ctx.stack.$push($convert(value)));
@@ -348,6 +363,7 @@ macro_rules! define_indexed_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed local memory.")]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
             let value = vm_try!(ctx.gc.$reader(ctx.local_memory_id_at_unchecked(memidx), start));
             vm_try!(ctx.stack.$push($convert(value)));
@@ -390,6 +406,7 @@ macro_rules! define_indexed_local_base_store_alias {
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i32_load");
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(default_local_push_to_stack::<4>(ctx, start));
     call_next(tail_code, 1, ctx)
@@ -411,6 +428,7 @@ pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i64_load");
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(default_local_push_to_stack::<8>(ctx, start));
     call_next(tail_code, 1, ctx)
@@ -432,6 +450,7 @@ pub unsafe fn op_i64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_f32_load");
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(default_local_push_to_stack::<4>(ctx, start));
     call_next(tail_code, 1, ctx)
@@ -453,6 +472,7 @@ pub unsafe fn op_f32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_f64_load");
     let start = vm_try!(load_start(tail_code, ctx));
     vm_try!(default_local_push_to_stack::<8>(ctx, start));
     call_next(tail_code, 1, ctx)
@@ -474,6 +494,7 @@ pub unsafe fn op_f64_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i32_load8_u");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start));
     vm_try!(ctx.stack.push_u32_fast(u32::from(value)));
@@ -496,6 +517,7 @@ pub unsafe fn op_i32_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i32_load8_s");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i8_at(start));
     vm_try!(ctx.stack.push_i32_fast(i32::from(value)));
@@ -518,6 +540,7 @@ pub unsafe fn op_i32_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i32_load16_s");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i16_at(start));
     vm_try!(ctx.stack.push_i32_fast(i32::from(value)));
@@ -540,6 +563,7 @@ pub unsafe fn op_i32_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i32_load16_u");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(start));
     vm_try!(ctx.stack.push_u32_fast(u32::from(value)));
@@ -562,6 +586,7 @@ pub unsafe fn op_i32_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i64_load8_s");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i8_at(start));
     vm_try!(ctx.stack.push_i64(i64::from(value)));
@@ -584,6 +609,7 @@ pub unsafe fn op_i64_load8_s(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i64_load8_u");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start));
     vm_try!(ctx.stack.push_u64(u64::from(value)));
@@ -606,6 +632,7 @@ pub unsafe fn op_i64_load8_u(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i64_load16_s");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i16_at(start));
     vm_try!(ctx.stack.push_i64(i64::from(value)));
@@ -628,6 +655,7 @@ pub unsafe fn op_i64_load16_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i64_load16_u");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(start));
     vm_try!(ctx.stack.push_u64(u64::from(value)));
@@ -650,6 +678,7 @@ pub unsafe fn op_i64_load16_u(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i64_load32_s");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_i32_at(start));
     vm_try!(ctx.stack.push_i64(i64::from(value)));
@@ -672,6 +701,7 @@ pub unsafe fn op_i64_load32_s(tail_code: *const Instr, ctx: &mut ExecuteContext)
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i64_load32_u(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    profile_memory_family("op_i64_load32_u");
     let start = vm_try!(load_start(tail_code, ctx));
     let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(start));
     vm_try!(ctx.stack.push_u64(u64::from(value)));
@@ -930,6 +960,7 @@ macro_rules! define_shared_push_load {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
             let start = vm_try!(load_start(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
                 ctx.default_shared_memory_id_unchecked(),
@@ -959,6 +990,7 @@ macro_rules! define_shared_scalar_load {
         /// - `ctx` must reference a live execution context whose default memory is shared.
         /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
             let start = vm_try!(load_start(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -1662,10 +1694,11 @@ mod tests {
         common::{
             stack::{CachedMemoryKind, CallFrameCache},
             store::{InstanceId, MemoryHandle},
-            ExecuteContext, LocalMemoryObject, LocalReference, Memory, ObjectRef, Operand, Store,
-            StoreInner,
+            ExecuteContext, InstanceHandle, LocalMemoryObject, LocalReference, Memory, ObjectRef,
+            Operand, Registry, ResultValue, Store, StoreInner, WasmValue,
         },
         runtime::{memory_effect::PendingOp, scheduler::EffectSupplier},
+        IoReadBinaryReader, WasmParser,
     };
     use std::collections::VecDeque;
 
@@ -1707,6 +1740,17 @@ mod tests {
             effect: EffectSupplier::from_parts(1, pending_effects, queue),
             cont: std::ptr::null(),
             task_id: 1,
+        }
+    }
+
+    async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
+        let bytes = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        let module = parser.parse_module().expect("module must parse");
+        match crate::instantiate(module, store, registry).await {
+            VMResult::Success(instance) => instance,
+            other => panic!("module must instantiate, got {other:?}"),
         }
     }
 
@@ -1779,5 +1823,98 @@ mod tests {
             unsafe { load_start(program.as_ptr(), &mut ctx) },
             VMResult::MemoryIndexOutOfRange
         ));
+    }
+
+    #[tokio::test]
+    async fn profiler_prefers_local_base_memory_families_over_generic_path() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let instance = instantiate_wat(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $base i32) (param $remaining i32) (result i32)
+                local.get $base
+                i32.const 0
+                i32.store
+                block $done
+                  loop $loop
+                    local.get $remaining
+                    i32.eqz
+                    br_if $done
+
+                    local.get $base
+                    local.get $base
+                    i32.load
+                    i32.const 1
+                    i32.add
+                    i32.store
+
+                    local.get $remaining
+                    i32.const 1
+                    i32.sub
+                    local.set $remaining
+                    br $loop
+                  end
+                end
+                local.get $base
+                i32.load))
+            "#,
+            &store,
+            &registry,
+        )
+        .await;
+
+        let _profile = super::super::DispatchProfileTestOverride::enable();
+        let result = crate::run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(8), WasmValue::I32(12)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(12)]));
+            }
+            other => panic!("profiled local-base memory loop must succeed, got {other:?}"),
+        }
+
+        let snapshot = super::super::take_last_dispatch_profile_snapshot_for_test()
+            .expect("profile snapshot must be recorded");
+        let count = |label: &'static str| {
+            snapshot
+                .stats
+                .iter()
+                .find_map(|(candidate, stat)| (*candidate == label).then_some(stat.count))
+                .unwrap_or_default()
+        };
+
+        let specialized_load = count("op_i32_load_local_base");
+        let specialized_store = count("op_i32_store_local_base");
+        let generic_load = count("op_i32_load");
+        let generic_store = count("op_i32_store");
+
+        assert!(
+            specialized_load > 0,
+            "local-base load family must appear in dispatch profile: {:?}",
+            snapshot.stats
+        );
+        assert!(
+            specialized_store > 0,
+            "local-base store family must appear in dispatch profile: {:?}",
+            snapshot.stats
+        );
+        assert!(
+            specialized_load > generic_load,
+            "specialized load family must dominate generic load path: {:?}",
+            snapshot.stats
+        );
+        assert!(
+            specialized_store > generic_store,
+            "specialized store family must dominate generic store path: {:?}",
+            snapshot.stats
+        );
     }
 }
