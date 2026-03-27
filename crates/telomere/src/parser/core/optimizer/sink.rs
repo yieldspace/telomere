@@ -7,6 +7,7 @@ use crate::{
     runtime::vm,
 };
 
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct RecordEmit {
     pub(crate) source_start: Option<usize>,
@@ -14,6 +15,7 @@ pub(crate) struct RecordEmit {
     pub(crate) operands: Vec<Operand>,
 }
 
+#[cfg(test)]
 impl RecordEmit {
     pub(crate) fn len(&self) -> usize {
         1 + self.operands.len()
@@ -103,6 +105,7 @@ impl PackedOperand {
     }
 }
 
+#[cfg(test)]
 #[cold]
 #[inline(never)]
 pub(crate) fn pack_records(records: &[RecordEmit]) -> PackedOpStream {
@@ -118,6 +121,27 @@ pub(crate) fn pack_records(records: &[RecordEmit]) -> PackedOpStream {
 
 #[cold]
 #[inline(never)]
+pub(crate) fn pack_op(source_start: Option<usize>, op: Op, operands: &[Operand]) -> PackedOp {
+    PackedOp {
+        source_start,
+        op,
+        operands: pack_operands(op, operands, &HashMap::new()),
+    }
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn build_packed_stream(mut ops: Vec<PackedOp>) -> PackedOpStream {
+    let (const_pool, const_refs) = build_const_pool_from_packed_ops(&ops);
+    for op in &mut ops {
+        apply_const_pool_refs(op, &const_refs);
+    }
+    PackedOpStream { const_pool, ops }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg(test)]
 fn build_const_pool(
     records: &[RecordEmit],
 ) -> (Vec<ConstPoolValue>, HashMap<ConstPoolValue, ConstPoolRef>) {
@@ -150,6 +174,39 @@ fn build_const_pool(
 
 #[cold]
 #[inline(never)]
+fn build_const_pool_from_packed_ops(
+    ops: &[PackedOp],
+) -> (Vec<ConstPoolValue>, HashMap<ConstPoolValue, ConstPoolRef>) {
+    let mut counts = HashMap::new();
+    let mut first_seen = Vec::new();
+    for op in ops {
+        let Some(value) = const_pool_candidate_from_packed_op(op) else {
+            continue;
+        };
+        let entry = counts.entry(value).or_insert_with(|| {
+            first_seen.push(value);
+            0usize
+        });
+        *entry += 1;
+    }
+    let mut const_pool = Vec::new();
+    let mut const_refs = HashMap::new();
+    for value in first_seen {
+        if counts[&value] < 2 {
+            continue;
+        }
+        let index = ConstPoolRef(
+            u32::try_from(const_pool.len()).expect("const pool length exceeds u32::MAX"),
+        );
+        const_refs.insert(value, index);
+        const_pool.push(value);
+    }
+    (const_pool, const_refs)
+}
+
+#[cold]
+#[inline(never)]
+#[cfg(test)]
 fn const_pool_candidate(record: &RecordEmit) -> Option<ConstPoolValue> {
     if ptr::fn_addr_eq(record.op, vm::op_i32_const as Op) {
         return Some(ConstPoolValue::I32(unsafe { record.operands[0].i32 }));
@@ -162,6 +219,47 @@ fn const_pool_candidate(record: &RecordEmit) -> Option<ConstPoolValue> {
 
 #[cold]
 #[inline(never)]
+fn const_pool_candidate_from_packed_op(op: &PackedOp) -> Option<ConstPoolValue> {
+    if ptr::fn_addr_eq(op.op, vm::op_i32_const as Op) {
+        let PackedOperand::I32(value) = *op.operands.first()? else {
+            return None;
+        };
+        return Some(ConstPoolValue::I32(value));
+    }
+    if ptr::fn_addr_eq(op.op, vm::op_i64_const as Op) {
+        let PackedOperand::I64(value) = *op.operands.first()? else {
+            return None;
+        };
+        return Some(ConstPoolValue::I64(value));
+    }
+    None
+}
+
+#[cold]
+#[inline(never)]
+fn apply_const_pool_refs(op: &mut PackedOp, const_refs: &HashMap<ConstPoolValue, ConstPoolRef>) {
+    if ptr::fn_addr_eq(op.op, vm::op_i32_const as Op) {
+        let Some(PackedOperand::I32(value)) = op.operands.first().copied() else {
+            return;
+        };
+        if let Some(index) = const_refs.get(&ConstPoolValue::I32(value)).copied() {
+            op.operands[0] = PackedOperand::ConstPoolRef(index);
+        }
+        return;
+    }
+    if ptr::fn_addr_eq(op.op, vm::op_i64_const as Op) {
+        let Some(PackedOperand::I64(value)) = op.operands.first().copied() else {
+            return;
+        };
+        if let Some(index) = const_refs.get(&ConstPoolValue::I64(value)).copied() {
+            op.operands[0] = PackedOperand::ConstPoolRef(index);
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg(test)]
 fn pack_record(
     record: &RecordEmit,
     const_refs: &HashMap<ConstPoolValue, ConstPoolRef>,
@@ -201,6 +299,9 @@ fn pack_operands(
             .collect();
     }
     if let Some(packed) = pack_fused_local_control_operands(op, operands) {
+        return packed;
+    }
+    if let Some(packed) = pack_specialized_memory_operands(op, operands) {
         return packed;
     }
     if ptr::fn_addr_eq(op, vm::op_f32_const as Op) {
@@ -330,6 +431,27 @@ fn pack_fused_local_control_operands(op: Op, operands: &[Operand]) -> Option<Vec
 
 #[cold]
 #[inline(never)]
+fn pack_specialized_memory_operands(op: Op, operands: &[Operand]) -> Option<Vec<PackedOperand>> {
+    let memarg_index = memarg_operand_index(op)?;
+    if memarg_index != 2 {
+        return None;
+    }
+    let first = operands.first()?;
+    let second = operands.get(1)?;
+    let third = operands.get(2)?;
+    let mut out = vec![
+        PackedOperand::LocalAddr(unsafe { first.local_addr }),
+        PackedOperand::I32(unsafe { second.i32 }),
+        PackedOperand::MemArg(unsafe { third.memarg }),
+    ];
+    if let Some(fourth) = operands.get(3) {
+        out.push(PackedOperand::U32(unsafe { fourth.u32 }));
+    }
+    Some(out)
+}
+
+#[cold]
+#[inline(never)]
 fn pack_fallback_operands(op: Op, operands: &[Operand]) -> Vec<PackedOperand> {
     if is_call_like_op(op) || is_u32_operand_op(op) {
         return operands
@@ -362,6 +484,7 @@ pub(crate) fn flatten_packed_stream(stream: &PackedOpStream) -> Vec<Instr> {
 }
 
 #[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn flatten_records(records: &[RecordEmit]) -> Vec<Instr> {
     let mut instrs = Vec::with_capacity(records.iter().map(RecordEmit::len).sum());
     for record in records {

@@ -1,6 +1,6 @@
 mod common;
 
-use common::instantiate_wat;
+use common::{instantiate_wat, run_wast};
 use telomere::{run_module_function, Registry, ResultValue, Store, VMResult, WasmValue};
 
 #[tokio::test]
@@ -112,6 +112,616 @@ async fn optimizer_small_memory_loop_remains_correct() {
         }
         other => panic!("memory loop must succeed, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn optimizer_select_with_local_tee_rhs_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "run") (param i32 i32) (result i32)
+            (select
+              (local.get 0)
+              (local.tee 0 (i32.const 6))
+              (local.get 1)
+            )))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(6)]));
+        }
+        other => panic!("select with local.tee rhs must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_local_tee_wast_module_select_second_remains_correct() {
+    let wast = include_str!("wasm-testsuite/local_tee.wast");
+    let (module, _) = wast
+        .split_once("\n)\n\n(assert")
+        .expect("local_tee.wast must contain a module followed by asserts");
+    let module = format!("{module}\n)");
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "as-select-second",
+        &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(6)]));
+        }
+        other => panic!("full local_tee module select must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_local_tee_select_calls_do_not_leak_frame_state() {
+    let wast = include_str!("wasm-testsuite/local_tee.wast");
+    let (module, _) = wast
+        .split_once("\n)\n\n(assert")
+        .expect("local_tee.wast must contain a module followed by asserts");
+    let module = format!("{module}\n)");
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    let first = run_module_function(
+        &instance,
+        &store,
+        "as-select-first",
+        &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(1)]),
+    )
+    .await;
+    match first {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(5)]));
+        }
+        other => panic!("first select call must succeed, got {other:?}"),
+    }
+
+    let second = run_module_function(
+        &instance,
+        &store,
+        "as-select-second",
+        &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+    )
+    .await;
+    match second {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(6)]));
+        }
+        other => panic!("second select call must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_local_tee_control_prefix_before_select_second_remains_correct() {
+    let wast = include_str!("wasm-testsuite/local_tee.wast");
+    let (module, _) = wast
+        .split_once("\n)\n\n(assert")
+        .expect("local_tee.wast must contain a module followed by asserts");
+    let module = format!("{module}\n)");
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    let calls = [
+        (
+            "as-if-cond",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(0)],
+        ),
+        (
+            "as-if-then",
+            vec![WasmValue::I32(1)],
+            vec![WasmValue::I32(3)],
+        ),
+        (
+            "as-if-else",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(4)],
+        ),
+        (
+            "as-select-first",
+            vec![WasmValue::I32(0), WasmValue::I32(1)],
+            vec![WasmValue::I32(5)],
+        ),
+    ];
+
+    for (name, args, expected) in calls {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, ResultValue::new(expected)),
+            other => panic!("{name} must succeed, got {other:?}"),
+        }
+    }
+
+    let second = run_module_function(
+        &instance,
+        &store,
+        "as-select-second",
+        &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+    )
+    .await;
+    match second {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(6)]));
+        }
+        other => panic!("second select call must succeed after control prefix, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_local_tee_select_second_before_select_cond_remains_correct() {
+    let wast = include_str!("wasm-testsuite/local_tee.wast");
+    let (module, _) = wast
+        .split_once("\n)\n\n(assert")
+        .expect("local_tee.wast must contain a module followed by asserts");
+    let module = format!("{module}\n)");
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    let second = run_module_function(
+        &instance,
+        &store,
+        "as-select-second",
+        &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(0)]),
+    )
+    .await;
+    match second {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(6)]));
+        }
+        other => panic!("second select call must succeed, got {other:?}"),
+    }
+
+    let cond = run_module_function(
+        &instance,
+        &store,
+        "as-select-cond",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    match cond {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(0)]));
+        }
+        other => panic!("select-cond must succeed after select-second, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_local_tee_select_cond_alone_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            (select
+              (i32.const 0)
+              (i32.const 1)
+              (local.tee 0 (i32.const 7))
+            )))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(0)]));
+        }
+        other => panic!("select-cond alone must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_full_local_tee_module_select_cond_alone_remains_correct() {
+    let wast = include_str!("wasm-testsuite/local_tee.wast");
+    let (module, _) = wast
+        .split_once("\n)\n\n(assert")
+        .expect("local_tee.wast must contain a module followed by asserts");
+    let module = format!("{module}\n)");
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "as-select-cond",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(0)]));
+        }
+        other => panic!("full local_tee module select-cond must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_full_local_tee_module_binary_right_remains_correct() {
+    let wast = include_str!("wasm-testsuite/local_tee.wast");
+    let (module, _) = wast
+        .split_once("\n)\n\n(assert")
+        .expect("local_tee.wast must contain a module followed by asserts");
+    let module = format!("{module}\n)");
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "as-binary-right",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(6)]));
+        }
+        other => panic!("full local_tee module binary-right must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_preserves_i64_div_u_trap_under_drop() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "run") (param i64 i64)
+            (drop (i64.div_u (local.get 0) (local.get 1)))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I64(1), WasmValue::I64(0)]),
+    )
+    .await;
+
+    assert!(result.is_err(), "dropped i64.div_u must still trap");
+}
+
+#[tokio::test]
+async fn optimizer_preserves_i32_div_s_overflow_trap_under_drop() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "run") (param i32 i32)
+            (drop (i32.div_s (local.get 0) (local.get 1)))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(i32::MIN), WasmValue::I32(-1)]),
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "dropped i32.div_s overflow must still trap"
+    );
+}
+
+#[tokio::test]
+async fn optimizer_preserves_full_traps_module_i64_div_u_trap_under_drop() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "no_dce.i32.div_s") (param i32) (param i32)
+            (drop (i32.div_s (local.get 0) (local.get 1))))
+          (func (export "no_dce.i32.div_u") (param i32) (param i32)
+            (drop (i32.div_u (local.get 0) (local.get 1))))
+          (func (export "no_dce.i64.div_s") (param i64) (param i64)
+            (drop (i64.div_s (local.get 0) (local.get 1))))
+          (func (export "no_dce.i64.div_u") (param i64) (param i64)
+            (drop (i64.div_u (local.get 0) (local.get 1)))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args) in [
+        (
+            "no_dce.i32.div_s",
+            ResultValue::new(vec![WasmValue::I32(1), WasmValue::I32(0)]),
+        ),
+        (
+            "no_dce.i32.div_u",
+            ResultValue::new(vec![WasmValue::I32(1), WasmValue::I32(0)]),
+        ),
+        (
+            "no_dce.i64.div_s",
+            ResultValue::new(vec![WasmValue::I64(1), WasmValue::I64(0)]),
+        ),
+        (
+            "no_dce.i64.div_u",
+            ResultValue::new(vec![WasmValue::I64(1), WasmValue::I64(0)]),
+        ),
+    ] {
+        let result = run_module_function(&instance, &store, name, &args).await;
+        assert!(result.is_err(), "{name} must still trap under drop");
+    }
+}
+
+#[tokio::test]
+async fn optimizer_run_wast_traps_first_module_remains_correct() {
+    run_wast(
+        r#"
+        (module
+          (func (export "no_dce.i32.div_s") (param $x i32) (param $y i32)
+            (drop (i32.div_s (local.get $x) (local.get $y))))
+          (func (export "no_dce.i32.div_u") (param $x i32) (param $y i32)
+            (drop (i32.div_u (local.get $x) (local.get $y))))
+          (func (export "no_dce.i64.div_s") (param $x i64) (param $y i64)
+            (drop (i64.div_s (local.get $x) (local.get $y))))
+          (func (export "no_dce.i64.div_u") (param $x i64) (param $y i64)
+            (drop (i64.div_u (local.get $x) (local.get $y)))))
+
+        (assert_trap (invoke "no_dce.i32.div_s" (i32.const 1) (i32.const 0)) "integer divide by zero")
+        (assert_trap (invoke "no_dce.i32.div_u" (i32.const 1) (i32.const 0)) "integer divide by zero")
+        (assert_trap (invoke "no_dce.i64.div_s" (i64.const 1) (i64.const 0)) "integer divide by zero")
+        (assert_trap (invoke "no_dce.i64.div_u" (i64.const 1) (i64.const 0)) "integer divide by zero")
+        "#,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn optimizer_run_wast_full_traps_fixture_remains_correct() {
+    run_wast(include_str!("wasm-testsuite/traps.wast")).await;
+}
+
+#[tokio::test]
+async fn optimizer_local_tee_prefix_up_to_select_cond_remains_correct() {
+    let wast = include_str!("wasm-testsuite/local_tee.wast");
+    let (module, _) = wast
+        .split_once("\n)\n\n(assert")
+        .expect("local_tee.wast must contain a module followed by asserts");
+    let module = format!("{module}\n)");
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    let calls = vec![
+        (
+            "as-block-mid",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(1)],
+        ),
+        (
+            "as-block-last",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(1)],
+        ),
+        (
+            "as-loop-first",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(3)],
+        ),
+        (
+            "as-loop-mid",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(4)],
+        ),
+        (
+            "as-loop-last",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(5)],
+        ),
+        (
+            "as-br-value",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(9)],
+        ),
+        ("as-br_if-cond", vec![WasmValue::I32(0)], vec![]),
+        (
+            "as-br_if-value",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(8)],
+        ),
+        (
+            "as-br_if-value-cond",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(6)],
+        ),
+        ("as-br_table-index", vec![WasmValue::I32(0)], vec![]),
+        (
+            "as-br_table-value",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(10)],
+        ),
+        (
+            "as-br_table-value-index",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(6)],
+        ),
+        (
+            "as-return-value",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(7)],
+        ),
+        (
+            "as-if-cond",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(0)],
+        ),
+        (
+            "as-if-then",
+            vec![WasmValue::I32(1)],
+            vec![WasmValue::I32(3)],
+        ),
+        (
+            "as-if-else",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(4)],
+        ),
+        (
+            "as-select-first",
+            vec![WasmValue::I32(0), WasmValue::I32(1)],
+            vec![WasmValue::I32(5)],
+        ),
+        (
+            "as-select-second",
+            vec![WasmValue::I32(0), WasmValue::I32(0)],
+            vec![WasmValue::I32(6)],
+        ),
+        (
+            "as-select-cond",
+            vec![WasmValue::I32(0)],
+            vec![WasmValue::I32(0)],
+        ),
+    ];
+
+    for (name, args, expected) in calls {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, ResultValue::new(expected), "{name}"),
+            other => panic!("{name} must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_float_xkcd_sqrt_5_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "run") (param f32) (param f32) (param f32) (result f32)
+            (f32.add
+              (f32.div (local.get 0) (local.get 1))
+              (f32.div (local.get 2) (local.get 0))
+            )))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![
+            WasmValue::F32(2.0),
+            WasmValue::F32(2.7182817),
+            WasmValue::F32(3.0),
+        ]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => match values.iter().next() {
+            Some(WasmValue::F32(actual)) => {
+                assert_eq!(actual.to_bits(), 0x400f_16ac);
+            }
+            other => panic!("float run must return one f32, got {other:?}"),
+        },
+        other => panic!("float xkcd sqrt 5 must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_full_float_exprs_xkcd_sqrt_5_remains_correct() {
+    let wast = include_str!("wasm-testsuite/float_exprs.wast");
+    let start = wast
+        .find("(module\n  (func (export \"f32.sqrt\")")
+        .expect("float_exprs.wast must contain sqrt approximation module");
+    let rest = &wast[start..];
+    let (module, _) = rest
+        .split_once("\n)\n\n(assert_return (invoke \"f32.sqrt\"")
+        .expect("sqrt approximation module must be followed by asserts");
+    let module = format!("{module}\n)");
+
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(&module, &store, &registry).await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "f32.xkcd_sqrt_5",
+        &ResultValue::new(vec![
+            WasmValue::F32(2.0),
+            WasmValue::F32(2.7182817),
+            WasmValue::F32(3.0),
+        ]),
+    )
+    .await;
+
+    match result {
+        VMResult::Success(values) => match values.iter().next() {
+            Some(WasmValue::F32(actual)) => {
+                assert_eq!(actual.to_bits(), 0x400f_16ac);
+            }
+            other => panic!("full float module must return one f32, got {other:?}"),
+        },
+        other => panic!("full float module xkcd sqrt 5 must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_run_wast_local_tee_fixture_remains_correct() {
+    run_wast(include_str!("wasm-testsuite/local_tee.wast")).await;
 }
 
 #[tokio::test]

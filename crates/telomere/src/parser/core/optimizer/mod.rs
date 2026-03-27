@@ -57,6 +57,13 @@ mod tests {
         function_expr_at(wat, 0)
     }
 
+    fn module_prefix(wast: &str) -> String {
+        let (module, _) = wast
+            .split_once("\n)\n\n(assert")
+            .expect("wast fixture must contain a module followed by asserts");
+        format!("{module}\n)")
+    }
+
     fn decoded_ops(expr: &[Instr]) -> Vec<crate::common::Op> {
         let mut ops = Vec::new();
         let mut cursor = 0usize;
@@ -134,11 +141,14 @@ mod tests {
     fn debug_op_name(op: crate::common::Op) -> &'static str {
         let names = [
             ("op_global_get4", vm::op_global_get4 as crate::common::Op),
+            ("op_drop", vm::op_drop as crate::common::Op),
             ("op_local_get4", vm::op_local_get4 as crate::common::Op),
             ("op_local_set4", vm::op_local_set4 as crate::common::Op),
             ("op_local_tee4", vm::op_local_tee4 as crate::common::Op),
             ("op_i32_const", vm::op_i32_const as crate::common::Op),
             ("op_i32_add", vm::op_i32_add as crate::common::Op),
+            ("op_i32_sub", vm::op_i32_sub as crate::common::Op),
+            ("op_i32_div_s", vm::op_i32_div_s as crate::common::Op),
             (
                 "op_local_get4_i32_const_add",
                 vm::op_local_get4_i32_const_add as crate::common::Op,
@@ -197,6 +207,9 @@ mod tests {
                 "op_local_get4_i32_const_compare_br_if",
                 vm::op_local_get4_i32_const_compare_br_if as crate::common::Op,
             ),
+            ("op_select4", vm::op_select4 as crate::common::Op),
+            ("op_select8", vm::op_select8 as crate::common::Op),
+            ("op_select16", vm::op_select16 as crate::common::Op),
         ];
         names
             .into_iter()
@@ -255,6 +268,19 @@ mod tests {
             let current = unsafe { expr[cursor].op };
             if std::ptr::fn_addr_eq(current, vm::op_local_get4 as crate::common::Op) {
                 out.push(unsafe { expr[cursor + 1].operand.local_addr });
+            }
+            cursor += 1 + operand_width(current);
+        }
+        out
+    }
+
+    fn i32_const_values(expr: &[Instr]) -> Vec<i32> {
+        let mut cursor = 0usize;
+        let mut out = Vec::new();
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, vm::op_i32_const as crate::common::Op) {
+                out.push(unsafe { expr[cursor + 1].operand.i32 });
             }
             cursor += 1 + operand_width(current);
         }
@@ -549,6 +575,8 @@ mod tests {
             || std::ptr::fn_addr_eq(op, vm::op_i32_ge_s as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_ge_u as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_sub as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_div_s as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i32_div_u as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_shl as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_shr_s as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i32_shr_u as crate::common::Op)
@@ -569,6 +597,8 @@ mod tests {
             || std::ptr::fn_addr_eq(op, vm::op_i64_ge_u as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_add as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_sub as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_div_s as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_i64_div_u as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_mul as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_and as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_or as crate::common::Op)
@@ -578,6 +608,16 @@ mod tests {
             || std::ptr::fn_addr_eq(op, vm::op_i64_shr_u as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_rotl as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_i64_rotr as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_add as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_sub as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_mul as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_div as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_eq as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_ne as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_lt as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_gt as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_le as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f32_ge as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_f32_abs as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_f32_neg as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_f32_ceil as crate::common::Op)
@@ -585,6 +625,16 @@ mod tests {
             || std::ptr::fn_addr_eq(op, vm::op_f32_trunc as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_f32_nearest as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_f32_sqrt as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_add as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_sub as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_mul as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_div as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_eq as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_ne as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_lt as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_gt as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_le as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_f64_ge as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_f64_abs as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_f64_neg as crate::common::Op)
             || std::ptr::fn_addr_eq(op, vm::op_f64_ceil as crate::common::Op)
@@ -1469,6 +1519,202 @@ mod tests {
         );
         assert_eq!(count_op(&expr, vm::op_select as crate::common::Op), 0);
         assert_eq!(count_op(&expr, vm::op_select4 as crate::common::Op), 1);
+    }
+
+    #[test]
+    fn optimizer_preserves_select_operand_order_with_local_tee_rhs() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32 i32) (result i32)
+                (select
+                  (local.get 0)
+                  (local.tee 0 (i32.const 6))
+                  (local.get 1)
+                )))
+            "#,
+        );
+        assert_eq!(
+            debug_decoded_ops(&expr),
+            vec![
+                "op_local_get4",
+                "op_i32_const",
+                "op_local_tee4",
+                "op_local_get4",
+                "op_select4",
+                "op_end",
+                "special_function_return",
+            ]
+        );
+        assert_eq!(local_get4_addrs(&expr), vec![0, 4]);
+    }
+
+    #[test]
+    fn optimizer_preserves_select_operand_order_with_local_tee_cond() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (select
+                  (i32.const 0)
+                  (i32.const 1)
+                  (local.tee 0 (i32.const 7))
+                )))
+            "#,
+        );
+        assert_eq!(
+            debug_decoded_ops(&expr),
+            vec![
+                "op_i32_const",
+                "op_i32_const",
+                "op_i32_const",
+                "op_local_tee4",
+                "op_select4",
+                "op_end",
+                "special_function_return",
+            ]
+        );
+        assert_eq!(i32_const_values(&expr), vec![0, 1, 7]);
+    }
+
+    #[test]
+    fn optimizer_preserves_float_binary_eval_order() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param f32) (param f32) (param f32) (result f32)
+                (f32.add
+                  (f32.div (local.get 0) (local.get 1))
+                  (f32.div (local.get 2) (local.get 0))
+                )))
+            "#,
+        );
+        assert_eq!(local_get4_addrs(&expr), vec![0, 4, 8, 0]);
+    }
+
+    #[test]
+    fn optimizer_preserves_full_local_tee_select_cond_shape() {
+        let module = module_prefix(include_str!(
+            "../../../../tests/wasm-testsuite/local_tee.wast"
+        ));
+        let expr = function_expr_at(&module, 31);
+        assert_eq!(
+            debug_decoded_ops(&expr),
+            vec![
+                "op_i32_const",
+                "op_i32_const",
+                "op_i32_const",
+                "op_local_tee4",
+                "op_select4",
+                "op_end",
+                "special_function_return",
+            ]
+        );
+        assert_eq!(i32_const_values(&expr), vec![0, 1, 7]);
+    }
+
+    #[test]
+    fn optimizer_preserves_binary_right_operand_order_with_local_tee() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32) (result i32)
+                (i32.sub
+                  (i32.const 10)
+                  (local.tee 0 (i32.const 4))
+                )))
+            "#,
+        );
+        assert_eq!(
+            debug_decoded_ops(&expr),
+            vec![
+                "op_i32_const",
+                "op_i32_const",
+                "op_local_tee4",
+                "op_i32_sub",
+                "op_end",
+                "special_function_return",
+            ]
+        );
+        assert_eq!(i32_const_values(&expr), vec![10, 4]);
+    }
+
+    #[test]
+    fn optimizer_preserves_full_local_tee_binary_right_shape() {
+        let module = module_prefix(include_str!(
+            "../../../../tests/wasm-testsuite/local_tee.wast"
+        ));
+        let expr = function_expr_at(&module, 51);
+        assert_eq!(
+            debug_decoded_ops(&expr),
+            vec![
+                "op_i32_const",
+                "op_i32_const",
+                "op_local_tee4",
+                "op_i32_sub",
+                "op_end",
+                "special_function_return",
+            ]
+        );
+        assert_eq!(i32_const_values(&expr), vec![10, 4]);
+    }
+
+    #[test]
+    fn optimizer_preserves_trap_sensitive_drop_binary_ops() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i64 i64)
+                (drop (i64.div_u (local.get 0) (local.get 1)))))
+            "#,
+        );
+        assert_eq!(count_op(&expr, vm::op_i64_div_u as crate::common::Op), 1);
+        assert_eq!(count_op(&expr, vm::op_drop as crate::common::Op), 1);
+    }
+
+    #[test]
+    fn optimizer_preserves_full_traps_module_i64_div_u_under_drop() {
+        let expr = function_expr_at(
+            r#"
+            (module
+              (func (export "no_dce.i32.div_s") (param i32) (param i32)
+                (drop (i32.div_s (local.get 0) (local.get 1))))
+              (func (export "no_dce.i32.div_u") (param i32) (param i32)
+                (drop (i32.div_u (local.get 0) (local.get 1))))
+              (func (export "no_dce.i64.div_s") (param i64) (param i64)
+                (drop (i64.div_s (local.get 0) (local.get 1))))
+              (func (export "no_dce.i64.div_u") (param i64) (param i64)
+                (drop (i64.div_u (local.get 0) (local.get 1)))))
+            "#,
+            3,
+        );
+        assert_eq!(count_op(&expr, vm::op_i64_div_u as crate::common::Op), 1);
+        assert_eq!(count_op(&expr, vm::op_drop as crate::common::Op), 1);
+    }
+
+    #[test]
+    fn optimizer_preserves_i32_div_s_drop_operand_order() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i32 i32)
+                (drop (i32.div_s (local.get 0) (local.get 1)))))
+            "#,
+        );
+        assert_eq!(
+            debug_decoded_ops(&expr),
+            vec![
+                "op_local_get4",
+                "op_local_get4",
+                "op_i32_div_s",
+                "op_drop",
+                "op_end",
+                "special_function_return",
+            ]
+        );
+        assert_eq!(count_op(&expr, vm::op_i32_div_s as crate::common::Op), 1);
+        assert_eq!(count_op(&expr, vm::op_drop as crate::common::Op), 1);
+        assert_eq!(local_get4_addrs(&expr), vec![0, 4]);
     }
 
     #[test]

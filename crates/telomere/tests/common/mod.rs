@@ -166,7 +166,6 @@ pub async fn run_wast_with(text: &str, store: &Store, registry: &mut Registry) {
                         .await
                         .unwrap()
                     };
-
                     for (expected, actual) in expected.iter().zip(actual.iter()) {
                         if let WastRet::Core(expected) = expected {
                             match (expected, actual) {

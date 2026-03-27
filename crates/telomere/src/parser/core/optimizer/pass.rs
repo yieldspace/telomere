@@ -10,6 +10,8 @@ use crate::{
     runtime::vm,
 };
 
+#[cfg(test)]
+use super::sink::RecordEmit;
 use super::{
     cfg::{build_program, BasicBlock, BasicBlockProgram, DecodedInstr, InstructionMeta},
     expr::{
@@ -18,7 +20,10 @@ use super::{
         HeapVersion, LocalSlot, LoopValueShape, MaterializationCost, ProviderClass, PureOpKind,
         SlotClass, SlotRef, SlotShape, ValueDef, ValueGraph, ValueKey, ValueRef,
     },
-    sink::{flatten_packed_stream, pack_records, verify_packed_stream, RecordEmit},
+    sink::{
+        build_packed_stream, flatten_packed_stream, pack_op, verify_packed_stream, PackedOp,
+        PackedOperand,
+    },
     OptimizedFunction,
 };
 
@@ -115,6 +120,43 @@ struct OptimizerProfileConfig {
     max_focus_logs: usize,
 }
 
+const OPT_FAMILY_TOP_K: usize = 16;
+const PACKED_STREAM_GROWTH_BUDGET_PCT: usize = 10;
+const PACKED_STREAM_GROWTH_BUDGET_ABS: usize = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum OptimizerFamilyGroup {
+    LocalControl,
+    Memory,
+    CallSelect,
+}
+
+impl OptimizerFamilyGroup {
+    const ORDER: [Self; 3] = [Self::LocalControl, Self::Memory, Self::CallSelect];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::LocalControl => 0,
+            Self::Memory => 1,
+            Self::CallSelect => 2,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::LocalControl => "local/control",
+            Self::Memory => "memory",
+            Self::CallSelect => "call/select",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct OptimizerFamilyCandidateStat {
+    count: u64,
+    expected_provider_eliminations: u64,
+}
+
 impl OptimizerProfileConfig {
     fn from_env() -> Option<Self> {
         std::env::var_os("TELOMERE_OPT_PROFILE")?;
@@ -152,6 +194,173 @@ struct OptimizerProfiler {
     total_iterations: u64,
     block_visits: Vec<u64>,
     focus_logs_remaining: usize,
+}
+
+fn packed_stream_growth_pct(original_instrs: usize, packed_instrs: usize) -> f64 {
+    if original_instrs == 0 {
+        return 0.0;
+    }
+    (packed_instrs as f64 / original_instrs as f64 - 1.0) * 100.0
+}
+
+fn packed_stream_within_budget(original_instrs: usize, packed_instrs: usize) -> bool {
+    let relative_slack = (original_instrs
+        .saturating_mul(PACKED_STREAM_GROWTH_BUDGET_PCT)
+        .saturating_add(99))
+        / 100;
+    let allowed =
+        original_instrs.saturating_add(relative_slack.max(PACKED_STREAM_GROWTH_BUDGET_ABS));
+    packed_instrs <= allowed
+}
+
+fn collect_optimizer_family_candidates(
+    ops: &[PackedOp],
+) -> [Vec<(&'static str, OptimizerFamilyCandidateStat)>; 3] {
+    let mut grouped: [HashMap<&'static str, OptimizerFamilyCandidateStat>; 3] =
+        std::array::from_fn(|_| HashMap::new());
+    for op in ops {
+        let Some((group, label, expected_provider_elims)) = optimizer_family_candidate(op.op)
+        else {
+            continue;
+        };
+        let stat = grouped[group.index()].entry(label).or_default();
+        stat.count = stat.count.saturating_add(1);
+        stat.expected_provider_eliminations = stat
+            .expected_provider_eliminations
+            .saturating_add(u64::from(expected_provider_elims));
+    }
+    std::array::from_fn(|group_idx| {
+        let mut ranked = grouped[group_idx].drain().collect::<Vec<_>>();
+        ranked.sort_by(|(lhs_label, lhs), (rhs_label, rhs)| {
+            rhs.count
+                .cmp(&lhs.count)
+                .then_with(|| {
+                    rhs.expected_provider_eliminations
+                        .cmp(&lhs.expected_provider_eliminations)
+                })
+                .then_with(|| lhs_label.cmp(rhs_label))
+        });
+        ranked.truncate(OPT_FAMILY_TOP_K);
+        ranked
+    })
+}
+
+fn optimizer_family_candidate(op: Op) -> Option<(OptimizerFamilyGroup, &'static str, u8)> {
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_br_if as Op) {
+        return Some((OptimizerFamilyGroup::LocalControl, "op_local_get4_br_if", 1));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_eqz_br_if as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_i32_eqz_br_if",
+            2,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_compare_br_if as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_i32_const_compare_br_if",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_compare_br_if as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_local_get4_compare_br_if",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add_br_if as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_i32_const_add_br_if",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_i32_add_br_if as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_local_get4_i32_add_br_if",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add_set4 as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_i32_const_add_set4",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add_tee4 as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_i32_const_add_tee4",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_i32_add_set4 as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_local_get4_i32_add_set4",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_i32_add_tee4 as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_local_get4_i32_add_tee4",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_i32_const_add",
+            2,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_i32_add as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_get4_local_get4_i32_add",
+            2,
+        ));
+    }
+    if is_indexed_local_base_memory_family(op) {
+        return Some((OptimizerFamilyGroup::Memory, "memory.indexed_local_base", 2));
+    }
+    if is_local_base_memory_family(op) {
+        return Some((OptimizerFamilyGroup::Memory, "memory.local_base", 1));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_select4 as Op) {
+        return Some((OptimizerFamilyGroup::CallSelect, "select.4", 1));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_select8 as Op) {
+        return Some((OptimizerFamilyGroup::CallSelect, "select.8", 1));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_select16 as Op) {
+        return Some((OptimizerFamilyGroup::CallSelect, "select.16", 1));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_select as Op) {
+        return Some((OptimizerFamilyGroup::CallSelect, "select.generic", 0));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_call as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
+    {
+        return Some((OptimizerFamilyGroup::CallSelect, "call.direct", 0));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_return_call as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
+    {
+        return Some((OptimizerFamilyGroup::CallSelect, "call.return_direct", 0));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op) {
+        return Some((OptimizerFamilyGroup::CallSelect, "call.indirect", 0));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op) {
+        return Some((OptimizerFamilyGroup::CallSelect, "call.return_indirect", 0));
+    }
+    None
 }
 
 impl OptimizerProfiler {
@@ -214,7 +423,12 @@ impl OptimizerProfiler {
         }
     }
 
-    fn log_function_end(&self, rewrite: &FunctionRewrite) {
+    fn log_function_end(
+        &self,
+        rewrite: &FunctionRewrite,
+        original_instrs: usize,
+        packed: &super::sink::PackedOpStream,
+    ) {
         let elapsed = self.started_at.elapsed();
         let mut ranked = self
             .block_visits
@@ -237,6 +451,38 @@ impl OptimizerProfiler {
             rewrite.graph.nodes.len(),
             hottest,
         );
+        let packed_instrs = packed.instr_len();
+        eprintln!(
+            "[telomere-opt-profile] func={} packed_instrs={} original_instrs={} growth_pct={:.2} budget_pct={} budget_abs={} within_budget={}",
+            self.funcidx.0,
+            packed_instrs,
+            original_instrs,
+            packed_stream_growth_pct(original_instrs, packed_instrs),
+            PACKED_STREAM_GROWTH_BUDGET_PCT,
+            PACKED_STREAM_GROWTH_BUDGET_ABS,
+            packed_stream_within_budget(original_instrs, packed_instrs),
+        );
+        let grouped = collect_optimizer_family_candidates(&packed.ops);
+        for (priority_rank, group) in OptimizerFamilyGroup::ORDER.iter().copied().enumerate() {
+            let rendered = grouped[group.index()]
+                .iter()
+                .map(|(label, stat)| {
+                    format!(
+                        "{label}:count={},expected_provider_elims={}",
+                        stat.count, stat.expected_provider_eliminations
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            eprintln!(
+                "[telomere-opt-profile] func={} family_group={} priority_rank={} top_k={} candidates=[{}]",
+                self.funcidx.0,
+                group.label(),
+                priority_rank,
+                OPT_FAMILY_TOP_K,
+                rendered,
+            );
+        }
     }
 
     fn should_log_focus(&self, block_id: usize) -> bool {
@@ -346,6 +592,12 @@ enum BlockOpKind {
 #[derive(Clone, Copy)]
 struct AtomicBarrierShape {
     input_count: usize,
+}
+
+#[derive(Clone, Copy)]
+struct TrapSensitiveBarrierShape {
+    input_count: usize,
+    result_ty: ValType,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1179,9 +1431,9 @@ pub(crate) fn optimize_function(
         &rewrite.relower.block_bodies,
         &spill_plan,
     ));
-    let mut records = Vec::new();
+    let mut packed_ops = Vec::new();
     if !rewrite.relower.entry_prefix_ops.is_empty() {
-        records.extend(relower_block_body(
+        packed_ops.extend(relower_block_body(
             &BlockBody {
                 ops: rewrite.relower.entry_prefix_ops.clone(),
                 terminator: None,
@@ -1197,13 +1449,13 @@ pub(crate) fn optimize_function(
                 .get(block.start)
                 .filter(|record| record.op_eq(vm::op_loop))
             {
-                records.push(RecordEmit {
-                    source_start: Some(loop_header.old_start),
-                    op: loop_header.op,
-                    operands: loop_header.operands.clone(),
-                });
+                packed_ops.push(pack_op(
+                    Some(loop_header.old_start),
+                    loop_header.op,
+                    &loop_header.operands,
+                ));
             }
-            records.extend(relower_block_body(
+            packed_ops.extend(relower_block_body(
                 &rewrite.relower.block_bodies[block.id],
                 &rewrite.graph,
                 &spill_plan,
@@ -1213,25 +1465,31 @@ pub(crate) fn optimize_function(
     debug_assert!(verify_relower_preserves_call_ops(
         &program,
         &rewrite.relower.block_bodies,
-        &records,
+        &packed_ops,
     ));
     debug_assert!(verify_relower_preserves_effect_result_spills(
         &rewrite.graph,
         &rewrite.relower.block_bodies,
         &spill_plan,
-        &records,
+        &packed_ops,
     ));
-    if patch_jump_targets(&mut records).is_err() {
+    if patch_packed_jump_targets(&mut packed_ops).is_err() {
         return OptimizedFunction {
             instrs,
             op_lens: fallback_op_lens,
         };
     }
-    if let Some(profiler) = profiler.as_ref() {
-        profiler.log_function_end(&rewrite);
-    }
-    let packed = pack_records(&records);
+    let packed = build_packed_stream(packed_ops);
     debug_assert!(verify_packed_stream(&packed));
+    if let Some(profiler) = profiler.as_ref() {
+        profiler.log_function_end(&rewrite, instrs.len(), &packed);
+    }
+    if !packed_stream_within_budget(instrs.len(), packed.instr_len()) {
+        return OptimizedFunction {
+            instrs,
+            op_lens: fallback_op_lens,
+        };
+    }
     let op_lens = packed
         .ops
         .iter()
@@ -2853,20 +3111,19 @@ fn relower_block_body(
     body: &BlockBody,
     graph: &ValueGraph,
     spill_plan: &EffectResultSpillPlan,
-) -> Vec<RecordEmit> {
+) -> Vec<PackedOp> {
     let mut skipped_ops = HashSet::new();
-    let mut records_rev =
-        Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
+    let mut ops_rev = Vec::with_capacity(body.ops.len() + usize::from(body.terminator.is_some()));
 
     if let Some(terminator) = &body.terminator {
         if let Some(spec) = build_specialized_br_if_lowering(graph, body, terminator) {
             debug_assert!(verify_specialized_local_control_lowering(body, &spec));
             skipped_ops.extend(spec.absorbed_ops.iter().copied());
-            records_rev.push(relower_specialized_local_control_terminator(
+            ops_rev.push(relower_specialized_local_control_terminator(
                 &spec, spill_plan,
             ));
         } else if terminator.kind != BlockTerminatorKind::Loop {
-            records_rev.push(relower_block_terminator(terminator, spill_plan));
+            ops_rev.push(relower_block_terminator(terminator, spill_plan));
         }
     }
 
@@ -2894,50 +3151,50 @@ fn relower_block_body(
                 .iter()
                 .all(|absorbed_idx| !skipped_ops.contains(absorbed_idx)));
             skipped_ops.extend(absorbed_ops);
-            RecordEmit {
-                source_start: op.source_start,
-                op: spec.op,
-                operands: block_operands_to_raw_with_spills_for_op(
-                    spec.op,
-                    &spec.operands,
-                    spill_plan,
-                ),
-            }
+            pack_emitted_op(
+                op.source_start,
+                spec.op,
+                block_operands_to_raw_with_spills_for_op(spec.op, &spec.operands, spill_plan),
+            )
         } else {
             relower_block_op(op, spill_plan)
         };
 
         if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
-            records_rev.push(RecordEmit {
-                source_start: None,
-                op: local_tee_op(slot.size),
-                operands: vec![Operand {
+            ops_rev.push(pack_emitted_op(
+                None,
+                local_tee_op(slot.size),
+                vec![Operand {
                     local_addr: slot.addr,
                 }],
-            });
+            ));
         }
-        records_rev.push(lowered);
+        ops_rev.push(lowered);
     }
 
-    records_rev.reverse();
-    records_rev
+    ops_rev.reverse();
+    ops_rev
+}
+
+fn pack_emitted_op(source_start: Option<usize>, op: Op, operands: Vec<Operand>) -> PackedOp {
+    pack_op(source_start, op, &operands)
 }
 
 fn relower_specialized_local_control_op(
     spec: &SpecializedLocalControlLowering,
     spill_plan: &EffectResultSpillPlan,
-) -> RecordEmit {
-    RecordEmit {
-        source_start: spec.source_start,
-        op: spec.op,
-        operands: block_operands_to_raw_with_spills_for_op(spec.op, &spec.operands, spill_plan),
-    }
+) -> PackedOp {
+    pack_emitted_op(
+        spec.source_start,
+        spec.op,
+        block_operands_to_raw_with_spills_for_op(spec.op, &spec.operands, spill_plan),
+    )
 }
 
 fn relower_specialized_local_control_terminator(
     spec: &SpecializedLocalControlLowering,
     spill_plan: &EffectResultSpillPlan,
-) -> RecordEmit {
+) -> PackedOp {
     let terminator = BlockTerminator {
         source_start: spec.source_start,
         op: spec.op,
@@ -2946,11 +3203,11 @@ fn relower_specialized_local_control_terminator(
         inputs: Vec::new(),
         values: Vec::new(),
     };
-    RecordEmit {
-        source_start: spec.source_start,
-        op: spec.op,
-        operands: terminator_operands_to_raw_with_spills(&terminator, spill_plan),
-    }
+    pack_emitted_op(
+        spec.source_start,
+        spec.op,
+        terminator_operands_to_raw_with_spills(&terminator, spill_plan),
+    )
 }
 
 fn spill_slot_for_effect_result(
@@ -3134,7 +3391,7 @@ fn spec_memidx(spec: &SpecializedMemoryLowering) -> Option<u32> {
     }
 }
 
-fn relower_block_op(op: &BlockOp, spill_plan: &EffectResultSpillPlan) -> RecordEmit {
+fn relower_block_op(op: &BlockOp, spill_plan: &EffectResultSpillPlan) -> PackedOp {
     if op.kind == BlockOpKind::Select {
         if let Some(size) = block_op_select_size(op) {
             let typed_op = match size {
@@ -3144,30 +3401,26 @@ fn relower_block_op(op: &BlockOp, spill_plan: &EffectResultSpillPlan) -> RecordE
                 _ => None,
             };
             if let Some(opcode) = typed_op {
-                return RecordEmit {
-                    source_start: op.source_start,
-                    op: opcode,
-                    operands: Vec::new(),
-                };
+                return pack_emitted_op(op.source_start, opcode, Vec::new());
             }
         }
     }
-    RecordEmit {
-        source_start: op.source_start,
-        op: op.op,
-        operands: block_operands_to_raw_with_spills_for_op(op.op, &op.operands, spill_plan),
-    }
+    pack_emitted_op(
+        op.source_start,
+        op.op,
+        block_operands_to_raw_with_spills_for_op(op.op, &op.operands, spill_plan),
+    )
 }
 
 fn relower_block_terminator(
     terminator: &BlockTerminator,
     spill_plan: &EffectResultSpillPlan,
-) -> RecordEmit {
-    RecordEmit {
-        source_start: terminator.source_start,
-        op: terminator.op,
-        operands: terminator_operands_to_raw_with_spills(terminator, spill_plan),
-    }
+) -> PackedOp {
+    pack_emitted_op(
+        terminator.source_start,
+        terminator.op,
+        terminator_operands_to_raw_with_spills(terminator, spill_plan),
+    )
 }
 
 fn terminator_operands_to_raw_with_spills(
@@ -3585,6 +3838,16 @@ impl BlockOptimizer {
             );
             return;
         }
+        if let Some(shape) = decode_trap_sensitive_barrier_shape(record) {
+            self.emit_explicit_barrier_results(
+                record,
+                EffectBarrier::TrapSensitive,
+                shape.input_count,
+                &[shape.result_ty],
+                ordinal,
+            );
+            return;
+        }
         self.emit_barrier(record, ordinal);
     }
 
@@ -3726,6 +3989,9 @@ impl BlockOptimizer {
             return;
         }
         let op_idx = self.push_original(record);
+        if let Some(entry) = self.builder.entry_mut(op_idx) {
+            entry.inputs = vec![value];
+        }
         self.bind_local(slot, value);
         self.last_local_write = Some(LocalWrite {
             slot,
@@ -3778,13 +4044,19 @@ impl BlockOptimizer {
             _ => None,
         };
         if let Some(chosen) = chosen {
-            let cond_removed = self.try_remove_expr(cond);
-            let dropped = if chosen == lhs {
-                self.try_remove_expr(rhs)
+            let removable_other = if chosen == lhs {
+                self.can_remove_expr(rhs)
             } else {
-                self.try_remove_expr(lhs)
+                self.can_remove_expr(lhs)
             };
-            if cond_removed && dropped {
+            if self.can_remove_expr(cond) && removable_other {
+                let cond_removed = self.try_remove_expr(cond);
+                let dropped = if chosen == lhs {
+                    self.try_remove_expr(rhs)
+                } else {
+                    self.try_remove_expr(lhs)
+                };
+                debug_assert!(cond_removed && dropped);
                 self.push_stack(chosen);
                 self.incref(chosen);
                 return;
@@ -3857,8 +4129,8 @@ impl BlockOptimizer {
         };
         if self.can_remove_expr(value) {
             if let Some(source) = self.lookup_cse_source(key) {
-                self.try_remove_expr(value);
                 if let Some(materialized) = self.try_materialize_value(record.old_start, source) {
+                    self.try_remove_expr(value);
                     self.push_stack(materialized);
                     return;
                 }
@@ -3922,7 +4194,9 @@ impl BlockOptimizer {
             (self.exprs[lhs.0].const_value, self.exprs[rhs.0].const_value)
         {
             if let Some(value) = fold_binary(op, lhs_const, rhs_const) {
-                if self.try_remove_expr(lhs) && self.try_remove_expr(rhs) {
+                if self.can_remove_expr(lhs) && self.can_remove_expr(rhs) {
+                    self.try_remove_expr(lhs);
+                    self.try_remove_expr(rhs);
                     self.emit_const(record.old_start, const_value_type(value), value, ordinal);
                     return;
                 }
@@ -3937,9 +4211,9 @@ impl BlockOptimizer {
         };
         if self.can_remove_expr(lhs) && self.can_remove_expr(rhs) {
             if let Some(source) = self.lookup_cse_source(key) {
-                self.try_remove_expr(lhs);
-                self.try_remove_expr(rhs);
                 if let Some(materialized) = self.try_materialize_value(record.old_start, source) {
+                    self.try_remove_expr(lhs);
+                    self.try_remove_expr(rhs);
                     self.push_stack(materialized);
                     return;
                 }
@@ -4516,6 +4790,13 @@ impl BlockOptimizer {
             && state.removable
             && state.producer_op.is_some()
             && state.materialized_block == Some(self.block_id)
+            && !self.builder_uses_expr(expr, state.producer_op)
+    }
+
+    fn builder_uses_expr(&self, expr: ValueRef, producer_op: Option<usize>) -> bool {
+        self.builder
+            .live_entries()
+            .any(|(idx, entry)| Some(idx) != producer_op && entry.inputs.contains(&expr))
     }
 
     fn can_materialize(&self, expr: ValueRef) -> bool {
@@ -5911,6 +6192,93 @@ fn specialized_memory_op(op: Op) -> Option<Op> {
     None
 }
 
+fn is_local_base_memory_family(op: Op) -> bool {
+    const SOURCES: &[Op] = &[
+        vm::op_i32_load as Op,
+        vm::op_i64_load as Op,
+        vm::op_f32_load as Op,
+        vm::op_f64_load as Op,
+        vm::op_i32_load8_s as Op,
+        vm::op_i32_load8_u as Op,
+        vm::op_i32_load16_s as Op,
+        vm::op_i32_load16_u as Op,
+        vm::op_i64_load8_s as Op,
+        vm::op_i64_load8_u as Op,
+        vm::op_i64_load16_s as Op,
+        vm::op_i64_load16_u as Op,
+        vm::op_i64_load32_s as Op,
+        vm::op_i64_load32_u as Op,
+        vm::op_i32_store as Op,
+        vm::op_i64_store as Op,
+        vm::op_f32_store as Op,
+        vm::op_f64_store as Op,
+        vm::op_i32_store8 as Op,
+        vm::op_i32_store16 as Op,
+        vm::op_i64_store8 as Op,
+        vm::op_i64_store16 as Op,
+        vm::op_i64_store32 as Op,
+        vm::op_i32_load_local as Op,
+        vm::op_i64_load_local as Op,
+        vm::op_f32_load_local as Op,
+        vm::op_f64_load_local as Op,
+        vm::op_i32_load8_s_local as Op,
+        vm::op_i32_load8_u_local as Op,
+        vm::op_i32_load16_s_local as Op,
+        vm::op_i32_load16_u_local as Op,
+        vm::op_i64_load8_s_local as Op,
+        vm::op_i64_load8_u_local as Op,
+        vm::op_i64_load16_s_local as Op,
+        vm::op_i64_load16_u_local as Op,
+        vm::op_i64_load32_s_local as Op,
+        vm::op_i64_load32_u_local as Op,
+        vm::op_i32_store_local as Op,
+        vm::op_i64_store_local as Op,
+        vm::op_f32_store_local as Op,
+        vm::op_f64_store_local as Op,
+        vm::op_i32_store8_local as Op,
+        vm::op_i32_store16_local as Op,
+        vm::op_i64_store8_local as Op,
+        vm::op_i64_store16_local as Op,
+        vm::op_i64_store32_local as Op,
+    ];
+    SOURCES
+        .iter()
+        .filter_map(|source| specialized_memory_op(*source))
+        .any(|candidate| std::ptr::fn_addr_eq(candidate, op))
+}
+
+fn is_indexed_local_base_memory_family(op: Op) -> bool {
+    const SOURCES: &[Op] = &[
+        vm::op_i32_load_indexed_local as Op,
+        vm::op_i64_load_indexed_local as Op,
+        vm::op_f32_load_indexed_local as Op,
+        vm::op_f64_load_indexed_local as Op,
+        vm::op_i32_load8_s_indexed_local as Op,
+        vm::op_i32_load8_u_indexed_local as Op,
+        vm::op_i32_load16_s_indexed_local as Op,
+        vm::op_i32_load16_u_indexed_local as Op,
+        vm::op_i64_load8_s_indexed_local as Op,
+        vm::op_i64_load8_u_indexed_local as Op,
+        vm::op_i64_load16_s_indexed_local as Op,
+        vm::op_i64_load16_u_indexed_local as Op,
+        vm::op_i64_load32_s_indexed_local as Op,
+        vm::op_i64_load32_u_indexed_local as Op,
+        vm::op_i32_store_indexed_local as Op,
+        vm::op_i64_store_indexed_local as Op,
+        vm::op_f32_store_indexed_local as Op,
+        vm::op_f64_store_indexed_local as Op,
+        vm::op_i32_store8_indexed_local as Op,
+        vm::op_i32_store16_indexed_local as Op,
+        vm::op_i64_store8_indexed_local as Op,
+        vm::op_i64_store16_indexed_local as Op,
+        vm::op_i64_store32_indexed_local as Op,
+    ];
+    SOURCES
+        .iter()
+        .filter_map(|source| specialized_memory_op(*source))
+        .any(|candidate| std::ptr::fn_addr_eq(candidate, op))
+}
+
 fn block_op_i32_const(op: &BlockOp) -> Option<i32> {
     matches!(op.kind, BlockOpKind::Const).then(|| match op.operands.first()? {
         BlockOperand::I32(value) => Some(*value),
@@ -6962,6 +7330,7 @@ fn table_targets(program: &BasicBlockProgram, terminator: &BlockTerminator) -> V
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn patch_jump_targets(records: &mut [RecordEmit]) -> Result<(), ()> {
     let mut old_to_new = HashMap::new();
     let mut cursor = 0usize;
@@ -6996,6 +7365,49 @@ pub(crate) fn patch_jump_targets(records: &mut [RecordEmit]) -> Result<(), ()> {
                 record.operands[idx] = Operand {
                     jump_addr: patched as u32,
                 };
+            }
+        }
+    }
+    Ok(())
+}
+
+fn patch_packed_jump_targets(ops: &mut [PackedOp]) -> Result<(), ()> {
+    let mut old_to_new = HashMap::new();
+    let mut cursor = 0usize;
+    let mut record_positions = Vec::with_capacity(ops.len());
+    for op in ops.iter() {
+        record_positions.push((op.source_start, cursor));
+        if let Some(old_start) = op.source_start {
+            old_to_new.entry(old_start).or_insert(cursor);
+        }
+        cursor += op.len();
+    }
+    for op in ops.iter_mut() {
+        if let Some(target_index) = record_jump_target_operand_index(op.op) {
+            let Some(PackedOperand::JumpTarget(target)) = op.operands.get(target_index).copied()
+            else {
+                return Err(());
+            };
+            let Some(patched) = old_to_new
+                .get(&(target as usize))
+                .copied()
+                .or_else(|| infer_missing_target_cursor(&record_positions, target as usize))
+            else {
+                return Err(());
+            };
+            op.operands[target_index] = PackedOperand::JumpTarget(patched as u32);
+        } else if std::ptr::fn_addr_eq(op.op, vm::op_br_table as Op) {
+            let Some(PackedOperand::U32(table_len)) = op.operands.first().copied() else {
+                return Err(());
+            };
+            for idx in 1..=table_len as usize + 1 {
+                let Some(PackedOperand::JumpTarget(target)) = op.operands.get(idx).copied() else {
+                    return Err(());
+                };
+                let Some(patched) = old_to_new.get(&(target as usize)).copied() else {
+                    return Err(());
+                };
+                op.operands[idx] = PackedOperand::JumpTarget(patched as u32);
             }
         }
     }
@@ -7124,14 +7536,13 @@ fn verify_slot_plan(program: &BasicBlockProgram, rewrite: &FunctionRewrite) -> b
 fn verify_relower_preserves_call_ops(
     program: &BasicBlockProgram,
     bodies: &[BlockBody],
-    records: &[RecordEmit],
+    ops: &[PackedOp],
 ) -> bool {
     let reachable = reachable_blocks(program, bodies);
     verify_barrier_op_counts(program, &reachable, |source_start, op| {
-        records
-            .iter()
-            .filter(|record| {
-                record.source_start == Some(source_start) && std::ptr::fn_addr_eq(record.op, op)
+        ops.iter()
+            .filter(|packed| {
+                packed.source_start == Some(source_start) && std::ptr::fn_addr_eq(packed.op, op)
             })
             .count()
     })
@@ -7179,7 +7590,7 @@ fn verify_relower_preserves_effect_result_spills(
     graph: &ValueGraph,
     bodies: &[BlockBody],
     spill_plan: &EffectResultSpillPlan,
-    records: &[RecordEmit],
+    ops: &[PackedOp],
 ) -> bool {
     let mut expected_reads = HashMap::new();
     for body in bodies {
@@ -7212,15 +7623,15 @@ fn verify_relower_preserves_effect_result_spills(
     }
 
     let mut actual_reads = HashMap::new();
-    for record in records {
+    for op in ops {
         for &(addr, size) in expected_reads.keys() {
-            if std::ptr::fn_addr_eq(record.op, local_tee_op(size)) {
+            if std::ptr::fn_addr_eq(op.op, local_tee_op(size)) {
                 continue;
             }
-            let count = record
+            let count = op
                 .operands
                 .iter()
-                .filter(|operand| unsafe { operand.local_addr } == addr)
+                .filter(|operand| matches!(operand, PackedOperand::LocalAddr(local_addr) if *local_addr == addr))
                 .count();
             if count > 0 {
                 *actual_reads.entry((addr, size)).or_insert(0usize) += count;
@@ -7238,12 +7649,12 @@ fn verify_relower_preserves_effect_result_spills(
         if !graph[value.0].needs_spill {
             return false;
         }
-        let tee_count = records
+        let tee_count = ops
             .iter()
-            .filter(|record| {
-                record.source_start.is_none()
-                    && std::ptr::fn_addr_eq(record.op, local_tee_op(slot.size))
-                    && unsafe { record.operands[0].local_addr } == slot.addr
+            .filter(|op| {
+                op.source_start.is_none()
+                    && std::ptr::fn_addr_eq(op.op, local_tee_op(slot.size))
+                    && matches!(op.operands.first(), Some(PackedOperand::LocalAddr(addr)) if *addr == slot.addr)
             })
             .count();
         if tee_count == 0 {
@@ -7848,6 +8259,50 @@ fn decode_atomic_barrier_shape(record: &DecodedInstr) -> Option<AtomicBarrierSha
         || record.op_eq(vm::op_memory_atomic_wait64_indexed_shared as Op)
     {
         return Some(AtomicBarrierShape { input_count: 3 });
+    }
+    None
+}
+
+fn decode_trap_sensitive_barrier_shape(record: &DecodedInstr) -> Option<TrapSensitiveBarrierShape> {
+    if record.op_eq(vm::op_i32_div_s)
+        || record.op_eq(vm::op_i32_div_u)
+        || record.op_eq(vm::op_i32_rem_s)
+        || record.op_eq(vm::op_i32_rem_u)
+    {
+        return Some(TrapSensitiveBarrierShape {
+            input_count: 2,
+            result_ty: ValType::I32,
+        });
+    }
+    if record.op_eq(vm::op_i64_div_s)
+        || record.op_eq(vm::op_i64_div_u)
+        || record.op_eq(vm::op_i64_rem_s)
+        || record.op_eq(vm::op_i64_rem_u)
+    {
+        return Some(TrapSensitiveBarrierShape {
+            input_count: 2,
+            result_ty: ValType::I64,
+        });
+    }
+    if record.op_eq(vm::op_i32_trunc_f32_s)
+        || record.op_eq(vm::op_i32_trunc_f32_u)
+        || record.op_eq(vm::op_i32_trunc_f64_s)
+        || record.op_eq(vm::op_i32_trunc_f64_u)
+    {
+        return Some(TrapSensitiveBarrierShape {
+            input_count: 1,
+            result_ty: ValType::I32,
+        });
+    }
+    if record.op_eq(vm::op_i64_trunc_f32_s)
+        || record.op_eq(vm::op_i64_trunc_f32_u)
+        || record.op_eq(vm::op_i64_trunc_f64_s)
+        || record.op_eq(vm::op_i64_trunc_f64_u)
+    {
+        return Some(TrapSensitiveBarrierShape {
+            input_count: 1,
+            result_ty: ValType::I64,
+        });
     }
     None
 }
@@ -11313,5 +11768,13 @@ mod tests {
         assert_eq!(candidate.root_value, address_value);
         assert_eq!(candidate.result_size, 4);
         assert_eq!(candidate.source_start, Some(10));
+    }
+
+    #[test]
+    fn packed_stream_budget_uses_relative_growth_with_small_function_slack() {
+        assert!(packed_stream_within_budget(4, 12));
+        assert!(!packed_stream_within_budget(4, 13));
+        assert!(packed_stream_within_budget(100, 110));
+        assert!(!packed_stream_within_budget(100, 111));
     }
 }

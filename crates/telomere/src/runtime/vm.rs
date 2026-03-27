@@ -55,6 +55,12 @@ struct DispatchProfileConfig {
 }
 
 #[cfg(feature = "vm-profile")]
+const VM_PROFILE_TOP_K: usize = 16;
+
+#[cfg(feature = "vm-profile")]
+const HANDLER_LAYOUT_STABILITY_PHASES: usize = 2;
+
+#[cfg(feature = "vm-profile")]
 #[derive(Debug, Default, Clone, Copy)]
 struct DispatchProfileStat {
     count: u64,
@@ -103,10 +109,10 @@ struct DispatchProfileSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum HandlerLayoutGroup {
     Locals,
-    Control,
     Superinstructions,
     Memory,
     Call,
+    Control,
     Numeric,
     Globals,
     Tables,
@@ -116,6 +122,35 @@ enum HandlerLayoutGroup {
     Simd,
     Traps,
     Other,
+}
+
+#[cfg(feature = "vm-profile")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum DispatchProfileFamilyGroup {
+    LocalControl,
+    Memory,
+    CallSelect,
+}
+
+#[cfg(feature = "vm-profile")]
+impl DispatchProfileFamilyGroup {
+    const ORDER: [Self; 3] = [Self::LocalControl, Self::Memory, Self::CallSelect];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::LocalControl => 0,
+            Self::Memory => 1,
+            Self::CallSelect => 2,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::LocalControl => "local/control",
+            Self::Memory => "memory",
+            Self::CallSelect => "call/select",
+        }
+    }
 }
 
 #[cfg(feature = "vm-profile")]
@@ -206,6 +241,83 @@ fn handler_layout_group(label: &'static str) -> HandlerLayoutGroup {
 }
 
 #[cfg(feature = "vm-profile")]
+fn dispatch_profile_family_group(label: &'static str) -> DispatchProfileFamilyGroup {
+    if label.starts_with("op_call")
+        || label.starts_with("op_return_call")
+        || label.starts_with("op_select")
+    {
+        return DispatchProfileFamilyGroup::CallSelect;
+    }
+    if label.contains("_load")
+        || label.contains("_store")
+        || label.starts_with("op_mem_")
+        || label == "op_data_drop"
+    {
+        return DispatchProfileFamilyGroup::Memory;
+    }
+    DispatchProfileFamilyGroup::LocalControl
+}
+
+#[cfg(feature = "vm-profile")]
+fn grouped_profile_stats(
+    stats: &[(&'static str, DispatchProfileStat)],
+) -> [Vec<(&'static str, DispatchProfileStat)>; 3] {
+    let mut grouped: [Vec<(&'static str, DispatchProfileStat)>; 3] =
+        std::array::from_fn(|_| Vec::new());
+    let top_n = dispatch_profile_config().top_n;
+    for entry in stats.iter().copied() {
+        let group = dispatch_profile_family_group(entry.0);
+        let bucket = &mut grouped[group.index()];
+        if bucket.len() < top_n {
+            bucket.push(entry);
+        }
+    }
+    grouped
+}
+
+#[cfg(feature = "vm-profile")]
+fn grouped_profile_pairs(
+    pairs: &[((&'static str, &'static str), DispatchProfileStat)],
+) -> [Vec<((&'static str, &'static str), DispatchProfileStat)>; 3] {
+    let mut grouped: [Vec<((&'static str, &'static str), DispatchProfileStat)>; 3] =
+        std::array::from_fn(|_| Vec::new());
+    let top_n = dispatch_profile_config().top_n;
+    for entry in pairs.iter().copied() {
+        let group = dispatch_profile_family_group((entry.0).0);
+        let bucket = &mut grouped[group.index()];
+        if bucket.len() < top_n {
+            bucket.push(entry);
+        }
+    }
+    grouped
+}
+
+#[cfg(feature = "vm-profile")]
+fn grouped_profile_triples(
+    triples: &[(
+        (&'static str, &'static str, &'static str),
+        DispatchProfileStat,
+    )],
+) -> [Vec<(
+    (&'static str, &'static str, &'static str),
+    DispatchProfileStat,
+)>; 3] {
+    let mut grouped: [Vec<(
+        (&'static str, &'static str, &'static str),
+        DispatchProfileStat,
+    )>; 3] = std::array::from_fn(|_| Vec::new());
+    let top_n = dispatch_profile_config().top_n;
+    for entry in triples.iter().copied() {
+        let group = dispatch_profile_family_group((entry.0).0);
+        let bucket = &mut grouped[group.index()];
+        if bucket.len() < top_n {
+            bucket.push(entry);
+        }
+    }
+    grouped
+}
+
+#[cfg(feature = "vm-profile")]
 fn layout_span_for_pair(pair: (&'static str, &'static str)) -> usize {
     let lhs = handler_layout_group(pair.0).rank();
     let rhs = handler_layout_group(pair.1).rank();
@@ -267,11 +379,16 @@ impl Drop for DispatchProfileRunGuard {
             return;
         }
         eprintln!(
-            "[telomere-vm-profile] total_instrs={} elapsed_ms={:.3}",
+            "[telomere-vm-profile] total_instrs={} elapsed_ms={:.3} top_k={} layout_stability_phases={}",
             snapshot.total_instrs,
-            snapshot.elapsed.as_secs_f64() * 1000.0
+            snapshot.elapsed.as_secs_f64() * 1000.0,
+            VM_PROFILE_TOP_K,
+            HANDLER_LAYOUT_STABILITY_PHASES,
         );
-        for (label, stat) in snapshot.stats {
+        let grouped_stats = grouped_profile_stats(&snapshot.stats);
+        let grouped_pairs = grouped_profile_pairs(&snapshot.pairs);
+        let grouped_triples = grouped_profile_triples(&snapshot.triples);
+        for &(label, stat) in &snapshot.stats {
             let share = if snapshot.total_instrs == 0 {
                 0.0
             } else {
@@ -288,7 +405,7 @@ impl Drop for DispatchProfileRunGuard {
                 label, stat.count, approx_elapsed_ms, share
             );
         }
-        for ((lhs, rhs), stat) in snapshot.pairs {
+        for &((lhs, rhs), stat) in &snapshot.pairs {
             eprintln!(
                 "[telomere-vm-profile] pair={}=>{} count={} layout_span={} groups={:?}=>{:?}",
                 lhs,
@@ -299,7 +416,7 @@ impl Drop for DispatchProfileRunGuard {
                 handler_layout_group(rhs)
             );
         }
-        for ((a, b, c), stat) in snapshot.triples {
+        for &((a, b, c), stat) in &snapshot.triples {
             eprintln!(
                 "[telomere-vm-profile] triple={}=>{}=>{} count={} layout_span={} groups={:?}=>{:?}=>{:?}",
                 a,
@@ -310,6 +427,43 @@ impl Drop for DispatchProfileRunGuard {
                 handler_layout_group(a),
                 handler_layout_group(b),
                 handler_layout_group(c)
+            );
+        }
+        for group in DispatchProfileFamilyGroup::ORDER {
+            let stats = grouped_stats[group.index()]
+                .iter()
+                .map(|(label, stat)| format!("{label}:count={}", stat.count))
+                .collect::<Vec<_>>()
+                .join(",");
+            let pairs = grouped_pairs[group.index()]
+                .iter()
+                .map(|((lhs, rhs), stat)| {
+                    format!(
+                        "{lhs}=>{rhs}:count={},layout_span={}",
+                        stat.count,
+                        layout_span_for_pair((*lhs, *rhs))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let triples = grouped_triples[group.index()]
+                .iter()
+                .map(|((a, b, c), stat)| {
+                    format!(
+                        "{a}=>{b}=>{c}:count={},layout_span={}",
+                        stat.count,
+                        layout_span_for_triple((*a, *b, *c))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            eprintln!(
+                "[telomere-vm-profile] family_group={} top_k={} stats=[{}] pairs=[{}] triples=[{}]",
+                group.label(),
+                dispatch_profile_config().top_n,
+                stats,
+                pairs,
+                triples,
             );
         }
     }
@@ -326,7 +480,7 @@ fn dispatch_profile_config() -> DispatchProfileConfig {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value != 0)
-            .unwrap_or(16);
+            .unwrap_or(VM_PROFILE_TOP_K);
         DispatchProfileConfig { enabled, top_n }
     })
 }
@@ -1145,5 +1299,41 @@ mod tests {
             handler_layout_group("op_br_if"),
             HandlerLayoutGroup::Control
         );
+    }
+
+    #[test]
+    fn dispatch_profile_groups_hot_stats_by_phase0_buckets() {
+        let _enabled = DispatchProfileTestOverride::enable();
+        {
+            let _guard = DispatchProfileRunGuard::new();
+            dispatch_profile_count("op_local_get4_i32_eqz_br_if");
+            dispatch_profile_count("op_i32_load_local_base");
+            dispatch_profile_count("op_call");
+            dispatch_profile_count("op_select4");
+            dispatch_profile_count("op_i32_load_local_base");
+        }
+
+        let snapshot =
+            take_last_dispatch_profile_snapshot_for_test().expect("profile snapshot must exist");
+        let grouped_stats = grouped_profile_stats(&snapshot.stats);
+
+        assert_eq!(
+            grouped_stats[DispatchProfileFamilyGroup::LocalControl.index()][0].0,
+            "op_local_get4_i32_eqz_br_if"
+        );
+        assert_eq!(
+            grouped_stats[DispatchProfileFamilyGroup::Memory.index()][0].0,
+            "op_i32_load_local_base"
+        );
+        assert_eq!(
+            dispatch_profile_family_group("op_select4"),
+            DispatchProfileFamilyGroup::CallSelect
+        );
+        let call_select_labels = grouped_stats[DispatchProfileFamilyGroup::CallSelect.index()]
+            .iter()
+            .map(|(label, _)| *label)
+            .collect::<Vec<_>>();
+        assert!(call_select_labels.contains(&"op_call"));
+        assert!(call_select_labels.contains(&"op_select4"));
     }
 }
