@@ -10,6 +10,7 @@ publish.workspace = true
 [features]
 default = ["full"]
 full = ["telomere/full"]
+vm-profile = ["telomere/vm-profile"]
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }

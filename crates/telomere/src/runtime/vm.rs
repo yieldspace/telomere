@@ -28,8 +28,9 @@ use crate::{
     },
     Store,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "vm-profile"))]
 use std::cell::Cell;
+#[cfg(feature = "vm-profile")]
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -37,6 +38,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "vm-profile")]
 thread_local! {
     static DISPATCH_PROFILE_SESSION: RefCell<Option<DispatchProfileSession>> = const { RefCell::new(None) };
     #[cfg(test)]
@@ -45,44 +47,190 @@ thread_local! {
     static LAST_DISPATCH_PROFILE_SNAPSHOT: RefCell<Option<DispatchProfileSnapshot>> = const { RefCell::new(None) };
 }
 
+#[cfg(feature = "vm-profile")]
 #[derive(Clone, Copy)]
 struct DispatchProfileConfig {
     enabled: bool,
     top_n: usize,
 }
 
+#[cfg(feature = "vm-profile")]
 #[derive(Debug, Default, Clone, Copy)]
 struct DispatchProfileStat {
     count: u64,
 }
 
+#[cfg(feature = "vm-profile")]
 struct DispatchProfileSession {
     started_at: Instant,
     total_instrs: u64,
     stats: HashMap<&'static str, DispatchProfileStat>,
+    pairs: HashMap<(&'static str, &'static str), DispatchProfileStat>,
+    triples: HashMap<(&'static str, &'static str, &'static str), DispatchProfileStat>,
+    last_label: Option<&'static str>,
+    last_pair: Option<(&'static str, &'static str)>,
 }
 
+#[cfg(feature = "vm-profile")]
 impl DispatchProfileSession {
     fn new() -> Self {
         Self {
             started_at: Instant::now(),
             total_instrs: 0,
             stats: HashMap::new(),
+            pairs: HashMap::new(),
+            triples: HashMap::new(),
+            last_label: None,
+            last_pair: None,
         }
     }
 }
 
+#[cfg(feature = "vm-profile")]
 #[derive(Clone)]
 struct DispatchProfileSnapshot {
     elapsed: Duration,
     total_instrs: u64,
     stats: Vec<(&'static str, DispatchProfileStat)>,
+    pairs: Vec<((&'static str, &'static str), DispatchProfileStat)>,
+    triples: Vec<(
+        (&'static str, &'static str, &'static str),
+        DispatchProfileStat,
+    )>,
 }
 
+#[cfg(feature = "vm-profile")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum HandlerLayoutGroup {
+    Locals,
+    Control,
+    Superinstructions,
+    Memory,
+    Call,
+    Numeric,
+    Globals,
+    Tables,
+    Refs,
+    BulkMemory,
+    Atomics,
+    Simd,
+    Traps,
+    Other,
+}
+
+#[cfg(feature = "vm-profile")]
+impl HandlerLayoutGroup {
+    const fn rank(self) -> usize {
+        match self {
+            Self::Locals => 0,
+            Self::Superinstructions => 1,
+            Self::Memory => 2,
+            Self::Call => 3,
+            Self::Control => 4,
+            Self::Numeric => 5,
+            Self::Globals => 6,
+            Self::Tables => 7,
+            Self::Refs => 8,
+            Self::BulkMemory => 9,
+            Self::Atomics => 10,
+            Self::Simd => 11,
+            Self::Traps => 12,
+            Self::Other => 13,
+        }
+    }
+}
+
+#[cfg(feature = "vm-profile")]
+fn handler_layout_group(label: &'static str) -> HandlerLayoutGroup {
+    if label == "op_unreachable" {
+        return HandlerLayoutGroup::Traps;
+    }
+    if label.starts_with("special_")
+        || matches!(
+            label,
+            "op_return"
+                | "op_end"
+                | "op_br"
+                | "op_else"
+                | "op_br_if"
+                | "op_br_table"
+                | "op_loop"
+                | "op_if"
+        )
+    {
+        return HandlerLayoutGroup::Control;
+    }
+    if label.starts_with("op_local_get4_i32_const_add")
+        || label.starts_with("op_local_get4_local_get4_i32_add")
+        || matches!(
+            label,
+            "op_local_get4_br_if"
+                | "op_local_get4_i32_eqz_br_if"
+                | "op_local_get4_i32_const_compare_br_if"
+                | "op_local_get4_local_get4_compare_br_if"
+        )
+    {
+        return HandlerLayoutGroup::Superinstructions;
+    }
+    if label.starts_with("op_mem_") || label == "op_data_drop" {
+        return HandlerLayoutGroup::BulkMemory;
+    }
+    if label.starts_with("op_atomic") {
+        return HandlerLayoutGroup::Atomics;
+    }
+    if label.starts_with("op_call") || label.starts_with("op_return_call") {
+        return HandlerLayoutGroup::Call;
+    }
+    if label.contains("_load") || label.contains("_store") {
+        return HandlerLayoutGroup::Memory;
+    }
+    if label.starts_with("op_local_") || label.starts_with("op_select") || label == "op_drop" {
+        return HandlerLayoutGroup::Locals;
+    }
+    if label.starts_with("op_global_") {
+        return HandlerLayoutGroup::Globals;
+    }
+    if label.starts_with("op_table_") {
+        return HandlerLayoutGroup::Tables;
+    }
+    if label.starts_with("op_ref_") {
+        return HandlerLayoutGroup::Refs;
+    }
+    if label.starts_with("op_v128") || label.contains("x") {
+        return HandlerLayoutGroup::Simd;
+    }
+    if label.starts_with("op_i") || label.starts_with("op_f") {
+        return HandlerLayoutGroup::Numeric;
+    }
+    HandlerLayoutGroup::Other
+}
+
+#[cfg(feature = "vm-profile")]
+fn layout_span_for_pair(pair: (&'static str, &'static str)) -> usize {
+    let lhs = handler_layout_group(pair.0).rank();
+    let rhs = handler_layout_group(pair.1).rank();
+    lhs.max(rhs) - lhs.min(rhs)
+}
+
+#[cfg(feature = "vm-profile")]
+fn layout_span_for_triple(triple: (&'static str, &'static str, &'static str)) -> usize {
+    let a = handler_layout_group(triple.0).rank();
+    let b = handler_layout_group(triple.1).rank();
+    let c = handler_layout_group(triple.2).rank();
+    let min = a.min(b).min(c);
+    let max = a.max(b).max(c);
+    max - min
+}
+
+#[cfg(feature = "vm-profile")]
 struct DispatchProfileRunGuard {
     active: bool,
 }
 
+#[cfg(not(feature = "vm-profile"))]
+struct DispatchProfileRunGuard;
+
+#[cfg(feature = "vm-profile")]
 impl DispatchProfileRunGuard {
     fn new() -> Self {
         let active = dispatch_profile_enabled();
@@ -95,6 +243,14 @@ impl DispatchProfileRunGuard {
     }
 }
 
+#[cfg(not(feature = "vm-profile"))]
+impl DispatchProfileRunGuard {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(feature = "vm-profile")]
 impl Drop for DispatchProfileRunGuard {
     fn drop(&mut self) {
         if !self.active {
@@ -132,9 +288,34 @@ impl Drop for DispatchProfileRunGuard {
                 label, stat.count, approx_elapsed_ms, share
             );
         }
+        for ((lhs, rhs), stat) in snapshot.pairs {
+            eprintln!(
+                "[telomere-vm-profile] pair={}=>{} count={} layout_span={} groups={:?}=>{:?}",
+                lhs,
+                rhs,
+                stat.count,
+                layout_span_for_pair((lhs, rhs)),
+                handler_layout_group(lhs),
+                handler_layout_group(rhs)
+            );
+        }
+        for ((a, b, c), stat) in snapshot.triples {
+            eprintln!(
+                "[telomere-vm-profile] triple={}=>{}=>{} count={} layout_span={} groups={:?}=>{:?}=>{:?}",
+                a,
+                b,
+                c,
+                stat.count,
+                layout_span_for_triple((a, b, c)),
+                handler_layout_group(a),
+                handler_layout_group(b),
+                handler_layout_group(c)
+            );
+        }
     }
 }
 
+#[cfg(feature = "vm-profile")]
 fn dispatch_profile_config() -> DispatchProfileConfig {
     static CONFIG: OnceLock<DispatchProfileConfig> = OnceLock::new();
     *CONFIG.get_or_init(|| {
@@ -150,32 +331,46 @@ fn dispatch_profile_config() -> DispatchProfileConfig {
     })
 }
 
+#[cfg(feature = "vm-profile")]
 fn finish_dispatch_profile_session() -> Option<DispatchProfileSnapshot> {
     DISPATCH_PROFILE_SESSION.with(|session| {
         let mut session = session.borrow_mut();
         let profile = session.take()?;
         let now = Instant::now();
         let mut stats = profile.stats.into_iter().collect::<Vec<_>>();
+        let mut pairs = profile.pairs.into_iter().collect::<Vec<_>>();
+        let mut triples = profile.triples.into_iter().collect::<Vec<_>>();
         stats.sort_by_key(|(_, stat)| std::cmp::Reverse(stat.count));
+        pairs.sort_by_key(|(_, stat)| std::cmp::Reverse(stat.count));
+        triples.sort_by_key(|(_, stat)| std::cmp::Reverse(stat.count));
         stats.truncate(dispatch_profile_config().top_n);
+        pairs.truncate(dispatch_profile_config().top_n);
+        triples.truncate(dispatch_profile_config().top_n);
         Some(DispatchProfileSnapshot {
             elapsed: now.saturating_duration_since(profile.started_at),
             total_instrs: profile.total_instrs,
             stats,
+            pairs,
+            triples,
         })
     })
 }
 
 #[inline(always)]
+#[cfg(feature = "vm-profile")]
 fn dispatch_profile_enabled() -> bool {
     #[cfg(test)]
     if DISPATCH_PROFILE_TEST_ENABLED.with(|enabled| enabled.get()) {
         return true;
     }
+    if !cfg!(any(debug_assertions, test)) {
+        return false;
+    }
     dispatch_profile_config().enabled
 }
 
 #[inline(always)]
+#[cfg(feature = "vm-profile")]
 pub(crate) fn dispatch_profile_count(label: &'static str) {
     if !dispatch_profile_enabled() {
         return;
@@ -187,16 +382,32 @@ pub(crate) fn dispatch_profile_count(label: &'static str) {
         };
         let stat = profile.stats.entry(label).or_default();
         stat.count = stat.count.saturating_add(1);
+        if let Some(previous) = profile.last_label {
+            let pair = (previous, label);
+            let pair_stat = profile.pairs.entry(pair).or_default();
+            pair_stat.count = pair_stat.count.saturating_add(1);
+            if let Some((first, second)) = profile.last_pair {
+                let triple = (first, second, label);
+                let triple_stat = profile.triples.entry(triple).or_default();
+                triple_stat.count = triple_stat.count.saturating_add(1);
+            }
+            profile.last_pair = Some(pair);
+        }
+        profile.last_label = Some(label);
         profile.total_instrs = profile.total_instrs.saturating_add(1);
     });
 }
 
-#[cfg(test)]
+#[inline(always)]
+#[cfg(not(feature = "vm-profile"))]
+pub(crate) fn dispatch_profile_count(_label: &'static str) {}
+
+#[cfg(all(test, feature = "vm-profile"))]
 struct DispatchProfileTestOverride {
     previous: bool,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "vm-profile"))]
 impl DispatchProfileTestOverride {
     fn enable() -> Self {
         LAST_DISPATCH_PROFILE_SNAPSHOT.with(|last| {
@@ -211,14 +422,14 @@ impl DispatchProfileTestOverride {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "vm-profile"))]
 impl Drop for DispatchProfileTestOverride {
     fn drop(&mut self) {
         DISPATCH_PROFILE_TEST_ENABLED.with(|enabled| enabled.set(self.previous));
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "vm-profile"))]
 fn take_last_dispatch_profile_snapshot_for_test() -> Option<DispatchProfileSnapshot> {
     LAST_DISPATCH_PROFILE_SNAPSHOT.with(|last| last.borrow_mut().take())
 }
@@ -466,10 +677,9 @@ pub(crate) use tables::*;
 pub(crate) unsafe fn store_internal_local(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    label: &'static str,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    dispatch_profile_count(label);
     let memarg = (*tail_code).operand.memarg;
     let operation = make_operation(ctx);
     let offset = ctx.stack.pop_u32();
@@ -498,10 +708,9 @@ pub(crate) unsafe fn store_internal_local(
 pub(crate) unsafe fn store_internal_shared(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    label: &'static str,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    dispatch_profile_count(label);
     let memarg = (*tail_code).operand.memarg;
     let operation = make_operation(ctx);
     let offset = ctx.stack.pop_u32();
@@ -531,10 +740,9 @@ pub(crate) unsafe fn store_internal_shared(
 pub(crate) unsafe fn store_internal_local_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    label: &'static str,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    dispatch_profile_count(label);
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
     let operation = make_operation(ctx);
@@ -564,10 +772,9 @@ pub(crate) unsafe fn store_internal_local_indexed(
 pub(crate) unsafe fn store_internal_shared_indexed(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    label: &'static str,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    dispatch_profile_count(label);
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
     let operation = make_operation(ctx);
@@ -854,4 +1061,89 @@ pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMRes
         return VMResult::Unlinkable;
     };
     VMResult::Success(value)
+}
+
+#[cfg(all(test, feature = "vm-profile"))]
+mod tests {
+    use super::*;
+
+    fn count_label(stats: &[(&'static str, DispatchProfileStat)], label: &'static str) -> u64 {
+        stats
+            .iter()
+            .find_map(|(candidate, stat)| (*candidate == label).then_some(stat.count))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn dispatch_profile_tracks_pairs_triples_and_hot_layout_spans() {
+        let _enabled = DispatchProfileTestOverride::enable();
+        {
+            let _guard = DispatchProfileRunGuard::new();
+            dispatch_profile_count("op_local_get4");
+            dispatch_profile_count("op_local_get4_i32_eqz_br_if");
+            dispatch_profile_count("op_i32_load_local_base");
+            dispatch_profile_count("op_i32_store_local_base");
+            dispatch_profile_count("op_i32_load_local_base");
+        }
+
+        let snapshot =
+            take_last_dispatch_profile_snapshot_for_test().expect("profile snapshot must exist");
+        assert_eq!(count_label(&snapshot.stats, "op_local_get4"), 1);
+        assert_eq!(count_label(&snapshot.stats, "op_i32_load_local_base"), 2);
+
+        let pair = snapshot
+            .pairs
+            .iter()
+            .find_map(|((lhs, rhs), stat)| {
+                (*lhs == "op_local_get4_i32_eqz_br_if" && *rhs == "op_i32_load_local_base")
+                    .then_some(stat.count)
+            })
+            .expect("hot pair must be recorded");
+        assert_eq!(pair, 1);
+        assert_eq!(
+            layout_span_for_pair(("op_local_get4_i32_eqz_br_if", "op_i32_load_local_base")),
+            1
+        );
+
+        let triple = snapshot
+            .triples
+            .iter()
+            .find_map(|((a, b, c), stat)| {
+                (*a == "op_local_get4_i32_eqz_br_if"
+                    && *b == "op_i32_load_local_base"
+                    && *c == "op_i32_store_local_base")
+                    .then_some(stat.count)
+            })
+            .expect("hot triple must be recorded");
+        assert_eq!(triple, 1);
+        assert_eq!(
+            layout_span_for_triple((
+                "op_local_get4_i32_eqz_br_if",
+                "op_i32_load_local_base",
+                "op_i32_store_local_base",
+            )),
+            1
+        );
+    }
+
+    #[test]
+    fn handler_layout_groups_match_hot_path_modules() {
+        assert_eq!(
+            handler_layout_group("op_local_get4"),
+            HandlerLayoutGroup::Locals
+        );
+        assert_eq!(
+            handler_layout_group("op_local_get4_i32_eqz_br_if"),
+            HandlerLayoutGroup::Superinstructions
+        );
+        assert_eq!(
+            handler_layout_group("op_i32_store_local_base"),
+            HandlerLayoutGroup::Memory
+        );
+        assert_eq!(handler_layout_group("op_call"), HandlerLayoutGroup::Call);
+        assert_eq!(
+            handler_layout_group("op_br_if"),
+            HandlerLayoutGroup::Control
+        );
+    }
 }

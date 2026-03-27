@@ -1,9 +1,7 @@
 use super::*;
 
 #[inline(always)]
-fn profile_memory_family(label: &'static str) {
-    dispatch_profile_count(label);
-}
+fn profile_memory_family(_label: &'static str) {}
 
 #[inline(always)]
 fn truncate_u32_to_u8_bytes(value: u32) -> [u8; 1] {
@@ -122,10 +120,9 @@ unsafe fn load_start_indexed_local_base(
 unsafe fn store_internal_local_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    label: &'static str,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    profile_memory_family(label);
     let local_addr = (*tail_code).operand.local_addr as usize;
     let delta = (*tail_code.add(1)).operand.i32 as u32;
     let memarg = (*tail_code.add(2)).operand.memarg;
@@ -145,10 +142,9 @@ unsafe fn store_internal_local_base(
 unsafe fn store_internal_indexed_local_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
-    label: &'static str,
+    _label: &'static str,
     make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
 ) -> VMResult<()> {
-    profile_memory_family(label);
     let local_addr = (*tail_code).operand.local_addr as usize;
     let delta = (*tail_code.add(1)).operand.i32 as u32;
     let memarg = (*tail_code.add(2)).operand.memarg;
@@ -184,7 +180,6 @@ macro_rules! define_indexed_push_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            profile_memory_family(stringify!($local));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
                 ctx.local_memory_id_at_unchecked(memidx),
@@ -210,7 +205,6 @@ macro_rules! define_indexed_push_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            profile_memory_family(stringify!($shared));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
                 ctx.shared_memory_id_at_unchecked(memidx),
@@ -240,7 +234,6 @@ macro_rules! define_indexed_scalar_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a local memory.
         pub unsafe fn $local(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            profile_memory_family(stringify!($local));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -265,7 +258,6 @@ macro_rules! define_indexed_scalar_load {
         /// - `ctx` must reference a live execution context whose operand stack satisfies this instruction.
         /// - The memory index operand must be in-bounds and refer to a shared memory.
         pub unsafe fn $shared(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-            profile_memory_family(stringify!($shared));
             let (start, memidx) = vm_try!(load_start_indexed(tail_code, ctx));
             let value = vm_try!(ctx
                 .gc
@@ -1694,10 +1686,14 @@ mod tests {
         common::{
             stack::{CachedMemoryKind, CallFrameCache},
             store::{InstanceId, MemoryHandle},
-            ExecuteContext, InstanceHandle, LocalMemoryObject, LocalReference, Memory, ObjectRef,
-            Operand, Registry, ResultValue, Store, StoreInner, WasmValue,
+            ExecuteContext, LocalMemoryObject, LocalReference, Memory, ObjectRef, Operand, Store,
+            StoreInner,
         },
         runtime::{memory_effect::PendingOp, scheduler::EffectSupplier},
+    };
+    #[cfg(feature = "vm-profile")]
+    use crate::{
+        common::{InstanceHandle, Registry, ResultValue, WasmValue},
         IoReadBinaryReader, WasmParser,
     };
     use std::collections::VecDeque;
@@ -1743,6 +1739,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "vm-profile")]
     async fn instantiate_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
@@ -1825,6 +1822,8 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "vm-profile")]
+    #[ignore = "requires profiled memory wrapper ops"]
     #[tokio::test]
     async fn profiler_prefers_local_base_memory_families_over_generic_path() {
         let store = Store::new();

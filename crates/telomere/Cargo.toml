@@ -46,6 +46,7 @@ default = [
 ]
 simd = ["wide"]
 threads = []
+vm-profile = []
 full = [
     "simd",
     "threads",

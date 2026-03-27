@@ -1,5 +1,6 @@
 use super::*;
 use crate::common::Op;
+#[cfg(all(feature = "vm-profile", any(debug_assertions, test)))]
 use std::sync::OnceLock;
 
 /// WebAssembly `drop`.
@@ -224,6 +225,7 @@ pub unsafe fn op_local_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     call_next(tail_code, 1, ctx)
 }
 
+#[cfg(all(feature = "vm-profile", any(debug_assertions, test)))]
 pub(crate) fn local_get_dispatch_op(size: u32) -> Op {
     static PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
     let profile_enabled = *PROFILE_ENABLED.get_or_init(|| {
@@ -243,6 +245,19 @@ pub(crate) fn local_get_dispatch_op(size: u32) -> Op {
     }
 }
 
+#[cfg(any(
+    not(feature = "vm-profile"),
+    all(feature = "vm-profile", not(any(debug_assertions, test)))
+))]
+pub(crate) fn local_get_dispatch_op(size: u32) -> Op {
+    match size {
+        4 => op_local_get4 as Op,
+        8 => op_local_get8 as Op,
+        16 => op_local_get16 as Op,
+        _ => op_local_get4 as Op,
+    }
+}
+
 /// WebAssembly `local.get` profiled fast path for 4-byte values.
 ///
 /// Telomere runtime helper: records dispatch profile counts, then forwards to `op_local_get4`.
@@ -255,7 +270,12 @@ pub unsafe fn op_local_get4_profiled(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     dispatch_profile_count("op_local_get4");
-    op_local_get4(tail_code, ctx)
+    let addr = (*tail_code).operand.local_addr as usize;
+    vm_try!(ctx
+        .stack
+        .local_get4_from_base(ctx.local_base_ptr as *const u8, addr));
+    trace!("op_local_get4: {addr}");
+    call_next(tail_code, 1, ctx)
 }
 
 /// WebAssembly `local.get` profiled fast path for 8-byte values.
@@ -270,7 +290,12 @@ pub unsafe fn op_local_get8_profiled(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     dispatch_profile_count("op_local_get8");
-    op_local_get8(tail_code, ctx)
+    let addr = (*tail_code).operand.local_addr as usize;
+    vm_try!(ctx
+        .stack
+        .local_get8_from_base(ctx.local_base_ptr as *const u8, addr));
+    trace!("op_local_get8: {addr}");
+    call_next(tail_code, 1, ctx)
 }
 
 /// WebAssembly `local.get` profiled fast path for 16-byte values.
@@ -285,7 +310,12 @@ pub unsafe fn op_local_get16_profiled(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     dispatch_profile_count("op_local_get16");
-    op_local_get16(tail_code, ctx)
+    let addr = (*tail_code).operand.local_addr as usize;
+    vm_try!(ctx
+        .stack
+        .local_get16_from_base(ctx.local_base_ptr as *const u8, addr));
+    trace!("op_local_get16: {addr}");
+    call_next(tail_code, 1, ctx)
 }
 
 /// WebAssembly `local.set`.
