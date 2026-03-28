@@ -142,16 +142,49 @@ impl SlotRef {
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum AddressBaseKind {
     EntryLocal(LocalSlot),
+    TempLocal(LocalSlot),
     SpillLocal(LocalSlot),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AddressShape {
+    pub(crate) index: Option<AddressBaseKind>,
+    pub(crate) scale_log2: u8,
     pub(crate) base: AddressBaseKind,
     pub(crate) offset_delta: i32,
+}
+
+impl AddressShape {
+    pub(crate) const fn base_offset(base: AddressBaseKind, offset_delta: i32) -> Self {
+        Self {
+            index: None,
+            scale_log2: 0,
+            base,
+            offset_delta,
+        }
+    }
+
+    pub(crate) const fn scaled_index_offset(
+        base: AddressBaseKind,
+        index: AddressBaseKind,
+        scale_log2: u8,
+        offset_delta: i32,
+    ) -> Self {
+        Self {
+            index: Some(index),
+            scale_log2,
+            base,
+            offset_delta,
+        }
+    }
+
+    pub(crate) const fn is_base_offset(self) -> bool {
+        self.index.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

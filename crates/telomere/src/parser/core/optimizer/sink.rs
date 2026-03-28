@@ -11,6 +11,8 @@ use crate::{
     runtime::vm,
 };
 
+use super::pass::{specialized_memory_family, SpecializedMemoryFamily};
+
 #[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct RecordEmit {
@@ -570,22 +572,41 @@ fn local_fast_kind_metadata(op: Op, kind: u32) -> Option<(LocalFastRhsShape, Loc
 #[cold]
 #[inline(never)]
 fn pack_specialized_memory_operands(op: Op, operands: &[Operand]) -> Option<Vec<PackedOperand>> {
-    let memarg_index = memarg_operand_index(op)?;
-    if memarg_index != 2 {
+    let family = specialized_memory_family(op)?;
+    if operands.len() != family.operand_width() {
         return None;
     }
-    let first = operands.first()?;
-    let second = operands.get(1)?;
-    let third = operands.get(2)?;
-    let mut out = vec![
-        PackedOperand::LocalAddr(unsafe { first.local_addr }),
-        PackedOperand::I32(unsafe { second.i32 }),
-        PackedOperand::MemArg(unsafe { third.memarg }),
-    ];
-    if let Some(fourth) = operands.get(3) {
-        out.push(PackedOperand::U32(unsafe { fourth.u32 }));
-    }
-    Some(out)
+    Some(match family {
+        SpecializedMemoryFamily::LocalBase | SpecializedMemoryFamily::SharedLocalBase => vec![
+            PackedOperand::LocalAddr(unsafe { operands[0].local_addr }),
+            PackedOperand::I32(unsafe { operands[1].i32 }),
+            PackedOperand::MemArg(unsafe { operands[2].memarg }),
+        ],
+        SpecializedMemoryFamily::IndexedLocalBase
+        | SpecializedMemoryFamily::IndexedSharedLocalBase => vec![
+            PackedOperand::LocalAddr(unsafe { operands[0].local_addr }),
+            PackedOperand::I32(unsafe { operands[1].i32 }),
+            PackedOperand::MemArg(unsafe { operands[2].memarg }),
+            PackedOperand::U32(unsafe { operands[3].u32 }),
+        ],
+        SpecializedMemoryFamily::LocalScaledIndex
+        | SpecializedMemoryFamily::SharedLocalScaledIndex => vec![
+            PackedOperand::LocalAddr(unsafe { operands[0].local_addr }),
+            PackedOperand::LocalAddr(unsafe { operands[1].local_addr }),
+            PackedOperand::U32(unsafe { operands[2].u32 }),
+            PackedOperand::I32(unsafe { operands[3].i32 }),
+            PackedOperand::MemArg(unsafe { operands[4].memarg }),
+        ],
+        SpecializedMemoryFamily::IndexedLocalScaledIndex
+        | SpecializedMemoryFamily::IndexedSharedLocalScaledIndex => vec![
+            PackedOperand::LocalAddr(unsafe { operands[0].local_addr }),
+            PackedOperand::LocalAddr(unsafe { operands[1].local_addr }),
+            PackedOperand::U32(unsafe { operands[2].u32 }),
+            PackedOperand::I32(unsafe { operands[3].i32 }),
+            PackedOperand::MemArg(unsafe { operands[4].memarg }),
+            PackedOperand::U32(unsafe { operands[5].u32 }),
+        ],
+    })
 }
 
 #[cold]
@@ -702,6 +723,12 @@ pub(crate) fn verify_packed_stream(stream: &PackedOpStream) -> bool {
         {
             return false;
         }
+        if let Some(valid) = verify_specialized_memory_operands(op) {
+            if !valid {
+                return false;
+            }
+            continue;
+        }
         if let Some(index) = jump_target_operand_index(op.op) {
             let Some(PackedOperand::JumpTarget(target)) = op.operands.get(index) else {
                 return false;
@@ -727,6 +754,66 @@ pub(crate) fn verify_packed_stream(stream: &PackedOpStream) -> bool {
         }
     }
     true
+}
+
+#[cold]
+#[inline(never)]
+fn verify_specialized_memory_operands(op: &PackedOp) -> Option<bool> {
+    let family = specialized_memory_family(op.op)?;
+    if op.operands.len() != family.operand_width() {
+        return Some(false);
+    }
+    Some(match family {
+        SpecializedMemoryFamily::LocalBase | SpecializedMemoryFamily::SharedLocalBase => {
+            matches!(
+                op.operands.as_slice(),
+                [
+                    PackedOperand::LocalAddr(_),
+                    PackedOperand::I32(_),
+                    PackedOperand::MemArg(_)
+                ]
+            )
+        }
+        SpecializedMemoryFamily::IndexedLocalBase
+        | SpecializedMemoryFamily::IndexedSharedLocalBase => {
+            matches!(
+                op.operands.as_slice(),
+                [
+                    PackedOperand::LocalAddr(_),
+                    PackedOperand::I32(_),
+                    PackedOperand::MemArg(_),
+                    PackedOperand::U32(_)
+                ]
+            )
+        }
+        SpecializedMemoryFamily::LocalScaledIndex
+        | SpecializedMemoryFamily::SharedLocalScaledIndex => {
+            matches!(
+                op.operands.as_slice(),
+                [
+                    PackedOperand::LocalAddr(_),
+                    PackedOperand::LocalAddr(_),
+                    PackedOperand::U32(_),
+                    PackedOperand::I32(_),
+                    PackedOperand::MemArg(_)
+                ]
+            )
+        }
+        SpecializedMemoryFamily::IndexedLocalScaledIndex
+        | SpecializedMemoryFamily::IndexedSharedLocalScaledIndex => {
+            matches!(
+                op.operands.as_slice(),
+                [
+                    PackedOperand::LocalAddr(_),
+                    PackedOperand::LocalAddr(_),
+                    PackedOperand::U32(_),
+                    PackedOperand::I32(_),
+                    PackedOperand::MemArg(_),
+                    PackedOperand::U32(_)
+                ]
+            )
+        }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -1112,6 +1199,9 @@ fn jump_target_operand_index(op: Op) -> Option<usize> {
 #[cold]
 #[inline(never)]
 fn memarg_operand_index(op: Op) -> Option<usize> {
+    if let Some(family) = specialized_memory_family(op) {
+        return Some(family.memarg_index());
+    }
     let first = [
         vm::op_i32_load as Op,
         vm::op_i32_load8_s as Op,
@@ -1219,60 +1309,6 @@ fn memarg_operand_index(op: Op) -> Option<usize> {
         .any(|candidate| ptr::fn_addr_eq(*candidate, op))
     {
         return Some(0);
-    }
-    let fourth = [
-        vm::op_i32_load_local_base as Op,
-        vm::op_i32_load8_s_local_base as Op,
-        vm::op_i32_load8_u_local_base as Op,
-        vm::op_i32_load16_s_local_base as Op,
-        vm::op_i32_load16_u_local_base as Op,
-        vm::op_i64_load_local_base as Op,
-        vm::op_i64_load8_s_local_base as Op,
-        vm::op_i64_load8_u_local_base as Op,
-        vm::op_i64_load16_s_local_base as Op,
-        vm::op_i64_load16_u_local_base as Op,
-        vm::op_i64_load32_s_local_base as Op,
-        vm::op_i64_load32_u_local_base as Op,
-        vm::op_f32_load_local_base as Op,
-        vm::op_f64_load_local_base as Op,
-        vm::op_i32_store_local_base as Op,
-        vm::op_i32_store8_local_base as Op,
-        vm::op_i32_store16_local_base as Op,
-        vm::op_i64_store_local_base as Op,
-        vm::op_i64_store8_local_base as Op,
-        vm::op_i64_store16_local_base as Op,
-        vm::op_i64_store32_local_base as Op,
-        vm::op_f32_store_local_base as Op,
-        vm::op_f64_store_local_base as Op,
-        vm::op_i32_load_indexed_local_base as Op,
-        vm::op_i32_load8_s_indexed_local_base as Op,
-        vm::op_i32_load8_u_indexed_local_base as Op,
-        vm::op_i32_load16_s_indexed_local_base as Op,
-        vm::op_i32_load16_u_indexed_local_base as Op,
-        vm::op_i64_load_indexed_local_base as Op,
-        vm::op_i64_load8_s_indexed_local_base as Op,
-        vm::op_i64_load8_u_indexed_local_base as Op,
-        vm::op_i64_load16_s_indexed_local_base as Op,
-        vm::op_i64_load16_u_indexed_local_base as Op,
-        vm::op_i64_load32_s_indexed_local_base as Op,
-        vm::op_i64_load32_u_indexed_local_base as Op,
-        vm::op_f32_load_indexed_local_base as Op,
-        vm::op_f64_load_indexed_local_base as Op,
-        vm::op_i32_store_indexed_local_base as Op,
-        vm::op_i32_store8_indexed_local_base as Op,
-        vm::op_i32_store16_indexed_local_base as Op,
-        vm::op_i64_store_indexed_local_base as Op,
-        vm::op_i64_store8_indexed_local_base as Op,
-        vm::op_i64_store16_indexed_local_base as Op,
-        vm::op_i64_store32_indexed_local_base as Op,
-        vm::op_f32_store_indexed_local_base as Op,
-        vm::op_f64_store_indexed_local_base as Op,
-    ];
-    if fourth
-        .iter()
-        .any(|candidate| ptr::fn_addr_eq(*candidate, op))
-    {
-        return Some(2);
     }
     None
 }

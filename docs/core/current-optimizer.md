@@ -182,12 +182,58 @@ provider elimination の条件は保守的に固定している。これに引�
 
 ### 6.2 Memory family
 
-memory は `AddressShape` を候補抽出に使いつつ、最終判定は `SlotRef` で行う。adjacent provider pattern だけでなく、block argument / LICM / merge 後に residual graph 側へ残った `AddressShape` からでも、既存 `*_local_base` / `*_indexed_local_base` へ正規化できる場合は specialized path を選ぶ。
+memory は `AddressShape` を候補抽出に使いつつ、最終判定は `SlotRef` と temp-local normalization で行う。現在の memory family は scalar load/store の canonical local/shared/default/indexed path を cover しており、最終 lowering 形は次の 8 family に固定している。
 
-- `local/spill + load`
-- `local/spill + const + add/sub + load`
-- `local/spill + store`
-- `local/spill + const + add/sub + store`
+- `memory.local_base`
+- `memory.indexed_local_base`
+- `memory.shared_local_base`
+- `memory.indexed_shared_local_base`
+- `memory.local_scaled_index`
+- `memory.indexed_local_scaled_index`
+- `memory.shared_local_scaled_index`
+- `memory.indexed_shared_local_scaled_index`
+
+packed operand ABI は family ごとに additive に広がっている。
+
+- `*_local_base`: `LocalAddr(base), I32(delta), MemArg`
+- `*_indexed_*_local_base`: `LocalAddr(base), I32(delta), MemArg, U32(memidx)`
+- `*_local_scaled_index`: `LocalAddr(base), LocalAddr(index), U32(scale_log2), I32(delta), MemArg`
+- `*_indexed_*_local_scaled_index`: `LocalAddr(base), LocalAddr(index), U32(scale_log2), I32(delta), MemArg, U32(memidx)`
+
+memory relower の成立順は固定している。
+
+- `adjacent direct/offset pattern`
+- residual `AddressShape`
+- temp-local normalization
+
+residual `AddressShape` は 2 つの canonical shape を正本にする。
+
+- `BaseOffset { base, offset_delta }`
+- `ScaledIndexOffset { base, index, scale_log2, offset_delta }`
+
+`base` と `index` はどちらも `EntryLocal` / `SpillLocal` / `TempLocal` の 4-byte local に限定する。same-block の non-adjacent `base + const` / `base - const` は、temp-local fallback より先に residual `AddressShape + offset_delta` として specialized path に落とす。`base + index * {1,2,4,8} + const` と `base + (index << {0,1,2,3}) + const` も residual `ScaledIndexOffset` として specialized path に落とす。
+
+same-block / cross-block で residual shape に落ちない rooted tree は temp-local normalization に回す。
+
+- address side は `i32` に限定し、stable slot alias / `LocalTee`、scalar const、non-trapping unary/binop/cmp、`i32.eqz`、scalar `select`、`global.get4`、nested scalar `op_call*`、trap-sensitive `i32`、enumerable merge-fed block argument を扱う
+- memory-derived address root は replay しない。cross-block の enumerable edge-buffering で only-once 評価へ寄せられる場合を除き、same-block の `MemoryLoad` provider は現在 generic fallback に残す
+- cross-block rewrite は same-function 内で incoming edge を全列挙できる場合だけ成立する
+
+store specialization は `address family + value suffix relower` に分けている。value 側は raw contiguous trailing slice 前提を残しつつ、前正規化で suffix 化する。
+
+- same-block の non-adjacent value tree は producer を動かさず temp local に buffer し、store 直前では normalized trailing suffix に揃える
+- cross-block merge-fed value も、全 incoming edge を列挙できる場合は predecessor edge で temp write して store block で `local.get temp` を読む
+- scalar store value tree は local/scalar const、stable slot alias / `LocalTee`、non-trapping unary/binop/cmp、`i32.eqz` / `i64.eqz`、scalar `select`、nested scalar `op_call*`、trap-sensitive scalar numeric op、contiguous scalar `memory.load` まで扱う
+
+shared/default/indexed の split と `memarg` / `memidx` は specialization 後も不変で、local/shared を混線させない。
+
+残る非対象は次だけである。
+
+- SIMD memory family
+- atomic memory family
+- bulk memory family
+- same-block `memory-derived address root`
+- cross-function rewrite
 
 address provider と value provider は独立に消去判定する。generic semantics を壊す可能性がある場合は常に generic path へフォールバックする。
 

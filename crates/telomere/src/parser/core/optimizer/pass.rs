@@ -411,11 +411,9 @@ fn optimizer_family_candidate(op: Op) -> Option<(OptimizerFamilyGroup, &'static 
             2,
         ));
     }
-    if is_indexed_local_base_memory_family(op) {
-        return Some((OptimizerFamilyGroup::Memory, "memory.indexed_local_base", 2));
-    }
-    if is_local_base_memory_family(op) {
-        return Some((OptimizerFamilyGroup::Memory, "memory.local_base", 1));
+    if let Some(family) = specialized_memory_family(op) {
+        let (label, expected_provider_elims) = family.profile_entry();
+        return Some((OptimizerFamilyGroup::Memory, label, expected_provider_elims));
     }
     if std::ptr::fn_addr_eq(op, vm::op_select4 as Op) {
         return Some((OptimizerFamilyGroup::CallSelect, "select.4", 1));
@@ -446,6 +444,55 @@ fn optimizer_family_candidate(op: Op) -> Option<(OptimizerFamilyGroup, &'static 
         return Some((OptimizerFamilyGroup::CallSelect, "call.return_indirect", 0));
     }
     None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SpecializedMemoryFamily {
+    LocalBase,
+    IndexedLocalBase,
+    SharedLocalBase,
+    IndexedSharedLocalBase,
+    LocalScaledIndex,
+    IndexedLocalScaledIndex,
+    SharedLocalScaledIndex,
+    IndexedSharedLocalScaledIndex,
+}
+
+impl SpecializedMemoryFamily {
+    pub(super) const fn memarg_index(self) -> usize {
+        match self {
+            Self::LocalBase
+            | Self::IndexedLocalBase
+            | Self::SharedLocalBase
+            | Self::IndexedSharedLocalBase => 2,
+            Self::LocalScaledIndex
+            | Self::IndexedLocalScaledIndex
+            | Self::SharedLocalScaledIndex
+            | Self::IndexedSharedLocalScaledIndex => 4,
+        }
+    }
+
+    pub(super) const fn operand_width(self) -> usize {
+        match self {
+            Self::LocalBase | Self::SharedLocalBase => 3,
+            Self::IndexedLocalBase | Self::IndexedSharedLocalBase => 4,
+            Self::LocalScaledIndex | Self::SharedLocalScaledIndex => 5,
+            Self::IndexedLocalScaledIndex | Self::IndexedSharedLocalScaledIndex => 6,
+        }
+    }
+
+    const fn profile_entry(self) -> (&'static str, u8) {
+        match self {
+            Self::LocalBase => ("memory.local_base", 1),
+            Self::IndexedLocalBase => ("memory.indexed_local_base", 2),
+            Self::SharedLocalBase => ("memory.shared_local_base", 1),
+            Self::IndexedSharedLocalBase => ("memory.indexed_shared_local_base", 2),
+            Self::LocalScaledIndex => ("memory.local_scaled_index", 2),
+            Self::IndexedLocalScaledIndex => ("memory.indexed_local_scaled_index", 3),
+            Self::SharedLocalScaledIndex => ("memory.shared_local_scaled_index", 2),
+            Self::IndexedSharedLocalScaledIndex => ("memory.indexed_shared_local_scaled_index", 3),
+        }
+    }
 }
 
 impl OptimizerProfiler {
@@ -1625,6 +1672,10 @@ pub(crate) fn optimize_function(
         &rewrite.graph,
         &rewrite.relower
     ));
+    normalize_memory_relower_regions(&program, &mut rewrite, locals, param_bytes);
+    debug_assert!(verify_memory_relower_window_normalization(
+        &program, &rewrite
+    ));
     debug_assert!(verify_explicit_effect_ir(
         &program,
         &rewrite.relower.block_bodies
@@ -2608,8 +2659,38 @@ enum CallMaterializationMode {
 #[derive(Clone, Debug)]
 struct MatchedAddressLowering {
     base: LocalSlot,
+    index: Option<LocalSlot>,
+    scale_log2: u8,
     offset_delta: i32,
     absorbed_ops: BTreeSet<usize>,
+}
+
+impl MatchedAddressLowering {
+    fn base_offset(base: LocalSlot, offset_delta: i32, absorbed_ops: BTreeSet<usize>) -> Self {
+        Self {
+            base,
+            index: None,
+            scale_log2: 0,
+            offset_delta,
+            absorbed_ops,
+        }
+    }
+
+    fn scaled_index(
+        base: LocalSlot,
+        index: LocalSlot,
+        scale_log2: u8,
+        offset_delta: i32,
+        absorbed_ops: BTreeSet<usize>,
+    ) -> Self {
+        Self {
+            base,
+            index: Some(index),
+            scale_log2,
+            offset_delta,
+            absorbed_ops,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2624,17 +2705,24 @@ fn symbolic_spill_slot(source: ValueRef, size: u32) -> LocalSlot {
 }
 
 fn entry_local_address_shape(slot: LocalSlot, ty: ValType) -> Option<AddressShape> {
-    (ty == ValType::I32).then_some(AddressShape {
-        base: AddressBaseKind::EntryLocal(slot),
-        offset_delta: 0,
-    })
+    (ty == ValType::I32).then_some(AddressShape::base_offset(
+        AddressBaseKind::EntryLocal(slot),
+        0,
+    ))
 }
 
 fn spill_local_address_shape(slot: LocalSlot, ty: ValType) -> Option<AddressShape> {
-    (ty == ValType::I32).then_some(AddressShape {
-        base: AddressBaseKind::SpillLocal(slot),
-        offset_delta: 0,
-    })
+    (ty == ValType::I32).then_some(AddressShape::base_offset(
+        AddressBaseKind::SpillLocal(slot),
+        0,
+    ))
+}
+
+fn temp_local_address_shape(slot: LocalSlot, ty: ValType) -> Option<AddressShape> {
+    (ty == ValType::I32).then_some(AddressShape::base_offset(
+        AddressBaseKind::TempLocal(slot),
+        0,
+    ))
 }
 
 fn entry_local_loop_value_shape(slot: LocalSlot, ty: ValType) -> Option<LoopValueShape> {
@@ -2650,11 +2738,12 @@ fn slot_ref_for_local_slot(slot: LocalSlot) -> SlotRef {
 }
 
 fn slot_ref_from_address_shape(shape: AddressShape) -> Option<SlotRef> {
-    if shape.offset_delta != 0 {
+    if shape.offset_delta != 0 || shape.index.is_some() {
         return None;
     }
     Some(match shape.base {
         AddressBaseKind::EntryLocal(slot) => SlotRef::entry_local(slot),
+        AddressBaseKind::TempLocal(slot) => SlotRef::temp_local(slot),
         AddressBaseKind::SpillLocal(slot) => SlotRef::spill_local(slot),
     })
 }
@@ -2822,6 +2911,7 @@ fn derive_unary_loop_value_shape(
 
 fn derive_binary_address_shape(
     exprs: &ValueGraph,
+    latest_by_origin: &HashMap<ExprOrigin, ValueRef>,
     op: PureOpKind,
     lhs: ValueRef,
     rhs: ValueRef,
@@ -2835,6 +2925,8 @@ fn derive_binary_address_shape(
                         i32_const_expr(exprs, lhs),
                     )
                 })
+                .or_else(|| combine_base_and_scaled_index_shape(exprs, latest_by_origin, lhs, rhs))
+                .or_else(|| combine_base_and_scaled_index_shape(exprs, latest_by_origin, rhs, lhs))
         }
         PureOpKind::I32Sub => combine_address_shape_and_const(
             exprs[lhs.0].address_shape,
@@ -2849,10 +2941,107 @@ fn combine_address_shape_and_const(
     delta: Option<i32>,
 ) -> Option<AddressShape> {
     let base = base?;
-    Some(AddressShape {
-        base: base.base,
-        offset_delta: base.offset_delta.wrapping_add(delta?),
+    let offset_delta = base.offset_delta.wrapping_add(delta?);
+    Some(match base.index {
+        Some(index) => {
+            AddressShape::scaled_index_offset(base.base, index, base.scale_log2, offset_delta)
+        }
+        None => AddressShape::base_offset(base.base, offset_delta),
     })
+}
+
+fn combine_base_and_scaled_index_shape(
+    exprs: &ValueGraph,
+    latest_by_origin: &HashMap<ExprOrigin, ValueRef>,
+    base_value: ValueRef,
+    scaled_index_value: ValueRef,
+) -> Option<AddressShape> {
+    let base_shape = exprs[base_value.0].address_shape?;
+    let (base, offset_delta) = address_shape_base_offset(base_shape)?;
+    let (index, scale_log2) =
+        extract_scaled_index_base(exprs, latest_by_origin, scaled_index_value)?;
+    Some(AddressShape::scaled_index_offset(
+        base,
+        index,
+        scale_log2,
+        offset_delta,
+    ))
+}
+
+fn address_shape_base_offset(shape: AddressShape) -> Option<(AddressBaseKind, i32)> {
+    shape
+        .is_base_offset()
+        .then_some((shape.base, shape.offset_delta))
+}
+
+fn address_base_kind_is_i32_local(base: AddressBaseKind) -> bool {
+    match base {
+        AddressBaseKind::EntryLocal(slot)
+        | AddressBaseKind::TempLocal(slot)
+        | AddressBaseKind::SpillLocal(slot) => slot.size == 4,
+    }
+}
+
+fn value_zero_offset_address_base(exprs: &ValueGraph, value: ValueRef) -> Option<AddressBaseKind> {
+    let shape = effective_slot_shape(exprs, value)
+        .and_then(|shape| shape.address)
+        .or(exprs[value.0].address_shape)?;
+    let (base, offset_delta) = address_shape_base_offset(shape)?;
+    (offset_delta == 0 && address_base_kind_is_i32_local(base)).then_some(base)
+}
+
+fn value_ref_for_origin(
+    latest_by_origin: &HashMap<ExprOrigin, ValueRef>,
+    origin: ExprOrigin,
+) -> Option<ValueRef> {
+    latest_by_origin.get(&origin).copied()
+}
+
+fn extract_scaled_index_base(
+    exprs: &ValueGraph,
+    latest_by_origin: &HashMap<ExprOrigin, ValueRef>,
+    value: ValueRef,
+) -> Option<(AddressBaseKind, u8)> {
+    if let Some(base) = value_zero_offset_address_base(exprs, value) {
+        return Some((base, 0));
+    }
+    match exprs[value.0].key {
+        Some(ValueKey::Binary {
+            op: PureOpKind::I32Shl,
+            lhs,
+            rhs,
+        }) => {
+            let lhs = value_ref_for_origin(latest_by_origin, lhs)?;
+            let rhs = value_ref_for_origin(latest_by_origin, rhs)?;
+            let base = value_zero_offset_address_base(exprs, lhs)?;
+            let scale = i32_const_expr(exprs, rhs)?;
+            (0..=3).contains(&scale).then_some((base, scale as u8))
+        }
+        Some(ValueKey::Binary {
+            op: PureOpKind::I32Mul,
+            lhs,
+            rhs,
+        }) => {
+            let lhs = value_ref_for_origin(latest_by_origin, lhs)?;
+            let rhs = value_ref_for_origin(latest_by_origin, rhs)?;
+            let lhs_base = value_zero_offset_address_base(exprs, lhs);
+            let rhs_base = value_zero_offset_address_base(exprs, rhs);
+            let lhs_scale = i32_const_expr(exprs, lhs).and_then(scale_log2_from_i32_factor);
+            let rhs_scale = i32_const_expr(exprs, rhs).and_then(scale_log2_from_i32_factor);
+            lhs_base.zip(rhs_scale).or_else(|| rhs_base.zip(lhs_scale))
+        }
+        _ => None,
+    }
+}
+
+fn scale_log2_from_i32_factor(value: i32) -> Option<u8> {
+    match value {
+        1 => Some(0),
+        2 => Some(1),
+        4 => Some(2),
+        8 => Some(3),
+        _ => None,
+    }
 }
 
 fn derive_binary_loop_value_shape(
@@ -2969,7 +3158,6 @@ fn build_specialized_memory_lowering(
     op_idx: usize,
     op: &BlockOp,
 ) -> Option<(SpecializedMemoryLowering, BTreeSet<usize>)> {
-    let opcode = specialized_memory_op(op.op)?;
     let memarg = block_op_memarg(op)?;
     let shape = match op.kind {
         BlockOpKind::MemoryLoad => {
@@ -2983,11 +3171,14 @@ fn build_specialized_memory_lowering(
         }
         _ => return None,
     };
-    let mut operands = vec![
-        BlockOperand::LocalAddr(shape.base.addr),
-        BlockOperand::I32(shape.offset_delta),
-        BlockOperand::Raw(Operand { memarg }),
-    ];
+    let opcode = specialized_memory_op_for_shape(op.op, &shape)?;
+    let mut operands = vec![BlockOperand::LocalAddr(shape.base.addr)];
+    if let Some(index) = shape.index {
+        operands.push(BlockOperand::LocalAddr(index.addr));
+        operands.push(BlockOperand::U32(u32::from(shape.scale_log2)));
+    }
+    operands.push(BlockOperand::I32(shape.offset_delta));
+    operands.push(BlockOperand::Raw(Operand { memarg }));
     if let Some(memidx) = block_op_index_memidx(op) {
         operands.push(BlockOperand::U32(memidx));
     }
@@ -3036,6 +3227,7 @@ fn match_memory_address_shape(
 ) -> Option<MatchedAddressLowering> {
     match_direct_address_shape(body, graph, spill_plan, op_idx, value)
         .or_else(|| match_offset_address_shape(body, graph, spill_plan, op_idx, value))
+        .or_else(|| match_same_block_residual_address_shape(body, graph, spill_plan, op_idx, value))
         .or_else(|| match_residual_address_shape(body, graph, op_idx, value))
 }
 
@@ -3050,6 +3242,11 @@ fn match_store_address_shape(
     match_store_direct_address_shape(body, graph, spill_plan, op_idx, address, value)
         .or_else(|| {
             match_store_offset_address_shape(body, graph, spill_plan, op_idx, address, value)
+        })
+        .or_else(|| {
+            match_same_block_store_residual_address_shape(
+                body, graph, spill_plan, op_idx, address, value,
+            )
         })
         .or_else(|| match_residual_store_address_shape(body, graph, op_idx, address, value))
 }
@@ -3069,11 +3266,11 @@ fn match_direct_address_shape(
         return None;
     }
     let base = block_op_any_local_get_slot(base_op, spill_plan)?;
-    Some(MatchedAddressLowering {
+    Some(MatchedAddressLowering::base_offset(
         base,
-        offset_delta: 0,
-        absorbed_ops: BTreeSet::from([base_idx]),
-    })
+        0,
+        BTreeSet::from([base_idx]),
+    ))
 }
 
 fn match_store_direct_address_shape(
@@ -3093,11 +3290,11 @@ fn match_store_direct_address_shape(
         return None;
     }
     let base = block_op_any_local_get_slot(base_op, spill_plan)?;
-    Some(MatchedAddressLowering {
+    Some(MatchedAddressLowering::base_offset(
         base,
-        offset_delta: 0,
-        absorbed_ops: BTreeSet::from([base_idx]),
-    })
+        0,
+        BTreeSet::from([base_idx]),
+    ))
 }
 
 fn match_offset_address_shape(
@@ -3219,17 +3416,203 @@ fn match_residual_address_shape_before(
     let shape = effective_slot_shape(graph, value)
         .and_then(|shape| shape.address)
         .or(graph[value.0].address_shape)?;
+    if let Some((base, index, scale_log2)) = address_shape_scaled_index_locals(shape) {
+        return Some(MatchedAddressLowering::scaled_index(
+            base,
+            index,
+            scale_log2,
+            shape.offset_delta,
+            BTreeSet::new(),
+        ));
+    }
+    let base = address_shape_base_local(shape)?;
+    Some(MatchedAddressLowering::base_offset(
+        base,
+        shape.offset_delta,
+        BTreeSet::new(),
+    ))
+}
+
+fn address_shape_base_local(shape: AddressShape) -> Option<LocalSlot> {
+    if !shape.is_base_offset() {
+        return None;
+    }
+    match shape.base {
+        AddressBaseKind::EntryLocal(slot)
+        | AddressBaseKind::TempLocal(slot)
+        | AddressBaseKind::SpillLocal(slot)
+            if slot.size == 4 =>
+        {
+            Some(slot)
+        }
+        _ => None,
+    }
+}
+
+fn address_shape_scaled_index_locals(shape: AddressShape) -> Option<(LocalSlot, LocalSlot, u8)> {
+    let index = shape.index?;
     let base = match shape.base {
-        AddressBaseKind::EntryLocal(slot) | AddressBaseKind::SpillLocal(slot) if slot.size == 4 => {
+        AddressBaseKind::EntryLocal(slot)
+        | AddressBaseKind::TempLocal(slot)
+        | AddressBaseKind::SpillLocal(slot)
+            if slot.size == 4 =>
+        {
             slot
         }
         _ => return None,
     };
-    Some(MatchedAddressLowering {
+    let index = match index {
+        AddressBaseKind::EntryLocal(slot)
+        | AddressBaseKind::TempLocal(slot)
+        | AddressBaseKind::SpillLocal(slot)
+            if slot.size == 4 =>
+        {
+            slot
+        }
+        _ => return None,
+    };
+    (shape.scale_log2 <= 3).then_some((base, index, shape.scale_log2))
+}
+
+fn match_same_block_residual_address_shape(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
+    value: ValueRef,
+) -> Option<MatchedAddressLowering> {
+    match_same_block_residual_address_shape_before(body, graph, spill_plan, op_idx, value)
+}
+
+fn match_same_block_store_residual_address_shape(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    op_idx: usize,
+    address: ValueRef,
+    value: ValueRef,
+) -> Option<MatchedAddressLowering> {
+    let value_slice = find_contiguous_trailing_value_slice(body, op_idx, value)?;
+    match_same_block_residual_address_shape_before(
+        body,
+        graph,
+        spill_plan,
+        value_slice.start_idx,
+        address,
+    )
+}
+
+fn match_same_block_residual_address_shape_before(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    before_idx: usize,
+    value: ValueRef,
+) -> Option<MatchedAddressLowering> {
+    let shape = effective_slot_shape(graph, value)
+        .and_then(|shape| shape.address)
+        .or(graph[value.0].address_shape)?;
+    let mut seen_values = HashSet::new();
+    let mut absorbed_ops = BTreeSet::new();
+    collect_same_block_residual_address_ops(
+        body,
+        graph,
+        spill_plan,
+        before_idx,
+        value,
+        &mut seen_values,
+        &mut absorbed_ops,
+    )?;
+    if absorbed_ops.is_empty() {
+        return None;
+    }
+    if let Some((base, index, scale_log2)) = address_shape_scaled_index_locals(shape) {
+        return Some(MatchedAddressLowering::scaled_index(
+            base,
+            index,
+            scale_log2,
+            shape.offset_delta,
+            absorbed_ops,
+        ));
+    }
+    let base = address_shape_base_local(shape)?;
+    Some(MatchedAddressLowering::base_offset(
         base,
-        offset_delta: shape.offset_delta,
-        absorbed_ops: BTreeSet::new(),
-    })
+        shape.offset_delta,
+        absorbed_ops,
+    ))
+}
+
+fn collect_same_block_residual_address_ops(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    spill_plan: &EffectResultSpillPlan,
+    before_idx: usize,
+    value: ValueRef,
+    seen_values: &mut HashSet<ValueRef>,
+    absorbed_ops: &mut BTreeSet<usize>,
+) -> Option<()> {
+    if !seen_values.insert(value) {
+        return Some(());
+    }
+    let Some(provider_idx) = producer_op_index_before(body, value, before_idx) else {
+        let state = &graph[value.0];
+        if state.const_value.is_some()
+            || effective_slot_shape(graph, value)
+                .and_then(|shape| shape.slot)
+                .and_then(materializable_slot)
+                .is_some_and(|slot| slot.size == 4)
+            || state.is_block_argument()
+        {
+            return Some(());
+        }
+        return None;
+    };
+    let provider = body.ops.get(provider_idx)?;
+    if block_op_single_result(provider) != Some(value) || !block_op_single_use(graph, provider) {
+        return None;
+    }
+    match provider.kind {
+        BlockOpKind::Const => matches!(
+            block_op_scalar_const_operand(provider),
+            Some(BlockOperand::I32(_))
+        )
+        .then(|| absorbed_ops.insert(provider_idx))
+        .map(|_| ()),
+        BlockOpKind::LocalGet => {
+            if local_get_reads_block_argument(graph, provider) {
+                return None;
+            }
+            let materializable = block_op_any_local_get_slot(provider, spill_plan).is_some()
+                || effective_slot_shape(graph, value)
+                    .and_then(|shape| shape.slot)
+                    .and_then(materializable_slot)
+                    .is_some_and(|slot| slot.size == 4);
+            if !materializable {
+                return None;
+            }
+            absorbed_ops.insert(provider_idx);
+            Some(())
+        }
+        BlockOpKind::PureBinary(
+            PureOpKind::I32Add | PureOpKind::I32Sub | PureOpKind::I32Mul | PureOpKind::I32Shl,
+        ) => {
+            for input in &provider.inputs {
+                collect_same_block_residual_address_ops(
+                    body,
+                    graph,
+                    spill_plan,
+                    provider_idx,
+                    *input,
+                    seen_values,
+                    absorbed_ops,
+                )?;
+            }
+            absorbed_ops.insert(provider_idx);
+            Some(())
+        }
+        _ => None,
+    }
 }
 
 fn match_store_adjacent_base_and_const(
@@ -3258,11 +3641,11 @@ fn match_store_adjacent_base_and_const(
     } else {
         delta
     };
-    Some(MatchedAddressLowering {
+    Some(MatchedAddressLowering::base_offset(
         base,
         offset_delta,
-        absorbed_ops: BTreeSet::from([base_idx, const_idx, binary_idx]),
-    })
+        BTreeSet::from([base_idx, const_idx, binary_idx]),
+    ))
 }
 
 fn match_adjacent_base_and_const(
@@ -3291,11 +3674,11 @@ fn match_adjacent_base_and_const(
     } else {
         delta
     };
-    Some(MatchedAddressLowering {
+    Some(MatchedAddressLowering::base_offset(
         base,
         offset_delta,
-        absorbed_ops: BTreeSet::from([base_idx, const_idx, binary_idx]),
-    })
+        BTreeSet::from([base_idx, const_idx, binary_idx]),
+    ))
 }
 
 fn find_contiguous_trailing_value_slice(
@@ -5035,6 +5418,34 @@ fn make_call_temp_local_value(
     value
 }
 
+fn make_memory_temp_local_value(
+    block_id: usize,
+    graph: &mut ValueGraph,
+    temp: LocalSlot,
+) -> ValueRef {
+    let value = ensure_seed_value(
+        graph,
+        ValType::I32,
+        ExprOrigin {
+            block_id,
+            ordinal: temp.addr as usize,
+            kind: ExprOriginKind::EntryLocal,
+        },
+    );
+    set_value_slot_shape(
+        graph,
+        value,
+        Some(SlotRef::temp_local(temp)),
+        temp_local_address_shape(temp, ValType::I32),
+        None,
+    );
+    let node = &mut graph[value.0];
+    node.use_count = 1;
+    node.removable = true;
+    node.refresh_optimizer_metadata();
+    value
+}
+
 struct TempLocalRewriteState<'a> {
     block_id: usize,
     graph: &'a mut ValueGraph,
@@ -5208,6 +5619,836 @@ fn verify_call_relower_window_normalization(graph: &ValueGraph, relower: &Relowe
                 if value_type_size(graph[input.0].ty) != Some(slot.size) {
                     return false;
                 }
+            }
+        }
+    }
+    true
+}
+
+fn normalize_memory_relower_regions(
+    program: &BasicBlockProgram,
+    rewrite: &mut FunctionRewrite,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+) {
+    loop {
+        let mut changed = false;
+        for (block_id, body) in rewrite.relower.block_bodies.iter_mut().enumerate() {
+            let before_len = body.ops.len();
+            changed |= normalize_memory_relower_body_windows(
+                block_id,
+                body,
+                &mut rewrite.graph,
+                locals,
+                param_bytes,
+            );
+            recompute_body_materialization_indices(block_id, body, &mut rewrite.graph);
+            changed |= body.ops.len() != before_len;
+        }
+        changed |=
+            normalize_cross_block_memory_relower_regions(program, rewrite, locals, param_bytes);
+        if !changed {
+            break;
+        }
+    }
+}
+
+fn normalize_memory_relower_body_windows(
+    block_id: usize,
+    body: &mut BlockBody,
+    graph: &mut ValueGraph,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+) -> bool {
+    let mut changed = false;
+    let mut op_idx = 0usize;
+    while op_idx < body.ops.len() {
+        let Some(op) = body.ops.get(op_idx).cloned() else {
+            break;
+        };
+        if !matches!(op.kind, BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore)
+            || specialized_memory_op(op.op).is_none()
+        {
+            op_idx += 1;
+            continue;
+        }
+        if build_specialized_memory_lowering(
+            body,
+            graph,
+            &EffectResultSpillPlan::default(),
+            op_idx,
+            &op,
+        )
+        .is_some()
+        {
+            op_idx += 1;
+            continue;
+        }
+        if let Some(next_op_idx) = buffer_same_block_memory_address_through_temp_local(
+            block_id,
+            body,
+            graph,
+            locals,
+            param_bytes,
+            op_idx,
+            &op,
+        ) {
+            changed = true;
+            op_idx = next_op_idx.saturating_add(1);
+            continue;
+        }
+        if let Some(next_op_idx) = buffer_same_block_memory_store_value_through_temp_local(
+            block_id,
+            body,
+            graph,
+            locals,
+            param_bytes,
+            op_idx,
+            &op,
+        ) {
+            changed = true;
+            op_idx = next_op_idx.saturating_add(1);
+            continue;
+        }
+        op_idx += 1;
+    }
+    changed
+}
+
+fn buffer_same_block_memory_address_through_temp_local(
+    block_id: usize,
+    body: &mut BlockBody,
+    graph: &mut ValueGraph,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+    op_idx: usize,
+    op: &BlockOp,
+) -> Option<usize> {
+    let address = memory_address_input(op)?;
+    let insert_idx = memory_address_temp_read_insert_idx(body, op_idx, op)?;
+    let provider_idx = producer_op_index_before(body, address, op_idx)?;
+    if provider_idx >= insert_idx {
+        return None;
+    }
+    let provider = body.ops.get(provider_idx)?.clone();
+    if provider.kind == BlockOpKind::MemoryLoad {
+        return None;
+    }
+    if provider_idx + 1 == insert_idx
+        && matches!(
+            provider.kind,
+            BlockOpKind::Const | BlockOpKind::PureUnary(_) | BlockOpKind::PureBinary(_)
+        )
+    {
+        return None;
+    }
+    if block_op_single_result(&provider) != Some(address)
+        || !memory_address_root_requires_temp_window(body, graph, op_idx, address, &provider)
+        || !memory_address_tree_is_bufferable(body, graph, op_idx, address, &mut HashSet::new())
+    {
+        return None;
+    }
+    let temp = LocalSlot::new(
+        allocate_optimizer_temp_slot(locals, param_bytes, ValType::I32),
+        4,
+    );
+    let buffer_idx = call_temp_window_buffer_anchor(body, provider_idx, insert_idx);
+    if !same_block_memory_address_buffer_is_safe(body, buffer_idx + 1, op_idx, address) {
+        return None;
+    }
+    body.ops.insert(
+        buffer_idx,
+        BlockOp {
+            source_start: None,
+            op: local_set_op(4),
+            kind: BlockOpKind::LocalSet,
+            operands: vec![BlockOperand::LocalAddr(temp.addr)],
+            inputs: vec![address],
+            values: Vec::new(),
+        },
+    );
+    let mut consumer_insert_idx = insert_idx;
+    let mut next_op_idx = op_idx;
+    if buffer_idx <= consumer_insert_idx {
+        consumer_insert_idx += 1;
+    }
+    if buffer_idx <= next_op_idx {
+        next_op_idx += 1;
+    }
+    let temp_value = make_memory_temp_local_value(block_id, graph, temp);
+    body.ops.insert(
+        consumer_insert_idx,
+        BlockOp {
+            source_start: None,
+            op: local_get_op(4),
+            kind: BlockOpKind::LocalGet,
+            operands: vec![BlockOperand::LocalAddr(temp.addr)],
+            inputs: Vec::new(),
+            values: vec![temp_value],
+        },
+    );
+    if consumer_insert_idx <= next_op_idx {
+        next_op_idx += 1;
+    }
+    body.ops.get_mut(next_op_idx)?.inputs[0] = temp_value;
+    recompute_body_materialization_indices(block_id, body, graph);
+    Some(next_op_idx)
+}
+
+fn same_block_memory_address_buffer_is_safe(
+    body: &BlockBody,
+    start_idx: usize,
+    target_op_idx: usize,
+    value: ValueRef,
+) -> bool {
+    for (op_idx, op) in body.ops.iter().enumerate().skip(start_idx) {
+        for (input_idx, input) in op.inputs.iter().enumerate() {
+            if *input != value {
+                continue;
+            }
+            let is_target_address = op_idx == target_op_idx
+                && input_idx == 0
+                && matches!(op.kind, BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore);
+            if !is_target_address {
+                return false;
+            }
+        }
+    }
+    !body
+        .terminator
+        .as_ref()
+        .is_some_and(|terminator| terminator.inputs.contains(&value))
+}
+
+fn buffer_same_block_memory_store_value_through_temp_local(
+    block_id: usize,
+    body: &mut BlockBody,
+    graph: &mut ValueGraph,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+    op_idx: usize,
+    op: &BlockOp,
+) -> Option<usize> {
+    if op.kind != BlockOpKind::MemoryStore {
+        return None;
+    }
+    let value = memory_store_value_input(op)?;
+    if find_contiguous_trailing_value_slice(body, op_idx, value).is_some() {
+        return None;
+    }
+    let provider_idx = producer_op_index_before(body, value, op_idx)?;
+    let provider = body.ops.get(provider_idx)?.clone();
+    if block_op_single_result(&provider) != Some(value)
+        || !store_value_tree_is_bufferable(&provider, graph[value.0].ty)
+    {
+        return None;
+    }
+    let ty = graph[value.0].ty;
+    let size = value_type_size(ty)?;
+    let temp = LocalSlot::new(allocate_optimizer_temp_slot(locals, param_bytes, ty), size);
+    let buffer_idx = call_temp_window_buffer_anchor(body, provider_idx, op_idx);
+    body.ops.insert(
+        buffer_idx,
+        BlockOp {
+            source_start: None,
+            op: local_set_op(size),
+            kind: BlockOpKind::LocalSet,
+            operands: vec![BlockOperand::LocalAddr(temp.addr)],
+            inputs: vec![value],
+            values: Vec::new(),
+        },
+    );
+    let mut ignored_suffix_ops = BTreeSet::new();
+    let mut rewrite_state = TempLocalRewriteState {
+        block_id,
+        graph,
+        occupied_suffix_ops: &mut ignored_suffix_ops,
+    };
+    let next_op_idx = rewrite_value_uses_after_to_temp_local(
+        body,
+        &mut rewrite_state,
+        buffer_idx + 1,
+        value,
+        temp,
+        op_idx + usize::from(buffer_idx <= op_idx),
+    )?;
+    recompute_body_materialization_indices(block_id, body, graph);
+    Some(next_op_idx)
+}
+
+fn normalize_cross_block_memory_relower_regions(
+    program: &BasicBlockProgram,
+    rewrite: &mut FunctionRewrite,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+) -> bool {
+    let mut changed = false;
+    let mut visiting = HashSet::new();
+    for block_id in 0..rewrite.relower.block_bodies.len() {
+        let mut op_idx = 0usize;
+        while op_idx < rewrite.relower.block_bodies[block_id].ops.len() {
+            let Some(op) = rewrite.relower.block_bodies[block_id]
+                .ops
+                .get(op_idx)
+                .cloned()
+            else {
+                break;
+            };
+            if !matches!(op.kind, BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore)
+                || specialized_memory_op(op.op).is_none()
+            {
+                op_idx += 1;
+                continue;
+            }
+            if build_specialized_memory_lowering(
+                &rewrite.relower.block_bodies[block_id],
+                &rewrite.graph,
+                &EffectResultSpillPlan::default(),
+                op_idx,
+                &op,
+            )
+            .is_some()
+            {
+                op_idx += 1;
+                continue;
+            }
+            let mut address_normalized = false;
+            if let Some(address) = memory_address_input(&op) {
+                if producer_op_index_before(
+                    &rewrite.relower.block_bodies[block_id],
+                    address,
+                    op_idx,
+                )
+                .is_none()
+                {
+                    if let Some(insert_idx) = memory_address_temp_read_insert_idx(
+                        &rewrite.relower.block_bodies[block_id],
+                        op_idx,
+                        &op,
+                    ) {
+                        if let Some(temp) = ensure_cross_block_memory_address_temp(
+                            program,
+                            rewrite,
+                            locals,
+                            param_bytes,
+                            block_id,
+                            address,
+                            &mut visiting,
+                        ) {
+                            let body = &mut rewrite.relower.block_bodies[block_id];
+                            let temp_value =
+                                make_memory_temp_local_value(block_id, &mut rewrite.graph, temp);
+                            body.ops.insert(
+                                insert_idx,
+                                BlockOp {
+                                    source_start: None,
+                                    op: local_get_op(4),
+                                    kind: BlockOpKind::LocalGet,
+                                    operands: vec![BlockOperand::LocalAddr(temp.addr)],
+                                    inputs: Vec::new(),
+                                    values: vec![temp_value],
+                                },
+                            );
+                            if insert_idx <= op_idx {
+                                op_idx += 1;
+                            }
+                            body.ops[op_idx].inputs[0] = temp_value;
+                            recompute_body_materialization_indices(
+                                block_id,
+                                body,
+                                &mut rewrite.graph,
+                            );
+                            changed = true;
+                            op_idx += 1;
+                            address_normalized = true;
+                        }
+                    }
+                }
+            }
+            if address_normalized {
+                continue;
+            }
+            if op.kind == BlockOpKind::MemoryStore {
+                let Some(value) = memory_store_value_input(&op) else {
+                    op_idx += 1;
+                    continue;
+                };
+                if find_contiguous_trailing_value_slice(
+                    &rewrite.relower.block_bodies[block_id],
+                    op_idx,
+                    value,
+                )
+                .is_some()
+                    || producer_op_index_before(
+                        &rewrite.relower.block_bodies[block_id],
+                        value,
+                        op_idx,
+                    )
+                    .is_some()
+                {
+                    op_idx += 1;
+                    continue;
+                }
+                let Some(temp) = ensure_cross_block_call_input_temp(
+                    program,
+                    rewrite,
+                    locals,
+                    param_bytes,
+                    block_id,
+                    value,
+                    &mut visiting,
+                ) else {
+                    op_idx += 1;
+                    continue;
+                };
+                let value_ty = rewrite.graph[value.0].ty;
+                let Some(size) = value_type_size(value_ty) else {
+                    op_idx += 1;
+                    continue;
+                };
+                let body = &mut rewrite.relower.block_bodies[block_id];
+                let temp_value =
+                    make_call_temp_local_value(block_id, &mut rewrite.graph, temp, value_ty);
+                body.ops.insert(
+                    op_idx,
+                    BlockOp {
+                        source_start: None,
+                        op: local_get_op(size),
+                        kind: BlockOpKind::LocalGet,
+                        operands: vec![BlockOperand::LocalAddr(temp.addr)],
+                        inputs: Vec::new(),
+                        values: vec![temp_value],
+                    },
+                );
+                body.ops[op_idx + 1].inputs[1] = temp_value;
+                recompute_body_materialization_indices(block_id, body, &mut rewrite.graph);
+                changed = true;
+                op_idx += 2;
+                continue;
+            }
+            op_idx += 1;
+        }
+    }
+    changed
+}
+
+fn ensure_cross_block_memory_address_temp(
+    program: &BasicBlockProgram,
+    rewrite: &mut FunctionRewrite,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+    block_id: usize,
+    value: ValueRef,
+    visiting: &mut HashSet<(usize, usize)>,
+) -> Option<LocalSlot> {
+    let node = rewrite.graph[value.0].clone();
+    if node.ty != ValType::I32 {
+        return None;
+    }
+    if successor_entry_stack_ordinal_for_input(rewrite, block_id, value).is_some() {
+        let temp = LocalSlot::new(
+            allocate_optimizer_temp_slot(locals, param_bytes, ValType::I32),
+            4,
+        );
+        rewrite.relower.block_prefix_ops[block_id].push(BlockOp {
+            source_start: None,
+            op: local_set_op(4),
+            kind: BlockOpKind::LocalSet,
+            operands: vec![BlockOperand::LocalAddr(temp.addr)],
+            inputs: vec![value],
+            values: Vec::new(),
+        });
+        return Some(temp);
+    }
+    let visit_key = (block_id, value.0);
+    if !visiting.insert(visit_key) {
+        return None;
+    }
+    let temp = LocalSlot::new(
+        allocate_optimizer_temp_slot(locals, param_bytes, ValType::I32),
+        4,
+    );
+    let mut saw_reachable_pred = false;
+    for pred in &program.predecessors[block_id] {
+        if !rewrite.exits[*pred].reachable {
+            continue;
+        }
+        saw_reachable_pred = true;
+        let pred_value =
+            resolve_predecessor_call_input_value(program, rewrite, block_id, *pred, value)?;
+        if rewrite.graph[pred_value.0].ty != ValType::I32 {
+            return None;
+        }
+        buffer_cross_block_memory_predecessor_value(
+            program,
+            rewrite,
+            locals,
+            CrossBlockMemoryPredecessorBufferTarget {
+                pred_block_id: *pred,
+                value: pred_value,
+                temp,
+                param_bytes,
+            },
+            visiting,
+        )?;
+    }
+    visiting.remove(&visit_key);
+    saw_reachable_pred.then_some(temp)
+}
+
+#[derive(Clone, Copy)]
+struct CrossBlockMemoryPredecessorBufferTarget {
+    pred_block_id: usize,
+    value: ValueRef,
+    temp: LocalSlot,
+    param_bytes: u32,
+}
+
+fn buffer_cross_block_memory_predecessor_value(
+    program: &BasicBlockProgram,
+    rewrite: &mut FunctionRewrite,
+    locals: &mut LocalsData,
+    target: CrossBlockMemoryPredecessorBufferTarget,
+    visiting: &mut HashSet<(usize, usize)>,
+) -> Option<()> {
+    let CrossBlockMemoryPredecessorBufferTarget {
+        pred_block_id,
+        value,
+        temp,
+        param_bytes,
+    } = target;
+    let body = &mut rewrite.relower.block_bodies[pred_block_id];
+    if let Some(provider_idx) = producer_op_index_before(body, value, body.ops.len()) {
+        let provider = body.ops.get(provider_idx)?;
+        if memory_address_root_requires_temp_window(
+            body,
+            &rewrite.graph,
+            body.ops.len(),
+            value,
+            provider,
+        ) && memory_address_tree_is_bufferable(
+            body,
+            &rewrite.graph,
+            body.ops.len(),
+            value,
+            &mut HashSet::new(),
+        ) {
+            let insert_idx = call_temp_window_buffer_anchor(body, provider_idx, body.ops.len());
+            body.ops.insert(
+                insert_idx,
+                BlockOp {
+                    source_start: None,
+                    op: local_set_op(4),
+                    kind: BlockOpKind::LocalSet,
+                    operands: vec![BlockOperand::LocalAddr(temp.addr)],
+                    inputs: vec![value],
+                    values: Vec::new(),
+                },
+            );
+            recompute_body_materialization_indices(pred_block_id, body, &mut rewrite.graph);
+            return Some(());
+        }
+        if provider.kind != BlockOpKind::Const {
+            return None;
+        }
+    }
+
+    if let Some(BlockOperand::I32(value)) =
+        scalar_const_operand_from_value(rewrite.graph[value.0].const_value)
+    {
+        append_block_prefix_temp_write_from_const(
+            &mut rewrite.relower.block_prefix_ops[pred_block_id],
+            pred_block_id,
+            &mut rewrite.graph,
+            ValType::I32,
+            BlockOperand::I32(value),
+            temp,
+        )?;
+        return Some(());
+    }
+
+    if let Some(slot_ref) = effective_slot_shape(&rewrite.graph, value).and_then(|shape| shape.slot)
+    {
+        let slot = materializable_slot(slot_ref)?;
+        if slot.size != 4 {
+            return None;
+        }
+        append_block_prefix_temp_write_from_slot(
+            &mut rewrite.relower.block_prefix_ops[pred_block_id],
+            pred_block_id,
+            &mut rewrite.graph,
+            slot_ref,
+            ValType::I32,
+            temp,
+        );
+        return Some(());
+    }
+
+    if rewrite.graph[value.0].is_block_argument() {
+        let source_slot = ensure_cross_block_memory_address_temp(
+            program,
+            rewrite,
+            locals,
+            param_bytes,
+            pred_block_id,
+            value,
+            visiting,
+        )?;
+        append_block_prefix_temp_write_from_slot(
+            &mut rewrite.relower.block_prefix_ops[pred_block_id],
+            pred_block_id,
+            &mut rewrite.graph,
+            SlotRef::temp_local(source_slot),
+            ValType::I32,
+            temp,
+        );
+        return Some(());
+    }
+
+    None
+}
+
+fn memory_address_temp_read_insert_idx(
+    body: &BlockBody,
+    op_idx: usize,
+    op: &BlockOp,
+) -> Option<usize> {
+    match op.kind {
+        BlockOpKind::MemoryLoad => Some(op_idx),
+        BlockOpKind::MemoryStore => {
+            let value = memory_store_value_input(op)?;
+            Some(find_contiguous_trailing_value_slice(body, op_idx, value)?.start_idx)
+        }
+        _ => None,
+    }
+}
+
+fn memory_address_tree_is_bufferable(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    before_idx: usize,
+    value: ValueRef,
+    seen_values: &mut HashSet<ValueRef>,
+) -> bool {
+    if !seen_values.insert(value) {
+        return true;
+    }
+    let node = &graph[value.0];
+    if node.ty != ValType::I32 {
+        return false;
+    }
+    if let Some(provider_idx) = producer_op_index_before(body, value, before_idx) {
+        let Some(provider) = body.ops.get(provider_idx) else {
+            return false;
+        };
+        if block_op_single_result(provider) != Some(value) {
+            return false;
+        }
+        return match provider.kind {
+            BlockOpKind::Const => matches!(
+                block_op_scalar_const_operand(provider),
+                Some(BlockOperand::I32(_))
+            ),
+            BlockOpKind::LocalGet => !local_get_reads_block_argument(graph, provider),
+            BlockOpKind::LocalTee => provider.inputs.first().copied().is_some_and(|input| {
+                memory_address_tree_is_bufferable(body, graph, provider_idx, input, seen_values)
+            }),
+            BlockOpKind::Select => {
+                block_op_select_size(provider) == Some(4)
+                    && provider.inputs.iter().all(|input| {
+                        memory_address_tree_is_bufferable(
+                            body,
+                            graph,
+                            provider_idx,
+                            *input,
+                            seen_values,
+                        )
+                    })
+            }
+            BlockOpKind::PureUnary(_) | BlockOpKind::PureBinary(_) => {
+                provider.inputs.iter().all(|input| {
+                    memory_address_tree_is_bufferable(
+                        body,
+                        graph,
+                        provider_idx,
+                        *input,
+                        seen_values,
+                    )
+                })
+            }
+            BlockOpKind::GlobalGet => {
+                block_op_global_get_slot(provider).is_some_and(|slot| slot.size == 4)
+            }
+            BlockOpKind::CallLike => call_materializer_nested_call_op(provider.op),
+            BlockOpKind::MemoryLoad => provider.inputs.iter().all(|input| {
+                memory_address_tree_is_bufferable(body, graph, provider_idx, *input, seen_values)
+            }),
+            BlockOpKind::TableGet | BlockOpKind::MemoryStore => false,
+            _ => {
+                call_materializer_is_trap_sensitive_op(provider.op)
+                    && provider.inputs.iter().all(|input| {
+                        memory_address_tree_is_bufferable(
+                            body,
+                            graph,
+                            provider_idx,
+                            *input,
+                            seen_values,
+                        )
+                    })
+            }
+        };
+    }
+
+    if matches!(
+        scalar_const_operand_from_value(node.const_value),
+        Some(BlockOperand::I32(_))
+    ) {
+        return true;
+    }
+
+    if node.is_effect_result() {
+        return false;
+    }
+
+    node.is_block_argument()
+        || node.origin.kind == ExprOriginKind::BlockArgument
+        || effective_slot_shape(graph, value)
+            .and_then(|shape| shape.slot)
+            .and_then(materializable_slot)
+            .is_some_and(|slot| slot.size == 4)
+}
+
+fn store_value_tree_is_bufferable(provider: &BlockOp, ty: ValType) -> bool {
+    let Some(size) = value_type_size(ty) else {
+        return false;
+    };
+    if !matches!(size, 4 | 8) || block_op_single_result(provider).is_none() {
+        return false;
+    }
+    match provider.kind {
+        BlockOpKind::Const => matches!(
+            block_op_scalar_const_operand(provider),
+            Some(
+                BlockOperand::I32(_)
+                    | BlockOperand::I64(_)
+                    | BlockOperand::F32(_)
+                    | BlockOperand::F64(_)
+            )
+        ),
+        BlockOpKind::LocalGet
+        | BlockOpKind::LocalTee
+        | BlockOpKind::GlobalGet
+        | BlockOpKind::PureUnary(_)
+        | BlockOpKind::PureBinary(_)
+        | BlockOpKind::MemoryLoad => true,
+        BlockOpKind::Select => block_op_select_size(provider) == Some(size),
+        BlockOpKind::CallLike => call_materializer_nested_call_op(provider.op),
+        _ => call_materializer_is_trap_sensitive_op(provider.op),
+    }
+}
+
+fn memory_address_root_requires_temp_window(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    before_idx: usize,
+    value: ValueRef,
+    provider: &BlockOp,
+) -> bool {
+    if match_same_block_residual_address_shape_before(
+        body,
+        graph,
+        &EffectResultSpillPlan::default(),
+        before_idx,
+        value,
+    )
+    .is_some()
+    {
+        return false;
+    }
+    match provider.kind {
+        BlockOpKind::Const
+        | BlockOpKind::LocalGet
+        | BlockOpKind::LocalTee
+        | BlockOpKind::Select
+        | BlockOpKind::GlobalGet
+        | BlockOpKind::MemoryLoad
+        | BlockOpKind::PureUnary(_)
+        | BlockOpKind::PureBinary(_) => true,
+        BlockOpKind::CallLike => call_materializer_nested_call_op(provider.op),
+        _ => call_materializer_is_trap_sensitive_op(provider.op),
+    }
+}
+
+fn verify_memory_relower_window_normalization(
+    program: &BasicBlockProgram,
+    rewrite: &FunctionRewrite,
+) -> bool {
+    for block_id in 0..rewrite.relower.block_bodies.len() {
+        let body = combined_relower_block_body(&rewrite.relower, block_id);
+        for (op_idx, op) in body.ops.iter().enumerate() {
+            if !matches!(op.kind, BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore) {
+                continue;
+            }
+            let Some(address) = memory_address_input(op) else {
+                return false;
+            };
+            let Some(provider_idx) = producer_op_index_before(&body, address, op_idx) else {
+                continue;
+            };
+            let Some(provider) = body.ops.get(provider_idx) else {
+                return false;
+            };
+            if provider.source_start.is_some() || provider.kind != BlockOpKind::LocalGet {
+                continue;
+            }
+            let Some(slot) = block_op_local_get_slot(provider) else {
+                return false;
+            };
+            let Some(temp_slot) = rewrite.graph[address.0]
+                .slot_shape
+                .as_ref()
+                .and_then(|shape| shape.slot)
+                .filter(|slot_ref| slot_ref.class == SlotClass::TempLocal)
+            else {
+                continue;
+            };
+            if temp_slot != SlotRef::temp_local(slot)
+                || rewrite.graph[address.0].materialized_block != Some(block_id)
+                || value_type_size(rewrite.graph[address.0].ty) != Some(4)
+            {
+                return false;
+            }
+            if op.kind == BlockOpKind::MemoryStore {
+                let Some(value) = memory_store_value_input(op) else {
+                    return false;
+                };
+                let Some(value_slice) = find_contiguous_trailing_value_slice(&body, op_idx, value)
+                else {
+                    return false;
+                };
+                if provider_idx + 1 != value_slice.start_idx {
+                    return false;
+                }
+            } else if provider_idx + 1 != op_idx {
+                return false;
+            }
+            if body.ops[..provider_idx]
+                .iter()
+                .any(|candidate| block_op_written_local_slot(candidate) == Some(slot))
+            {
+                continue;
+            }
+            if !program.predecessors[block_id]
+                .iter()
+                .filter(|pred| rewrite.exits[**pred].reachable)
+                .all(|pred| {
+                    combined_relower_block_body(&rewrite.relower, *pred)
+                        .ops
+                        .iter()
+                        .any(|candidate| block_op_written_local_slot(candidate) == Some(slot))
+                })
+            {
+                return false;
             }
         }
     }
@@ -5431,7 +6672,9 @@ fn debug_verify_specialized_memory_lowering(
             BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore
         ));
         debug_assert!(specialized_memory_op(original.op)
-            .is_some_and(|candidate| std::ptr::fn_addr_eq(candidate, _spec.op)));
+            .into_iter()
+            .chain(specialized_scaled_memory_op(original.op))
+            .any(|candidate| std::ptr::fn_addr_eq(candidate, _spec.op)));
         debug_assert!(same_memarg(block_op_memarg(original), spec_memarg(_spec)));
         debug_assert_eq!(block_op_index_memidx(original), spec_memidx(_spec));
         if original.kind == BlockOpKind::MemoryStore {
@@ -6134,7 +7377,13 @@ impl BlockOptimizer {
                         last.op = tee_op;
                         last.kind = PendingBlockEntryKind::Op(classify_block_op_kind(tee_op));
                         let source = write.value;
-                        self.push_stack(source);
+                        let materialized = self.build_local_read_expr(
+                            write.op_idx,
+                            slot,
+                            Some(source),
+                            self.exprs[source.0].ty,
+                        );
+                        self.push_stack(materialized);
                         self.last_local_write = Some(LocalWrite {
                             slot,
                             op_idx: write.op_idx,
@@ -6163,15 +7412,31 @@ impl BlockOptimizer {
             }
         }
 
-        let block_argument_source = source.is_some_and(|source| {
-            let state = &self.exprs[source.0];
-            state.origin.kind == ExprOriginKind::BlockArgument || state.is_block_argument()
-        });
         let op_idx = self.push_original(record);
         self.last_local_write = None;
-        let expr = if let Some(source) = source {
+        let fallback_ty = record
+            .stack_after
+            .types
+            .last()
+            .copied()
+            .unwrap_or_else(|| type_from_slot(slot.size));
+        let expr = self.build_local_read_expr(op_idx, slot, source, fallback_ty);
+        self.push_stack(expr);
+    }
+
+    fn build_local_read_expr(
+        &mut self,
+        op_idx: usize,
+        slot: LocalSlot,
+        source: Option<ValueRef>,
+        fallback_ty: ValType,
+    ) -> ValueRef {
+        if let Some(source) = source {
             let source_state = self.exprs[source.0].clone();
-            if block_argument_source {
+            let source_is_block_argument = source_state.origin.kind
+                == ExprOriginKind::BlockArgument
+                || source_state.is_block_argument();
+            if source_is_block_argument {
                 let expr = self.new_expr_with_origin(
                     source_state.ty,
                     source_state.origin,
@@ -6203,14 +7468,8 @@ impl BlockOptimizer {
                 expr
             }
         } else {
-            let ty = record
-                .stack_after
-                .types
-                .last()
-                .copied()
-                .unwrap_or_else(|| type_from_slot(slot.size));
             let expr = self.new_expr_with_origin(
-                ty,
+                fallback_ty,
                 ExprOrigin {
                     block_id: self.block_id,
                     ordinal: slot.addr as usize,
@@ -6231,8 +7490,7 @@ impl BlockOptimizer {
                 entry_local_loop_value_shape(slot, ty),
             );
             expr
-        };
-        self.push_stack(expr);
+        }
     }
 
     fn visit_local_set(
@@ -6512,7 +7770,8 @@ impl BlockOptimizer {
             Some(op_idx),
             true,
         );
-        let address_shape = derive_binary_address_shape(&self.exprs, op, lhs, rhs);
+        let address_shape =
+            derive_binary_address_shape(&self.exprs, &self.latest_by_origin, op, lhs, rhs);
         let loop_value_shape = derive_binary_loop_value_shape(&self.exprs, op, lhs, rhs);
         self.set_value_shapes(expr, address_shape, loop_value_shape);
         self.maybe_mark_loop_invariant(expr);
@@ -8272,71 +9531,140 @@ fn specialized_memory_op(op: Op) -> Option<Op> {
     if std::ptr::fn_addr_eq(op, vm::op_i32_load as Op) {
         return Some(vm::op_i32_load_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load_shared as Op) {
+        return Some(vm::op_i32_load_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_load as Op) {
         return Some(vm::op_i64_load_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load_shared as Op) {
+        return Some(vm::op_i64_load_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_f32_load as Op) {
         return Some(vm::op_f32_load_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_load_shared as Op) {
+        return Some(vm::op_f32_load_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_f64_load as Op) {
         return Some(vm::op_f64_load_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_load_shared as Op) {
+        return Some(vm::op_f64_load_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s as Op) {
         return Some(vm::op_i32_load8_s_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s_shared as Op) {
+        return Some(vm::op_i32_load8_s_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u as Op) {
         return Some(vm::op_i32_load8_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_shared as Op) {
+        return Some(vm::op_i32_load8_u_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s as Op) {
         return Some(vm::op_i32_load16_s_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_shared as Op) {
+        return Some(vm::op_i32_load16_s_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u as Op) {
         return Some(vm::op_i32_load16_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_shared as Op) {
+        return Some(vm::op_i32_load16_u_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s as Op) {
         return Some(vm::op_i64_load8_s_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s_shared as Op) {
+        return Some(vm::op_i64_load8_s_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u as Op) {
         return Some(vm::op_i64_load8_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u_shared as Op) {
+        return Some(vm::op_i64_load8_u_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s as Op) {
         return Some(vm::op_i64_load16_s_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s_shared as Op) {
+        return Some(vm::op_i64_load16_s_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u as Op) {
         return Some(vm::op_i64_load16_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u_shared as Op) {
+        return Some(vm::op_i64_load16_u_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s as Op) {
         return Some(vm::op_i64_load32_s_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s_shared as Op) {
+        return Some(vm::op_i64_load32_s_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u as Op) {
         return Some(vm::op_i64_load32_u_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u_shared as Op) {
+        return Some(vm::op_i64_load32_u_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i32_store as Op) {
         return Some(vm::op_i32_store_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store_shared as Op) {
+        return Some(vm::op_i32_store_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_store as Op) {
         return Some(vm::op_i64_store_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store_shared as Op) {
+        return Some(vm::op_i64_store_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_f32_store as Op) {
         return Some(vm::op_f32_store_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_store_shared as Op) {
+        return Some(vm::op_f32_store_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_f64_store as Op) {
         return Some(vm::op_f64_store_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_store_shared as Op) {
+        return Some(vm::op_f64_store_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i32_store8 as Op) {
         return Some(vm::op_i32_store8_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store8_shared as Op) {
+        return Some(vm::op_i32_store8_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i32_store16 as Op) {
         return Some(vm::op_i32_store16_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store16_shared as Op) {
+        return Some(vm::op_i32_store16_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i64_store8 as Op) {
         return Some(vm::op_i64_store8_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store8_shared as Op) {
+        return Some(vm::op_i64_store8_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_store16 as Op) {
         return Some(vm::op_i64_store16_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store16_shared as Op) {
+        return Some(vm::op_i64_store16_shared_local_base as Op);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i64_store32 as Op) {
         return Some(vm::op_i64_store32_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store32_shared as Op) {
+        return Some(vm::op_i64_store32_shared_local_base as Op);
     }
     if std::ptr::fn_addr_eq(op, vm::op_i32_load_local as Op) {
         return Some(vm::op_i32_load_local_base as Op);
@@ -8476,94 +9804,600 @@ fn specialized_memory_op(op: Op) -> Option<Op> {
     if std::ptr::fn_addr_eq(op, vm::op_i64_store32_indexed_local as Op) {
         return Some(vm::op_i64_store32_indexed_local_base as Op);
     }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load_indexed_shared as Op) {
+        return Some(vm::op_i32_load_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load_indexed_shared as Op) {
+        return Some(vm::op_i64_load_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_load_indexed_shared as Op) {
+        return Some(vm::op_f32_load_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_load_indexed_shared as Op) {
+        return Some(vm::op_f64_load_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s_indexed_shared as Op) {
+        return Some(vm::op_i32_load8_s_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_indexed_shared as Op) {
+        return Some(vm::op_i32_load8_u_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_indexed_shared as Op) {
+        return Some(vm::op_i32_load16_s_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_indexed_shared as Op) {
+        return Some(vm::op_i32_load16_u_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s_indexed_shared as Op) {
+        return Some(vm::op_i64_load8_s_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u_indexed_shared as Op) {
+        return Some(vm::op_i64_load8_u_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s_indexed_shared as Op) {
+        return Some(vm::op_i64_load16_s_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u_indexed_shared as Op) {
+        return Some(vm::op_i64_load16_u_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s_indexed_shared as Op) {
+        return Some(vm::op_i64_load32_s_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u_indexed_shared as Op) {
+        return Some(vm::op_i64_load32_u_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store_indexed_shared as Op) {
+        return Some(vm::op_i32_store_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store_indexed_shared as Op) {
+        return Some(vm::op_i64_store_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_store_indexed_shared as Op) {
+        return Some(vm::op_f32_store_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_store_indexed_shared as Op) {
+        return Some(vm::op_f64_store_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store8_indexed_shared as Op) {
+        return Some(vm::op_i32_store8_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store16_indexed_shared as Op) {
+        return Some(vm::op_i32_store16_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store8_indexed_shared as Op) {
+        return Some(vm::op_i64_store8_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store16_indexed_shared as Op) {
+        return Some(vm::op_i64_store16_indexed_shared_local_base as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store32_indexed_shared as Op) {
+        return Some(vm::op_i64_store32_indexed_shared_local_base as Op);
+    }
     None
 }
 
-fn is_local_base_memory_family(op: Op) -> bool {
-    const SOURCES: &[Op] = &[
-        vm::op_i32_load as Op,
-        vm::op_i64_load as Op,
-        vm::op_f32_load as Op,
-        vm::op_f64_load as Op,
-        vm::op_i32_load8_s as Op,
-        vm::op_i32_load8_u as Op,
-        vm::op_i32_load16_s as Op,
-        vm::op_i32_load16_u as Op,
-        vm::op_i64_load8_s as Op,
-        vm::op_i64_load8_u as Op,
-        vm::op_i64_load16_s as Op,
-        vm::op_i64_load16_u as Op,
-        vm::op_i64_load32_s as Op,
-        vm::op_i64_load32_u as Op,
-        vm::op_i32_store as Op,
-        vm::op_i64_store as Op,
-        vm::op_f32_store as Op,
-        vm::op_f64_store as Op,
-        vm::op_i32_store8 as Op,
-        vm::op_i32_store16 as Op,
-        vm::op_i64_store8 as Op,
-        vm::op_i64_store16 as Op,
-        vm::op_i64_store32 as Op,
-        vm::op_i32_load_local as Op,
-        vm::op_i64_load_local as Op,
-        vm::op_f32_load_local as Op,
-        vm::op_f64_load_local as Op,
-        vm::op_i32_load8_s_local as Op,
-        vm::op_i32_load8_u_local as Op,
-        vm::op_i32_load16_s_local as Op,
-        vm::op_i32_load16_u_local as Op,
-        vm::op_i64_load8_s_local as Op,
-        vm::op_i64_load8_u_local as Op,
-        vm::op_i64_load16_s_local as Op,
-        vm::op_i64_load16_u_local as Op,
-        vm::op_i64_load32_s_local as Op,
-        vm::op_i64_load32_u_local as Op,
-        vm::op_i32_store_local as Op,
-        vm::op_i64_store_local as Op,
-        vm::op_f32_store_local as Op,
-        vm::op_f64_store_local as Op,
-        vm::op_i32_store8_local as Op,
-        vm::op_i32_store16_local as Op,
-        vm::op_i64_store8_local as Op,
-        vm::op_i64_store16_local as Op,
-        vm::op_i64_store32_local as Op,
-    ];
-    SOURCES
+fn specialized_scaled_memory_op(op: Op) -> Option<Op> {
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load_local as Op)
+    {
+        return Some(vm::op_i32_load_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load_shared as Op) {
+        return Some(vm::op_i32_load_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load_local as Op)
+    {
+        return Some(vm::op_i64_load_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load_shared as Op) {
+        return Some(vm::op_i64_load_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_load as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_load_local as Op)
+    {
+        return Some(vm::op_f32_load_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_load_shared as Op) {
+        return Some(vm::op_f32_load_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_load as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_load_local as Op)
+    {
+        return Some(vm::op_f64_load_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_load_shared as Op) {
+        return Some(vm::op_f64_load_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load8_s_local as Op)
+    {
+        return Some(vm::op_i32_load8_s_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s_shared as Op) {
+        return Some(vm::op_i32_load8_s_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_local as Op)
+    {
+        return Some(vm::op_i32_load8_u_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_shared as Op) {
+        return Some(vm::op_i32_load8_u_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_local as Op)
+    {
+        return Some(vm::op_i32_load16_s_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_shared as Op) {
+        return Some(vm::op_i32_load16_s_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_local as Op)
+    {
+        return Some(vm::op_i32_load16_u_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_shared as Op) {
+        return Some(vm::op_i32_load16_u_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load8_s_local as Op)
+    {
+        return Some(vm::op_i64_load8_s_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s_shared as Op) {
+        return Some(vm::op_i64_load8_s_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load8_u_local as Op)
+    {
+        return Some(vm::op_i64_load8_u_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u_shared as Op) {
+        return Some(vm::op_i64_load8_u_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load16_s_local as Op)
+    {
+        return Some(vm::op_i64_load16_s_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s_shared as Op) {
+        return Some(vm::op_i64_load16_s_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load16_u_local as Op)
+    {
+        return Some(vm::op_i64_load16_u_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u_shared as Op) {
+        return Some(vm::op_i64_load16_u_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load32_s_local as Op)
+    {
+        return Some(vm::op_i64_load32_s_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s_shared as Op) {
+        return Some(vm::op_i64_load32_s_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_load32_u_local as Op)
+    {
+        return Some(vm::op_i64_load32_u_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u_shared as Op) {
+        return Some(vm::op_i64_load32_u_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_store_local as Op)
+    {
+        return Some(vm::op_i32_store_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store_shared as Op) {
+        return Some(vm::op_i32_store_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_store_local as Op)
+    {
+        return Some(vm::op_i64_store_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store_shared as Op) {
+        return Some(vm::op_i64_store_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_store as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f32_store_local as Op)
+    {
+        return Some(vm::op_f32_store_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_store_shared as Op) {
+        return Some(vm::op_f32_store_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_store as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_f64_store_local as Op)
+    {
+        return Some(vm::op_f64_store_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_store_shared as Op) {
+        return Some(vm::op_f64_store_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_store8_local as Op)
+    {
+        return Some(vm::op_i32_store8_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store8_shared as Op) {
+        return Some(vm::op_i32_store8_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store16 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i32_store16_local as Op)
+    {
+        return Some(vm::op_i32_store16_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store16_shared as Op) {
+        return Some(vm::op_i32_store16_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_store8_local as Op)
+    {
+        return Some(vm::op_i64_store8_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store8_shared as Op) {
+        return Some(vm::op_i64_store8_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store16 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_store16_local as Op)
+    {
+        return Some(vm::op_i64_store16_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store16_shared as Op) {
+        return Some(vm::op_i64_store16_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store32 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_i64_store32_local as Op)
+    {
+        return Some(vm::op_i64_store32_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store32_shared as Op) {
+        return Some(vm::op_i64_store32_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load_indexed_local as Op) {
+        return Some(vm::op_i32_load_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load_indexed_shared as Op) {
+        return Some(vm::op_i32_load_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load_indexed_local as Op) {
+        return Some(vm::op_i64_load_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load_indexed_shared as Op) {
+        return Some(vm::op_i64_load_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_load_indexed_local as Op) {
+        return Some(vm::op_f32_load_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_load_indexed_shared as Op) {
+        return Some(vm::op_f32_load_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_load_indexed_local as Op) {
+        return Some(vm::op_f64_load_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_load_indexed_shared as Op) {
+        return Some(vm::op_f64_load_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s_indexed_local as Op) {
+        return Some(vm::op_i32_load8_s_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_s_indexed_shared as Op) {
+        return Some(vm::op_i32_load8_s_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_indexed_local as Op) {
+        return Some(vm::op_i32_load8_u_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_indexed_shared as Op) {
+        return Some(vm::op_i32_load8_u_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_indexed_local as Op) {
+        return Some(vm::op_i32_load16_s_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_s_indexed_shared as Op) {
+        return Some(vm::op_i32_load16_s_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_indexed_local as Op) {
+        return Some(vm::op_i32_load16_u_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load16_u_indexed_shared as Op) {
+        return Some(vm::op_i32_load16_u_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s_indexed_local as Op) {
+        return Some(vm::op_i64_load8_s_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_s_indexed_shared as Op) {
+        return Some(vm::op_i64_load8_s_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u_indexed_local as Op) {
+        return Some(vm::op_i64_load8_u_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load8_u_indexed_shared as Op) {
+        return Some(vm::op_i64_load8_u_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s_indexed_local as Op) {
+        return Some(vm::op_i64_load16_s_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_s_indexed_shared as Op) {
+        return Some(vm::op_i64_load16_s_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u_indexed_local as Op) {
+        return Some(vm::op_i64_load16_u_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load16_u_indexed_shared as Op) {
+        return Some(vm::op_i64_load16_u_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s_indexed_local as Op) {
+        return Some(vm::op_i64_load32_s_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_s_indexed_shared as Op) {
+        return Some(vm::op_i64_load32_s_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u_indexed_local as Op) {
+        return Some(vm::op_i64_load32_u_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_load32_u_indexed_shared as Op) {
+        return Some(vm::op_i64_load32_u_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store_indexed_local as Op) {
+        return Some(vm::op_i32_store_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store_indexed_shared as Op) {
+        return Some(vm::op_i32_store_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store_indexed_local as Op) {
+        return Some(vm::op_i64_store_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store_indexed_shared as Op) {
+        return Some(vm::op_i64_store_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_store_indexed_local as Op) {
+        return Some(vm::op_f32_store_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f32_store_indexed_shared as Op) {
+        return Some(vm::op_f32_store_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_store_indexed_local as Op) {
+        return Some(vm::op_f64_store_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_f64_store_indexed_shared as Op) {
+        return Some(vm::op_f64_store_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store8_indexed_local as Op) {
+        return Some(vm::op_i32_store8_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store8_indexed_shared as Op) {
+        return Some(vm::op_i32_store8_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store16_indexed_local as Op) {
+        return Some(vm::op_i32_store16_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i32_store16_indexed_shared as Op) {
+        return Some(vm::op_i32_store16_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store8_indexed_local as Op) {
+        return Some(vm::op_i64_store8_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store8_indexed_shared as Op) {
+        return Some(vm::op_i64_store8_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store16_indexed_local as Op) {
+        return Some(vm::op_i64_store16_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store16_indexed_shared as Op) {
+        return Some(vm::op_i64_store16_indexed_shared_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store32_indexed_local as Op) {
+        return Some(vm::op_i64_store32_indexed_local_scaled_index as Op);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_i64_store32_indexed_shared as Op) {
+        return Some(vm::op_i64_store32_indexed_shared_local_scaled_index as Op);
+    }
+    None
+}
+
+fn specialized_memory_op_for_shape(op: Op, shape: &MatchedAddressLowering) -> Option<Op> {
+    if shape.index.is_some() {
+        specialized_scaled_memory_op(op)
+    } else {
+        specialized_memory_op(op)
+    }
+}
+
+const LOCAL_BASE_MEMORY_SOURCES: &[Op] = &[
+    vm::op_i32_load as Op,
+    vm::op_i64_load as Op,
+    vm::op_f32_load as Op,
+    vm::op_f64_load as Op,
+    vm::op_i32_load8_s as Op,
+    vm::op_i32_load8_u as Op,
+    vm::op_i32_load16_s as Op,
+    vm::op_i32_load16_u as Op,
+    vm::op_i64_load8_s as Op,
+    vm::op_i64_load8_u as Op,
+    vm::op_i64_load16_s as Op,
+    vm::op_i64_load16_u as Op,
+    vm::op_i64_load32_s as Op,
+    vm::op_i64_load32_u as Op,
+    vm::op_i32_store as Op,
+    vm::op_i64_store as Op,
+    vm::op_f32_store as Op,
+    vm::op_f64_store as Op,
+    vm::op_i32_store8 as Op,
+    vm::op_i32_store16 as Op,
+    vm::op_i64_store8 as Op,
+    vm::op_i64_store16 as Op,
+    vm::op_i64_store32 as Op,
+    vm::op_i32_load_local as Op,
+    vm::op_i64_load_local as Op,
+    vm::op_f32_load_local as Op,
+    vm::op_f64_load_local as Op,
+    vm::op_i32_load8_s_local as Op,
+    vm::op_i32_load8_u_local as Op,
+    vm::op_i32_load16_s_local as Op,
+    vm::op_i32_load16_u_local as Op,
+    vm::op_i64_load8_s_local as Op,
+    vm::op_i64_load8_u_local as Op,
+    vm::op_i64_load16_s_local as Op,
+    vm::op_i64_load16_u_local as Op,
+    vm::op_i64_load32_s_local as Op,
+    vm::op_i64_load32_u_local as Op,
+    vm::op_i32_store_local as Op,
+    vm::op_i64_store_local as Op,
+    vm::op_f32_store_local as Op,
+    vm::op_f64_store_local as Op,
+    vm::op_i32_store8_local as Op,
+    vm::op_i32_store16_local as Op,
+    vm::op_i64_store8_local as Op,
+    vm::op_i64_store16_local as Op,
+    vm::op_i64_store32_local as Op,
+];
+
+const INDEXED_LOCAL_BASE_MEMORY_SOURCES: &[Op] = &[
+    vm::op_i32_load_indexed_local as Op,
+    vm::op_i64_load_indexed_local as Op,
+    vm::op_f32_load_indexed_local as Op,
+    vm::op_f64_load_indexed_local as Op,
+    vm::op_i32_load8_s_indexed_local as Op,
+    vm::op_i32_load8_u_indexed_local as Op,
+    vm::op_i32_load16_s_indexed_local as Op,
+    vm::op_i32_load16_u_indexed_local as Op,
+    vm::op_i64_load8_s_indexed_local as Op,
+    vm::op_i64_load8_u_indexed_local as Op,
+    vm::op_i64_load16_s_indexed_local as Op,
+    vm::op_i64_load16_u_indexed_local as Op,
+    vm::op_i64_load32_s_indexed_local as Op,
+    vm::op_i64_load32_u_indexed_local as Op,
+    vm::op_i32_store_indexed_local as Op,
+    vm::op_i64_store_indexed_local as Op,
+    vm::op_f32_store_indexed_local as Op,
+    vm::op_f64_store_indexed_local as Op,
+    vm::op_i32_store8_indexed_local as Op,
+    vm::op_i32_store16_indexed_local as Op,
+    vm::op_i64_store8_indexed_local as Op,
+    vm::op_i64_store16_indexed_local as Op,
+    vm::op_i64_store32_indexed_local as Op,
+];
+
+const SHARED_LOCAL_BASE_MEMORY_SOURCES: &[Op] = &[
+    vm::op_i32_load_shared as Op,
+    vm::op_i64_load_shared as Op,
+    vm::op_f32_load_shared as Op,
+    vm::op_f64_load_shared as Op,
+    vm::op_i32_load8_s_shared as Op,
+    vm::op_i32_load8_u_shared as Op,
+    vm::op_i32_load16_s_shared as Op,
+    vm::op_i32_load16_u_shared as Op,
+    vm::op_i64_load8_s_shared as Op,
+    vm::op_i64_load8_u_shared as Op,
+    vm::op_i64_load16_s_shared as Op,
+    vm::op_i64_load16_u_shared as Op,
+    vm::op_i64_load32_s_shared as Op,
+    vm::op_i64_load32_u_shared as Op,
+    vm::op_i32_store_shared as Op,
+    vm::op_i64_store_shared as Op,
+    vm::op_f32_store_shared as Op,
+    vm::op_f64_store_shared as Op,
+    vm::op_i32_store8_shared as Op,
+    vm::op_i32_store16_shared as Op,
+    vm::op_i64_store8_shared as Op,
+    vm::op_i64_store16_shared as Op,
+    vm::op_i64_store32_shared as Op,
+];
+
+const INDEXED_SHARED_LOCAL_BASE_MEMORY_SOURCES: &[Op] = &[
+    vm::op_i32_load_indexed_shared as Op,
+    vm::op_i64_load_indexed_shared as Op,
+    vm::op_f32_load_indexed_shared as Op,
+    vm::op_f64_load_indexed_shared as Op,
+    vm::op_i32_load8_s_indexed_shared as Op,
+    vm::op_i32_load8_u_indexed_shared as Op,
+    vm::op_i32_load16_s_indexed_shared as Op,
+    vm::op_i32_load16_u_indexed_shared as Op,
+    vm::op_i64_load8_s_indexed_shared as Op,
+    vm::op_i64_load8_u_indexed_shared as Op,
+    vm::op_i64_load16_s_indexed_shared as Op,
+    vm::op_i64_load16_u_indexed_shared as Op,
+    vm::op_i64_load32_s_indexed_shared as Op,
+    vm::op_i64_load32_u_indexed_shared as Op,
+    vm::op_i32_store_indexed_shared as Op,
+    vm::op_i64_store_indexed_shared as Op,
+    vm::op_f32_store_indexed_shared as Op,
+    vm::op_f64_store_indexed_shared as Op,
+    vm::op_i32_store8_indexed_shared as Op,
+    vm::op_i32_store16_indexed_shared as Op,
+    vm::op_i64_store8_indexed_shared as Op,
+    vm::op_i64_store16_indexed_shared as Op,
+    vm::op_i64_store32_indexed_shared as Op,
+];
+
+fn maps_to_specialized_memory_family(sources: &[Op], mapper: fn(Op) -> Option<Op>, op: Op) -> bool {
+    sources
         .iter()
-        .filter_map(|source| specialized_memory_op(*source))
+        .filter_map(|source| mapper(*source))
         .any(|candidate| std::ptr::fn_addr_eq(candidate, op))
 }
 
-fn is_indexed_local_base_memory_family(op: Op) -> bool {
-    const SOURCES: &[Op] = &[
-        vm::op_i32_load_indexed_local as Op,
-        vm::op_i64_load_indexed_local as Op,
-        vm::op_f32_load_indexed_local as Op,
-        vm::op_f64_load_indexed_local as Op,
-        vm::op_i32_load8_s_indexed_local as Op,
-        vm::op_i32_load8_u_indexed_local as Op,
-        vm::op_i32_load16_s_indexed_local as Op,
-        vm::op_i32_load16_u_indexed_local as Op,
-        vm::op_i64_load8_s_indexed_local as Op,
-        vm::op_i64_load8_u_indexed_local as Op,
-        vm::op_i64_load16_s_indexed_local as Op,
-        vm::op_i64_load16_u_indexed_local as Op,
-        vm::op_i64_load32_s_indexed_local as Op,
-        vm::op_i64_load32_u_indexed_local as Op,
-        vm::op_i32_store_indexed_local as Op,
-        vm::op_i64_store_indexed_local as Op,
-        vm::op_f32_store_indexed_local as Op,
-        vm::op_f64_store_indexed_local as Op,
-        vm::op_i32_store8_indexed_local as Op,
-        vm::op_i32_store16_indexed_local as Op,
-        vm::op_i64_store8_indexed_local as Op,
-        vm::op_i64_store16_indexed_local as Op,
-        vm::op_i64_store32_indexed_local as Op,
-    ];
-    SOURCES
-        .iter()
-        .filter_map(|source| specialized_memory_op(*source))
-        .any(|candidate| std::ptr::fn_addr_eq(candidate, op))
+pub(super) fn specialized_memory_family(op: Op) -> Option<SpecializedMemoryFamily> {
+    if maps_to_specialized_memory_family(LOCAL_BASE_MEMORY_SOURCES, specialized_memory_op, op) {
+        return Some(SpecializedMemoryFamily::LocalBase);
+    }
+    if maps_to_specialized_memory_family(
+        INDEXED_LOCAL_BASE_MEMORY_SOURCES,
+        specialized_memory_op,
+        op,
+    ) {
+        return Some(SpecializedMemoryFamily::IndexedLocalBase);
+    }
+    if maps_to_specialized_memory_family(
+        SHARED_LOCAL_BASE_MEMORY_SOURCES,
+        specialized_memory_op,
+        op,
+    ) {
+        return Some(SpecializedMemoryFamily::SharedLocalBase);
+    }
+    if maps_to_specialized_memory_family(
+        INDEXED_SHARED_LOCAL_BASE_MEMORY_SOURCES,
+        specialized_memory_op,
+        op,
+    ) {
+        return Some(SpecializedMemoryFamily::IndexedSharedLocalBase);
+    }
+    if maps_to_specialized_memory_family(
+        LOCAL_BASE_MEMORY_SOURCES,
+        specialized_scaled_memory_op,
+        op,
+    ) {
+        return Some(SpecializedMemoryFamily::LocalScaledIndex);
+    }
+    if maps_to_specialized_memory_family(
+        INDEXED_LOCAL_BASE_MEMORY_SOURCES,
+        specialized_scaled_memory_op,
+        op,
+    ) {
+        return Some(SpecializedMemoryFamily::IndexedLocalScaledIndex);
+    }
+    if maps_to_specialized_memory_family(
+        SHARED_LOCAL_BASE_MEMORY_SOURCES,
+        specialized_scaled_memory_op,
+        op,
+    ) {
+        return Some(SpecializedMemoryFamily::SharedLocalScaledIndex);
+    }
+    if maps_to_specialized_memory_family(
+        INDEXED_SHARED_LOCAL_BASE_MEMORY_SOURCES,
+        specialized_scaled_memory_op,
+        op,
+    ) {
+        return Some(SpecializedMemoryFamily::IndexedSharedLocalScaledIndex);
+    }
+    None
 }
 
 fn block_op_i32_const(op: &BlockOp) -> Option<i32> {
@@ -11867,6 +13701,22 @@ mod tests {
             .expect("direct call consumer should specialize")
     }
 
+    fn expect_specialized_memory_consumer(
+        graph: &ValueGraph,
+        body: &BlockBody,
+        op_idx: usize,
+    ) -> (SpecializedMemoryLowering, BTreeSet<usize>) {
+        let op = &body.ops[op_idx];
+        build_specialized_memory_lowering(
+            body,
+            graph,
+            &EffectResultSpillPlan::default(),
+            op_idx,
+            op,
+        )
+        .expect("memory consumer should specialize")
+    }
+
     fn expect_specialized_br_if(
         graph: &ValueGraph,
         body: &BlockBody,
@@ -12409,6 +14259,8 @@ mod tests {
         };
         let slot = LocalSlot::new(8, 4);
         let shape = AddressShape {
+            index: None,
+            scale_log2: 0,
             base: AddressBaseKind::EntryLocal(slot),
             offset_delta: 4,
         };
@@ -12506,6 +14358,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot),
                 offset_delta: 4,
             }),
@@ -12533,6 +14387,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot),
                 offset_delta: 8,
             }),
@@ -12582,6 +14438,8 @@ mod tests {
         let slot_shape = build_slot_shape(
             Some(SlotRef::entry_local(slot)),
             Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot),
                 offset_delta: 0,
             }),
@@ -12600,6 +14458,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot),
                 offset_delta: 0,
             }),
@@ -12627,6 +14487,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot),
                 offset_delta: 0,
             }),
@@ -12692,6 +14554,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot0),
                 offset_delta: 0,
             }),
@@ -12699,6 +14563,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(slot0)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(slot0),
                     offset_delta: 0,
                 }),
@@ -12726,6 +14592,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot1),
                 offset_delta: 0,
             }),
@@ -12733,6 +14601,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(slot1)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(slot1),
                     offset_delta: 0,
                 }),
@@ -12780,6 +14650,8 @@ mod tests {
             None,
             None,
             Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot),
                 offset_delta: 0,
             }),
@@ -12787,6 +14659,8 @@ mod tests {
             build_slot_shape(
                 Some(SlotRef::entry_local(slot)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(slot),
                     offset_delta: 0,
                 }),
@@ -12843,6 +14717,8 @@ mod tests {
             None,
             None,
             Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(canonical_slot),
                 offset_delta: 0,
             }),
@@ -12850,6 +14726,8 @@ mod tests {
             build_slot_shape(
                 Some(SlotRef::entry_local(canonical_slot)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(canonical_slot),
                     offset_delta: 0,
                 }),
@@ -12904,6 +14782,8 @@ mod tests {
             Some(ConstValue::I32(2000)),
             None,
             Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot),
                 offset_delta: 0,
             }),
@@ -12911,6 +14791,8 @@ mod tests {
             build_slot_shape(
                 Some(SlotRef::entry_local(slot)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(slot),
                     offset_delta: 0,
                 }),
@@ -12994,6 +14876,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot),
                 offset_delta: 0,
             }),
@@ -13001,6 +14885,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(slot)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(slot),
                     offset_delta: 0,
                 }),
@@ -13092,6 +14978,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 0,
             }),
@@ -13099,6 +14987,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -13154,6 +15044,8 @@ mod tests {
                 rhs: graph[imm.0].origin,
             }),
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 7,
             }),
@@ -13161,6 +15053,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 7,
                 }),
@@ -13246,6 +15140,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 0,
             }),
@@ -13253,6 +15149,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -13308,6 +15206,8 @@ mod tests {
                 rhs: graph[imm.0].origin,
             }),
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 5,
             }),
@@ -13315,6 +15215,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 5,
                 }),
@@ -13403,6 +15305,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -13410,6 +15314,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -13623,6 +15529,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(base),
                     offset_delta: 6,
                 }),
@@ -13630,6 +15538,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(base)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(base),
                         offset_delta: 6,
                     }),
@@ -13714,6 +15624,116 @@ mod tests {
         let memarg = unsafe { memarg_operand.memarg };
         assert_eq!(memarg.align, 0);
         assert_eq!(memarg.offset, 4);
+    }
+
+    #[test]
+    fn memory_relower_specializes_shared_residual_address_shape_without_provider_ops() {
+        let base = LocalSlot::new(14, 4);
+        let mut graph = ValueGraph::default();
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 7,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: 12,
+                }),
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(base)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(base),
+                        offset_delta: 12,
+                    }),
+                    None,
+                ),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 7,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(7),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![BlockOp {
+                source_start: Some(54),
+                op: vm::op_i32_load_shared as Op,
+                kind: BlockOpKind::MemoryLoad,
+                operands: vec![BlockOperand::Raw(Operand {
+                    memarg: crate::common::MemArg {
+                        align: 0,
+                        offset: 4,
+                    },
+                })],
+                inputs: vec![address],
+                values: vec![load],
+            }],
+            terminator: None,
+        };
+
+        let (spec, absorbed_ops) = build_specialized_memory_lowering(
+            &body,
+            &graph,
+            &EffectResultSpillPlan::default(),
+            0,
+            &body.ops[0],
+        )
+        .expect("shared memory load should specialize from residual address shape");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_shared_local_base as Op
+        ));
+        assert!(absorbed_ops.is_empty());
+        assert!(matches!(
+            spec.operands.as_slice(),
+            [BlockOperand::LocalAddr(addr), BlockOperand::I32(delta), BlockOperand::Raw(_)]
+                if *addr == base.addr && *delta == 12
+        ));
     }
 
     #[test]
@@ -13802,6 +15822,1867 @@ mod tests {
     }
 
     #[test]
+    fn memory_relower_specializes_non_adjacent_residual_add_address_without_temp_buffer() {
+        let base = LocalSlot::new(16, 4);
+        let mut graph = ValueGraph::default();
+        let base_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 8,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(base)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(base)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(base),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(base)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(8),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let imm = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 8,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(5)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(8),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let base_origin = graph[base_value.0].origin;
+        let imm_origin = graph[imm.0].origin;
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 8,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Binary {
+                    op: PureOpKind::I32Add,
+                    lhs: base_origin,
+                    rhs: imm_origin,
+                }),
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: 5,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4ConstAdd { base, imm: 5 }),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(base)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(base),
+                        offset_delta: 5,
+                    }),
+                    Some(LoopValueShape::Local4ConstAdd { base, imm: 5 }),
+                ),
+                provider_class: ProviderClass::PureBinary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(2),
+                materialized_block: Some(8),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let hole_const = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 8,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(3),
+                materialized_block: Some(8),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 8,
+                    ordinal: 4,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(5),
+                materialized_block: Some(8),
+                materialized_op: Some(5),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(60),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(base.addr)],
+                    inputs: Vec::new(),
+                    values: vec![base_value],
+                },
+                BlockOp {
+                    source_start: Some(62),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(5)],
+                    inputs: Vec::new(),
+                    values: vec![imm],
+                },
+                BlockOp {
+                    source_start: Some(64),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![base_value, imm],
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(66),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![hole_const],
+                },
+                BlockOp {
+                    source_start: Some(68),
+                    op: vm::op_drop as Op,
+                    kind: BlockOpKind::Drop,
+                    operands: Vec::new(),
+                    inputs: vec![hole_const],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(70),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address],
+                    values: vec![load],
+                },
+            ],
+            terminator: None,
+        };
+
+        let (spec, absorbed_ops) = expect_specialized_memory_consumer(&graph, &body, 5);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_local_base as Op
+        ));
+        assert_eq!(absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
+        assert!(matches!(
+            spec.operands.as_slice(),
+            [BlockOperand::LocalAddr(addr), BlockOperand::I32(delta), BlockOperand::Raw(_)]
+                if *addr == base.addr && *delta == 5
+        ));
+    }
+
+    #[test]
+    fn memory_relower_specializes_non_adjacent_residual_sub_store_address_without_temp_buffer() {
+        let base = LocalSlot::new(20, 4);
+        let value_slot = LocalSlot::new(24, 4);
+        let mut graph = ValueGraph::default();
+        let base_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 11,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(base)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(base)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(base),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(base)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(11),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let imm = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 11,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(3)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(11),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let base_origin = graph[base_value.0].origin;
+        let imm_origin = graph[imm.0].origin;
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 11,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Binary {
+                    op: PureOpKind::I32Sub,
+                    lhs: base_origin,
+                    rhs: imm_origin,
+                }),
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: -3,
+                }),
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(
+                    None,
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(base),
+                        offset_delta: -3,
+                    }),
+                    None,
+                ),
+                provider_class: ProviderClass::PureBinary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(2),
+                materialized_block: Some(11),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let hole_const = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 11,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(1)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(3),
+                materialized_block: Some(11),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let value_input = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 11,
+                    ordinal: 4,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(value_slot),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(value_slot)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(value_slot)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(value_slot),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(value_slot)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(4),
+                materialized_block: Some(11),
+                materialized_op: Some(4),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(80),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(base.addr)],
+                    inputs: Vec::new(),
+                    values: vec![base_value],
+                },
+                BlockOp {
+                    source_start: Some(82),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(3)],
+                    inputs: Vec::new(),
+                    values: vec![imm],
+                },
+                BlockOp {
+                    source_start: Some(84),
+                    op: vm::op_i32_sub as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Sub),
+                    operands: Vec::new(),
+                    inputs: vec![base_value, imm],
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(86),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(1)],
+                    inputs: Vec::new(),
+                    values: vec![hole_const],
+                },
+                BlockOp {
+                    source_start: Some(88),
+                    op: vm::op_drop as Op,
+                    kind: BlockOpKind::Drop,
+                    operands: Vec::new(),
+                    inputs: vec![hole_const],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(90),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(value_slot.addr)],
+                    inputs: Vec::new(),
+                    values: vec![value_input],
+                },
+                BlockOp {
+                    source_start: Some(92),
+                    op: vm::op_i32_store as Op,
+                    kind: BlockOpKind::MemoryStore,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address, value_input],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let (spec, absorbed_ops) = expect_specialized_memory_consumer(&graph, &body, 6);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_store_local_base as Op
+        ));
+        assert_eq!(absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
+        assert!(matches!(
+            spec.operands.as_slice(),
+            [BlockOperand::LocalAddr(addr), BlockOperand::I32(delta), BlockOperand::Raw(_)]
+                if *addr == base.addr && *delta == -3
+        ));
+    }
+
+    #[test]
+    fn memory_relower_specializes_indexed_shared_scaled_index_address_shape_without_provider_ops() {
+        let base = LocalSlot::new(28, 4);
+        let index = LocalSlot::new(32, 4);
+        let mut graph = ValueGraph::default();
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 12,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: Some(AddressBaseKind::EntryLocal(index)),
+                    scale_log2: 2,
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: 8,
+                }),
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 12,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(12),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![BlockOp {
+                source_start: Some(96),
+                op: vm::op_i32_load_indexed_shared as Op,
+                kind: BlockOpKind::MemoryLoad,
+                operands: vec![
+                    BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    }),
+                    BlockOperand::U32(1),
+                ],
+                inputs: vec![address],
+                values: vec![load],
+            }],
+            terminator: None,
+        };
+
+        let (spec, absorbed_ops) = build_specialized_memory_lowering(
+            &body,
+            &graph,
+            &EffectResultSpillPlan::default(),
+            0,
+            &body.ops[0],
+        )
+        .expect("indexed shared scaled-index load should specialize");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_indexed_shared_local_scaled_index as Op
+        ));
+        assert!(absorbed_ops.is_empty());
+        assert!(matches!(
+            spec.operands.as_slice(),
+            [
+                BlockOperand::LocalAddr(base_addr),
+                BlockOperand::LocalAddr(index_addr),
+                BlockOperand::U32(scale),
+                BlockOperand::I32(delta),
+                BlockOperand::Raw(_),
+                BlockOperand::U32(memidx)
+            ] if *base_addr == base.addr
+                && *index_addr == index.addr
+                && *scale == 2
+                && *delta == 8
+                && *memidx == 1
+        ));
+    }
+
+    #[test]
+    fn memory_relower_temp_window_specializes_non_adjacent_const_load_address() {
+        let mut graph = ValueGraph::default();
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 12,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(4)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(0),
+                materialized_block: Some(12),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let hole = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 12,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(12),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 12,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(3),
+                materialized_block: Some(12),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(100),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(4)],
+                    inputs: Vec::new(),
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(102),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![hole],
+                },
+                BlockOp {
+                    source_start: Some(104),
+                    op: vm::op_drop as Op,
+                    kind: BlockOpKind::Drop,
+                    operands: Vec::new(),
+                    inputs: vec![hole],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(106),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address],
+                    values: vec![load],
+                },
+            ],
+            terminator: None,
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(normalize_memory_relower_body_windows(
+            12,
+            &mut body,
+            &mut graph,
+            &mut locals,
+            0,
+        ));
+        recompute_body_materialization_indices(12, &body, &mut graph);
+
+        let load_idx = body
+            .ops
+            .iter()
+            .position(|op| op.source_start == Some(106))
+            .expect("load must remain");
+        assert!(matches!(body.ops[load_idx - 1].kind, BlockOpKind::LocalGet));
+        let (spec, absorbed_ops) = expect_specialized_memory_consumer(&graph, &body, load_idx);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_local_base as Op
+        ));
+        assert_eq!(absorbed_ops.len(), 1);
+    }
+
+    #[test]
+    fn memory_relower_temp_window_specializes_non_adjacent_eqz_load_address() {
+        let flag = LocalSlot::new(28, 4);
+        let mut graph = ValueGraph::default();
+        let flag_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(flag),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(flag)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(flag)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(flag),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(flag)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(13),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let flag_origin = graph[flag_value.0].origin;
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Unary {
+                    op: PureOpKind::I32Eqz,
+                    input: flag_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureUnary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(1),
+                materialized_block: Some(13),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let hole = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(3)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(13),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(4),
+                materialized_block: Some(13),
+                materialized_op: Some(4),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(110),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(flag.addr)],
+                    inputs: Vec::new(),
+                    values: vec![flag_value],
+                },
+                BlockOp {
+                    source_start: Some(112),
+                    op: vm::op_i32_eqz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Eqz),
+                    operands: Vec::new(),
+                    inputs: vec![flag_value],
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(114),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(3)],
+                    inputs: Vec::new(),
+                    values: vec![hole],
+                },
+                BlockOp {
+                    source_start: Some(116),
+                    op: vm::op_drop as Op,
+                    kind: BlockOpKind::Drop,
+                    operands: Vec::new(),
+                    inputs: vec![hole],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(118),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address],
+                    values: vec![load],
+                },
+            ],
+            terminator: None,
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(normalize_memory_relower_body_windows(
+            13,
+            &mut body,
+            &mut graph,
+            &mut locals,
+            0,
+        ));
+        recompute_body_materialization_indices(13, &body, &mut graph);
+
+        let load_idx = body
+            .ops
+            .iter()
+            .position(|op| op.source_start == Some(118))
+            .expect("load must remain");
+        assert!(matches!(body.ops[load_idx - 1].kind, BlockOpKind::LocalGet));
+        let (spec, absorbed_ops) = expect_specialized_memory_consumer(&graph, &body, load_idx);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_local_base as Op
+        ));
+        assert_eq!(absorbed_ops.len(), 1);
+    }
+
+    #[test]
+    fn memory_relower_temp_window_specializes_non_adjacent_global_get_load_address() {
+        let mut graph = ValueGraph::default();
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(9),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let hole = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(7)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(9),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(2),
+                materialized_block: Some(9),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(70),
+                    op: vm::op_global_get4 as Op,
+                    kind: BlockOpKind::GlobalGet,
+                    operands: vec![BlockOperand::U32(12)],
+                    inputs: Vec::new(),
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(72),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(7)],
+                    inputs: Vec::new(),
+                    values: vec![hole],
+                },
+                BlockOp {
+                    source_start: Some(74),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address],
+                    values: vec![load],
+                },
+            ],
+            terminator: None,
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(normalize_memory_relower_body_windows(
+            9,
+            &mut body,
+            &mut graph,
+            &mut locals,
+            0,
+        ));
+        recompute_body_materialization_indices(9, &body, &mut graph);
+
+        let load_idx = body
+            .ops
+            .iter()
+            .position(|op| op.source_start == Some(74))
+            .expect("load must remain");
+        assert!(matches!(body.ops[load_idx - 1].kind, BlockOpKind::LocalGet));
+        assert_eq!(
+            body.ops
+                .iter()
+                .filter(|op| op.source_start.is_none() && op.kind == BlockOpKind::LocalSet)
+                .count(),
+            1
+        );
+        let (spec, absorbed_ops) = expect_specialized_memory_consumer(&graph, &body, load_idx);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_local_base as Op
+        ));
+        assert_eq!(absorbed_ops.len(), 1);
+    }
+
+    #[test]
+    fn memory_relower_same_block_memory_derived_address_root_stays_generic() {
+        let mut graph = ValueGraph::default();
+        let base = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(0)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(0),
+                materialized_block: Some(14),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let pointer = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(1),
+                materialized_block: Some(14),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let hole = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(14),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(1), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(4),
+                materialized_block: Some(14),
+                materialized_op: Some(4),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(120),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(0)],
+                    inputs: Vec::new(),
+                    values: vec![base],
+                },
+                BlockOp {
+                    source_start: Some(122),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![base],
+                    values: vec![pointer],
+                },
+                BlockOp {
+                    source_start: Some(124),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![hole],
+                },
+                BlockOp {
+                    source_start: Some(126),
+                    op: vm::op_drop as Op,
+                    kind: BlockOpKind::Drop,
+                    operands: Vec::new(),
+                    inputs: vec![hole],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(128),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![pointer],
+                    values: vec![load],
+                },
+            ],
+            terminator: None,
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(!normalize_memory_relower_body_windows(
+            14,
+            &mut body,
+            &mut graph,
+            &mut locals,
+            0,
+        ));
+        assert!(body.ops.iter().all(|op| op.source_start.is_some()));
+        assert!(build_specialized_memory_lowering(
+            &body,
+            &graph,
+            &EffectResultSpillPlan::default(),
+            4,
+            &body.ops[4],
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn memory_relower_temp_window_keeps_store_value_suffix_while_buffering_address() {
+        let lhs_slot = LocalSlot::new(0, 4);
+        let rhs_slot = LocalSlot::new(4, 4);
+        let mut graph = ValueGraph::default();
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 10,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(10),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let lhs = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 10,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(lhs_slot),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(lhs_slot)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(lhs_slot)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(lhs_slot),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(lhs_slot)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(1),
+                materialized_block: Some(10),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let rhs = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 10,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(rhs_slot),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(rhs_slot)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(rhs_slot)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(rhs_slot),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(rhs_slot)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(2),
+                materialized_block: Some(10),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 10,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(3),
+                materialized_block: Some(10),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(80),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(1)],
+                    inputs: Vec::new(),
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(82),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(lhs_slot.addr)],
+                    inputs: Vec::new(),
+                    values: vec![lhs],
+                },
+                BlockOp {
+                    source_start: Some(84),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(rhs_slot.addr)],
+                    inputs: Vec::new(),
+                    values: vec![rhs],
+                },
+                BlockOp {
+                    source_start: Some(86),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![lhs, rhs],
+                    values: vec![value],
+                },
+                BlockOp {
+                    source_start: Some(88),
+                    op: vm::op_i32_store as Op,
+                    kind: BlockOpKind::MemoryStore,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address, value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(normalize_memory_relower_body_windows(
+            10,
+            &mut body,
+            &mut graph,
+            &mut locals,
+            0,
+        ));
+        recompute_body_materialization_indices(10, &body, &mut graph);
+
+        let store_idx = body
+            .ops
+            .iter()
+            .position(|op| op.source_start == Some(88))
+            .expect("store must remain");
+        let value_slice =
+            find_contiguous_trailing_value_slice(&body, store_idx, value).expect("value suffix");
+        assert!(matches!(
+            body.ops[value_slice.start_idx - 1].kind,
+            BlockOpKind::LocalGet
+        ));
+        let (spec, _) = expect_specialized_memory_consumer(&graph, &body, store_idx);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_store_local_base as Op
+        ));
+    }
+
+    #[test]
+    fn memory_relower_temp_window_buffers_non_adjacent_store_value_tree() {
+        let address_slot = LocalSlot::new(40, 4);
+        let mut graph = ValueGraph::default();
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(address_slot),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(address_slot)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(address_slot)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(address_slot),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(address_slot)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(14),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(1),
+                materialized_block: Some(14),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let hole = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(7)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(14),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(120),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(address_slot.addr)],
+                    inputs: Vec::new(),
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(122),
+                    op: vm::op_global_get4 as Op,
+                    kind: BlockOpKind::GlobalGet,
+                    operands: vec![BlockOperand::U32(3)],
+                    inputs: Vec::new(),
+                    values: vec![value],
+                },
+                BlockOp {
+                    source_start: Some(124),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(7)],
+                    inputs: Vec::new(),
+                    values: vec![hole],
+                },
+                BlockOp {
+                    source_start: Some(126),
+                    op: vm::op_drop as Op,
+                    kind: BlockOpKind::Drop,
+                    operands: Vec::new(),
+                    inputs: vec![hole],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(128),
+                    op: vm::op_i32_store as Op,
+                    kind: BlockOpKind::MemoryStore,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address, value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(normalize_memory_relower_body_windows(
+            14,
+            &mut body,
+            &mut graph,
+            &mut locals,
+            0,
+        ));
+        recompute_body_materialization_indices(14, &body, &mut graph);
+
+        let store_idx = body
+            .ops
+            .iter()
+            .position(|op| op.source_start == Some(128))
+            .expect("store must remain");
+        assert!(matches!(
+            body.ops[store_idx - 1].kind,
+            BlockOpKind::LocalGet
+        ));
+        assert_eq!(
+            body.ops
+                .iter()
+                .filter(|op| op.source_start.is_none() && op.kind == BlockOpKind::LocalSet)
+                .count(),
+            1
+        );
+        let (spec, _) = expect_specialized_memory_consumer(&graph, &body, store_idx);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_store_local_base as Op
+        ));
+    }
+
+    #[test]
+    fn cross_block_memory_relower_normalization_inserts_temp_read_for_block_entry_address() {
+        let mut graph = ValueGraph::default();
+        let pred_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 0,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(0),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let block_arg =
+            graph.ensure_block_argument(1, 0, ValType::I32, None, None, None, None, None);
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 1,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(1), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(1),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let program = BasicBlockProgram {
+            records: Vec::new(),
+            blocks: vec![
+                BasicBlock {
+                    id: 0,
+                    start: 0,
+                    end: 0,
+                },
+                BasicBlock {
+                    id: 1,
+                    start: 0,
+                    end: 0,
+                },
+            ],
+            old_start_to_block: HashMap::new(),
+            successors: vec![vec![1], Vec::new()],
+            predecessors: vec![Vec::new(), vec![0]],
+        };
+        let mut rewrite = FunctionRewrite {
+            entries: vec![
+                BlockEntryState {
+                    reachable: true,
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState {
+                    reachable: true,
+                    stack: vec![block_arg],
+                    ..BlockEntryState::default()
+                },
+            ],
+            exits: vec![
+                BlockEntryState {
+                    reachable: true,
+                    stack: vec![pred_value],
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState::default(),
+            ],
+            graph,
+            relower: RelowerPlan {
+                block_bodies: vec![
+                    BlockBody {
+                        ops: vec![BlockOp {
+                            source_start: Some(90),
+                            op: vm::op_global_get4 as Op,
+                            kind: BlockOpKind::GlobalGet,
+                            operands: vec![BlockOperand::U32(16)],
+                            inputs: Vec::new(),
+                            values: vec![pred_value],
+                        }],
+                        terminator: None,
+                    },
+                    BlockBody {
+                        ops: vec![BlockOp {
+                            source_start: Some(92),
+                            op: vm::op_i32_load as Op,
+                            kind: BlockOpKind::MemoryLoad,
+                            operands: vec![BlockOperand::Raw(Operand {
+                                memarg: crate::common::MemArg {
+                                    align: 0,
+                                    offset: 0,
+                                },
+                            })],
+                            inputs: vec![block_arg],
+                            values: vec![load],
+                        }],
+                        terminator: None,
+                    },
+                ],
+                loop_invariants: vec![LoopInvariantSet::default(); 2],
+                block_copy_plans: vec![BlockCopyPlan::default(); 2],
+                entry_prefix_ops: Vec::new(),
+                block_prefix_ops: vec![Vec::new(); 2],
+                block_suffix_ops: vec![Vec::new(); 2],
+            },
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(normalize_cross_block_memory_relower_regions(
+            &program,
+            &mut rewrite,
+            &mut locals,
+            0,
+        ));
+        assert_eq!(rewrite.relower.block_prefix_ops[1].len(), 1);
+        assert!(matches!(
+            rewrite.relower.block_prefix_ops[1][0].kind,
+            BlockOpKind::LocalSet
+        ));
+        assert!(matches!(
+            rewrite.relower.block_bodies[1].ops[0].kind,
+            BlockOpKind::LocalGet
+        ));
+
+        let combined = combined_relower_block_body(&rewrite.relower, 1);
+        let load_idx = combined
+            .ops
+            .iter()
+            .position(|op| op.source_start == Some(92))
+            .expect("load must remain");
+        let (spec, _) = expect_specialized_memory_consumer(&rewrite.graph, &combined, load_idx);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_local_base as Op
+        ));
+        assert!(verify_memory_relower_window_normalization(
+            &program, &rewrite
+        ));
+    }
+
+    #[test]
     fn local_control_relower_accepts_slot_preserving_block_argument_leaf_for_br_if() {
         let src = LocalSlot::new(0, 4);
         let mut graph = ValueGraph::default();
@@ -13817,6 +17698,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 0,
             }),
@@ -13824,6 +17707,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -13879,6 +17764,8 @@ mod tests {
                 rhs: graph[imm.0].origin,
             }),
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 3,
             }),
@@ -13886,6 +17773,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 3,
                 }),
@@ -13972,6 +17861,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 0,
             }),
@@ -13979,6 +17870,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -14079,6 +17972,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 0,
             }),
@@ -14086,6 +17981,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -14190,6 +18087,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -14276,6 +18175,8 @@ mod tests {
     fn visit_select_preserves_lossless_slot_shape() {
         let slot = LocalSlot::new(0, 4);
         let address_shape = AddressShape {
+            index: None,
+            scale_log2: 0,
             base: AddressBaseKind::EntryLocal(slot),
             offset_delta: 0,
         };
@@ -14752,6 +18653,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(src),
                 offset_delta: 0,
             }),
@@ -14759,6 +18662,8 @@ mod tests {
             slot_shape: build_slot_shape(
                 Some(SlotRef::entry_local(src)),
                 Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -14823,6 +18728,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot0),
                 offset_delta: 0,
             }),
@@ -14850,6 +18757,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::EntryLocal(slot0),
                 offset_delta: 3,
             }),
@@ -15010,6 +18919,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::SpillLocal(LocalSlot::new(12, 4)),
                 offset_delta: 0,
             }),
@@ -15061,6 +18972,8 @@ mod tests {
             const_value: None,
             key: None,
             address_shape: Some(AddressShape {
+                index: None,
+                scale_log2: 0,
                 base: AddressBaseKind::SpillLocal(LocalSlot::new(12, 4)),
                 offset_delta: 1,
             }),
@@ -15173,6 +19086,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -15180,6 +19095,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -15351,6 +19268,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::SpillLocal(spill_slot),
                     offset_delta: 0,
                 }),
@@ -15358,6 +19277,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::spill_local(spill_slot)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::SpillLocal(spill_slot),
                         offset_delta: 0,
                     }),
@@ -15387,6 +19308,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::SpillLocal(spill_slot),
                     offset_delta: 0,
                 }),
@@ -15394,6 +19317,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::spill_local(spill_slot)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::SpillLocal(spill_slot),
                         offset_delta: 0,
                     }),
@@ -15485,6 +19410,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -15492,6 +19419,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -15867,6 +19796,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(base),
                     offset_delta: 0,
                 }),
@@ -15874,6 +19805,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(base)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(base),
                         offset_delta: 0,
                     }),
@@ -16172,6 +20105,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(base),
                     offset_delta: 0,
                 }),
@@ -16179,6 +20114,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(base)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(base),
                         offset_delta: 0,
                     }),
@@ -16309,6 +20246,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(lhs),
                     offset_delta: 0,
                 }),
@@ -16316,6 +20255,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(lhs)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(lhs),
                         offset_delta: 0,
                     }),
@@ -16429,6 +20370,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(cond),
                     offset_delta: 0,
                 }),
@@ -16436,6 +20379,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(cond)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(cond),
                         offset_delta: 0,
                     }),
@@ -17743,6 +21688,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(base),
                     offset_delta: 0,
                 }),
@@ -17750,6 +21697,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(base)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(base),
                         offset_delta: 0,
                     }),
@@ -17957,6 +21906,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(base),
                     offset_delta: 0,
                 }),
@@ -17964,6 +21915,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(base)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(base),
                         offset_delta: 0,
                     }),
@@ -18127,6 +22080,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(dst),
                     offset_delta: 0,
                 }),
@@ -18134,6 +22089,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(dst)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(dst),
                         offset_delta: 0,
                     }),
@@ -18260,6 +22217,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -18267,6 +22226,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -18488,6 +22449,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -18495,6 +22458,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -18675,6 +22640,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -18682,6 +22649,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -18752,6 +22721,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(base),
                     offset_delta: 0,
                 }),
@@ -18759,6 +22730,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(base)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(base),
                         offset_delta: 0,
                     }),
@@ -18814,6 +22787,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(base),
                     offset_delta: 8,
                 }),
@@ -18821,6 +22796,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(base)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(base),
                         offset_delta: 8,
                     }),
@@ -19007,6 +22984,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(dst),
                     offset_delta: 0,
                 }),
@@ -19014,6 +22993,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(dst)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(dst),
                         offset_delta: 0,
                     }),
@@ -19271,6 +23252,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -19278,6 +23261,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -19939,6 +23924,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(slot1),
                     offset_delta: 0,
                 }),
@@ -19946,6 +23933,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(slot1)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(slot1),
                         offset_delta: 0,
                     }),
@@ -19975,6 +23964,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(slot2),
                     offset_delta: 0,
                 }),
@@ -19982,6 +23973,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(slot2)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(slot2),
                         offset_delta: 0,
                     }),
@@ -20205,6 +24198,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -20212,6 +24207,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -20358,6 +24355,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -20365,6 +24364,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -20628,6 +24629,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(dst),
                     offset_delta: 0,
                 }),
@@ -20635,6 +24638,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(dst)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(dst),
                         offset_delta: 0,
                     }),
@@ -20785,6 +24790,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -20792,6 +24799,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -20951,6 +24960,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(src),
                     offset_delta: 0,
                 }),
@@ -20958,6 +24969,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(src)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(src),
                         offset_delta: 0,
                     }),
@@ -21085,6 +25098,8 @@ mod tests {
                 const_value: None,
                 key: None,
                 address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
                     base: AddressBaseKind::EntryLocal(dst),
                     offset_delta: 0,
                 }),
@@ -21092,6 +25107,8 @@ mod tests {
                 slot_shape: build_slot_shape(
                     Some(SlotRef::entry_local(dst)),
                     Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
                         base: AddressBaseKind::EntryLocal(dst),
                         offset_delta: 0,
                     }),

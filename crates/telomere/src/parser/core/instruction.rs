@@ -4296,11 +4296,11 @@ mod tests {
     fn parser_specializes_shared_default_memory_load_handler() {
         let shared = op_at(
             r#"(module (memory 1 2 shared) (func (export "f") (param i32) (result i32) local.get 0 i32.load))"#,
-            2,
+            0,
         );
         assert!(std::ptr::fn_addr_eq(
             shared,
-            vm::op_i32_load_shared as crate::common::Op
+            vm::op_i32_load_shared_local_base as crate::common::Op
         ));
     }
 
@@ -4456,11 +4456,11 @@ mod tests {
                 local.get 0
                 i32.load $m))
             "#,
-            2,
+            0,
         );
         assert!(std::ptr::fn_addr_eq(
             shared,
-            vm::op_i32_load_indexed_shared as crate::common::Op
+            vm::op_i32_load_indexed_shared_local_base as crate::common::Op
         ));
     }
 

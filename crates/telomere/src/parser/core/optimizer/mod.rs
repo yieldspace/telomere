@@ -28,7 +28,7 @@ mod tests {
 
     use super::{
         cfg::{build_program, InstructionMeta},
-        pass::patch_jump_targets,
+        pass::{patch_jump_targets, specialized_memory_family},
         sink::RecordEmit,
     };
     use crate::{
@@ -114,10 +114,18 @@ mod tests {
     fn count_i32_load_family(expr: &[Instr]) -> usize {
         let family = [
             vm::op_i32_load as crate::common::Op,
+            vm::op_i32_load_shared as crate::common::Op,
             vm::op_i32_load_local as crate::common::Op,
             vm::op_i32_load_indexed_local as crate::common::Op,
+            vm::op_i32_load_indexed_shared as crate::common::Op,
             vm::op_i32_load_local_base as crate::common::Op,
+            vm::op_i32_load_shared_local_base as crate::common::Op,
             vm::op_i32_load_indexed_local_base as crate::common::Op,
+            vm::op_i32_load_indexed_shared_local_base as crate::common::Op,
+            vm::op_i32_load_local_scaled_index as crate::common::Op,
+            vm::op_i32_load_shared_local_scaled_index as crate::common::Op,
+            vm::op_i32_load_indexed_local_scaled_index as crate::common::Op,
+            vm::op_i32_load_indexed_shared_local_scaled_index as crate::common::Op,
         ];
         decoded_ops(expr)
             .into_iter()
@@ -132,10 +140,18 @@ mod tests {
     fn count_i32_load8_u_family(expr: &[Instr]) -> usize {
         let family = [
             vm::op_i32_load8_u as crate::common::Op,
+            vm::op_i32_load8_u_shared as crate::common::Op,
             vm::op_i32_load8_u_local as crate::common::Op,
             vm::op_i32_load8_u_indexed_local as crate::common::Op,
+            vm::op_i32_load8_u_indexed_shared as crate::common::Op,
             vm::op_i32_load8_u_local_base as crate::common::Op,
+            vm::op_i32_load8_u_shared_local_base as crate::common::Op,
             vm::op_i32_load8_u_indexed_local_base as crate::common::Op,
+            vm::op_i32_load8_u_indexed_shared_local_base as crate::common::Op,
+            vm::op_i32_load8_u_local_scaled_index as crate::common::Op,
+            vm::op_i32_load8_u_shared_local_scaled_index as crate::common::Op,
+            vm::op_i32_load8_u_indexed_local_scaled_index as crate::common::Op,
+            vm::op_i32_load8_u_indexed_shared_local_scaled_index as crate::common::Op,
         ];
         decoded_ops(expr)
             .into_iter()
@@ -522,6 +538,9 @@ mod tests {
     }
 
     fn memarg_operand_index(op: crate::common::Op) -> Option<usize> {
+        if let Some(family) = specialized_memory_family(op) {
+            return Some(family.memarg_index() + 1);
+        }
         let second = [
             vm::op_i32_load_local as crate::common::Op,
             vm::op_i32_load8_s_local as crate::common::Op,
@@ -634,6 +653,9 @@ mod tests {
     }
 
     fn operand_width(op: crate::common::Op) -> usize {
+        if let Some(family) = specialized_memory_family(op) {
+            return family.operand_width();
+        }
         let one = [
             vm::special_function_return as crate::common::Op,
             vm::special_block_return as crate::common::Op,

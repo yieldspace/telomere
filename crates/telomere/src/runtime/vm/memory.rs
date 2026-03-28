@@ -116,6 +116,102 @@ unsafe fn load_start_indexed_local_base(
 }
 
 #[inline(always)]
+unsafe fn load_start_local_scaled_index(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<usize> {
+    let base_addr = (*tail_code).operand.local_addr as usize;
+    let index_addr = (*tail_code.add(1)).operand.local_addr as usize;
+    let scale_log2 = (*tail_code.add(2)).operand.u32;
+    let delta = (*tail_code.add(3)).operand.i32 as u32;
+    let memarg = (*tail_code.add(4)).operand.memarg;
+    debug_assert!(scale_log2 <= 3);
+    let base = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, base_addr);
+    let index = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, index_addr);
+    let offset = base
+        .wrapping_add(index.wrapping_shl(scale_log2))
+        .wrapping_add(delta);
+    compute_memory_offset(memarg, offset)
+}
+
+#[inline(always)]
+unsafe fn load_start_indexed_local_scaled_index(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32)> {
+    let base_addr = (*tail_code).operand.local_addr as usize;
+    let index_addr = (*tail_code.add(1)).operand.local_addr as usize;
+    let scale_log2 = (*tail_code.add(2)).operand.u32;
+    let delta = (*tail_code.add(3)).operand.i32 as u32;
+    let memarg = (*tail_code.add(4)).operand.memarg;
+    let memidx = (*tail_code.add(5)).operand.u32;
+    debug_assert!(scale_log2 <= 3);
+    let base = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, base_addr);
+    let index = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, index_addr);
+    let offset = base
+        .wrapping_add(index.wrapping_shl(scale_log2))
+        .wrapping_add(delta);
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    VMResult::Success((start, memidx))
+}
+
+#[inline(always)]
+unsafe fn load_start_shared_local_scaled_index(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<usize> {
+    let base_addr = (*tail_code).operand.local_addr as usize;
+    let index_addr = (*tail_code.add(1)).operand.local_addr as usize;
+    let scale_log2 = (*tail_code.add(2)).operand.u32;
+    let delta = (*tail_code.add(3)).operand.i32 as u32;
+    let memarg = (*tail_code.add(4)).operand.memarg;
+    debug_assert!(scale_log2 <= 3);
+    let base = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, base_addr);
+    let index = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, index_addr);
+    let offset = base
+        .wrapping_add(index.wrapping_shl(scale_log2))
+        .wrapping_add(delta);
+    compute_memory_offset(memarg, offset)
+}
+
+#[inline(always)]
+unsafe fn load_start_indexed_shared_local_scaled_index(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32)> {
+    let base_addr = (*tail_code).operand.local_addr as usize;
+    let index_addr = (*tail_code.add(1)).operand.local_addr as usize;
+    let scale_log2 = (*tail_code.add(2)).operand.u32;
+    let delta = (*tail_code.add(3)).operand.i32 as u32;
+    let memarg = (*tail_code.add(4)).operand.memarg;
+    let memidx = (*tail_code.add(5)).operand.u32;
+    debug_assert!(scale_log2 <= 3);
+    let base = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, base_addr);
+    let index = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, index_addr);
+    let offset = base
+        .wrapping_add(index.wrapping_shl(scale_log2))
+        .wrapping_add(delta);
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    VMResult::Success((start, memidx))
+}
+
+#[inline(always)]
 #[allow(dead_code)]
 unsafe fn store_internal_local_base(
     tail_code: *const Instr,
@@ -160,6 +256,139 @@ unsafe fn store_internal_indexed_local_base(
         .gc
         .local_write_bytes(ctx.local_memory_id_at_unchecked(memidx), start, bytes));
     call_next(tail_code, 4, ctx)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn store_internal_shared_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    _label: &'static str,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let start = vm_try!(load_start_local_base(tail_code, ctx));
+    let operation = make_operation(ctx);
+    let bytes = operation.as_slice();
+    vm_try!(ctx
+        .gc
+        .shared_write_bytes(ctx.default_shared_memory_id_unchecked(), start, bytes));
+    call_next(tail_code, 3, ctx)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn store_internal_indexed_shared_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    _label: &'static str,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
+    let operation = make_operation(ctx);
+    let bytes = operation.as_slice();
+    vm_try!(ctx
+        .gc
+        .shared_write_bytes(ctx.shared_memory_id_at_unchecked(memidx), start, bytes));
+    call_next(tail_code, 4, ctx)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn store_internal_local_scaled_index(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    _label: &'static str,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
+    let operation = make_operation(ctx);
+    let bytes = operation.as_slice();
+    vm_try!(unsafe { ctx.default_local_memory_mut_unchecked() }.write_bytes(start, bytes));
+    call_next(tail_code, 5, ctx)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn store_internal_shared_local_scaled_index(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    _label: &'static str,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
+    let operation = make_operation(ctx);
+    let bytes = operation.as_slice();
+    vm_try!(ctx
+        .gc
+        .shared_write_bytes(ctx.default_shared_memory_id_unchecked(), start, bytes));
+    call_next(tail_code, 5, ctx)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn store_internal_indexed_local_scaled_index(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    _label: &'static str,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
+    let operation = make_operation(ctx);
+    let bytes = operation.as_slice();
+    vm_try!(ctx
+        .gc
+        .local_write_bytes(ctx.local_memory_id_at_unchecked(memidx), start, bytes));
+    call_next(tail_code, 6, ctx)
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+unsafe fn store_internal_indexed_shared_local_scaled_index(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    _label: &'static str,
+    make_operation: impl FnOnce(&mut ExecuteContext) -> StoreBytes,
+) -> VMResult<()> {
+    let (start, memidx) = vm_try!(load_start_indexed_shared_local_scaled_index(tail_code, ctx));
+    let operation = make_operation(ctx);
+    let bytes = operation.as_slice();
+    vm_try!(ctx
+        .gc
+        .shared_write_bytes(ctx.shared_memory_id_at_unchecked(memidx), start, bytes));
+    call_next(tail_code, 6, ctx)
+}
+
+#[inline(always)]
+unsafe fn load_start_shared_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<usize> {
+    debug_assert!(ctx.snapshot().has_default_memory());
+    let local_addr = (*tail_code).operand.local_addr as usize;
+    let delta = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    let offset = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, local_addr)
+        .wrapping_add(delta);
+    compute_memory_offset(memarg, offset)
+}
+
+#[inline(always)]
+unsafe fn load_start_indexed_shared_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(usize, u32)> {
+    let local_addr = (*tail_code).operand.local_addr as usize;
+    let delta = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    let memidx = (*tail_code.add(3)).operand.u32;
+    let offset = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, local_addr)
+        .wrapping_add(delta);
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    VMResult::Success((start, memidx))
 }
 
 macro_rules! define_indexed_push_load {
@@ -378,6 +607,256 @@ macro_rules! define_indexed_local_base_store_alias {
         #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             store_internal_indexed_local_base(tail_code, ctx, stringify!($name), $make_operation)
+        }
+    };
+}
+
+macro_rules! define_shared_local_base_push_load {
+    ($name:ident, $mnemonic:literal, $bytes:expr) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on shared default memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let start = vm_try!(load_start_shared_local_base(tail_code, ctx));
+            vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
+                ctx.default_shared_memory_id_unchecked(),
+                ctx.stack,
+                start,
+            ));
+            call_next(tail_code, 3, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_shared_local_base_push_load {
+    ($name:ident, $mnemonic:literal, $bytes:expr) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed shared memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let (start, memidx) = vm_try!(load_start_indexed_shared_local_base(tail_code, ctx));
+            vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
+                ctx.shared_memory_id_at_unchecked(memidx),
+                ctx.stack,
+                start,
+            ));
+            call_next(tail_code, 4, ctx)
+        }
+    };
+}
+
+macro_rules! define_shared_local_base_scalar_load {
+    ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on shared default memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let start = vm_try!(load_start_shared_local_base(tail_code, ctx));
+            let value = vm_try!(ctx
+                .gc
+                .$reader(ctx.default_shared_memory_id_unchecked(), start));
+            vm_try!(ctx.stack.$push($convert(value)));
+            call_next(tail_code, 3, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_shared_local_base_scalar_load {
+    ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed shared memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let (start, memidx) = vm_try!(load_start_indexed_shared_local_base(tail_code, ctx));
+            let value = vm_try!(ctx.gc.$reader(ctx.shared_memory_id_at_unchecked(memidx), start));
+            vm_try!(ctx.stack.$push($convert(value)));
+            call_next(tail_code, 4, ctx)
+        }
+    };
+}
+
+macro_rules! define_shared_local_base_store_alias {
+    ($name:ident, $make_operation:expr) => {
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            store_internal_shared_local_base(tail_code, ctx, stringify!($name), $make_operation)
+        }
+    };
+}
+
+macro_rules! define_indexed_shared_local_base_store_alias {
+    ($name:ident, $make_operation:expr) => {
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            store_internal_indexed_shared_local_base(
+                tail_code,
+                ctx,
+                stringify!($name),
+                $make_operation,
+            )
+        }
+    };
+}
+
+macro_rules! define_local_scaled_index_push_load {
+    ($name:ident, $mnemonic:literal, $bytes:expr) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on default local memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
+            vm_try!(default_local_push_to_stack::<$bytes>(ctx, start));
+            call_next(tail_code, 5, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_local_scaled_index_push_load {
+    ($name:ident, $mnemonic:literal, $bytes:expr) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed local memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
+            vm_try!(ctx.gc.local_push_memory_to_stack::<$bytes>(
+                ctx.local_memory_id_at_unchecked(memidx),
+                ctx.stack,
+                start,
+            ));
+            call_next(tail_code, 6, ctx)
+        }
+    };
+}
+
+macro_rules! define_shared_local_scaled_index_push_load {
+    ($name:ident, $mnemonic:literal, $bytes:expr) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on shared default memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
+            vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
+                ctx.default_shared_memory_id_unchecked(),
+                ctx.stack,
+                start,
+            ));
+            call_next(tail_code, 5, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_shared_local_scaled_index_push_load {
+    ($name:ident, $mnemonic:literal, $bytes:expr) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed shared memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let (start, memidx) =
+                vm_try!(load_start_indexed_shared_local_scaled_index(tail_code, ctx));
+            vm_try!(ctx.gc.shared_push_memory_to_stack::<$bytes>(
+                ctx.shared_memory_id_at_unchecked(memidx),
+                ctx.stack,
+                start,
+            ));
+            call_next(tail_code, 6, ctx)
+        }
+    };
+}
+
+macro_rules! define_local_scaled_index_scalar_load {
+    ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on default local memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
+            let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.$reader(start));
+            vm_try!(ctx.stack.$push($convert(value)));
+            call_next(tail_code, 5, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_local_scaled_index_scalar_load {
+    ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed local memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
+            let value = vm_try!(ctx.gc.$reader(ctx.local_memory_id_at_unchecked(memidx), start));
+            vm_try!(ctx.stack.$push($convert(value)));
+            call_next(tail_code, 6, ctx)
+        }
+    };
+}
+
+macro_rules! define_shared_local_scaled_index_scalar_load {
+    ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on shared default memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
+            let value = vm_try!(ctx
+                .gc
+                .$reader(ctx.default_shared_memory_id_unchecked(), start));
+            vm_try!(ctx.stack.$push($convert(value)));
+            call_next(tail_code, 5, ctx)
+        }
+    };
+}
+
+macro_rules! define_indexed_shared_local_scaled_index_scalar_load {
+    ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
+        #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed shared memory.")]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let (start, memidx) =
+                vm_try!(load_start_indexed_shared_local_scaled_index(tail_code, ctx));
+            let value = vm_try!(ctx.gc.$reader(ctx.shared_memory_id_at_unchecked(memidx), start));
+            vm_try!(ctx.stack.$push($convert(value)));
+            call_next(tail_code, 6, ctx)
+        }
+    };
+}
+
+macro_rules! define_local_scaled_index_store_alias {
+    ($name:ident, $make_operation:expr) => {
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            store_internal_local_scaled_index(tail_code, ctx, stringify!($name), $make_operation)
+        }
+    };
+}
+
+macro_rules! define_indexed_local_scaled_index_store_alias {
+    ($name:ident, $make_operation:expr) => {
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            store_internal_indexed_local_scaled_index(
+                tail_code,
+                ctx,
+                stringify!($name),
+                $make_operation,
+            )
+        }
+    };
+}
+
+macro_rules! define_shared_local_scaled_index_store_alias {
+    ($name:ident, $make_operation:expr) => {
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            store_internal_shared_local_scaled_index(
+                tail_code,
+                ctx,
+                stringify!($name),
+                $make_operation,
+            )
+        }
+    };
+}
+
+macro_rules! define_indexed_shared_local_scaled_index_store_alias {
+    ($name:ident, $make_operation:expr) => {
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            store_internal_indexed_shared_local_scaled_index(
+                tail_code,
+                ctx,
+                stringify!($name),
+                $make_operation,
+            )
         }
     };
 }
@@ -1490,6 +1969,643 @@ define_indexed_local_base_store_alias!(op_i64_store16_indexed_local_base, |ctx| 
 define_indexed_local_base_store_alias!(op_i64_store32_indexed_local_base, |ctx| {
     StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
 });
+
+define_shared_local_base_push_load!(op_i32_load_shared_local_base, "i32.load", 4);
+define_shared_local_base_push_load!(op_i64_load_shared_local_base, "i64.load", 8);
+define_shared_local_base_push_load!(op_f32_load_shared_local_base, "f32.load", 4);
+define_shared_local_base_push_load!(op_f64_load_shared_local_base, "f64.load", 8);
+define_shared_local_base_scalar_load!(
+    op_i32_load8_u_shared_local_base,
+    "i32.load8_u",
+    shared_read_u8_at,
+    push_u32_fast,
+    u32::from
+);
+define_shared_local_base_scalar_load!(
+    op_i32_load8_s_shared_local_base,
+    "i32.load8_s",
+    shared_read_i8_at,
+    push_i32_fast,
+    i32::from
+);
+define_shared_local_base_scalar_load!(
+    op_i32_load16_s_shared_local_base,
+    "i32.load16_s",
+    shared_read_i16_at,
+    push_i32_fast,
+    i32::from
+);
+define_shared_local_base_scalar_load!(
+    op_i32_load16_u_shared_local_base,
+    "i32.load16_u",
+    shared_read_u16_at,
+    push_u32_fast,
+    u32::from
+);
+define_shared_local_base_scalar_load!(
+    op_i64_load8_s_shared_local_base,
+    "i64.load8_s",
+    shared_read_i8_at,
+    push_i64_fast,
+    i64::from
+);
+define_shared_local_base_scalar_load!(
+    op_i64_load8_u_shared_local_base,
+    "i64.load8_u",
+    shared_read_u8_at,
+    push_u64_fast,
+    u64::from
+);
+define_shared_local_base_scalar_load!(
+    op_i64_load16_s_shared_local_base,
+    "i64.load16_s",
+    shared_read_i16_at,
+    push_i64_fast,
+    i64::from
+);
+define_shared_local_base_scalar_load!(
+    op_i64_load16_u_shared_local_base,
+    "i64.load16_u",
+    shared_read_u16_at,
+    push_u64_fast,
+    u64::from
+);
+define_shared_local_base_scalar_load!(
+    op_i64_load32_s_shared_local_base,
+    "i64.load32_s",
+    shared_read_i32_at,
+    push_i64_fast,
+    i64::from
+);
+define_shared_local_base_scalar_load!(
+    op_i64_load32_u_shared_local_base,
+    "i64.load32_u",
+    shared_read_u32_at,
+    push_u64_fast,
+    u64::from
+);
+define_shared_local_base_store_alias!(op_i32_store_shared_local_base, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_shared_local_base_store_alias!(op_i64_store_shared_local_base, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_shared_local_base_store_alias!(op_f32_store_shared_local_base, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_shared_local_base_store_alias!(op_f64_store_shared_local_base, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_shared_local_base_store_alias!(op_i32_store8_shared_local_base, |ctx| {
+    StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
+});
+define_shared_local_base_store_alias!(op_i32_store16_shared_local_base, |ctx| {
+    StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
+});
+define_shared_local_base_store_alias!(op_i64_store8_shared_local_base, |ctx| {
+    StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
+});
+define_shared_local_base_store_alias!(op_i64_store16_shared_local_base, |ctx| {
+    StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
+});
+define_shared_local_base_store_alias!(op_i64_store32_shared_local_base, |ctx| {
+    StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
+});
+
+define_indexed_shared_local_base_push_load!(op_i32_load_indexed_shared_local_base, "i32.load", 4);
+define_indexed_shared_local_base_push_load!(op_i64_load_indexed_shared_local_base, "i64.load", 8);
+define_indexed_shared_local_base_push_load!(op_f32_load_indexed_shared_local_base, "f32.load", 4);
+define_indexed_shared_local_base_push_load!(op_f64_load_indexed_shared_local_base, "f64.load", 8);
+define_indexed_shared_local_base_scalar_load!(
+    op_i32_load8_u_indexed_shared_local_base,
+    "i32.load8_u",
+    shared_read_u8_at,
+    push_u32_fast,
+    u32::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i32_load8_s_indexed_shared_local_base,
+    "i32.load8_s",
+    shared_read_i8_at,
+    push_i32_fast,
+    i32::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i32_load16_s_indexed_shared_local_base,
+    "i32.load16_s",
+    shared_read_i16_at,
+    push_i32_fast,
+    i32::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i32_load16_u_indexed_shared_local_base,
+    "i32.load16_u",
+    shared_read_u16_at,
+    push_u32_fast,
+    u32::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i64_load8_s_indexed_shared_local_base,
+    "i64.load8_s",
+    shared_read_i8_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i64_load8_u_indexed_shared_local_base,
+    "i64.load8_u",
+    shared_read_u8_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i64_load16_s_indexed_shared_local_base,
+    "i64.load16_s",
+    shared_read_i16_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i64_load16_u_indexed_shared_local_base,
+    "i64.load16_u",
+    shared_read_u16_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i64_load32_s_indexed_shared_local_base,
+    "i64.load32_s",
+    shared_read_i32_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_shared_local_base_scalar_load!(
+    op_i64_load32_u_indexed_shared_local_base,
+    "i64.load32_u",
+    shared_read_u32_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_shared_local_base_store_alias!(op_i32_store_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_indexed_shared_local_base_store_alias!(op_i64_store_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_indexed_shared_local_base_store_alias!(op_f32_store_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_indexed_shared_local_base_store_alias!(op_f64_store_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_indexed_shared_local_base_store_alias!(op_i32_store8_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
+});
+define_indexed_shared_local_base_store_alias!(op_i32_store16_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
+});
+define_indexed_shared_local_base_store_alias!(op_i64_store8_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
+});
+define_indexed_shared_local_base_store_alias!(op_i64_store16_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
+});
+define_indexed_shared_local_base_store_alias!(op_i64_store32_indexed_shared_local_base, |ctx| {
+    StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
+});
+
+define_local_scaled_index_push_load!(op_i32_load_local_scaled_index, "i32.load", 4);
+define_local_scaled_index_push_load!(op_i64_load_local_scaled_index, "i64.load", 8);
+define_local_scaled_index_push_load!(op_f32_load_local_scaled_index, "f32.load", 4);
+define_local_scaled_index_push_load!(op_f64_load_local_scaled_index, "f64.load", 8);
+define_local_scaled_index_scalar_load!(
+    op_i32_load8_u_local_scaled_index,
+    "i32.load8_u",
+    read_u8_at,
+    push_u32_fast,
+    u32::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i32_load8_s_local_scaled_index,
+    "i32.load8_s",
+    read_i8_at,
+    push_i32_fast,
+    i32::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i32_load16_s_local_scaled_index,
+    "i32.load16_s",
+    read_i16_at,
+    push_i32_fast,
+    i32::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i32_load16_u_local_scaled_index,
+    "i32.load16_u",
+    read_u16_at,
+    push_u32_fast,
+    u32::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i64_load8_s_local_scaled_index,
+    "i64.load8_s",
+    read_i8_at,
+    push_i64_fast,
+    i64::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i64_load8_u_local_scaled_index,
+    "i64.load8_u",
+    read_u8_at,
+    push_u64_fast,
+    u64::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i64_load16_s_local_scaled_index,
+    "i64.load16_s",
+    read_i16_at,
+    push_i64_fast,
+    i64::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i64_load16_u_local_scaled_index,
+    "i64.load16_u",
+    read_u16_at,
+    push_u64_fast,
+    u64::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i64_load32_s_local_scaled_index,
+    "i64.load32_s",
+    read_i32_at,
+    push_i64_fast,
+    i64::from
+);
+define_local_scaled_index_scalar_load!(
+    op_i64_load32_u_local_scaled_index,
+    "i64.load32_u",
+    read_u32_at,
+    push_u64_fast,
+    u64::from
+);
+define_local_scaled_index_store_alias!(op_i32_store_local_scaled_index, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_local_scaled_index_store_alias!(op_i64_store_local_scaled_index, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_local_scaled_index_store_alias!(op_f32_store_local_scaled_index, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_local_scaled_index_store_alias!(op_f64_store_local_scaled_index, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_local_scaled_index_store_alias!(op_i32_store8_local_scaled_index, |ctx| {
+    StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
+});
+define_local_scaled_index_store_alias!(op_i32_store16_local_scaled_index, |ctx| {
+    StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
+});
+define_local_scaled_index_store_alias!(op_i64_store8_local_scaled_index, |ctx| {
+    StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
+});
+define_local_scaled_index_store_alias!(op_i64_store16_local_scaled_index, |ctx| {
+    StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
+});
+define_local_scaled_index_store_alias!(op_i64_store32_local_scaled_index, |ctx| {
+    StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
+});
+
+define_indexed_local_scaled_index_push_load!(op_i32_load_indexed_local_scaled_index, "i32.load", 4);
+define_indexed_local_scaled_index_push_load!(op_i64_load_indexed_local_scaled_index, "i64.load", 8);
+define_indexed_local_scaled_index_push_load!(op_f32_load_indexed_local_scaled_index, "f32.load", 4);
+define_indexed_local_scaled_index_push_load!(op_f64_load_indexed_local_scaled_index, "f64.load", 8);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i32_load8_u_indexed_local_scaled_index,
+    "i32.load8_u",
+    local_read_u8_at,
+    push_u32_fast,
+    u32::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i32_load8_s_indexed_local_scaled_index,
+    "i32.load8_s",
+    local_read_i8_at,
+    push_i32_fast,
+    i32::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i32_load16_s_indexed_local_scaled_index,
+    "i32.load16_s",
+    local_read_i16_at,
+    push_i32_fast,
+    i32::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i32_load16_u_indexed_local_scaled_index,
+    "i32.load16_u",
+    local_read_u16_at,
+    push_u32_fast,
+    u32::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i64_load8_s_indexed_local_scaled_index,
+    "i64.load8_s",
+    local_read_i8_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i64_load8_u_indexed_local_scaled_index,
+    "i64.load8_u",
+    local_read_u8_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i64_load16_s_indexed_local_scaled_index,
+    "i64.load16_s",
+    local_read_i16_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i64_load16_u_indexed_local_scaled_index,
+    "i64.load16_u",
+    local_read_u16_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i64_load32_s_indexed_local_scaled_index,
+    "i64.load32_s",
+    local_read_i32_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_local_scaled_index_scalar_load!(
+    op_i64_load32_u_indexed_local_scaled_index,
+    "i64.load32_u",
+    local_read_u32_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_local_scaled_index_store_alias!(op_i32_store_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_indexed_local_scaled_index_store_alias!(op_i64_store_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_indexed_local_scaled_index_store_alias!(op_f32_store_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_indexed_local_scaled_index_store_alias!(op_f64_store_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_indexed_local_scaled_index_store_alias!(op_i32_store8_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
+});
+define_indexed_local_scaled_index_store_alias!(op_i32_store16_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
+});
+define_indexed_local_scaled_index_store_alias!(op_i64_store8_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
+});
+define_indexed_local_scaled_index_store_alias!(op_i64_store16_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
+});
+define_indexed_local_scaled_index_store_alias!(op_i64_store32_indexed_local_scaled_index, |ctx| {
+    StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
+});
+
+define_shared_local_scaled_index_push_load!(op_i32_load_shared_local_scaled_index, "i32.load", 4);
+define_shared_local_scaled_index_push_load!(op_i64_load_shared_local_scaled_index, "i64.load", 8);
+define_shared_local_scaled_index_push_load!(op_f32_load_shared_local_scaled_index, "f32.load", 4);
+define_shared_local_scaled_index_push_load!(op_f64_load_shared_local_scaled_index, "f64.load", 8);
+define_shared_local_scaled_index_scalar_load!(
+    op_i32_load8_u_shared_local_scaled_index,
+    "i32.load8_u",
+    shared_read_u8_at,
+    push_u32_fast,
+    u32::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i32_load8_s_shared_local_scaled_index,
+    "i32.load8_s",
+    shared_read_i8_at,
+    push_i32_fast,
+    i32::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i32_load16_s_shared_local_scaled_index,
+    "i32.load16_s",
+    shared_read_i16_at,
+    push_i32_fast,
+    i32::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i32_load16_u_shared_local_scaled_index,
+    "i32.load16_u",
+    shared_read_u16_at,
+    push_u32_fast,
+    u32::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i64_load8_s_shared_local_scaled_index,
+    "i64.load8_s",
+    shared_read_i8_at,
+    push_i64_fast,
+    i64::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i64_load8_u_shared_local_scaled_index,
+    "i64.load8_u",
+    shared_read_u8_at,
+    push_u64_fast,
+    u64::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i64_load16_s_shared_local_scaled_index,
+    "i64.load16_s",
+    shared_read_i16_at,
+    push_i64_fast,
+    i64::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i64_load16_u_shared_local_scaled_index,
+    "i64.load16_u",
+    shared_read_u16_at,
+    push_u64_fast,
+    u64::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i64_load32_s_shared_local_scaled_index,
+    "i64.load32_s",
+    shared_read_i32_at,
+    push_i64_fast,
+    i64::from
+);
+define_shared_local_scaled_index_scalar_load!(
+    op_i64_load32_u_shared_local_scaled_index,
+    "i64.load32_u",
+    shared_read_u32_at,
+    push_u64_fast,
+    u64::from
+);
+define_shared_local_scaled_index_store_alias!(op_i32_store_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_shared_local_scaled_index_store_alias!(op_i64_store_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_shared_local_scaled_index_store_alias!(op_f32_store_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write4(ctx.stack.pop_u8_array::<4>())
+});
+define_shared_local_scaled_index_store_alias!(op_f64_store_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write8(ctx.stack.pop_u8_array::<8>())
+});
+define_shared_local_scaled_index_store_alias!(op_i32_store8_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32()))
+});
+define_shared_local_scaled_index_store_alias!(op_i32_store16_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32()))
+});
+define_shared_local_scaled_index_store_alias!(op_i64_store8_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64()))
+});
+define_shared_local_scaled_index_store_alias!(op_i64_store16_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64()))
+});
+define_shared_local_scaled_index_store_alias!(op_i64_store32_shared_local_scaled_index, |ctx| {
+    StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64()))
+});
+
+define_indexed_shared_local_scaled_index_push_load!(
+    op_i32_load_indexed_shared_local_scaled_index,
+    "i32.load",
+    4
+);
+define_indexed_shared_local_scaled_index_push_load!(
+    op_i64_load_indexed_shared_local_scaled_index,
+    "i64.load",
+    8
+);
+define_indexed_shared_local_scaled_index_push_load!(
+    op_f32_load_indexed_shared_local_scaled_index,
+    "f32.load",
+    4
+);
+define_indexed_shared_local_scaled_index_push_load!(
+    op_f64_load_indexed_shared_local_scaled_index,
+    "f64.load",
+    8
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i32_load8_u_indexed_shared_local_scaled_index,
+    "i32.load8_u",
+    shared_read_u8_at,
+    push_u32_fast,
+    u32::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i32_load8_s_indexed_shared_local_scaled_index,
+    "i32.load8_s",
+    shared_read_i8_at,
+    push_i32_fast,
+    i32::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i32_load16_s_indexed_shared_local_scaled_index,
+    "i32.load16_s",
+    shared_read_i16_at,
+    push_i32_fast,
+    i32::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i32_load16_u_indexed_shared_local_scaled_index,
+    "i32.load16_u",
+    shared_read_u16_at,
+    push_u32_fast,
+    u32::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i64_load8_s_indexed_shared_local_scaled_index,
+    "i64.load8_s",
+    shared_read_i8_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i64_load8_u_indexed_shared_local_scaled_index,
+    "i64.load8_u",
+    shared_read_u8_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i64_load16_s_indexed_shared_local_scaled_index,
+    "i64.load16_s",
+    shared_read_i16_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i64_load16_u_indexed_shared_local_scaled_index,
+    "i64.load16_u",
+    shared_read_u16_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i64_load32_s_indexed_shared_local_scaled_index,
+    "i64.load32_s",
+    shared_read_i32_at,
+    push_i64_fast,
+    i64::from
+);
+define_indexed_shared_local_scaled_index_scalar_load!(
+    op_i64_load32_u_indexed_shared_local_scaled_index,
+    "i64.load32_u",
+    shared_read_u32_at,
+    push_u64_fast,
+    u64::from
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_i32_store_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write4(ctx.stack.pop_u8_array::<4>()) }
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_i64_store_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write8(ctx.stack.pop_u8_array::<8>()) }
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_f32_store_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write4(ctx.stack.pop_u8_array::<4>()) }
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_f64_store_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write8(ctx.stack.pop_u8_array::<8>()) }
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_i32_store8_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write1(truncate_u32_to_u8_bytes(ctx.stack.pop_u32())) }
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_i32_store16_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write2(truncate_u32_to_u16_bytes(ctx.stack.pop_u32())) }
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_i64_store8_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write1(truncate_u64_to_u8_bytes(ctx.stack.pop_u64())) }
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_i64_store16_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write2(truncate_u64_to_u16_bytes(ctx.stack.pop_u64())) }
+);
+define_indexed_shared_local_scaled_index_store_alias!(
+    op_i64_store32_indexed_shared_local_scaled_index,
+    |ctx| { StoreBytes::Write4(truncate_u64_to_u32_bytes(ctx.stack.pop_u64())) }
+);
 
 /// WebAssembly `memory.size` on shared default memory.
 ///

@@ -157,6 +157,525 @@ async fn optimizer_small_memory_loop_remains_correct() {
 }
 
 #[tokio::test]
+async fn optimizer_memory_address_select_tree_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 0) "\11\00\00\00\22\00\00\00")
+          (global $base (mut i32) (i32.const 0))
+          (func (export "run") (param i32) (result i32)
+            global.get $base
+            i32.const 4
+            local.get 0
+            select
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (flag, expected) in [(0, 34), (1, 17)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(flag)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("memory address select({flag}) must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_memory_address_const_and_eqz_roots_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 0) "\11\22\00\00\2a\00\00\00")
+          (func (export "run_const") (param i32) (result i32)
+            i32.const 4
+            local.get 0
+            drop
+            i32.load)
+          (func (export "run_eqz") (param i32) (result i32)
+            local.get 0
+            i32.eqz
+            i32.const 9
+            drop
+            i32.load8_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let const_result = run_module_function(
+        &instance,
+        &store,
+        "run_const",
+        &ResultValue::new(vec![WasmValue::I32(7)]),
+    )
+    .await;
+    match const_result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+        }
+        other => panic!("const-root memory address path must succeed, got {other:?}"),
+    }
+
+    for (flag, expected) in [(0, 34), (5, 17)] {
+        let eqz_result = run_module_function(
+            &instance,
+            &store,
+            "run_eqz",
+            &ResultValue::new(vec![WasmValue::I32(flag)]),
+        )
+        .await;
+        match eqz_result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("eqz-root memory address path({flag}) must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_memory_address_call_root_with_store_value_suffix_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func $addr (result i32)
+            i32.const 0)
+          (func (export "run") (param i32 i32) (result i32)
+            call $addr
+            local.get 0
+            local.get 1
+            i32.add
+            i32.store
+            call $addr
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((lhs, rhs), expected) in [((0, 0), 0), ((7, 3), 10), ((11, 5), 16)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(lhs), WasmValue::I32(rhs)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!(
+                "memory address call-root store suffix({lhs}, {rhs}) must succeed, got {other:?}"
+            ),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_scaled_index_memory_families_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "run") (param $idx i32) (param $value i32) (result i32)
+            local.get $idx
+            i32.const 2
+            i32.shl
+            i32.const 8
+            i32.add
+            local.get $value
+            i32.store
+            local.get $idx
+            i32.const 2
+            i32.shl
+            i32.const 8
+            i32.add
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((idx, value), expected) in [((0, 11), 11), ((1, 22), 22), ((3, 37), 37)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(idx), WasmValue::I32(value)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => {
+                panic!("scaled-index memory family({idx}, {value}) must succeed, got {other:?}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "threads")]
+#[tokio::test]
+async fn optimizer_shared_memory_local_base_families_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1 2 shared)
+          (func (export "run") (param $base i32) (param $value i32) (result i32)
+            local.get $base
+            i32.const 4
+            i32.add
+            local.get $value
+            i32.store
+            local.get $base
+            i32.const 4
+            i32.add
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((base, value), expected) in [((0, 19), 19), ((8, 27), 27)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(base), WasmValue::I32(value)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!(
+                "shared local-base memory family({base}, {value}) must succeed, got {other:?}"
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "threads")]
+#[tokio::test]
+async fn optimizer_indexed_shared_scaled_index_memory_families_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (memory $m 1 2 shared)
+          (func (export "run") (param $idx i32) (param $value i32) (result i32)
+            local.get $idx
+            i32.const 2
+            i32.shl
+            i32.const 8
+            i32.add
+            local.get $value
+            i32.store $m
+            local.get $idx
+            i32.const 2
+            i32.shl
+            i32.const 8
+            i32.add
+            i32.load $m))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((idx, value), expected) in [((0, 31), 31), ((2, 47), 47)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(idx), WasmValue::I32(value)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!(
+                "indexed shared scaled-index memory family({idx}, {value}) must succeed, got {other:?}"
+            ),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_store_value_merge_temp_window_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (global $g (mut i32) (i32.const 7))
+          (func (export "run") (param i32) (result i32)
+            i32.const 0
+            block (result i32)
+              local.get 0
+              if (result i32)
+                global.get $g
+              else
+                i32.const 5
+              end
+            end
+            i32.store
+            i32.const 0
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (flag, expected) in [(0, 5), (1, 7)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(flag)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => {
+                panic!("merge-fed store value temp window({flag}) must succeed, got {other:?}")
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_memory_derived_address_root_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 0) "\04\00\00\00\2a\00\00\00")
+          (func (export "run") (result i32)
+            i32.const 0
+            i32.load
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+        }
+        other => panic!("memory-derived address root must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_component_style_record_stores_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func $alloc (result i32)
+            i32.const 32)
+          (func (export "run") (param i32 f64 i32 i32) (result i32)
+            (local $ret i32)
+            call $alloc
+            local.set $ret
+            local.get $ret
+            local.get 0
+            i32.store
+            local.get $ret
+            i32.const 8
+            i32.add
+            local.get 1
+            f64.store
+            local.get $ret
+            i32.const 16
+            i32.add
+            local.get 2
+            i32.store8
+            local.get $ret
+            i32.const 20
+            i32.add
+            local.get 3
+            i32.store
+            local.get $ret
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![
+            WasmValue::I32(32343),
+            WasmValue::F64(std::f64::consts::PI),
+            WasmValue::I32(0),
+            WasmValue::I32(314159265),
+        ]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(32343)]));
+        }
+        other => panic!("component-style record stores must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_memory_address_trap_sensitive_tree_preserves_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 4) "\2a\00\00\00")
+          (func (export "run_ok") (result i32)
+            i32.const 8
+            i32.const 2
+            i32.div_s
+            i32.load)
+          (func (export "run_trap") (result i32)
+            i32.const 1
+            i32.const 0
+            i32.div_s
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let ok = run_module_function(&instance, &store, "run_ok", &ResultValue::new(vec![])).await;
+    match ok {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+        }
+        other => panic!("trap-sensitive address ok path must succeed, got {other:?}"),
+    }
+
+    let trapped =
+        run_module_function(&instance, &store, "run_trap", &ResultValue::new(vec![])).await;
+    assert!(matches!(trapped, VMResult::InvalidOperand));
+}
+
+#[tokio::test]
+async fn optimizer_memory_address_non_adjacent_base_plus_const_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 8) "\2a\00\00\00\39\00\00\00")
+          (func (export "run_add") (param i32) (result i32)
+            local.get 0
+            i32.const 8
+            i32.add
+            i32.const 1
+            drop
+            i32.load)
+          (func (export "run_sub_store") (param i32) (param i32) (result i32)
+            local.get 0
+            i32.const 4
+            i32.add
+            local.get 1
+            i32.store
+            local.get 0
+            i32.const 4
+            i32.add
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let add = run_module_function(
+        &instance,
+        &store,
+        "run_add",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    match add {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
+        }
+        other => panic!("non-adjacent base+const load must succeed, got {other:?}"),
+    }
+
+    let store_then_load = run_module_function(
+        &instance,
+        &store,
+        "run_sub_store",
+        &ResultValue::new(vec![WasmValue::I32(8), WasmValue::I32(77)]),
+    )
+    .await;
+    match store_then_load {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(77)]));
+        }
+        other => panic!("non-adjacent base+const store/load must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn optimizer_direct_call_neighboring_select_remains_correct() {
     let store = Store::new();
     let registry = Registry::new();
