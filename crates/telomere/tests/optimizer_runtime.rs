@@ -2251,6 +2251,468 @@ async fn optimizer_specializes_indirect_call_materializers_without_changing_abi(
 }
 
 #[tokio::test]
+async fn optimizer_call_relower_const_like_zero_input_leaves_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (type $inspect_t (func (param funcref externref v128) (result i32)))
+          (func $inspect (type $inspect_t) (param funcref externref v128) (result i32)
+            local.get 0
+            ref.is_null
+            local.get 1
+            ref.is_null
+            i32.add
+            local.get 2
+            i32x4.extract_lane 0
+            i32.add)
+          (table funcref (elem $inspect))
+
+          (func (export "direct") (result i32)
+            (call $inspect
+              (ref.func $inspect)
+              (ref.null extern)
+              (v128.const i32x4 7 0 0 0)))
+
+          (func (export "indirect") (result i32)
+            (call_indirect (type $inspect_t)
+              (ref.func $inspect)
+              (ref.null extern)
+              (v128.const i32x4 7 0 0 0)
+              (i32.const 0)))
+
+          (func (export "return_indirect") (result i32)
+            (return_call_indirect (type $inspect_t)
+              (ref.func $inspect)
+              (ref.null extern)
+              (v128.const i32x4 7 0 0 0)
+              (i32.const 0))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for name in ["direct", "indirect", "return_indirect"] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(8)]));
+            }
+            other => panic!("{name} const-like call relower case must succeed, got {other:?}"),
+        }
+    }
+
+    let mut import_registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+        (module
+          (func (export "inspect") (param funcref externref v128) (result i32)
+            local.get 0
+            ref.is_null
+            local.get 1
+            ref.is_null
+            i32.add
+            local.get 2
+            i32x4.extract_lane 0
+            i32.add))
+        "#,
+        &store,
+        &import_registry,
+    )
+    .await;
+    import_registry.register("host", host);
+    let import_instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "inspect" (func $inspect (param funcref externref v128) (result i32)))
+          (func $dummy)
+          (func (export "import_direct") (result i32)
+            (call $inspect
+              (ref.func $dummy)
+              (ref.null extern)
+              (v128.const i32x4 7 0 0 0))))
+        "#,
+        &store,
+        &import_registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &import_instance,
+        &store,
+        "import_direct",
+        &ResultValue::new(vec![]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(8)]));
+        }
+        other => panic!("import_direct const-like call relower case must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_call_relower_contiguous_memory_load_leaves_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (type $id_t (func (param i32) (result i32)))
+          (func $id (type $id_t) (param i32) (result i32) (local.get 0))
+          (table funcref (elem $id))
+          (memory 1)
+
+          (func (export "direct_load_arg") (result i32)
+            (local $base i32)
+            (local.set $base (i32.const 0))
+            (i32.store (i32.const 8) (i32.const 37))
+            (call $id
+              (i32.load
+                (i32.add
+                  (local.get $base)
+                  (i32.const 8)))))
+
+          (func (export "indirect_load_arg") (result i32)
+            (local $base i32)
+            (local.set $base (i32.const 0))
+            (i32.store (i32.const 8) (i32.const 41))
+            (call_indirect (type $id_t)
+              (i32.load
+                (i32.add
+                  (local.get $base)
+                  (i32.const 8)))
+              (i32.const 0)))
+
+          (func (export "return_indirect_load_arg") (result i32)
+            (local $base i32)
+            (local.set $base (i32.const 0))
+            (i32.store (i32.const 8) (i32.const 43))
+            (return_call_indirect (type $id_t)
+              (i32.load
+                (i32.add
+                  (local.get $base)
+                  (i32.const 8)))
+              (i32.const 0)))
+
+          (func (export "indirect_load_index") (result i32)
+            (local $base i32)
+            (local.set $base (i32.const 0))
+            (i32.store (i32.const 4) (i32.const 0))
+            (call_indirect (type $id_t)
+              (i32.const 21)
+              (i32.load
+                (i32.add
+                  (local.get $base)
+                  (i32.const 4))))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, expected) in [
+        ("direct_load_arg", 37),
+        ("indirect_load_arg", 41),
+        ("return_indirect_load_arg", 43),
+        ("indirect_load_index", 21),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("{name} memory-load call relower case must succeed, got {other:?}"),
+        }
+    }
+
+    let mut import_registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+        (module
+          (func (export "id") (param i32) (result i32) (local.get 0)))
+        "#,
+        &store,
+        &import_registry,
+    )
+    .await;
+    import_registry.register("host", host);
+    let import_instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "id" (func $id (param i32) (result i32)))
+          (memory 1)
+          (func (export "import_direct_load_arg") (result i32)
+            (local $base i32)
+            (local.set $base (i32.const 0))
+            (i32.store (i32.const 8) (i32.const 55))
+            (call $id
+              (i32.load
+                (i32.add
+                  (local.get $base)
+                  (i32.const 8))))))
+        "#,
+        &store,
+        &import_registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &import_instance,
+        &store,
+        "import_direct_load_arg",
+        &ResultValue::new(vec![]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(55)]));
+        }
+        other => {
+            panic!(
+                "import_direct_load_arg memory-load call relower case must succeed, got {other:?}"
+            )
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_call_relower_nested_call_and_index_trees_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (type $id_t (func (param i32) (result i32)))
+          (func $add1 (type $id_t) (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+          (func $id (type $id_t) (param i32) (result i32)
+            local.get 0)
+          (func $one (result i32) (i32.const 1))
+          (table funcref (elem $add1 $id))
+
+          (func (export "direct_nested_direct") (result i32)
+            (call $id
+              (call $add1 (i32.const 6))))
+
+          (func (export "direct_nested_indirect") (result i32)
+            (call $id
+              (call_indirect (type $id_t)
+                (i32.const 7)
+                (i32.const 0))))
+
+          (func (export "indirect_nested_index") (result i32)
+            (call_indirect (type $id_t)
+              (i32.const 21)
+              (call $one)))
+
+          (func (export "return_indirect_nested_arg") (result i32)
+            (return_call_indirect (type $id_t)
+              (call $add1 (i32.const 10))
+              (call $one))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, expected) in [
+        ("direct_nested_direct", 7),
+        ("direct_nested_indirect", 8),
+        ("indirect_nested_index", 21),
+        ("return_indirect_nested_arg", 11),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("{name} nested call relower case must succeed, got {other:?}"),
+        }
+    }
+
+    let mut import_registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+        (module
+          (func (export "id") (param i32) (result i32)
+            local.get 0))
+        "#,
+        &store,
+        &import_registry,
+    )
+    .await;
+    import_registry.register("host", host);
+    let import_instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "id" (func $id (param i32) (result i32)))
+          (func $add1 (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+          (func (export "import_nested") (result i32)
+            (call $id
+              (call $add1 (i32.const 12)))))
+        "#,
+        &store,
+        &import_registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &import_instance,
+        &store,
+        "import_nested",
+        &ResultValue::new(vec![]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(13)]));
+        }
+        other => panic!("import_nested nested call relower case must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_call_relower_trap_sensitive_trees_preserve_traps() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $id32 (param i32) (result i32) (local.get 0))
+          (func $id64 (param i64) (result i64) (local.get 0))
+
+          (func (export "div_ok") (result i32)
+            (call $id32 (i32.div_s (i32.const 21) (i32.const 3))))
+
+          (func (export "rem_ok") (result i64)
+            (call $id64 (i64.rem_u (i64.const 23) (i64.const 5))))
+
+          (func (export "trunc_ok") (result i32)
+            (call $id32 (i32.trunc_f32_s (f32.const 7.9))))
+
+          (func (export "div_trap") (result i32)
+            (call $id32 (i32.div_s (i32.const 1) (i32.const 0))))
+
+          (func (export "trunc_trap") (result i32)
+            (call $id32 (i32.trunc_f32_s (f32.const nan)))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, expected) in [
+        ("div_ok", ResultValue::new(vec![WasmValue::I32(7)])),
+        ("rem_ok", ResultValue::new(vec![WasmValue::I64(3)])),
+        ("trunc_ok", ResultValue::new(vec![WasmValue::I32(7)])),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, expected),
+            other => panic!("{name} trap-sensitive success case must succeed, got {other:?}"),
+        }
+    }
+
+    for name in ["div_trap", "trunc_trap"] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        assert!(result.is_err(), "{name} must preserve its trap");
+    }
+}
+
+#[tokio::test]
+async fn optimizer_call_relower_global_table_select_and_load_trees_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (type $pick_ref (func (param funcref) (result i32)))
+          (func $is_non_null (type $pick_ref) (param funcref) (result i32)
+            local.get 0
+            ref.is_null
+            i32.eqz)
+          (func $id (param i32) (result i32) (local.get 0))
+          (func $add1 (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+          (global $g i32 (i32.const 41))
+          (global $base i32 (i32.const 0))
+          (table funcref (elem $is_non_null))
+          (memory 1)
+
+          (func (export "global_arg") (result i32)
+            (call $id (global.get $g)))
+
+          (func (export "table_get_arg") (result i32)
+            (call $is_non_null
+              (table.get 0 (i32.const 0))))
+
+          (func (export "select_anchored") (param i32) (result i32)
+            (call $id
+              (select
+                (call $add1 (local.get 0))
+                (i32.div_s (i32.const 9) (i32.const 3))
+                (i32.eqz (local.get 0)))))
+
+          (func (export "load_anchored_address") (result i32)
+            (i32.store (i32.const 8) (i32.const 77))
+            (call $id
+              (i32.load
+                (i32.add
+                  (global.get $base)
+                  (i32.div_u (i32.const 16) (i32.const 2)))))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args, expected) in [
+        (
+            "global_arg",
+            vec![],
+            ResultValue::new(vec![WasmValue::I32(41)]),
+        ),
+        (
+            "table_get_arg",
+            vec![],
+            ResultValue::new(vec![WasmValue::I32(1)]),
+        ),
+        (
+            "select_anchored",
+            vec![WasmValue::I32(0)],
+            ResultValue::new(vec![WasmValue::I32(1)]),
+        ),
+        (
+            "select_anchored",
+            vec![WasmValue::I32(5)],
+            ResultValue::new(vec![WasmValue::I32(3)]),
+        ),
+        (
+            "load_anchored_address",
+            vec![],
+            ResultValue::new(vec![WasmValue::I32(77)]),
+        ),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, expected),
+            other => panic!("{name} anchored call relower case must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn optimizer_preserves_break_and_block_param_flows() {
     let store = Store::new();
     let registry = Registry::new();

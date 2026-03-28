@@ -164,9 +164,11 @@ import split (`op_call_import` / `op_return_call_import`) はこの ABI を共�
 - ただし call 自体を新 opcode family に置き換えるのではなく、call consumer 側で materializer 列だけを正本化する
 - direct call operand は引き続き `CallRecipeRef`
 - indirect call operand は引き続き `U32(tableidx), U32(typeidx)` のまま保つ
-- 正本化対象は local/scalar const leaf、`local.tee` の stable slot alias、そこからなる non-trapping unary/binop/cmp tree、`i32.eqz` / `i64.eqz`、およびそれらだけで構成された scalar `select` tree
+- 正本化対象は 2 系統ある。movable tree は local/scalar const leaf、`local.tee` の stable slot alias、`op_ref_null` / `op_ref_func` / `v128.const` の zero-input leaf、そこからなる non-trapping unary/binop/cmp tree、`i32.eqz` / `i64.eqz`、それらだけで構成された scalar `select` tree。anchored tree は nested `op_call*`、numeric trap-sensitive op (`i32/i64 div/rem`, `i32/i64 trunc_*`)、`global.get4/8/16`、`table.get`、それらを child に含む scalar `select` と contiguous `memory.load` leaf
 - partial apply は supported trailing suffix に限定する。unsupported prefix が 1 つでも出たら、その左側は generic materialization のまま残す。indirect call では table index もこの suffix 判定に含める
-- trap-sensitive tree、memory/call 由来値、ref/v128 const は generic fallback のまま残す
+- anchored tree は strict contiguous trailing suffix に完全に収まる場合だけ許可する。任意位置 partial apply、temp-local buffering、call handler 差し替えは行わない
+- `memory.load` leaf は、address subtree も含めて contiguous trailing suffix に完全に収まり、address 側が safe scalar tree か anchored child を含む safe scalar tree に落ちる場合だけ許可する
+- 依然として対象外なのは inner `return_call*` result、store、control、temp-local を使う前処理、任意位置 partial apply である
 
 provider elimination の条件は保守的に固定している。
 
@@ -235,7 +237,7 @@ family group は次の 3 群で固定する。
 - `memory`
 - `call/select`
   - call relower は `op_call` / `op_return_call` / `op_call_import` / `op_return_call_import` / `op_call_indirect` / `op_return_call_indirect` の identity を保ったまま、materializer 列だけを consumer 側で正本化する
-  - 正本化対象は local/scalar const leaf、stable slot alias、`i32.eqz` / `i64.eqz` を含む non-trapping unary/binop/cmp tree と、それらだけで構成された scalar `select` tree。partial apply は trailing suffix 限定で、indirect call の table index もこの判定に含める
+  - 正本化対象は local/scalar const leaf、stable slot alias、`op_ref_null` / `op_ref_func` / `v128.const` の zero-input leaf、`i32.eqz` / `i64.eqz` を含む non-trapping unary/binop/cmp tree、nested `op_call*`、numeric trap-sensitive op (`i32/i64 div/rem`, `i32/i64 trunc_*`)、`global.get4/8/16`、`table.get`、それらを child に含む scalar `select`、そして contiguous trailing suffix に閉じた `memory.load` leaf。partial apply は trailing suffix 限定で、anchored tree は strict contiguous suffix に閉じている必要があり、indirect call の table index もこの判定に含める
 
 ### 8.2 Runtime-side profiling
 

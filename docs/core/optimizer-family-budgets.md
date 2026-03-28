@@ -41,17 +41,17 @@ handler-layout contract used by the current optimizer implementation.
   - `memory.indexed_local_base`
 - `call/select`
   - `call.direct`
-    - relower canonicalizes direct-call arg materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
+    - relower canonicalizes direct-call arg materialization, including stable slot alias, safe scalar select trees, const-like `ref/v128` zero-input leaves, nested `op_call*`, numeric trap-sensitive trees, `global.get`, `table.get`, contiguous `memory.load` leaves, and trailing-suffix partial apply, without adding handlers
   - `call.return_direct`
-    - relower canonicalizes direct-return-call arg materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
+    - relower canonicalizes direct-return-call arg materialization, including stable slot alias, safe scalar select trees, const-like `ref/v128` zero-input leaves, nested `op_call*`, numeric trap-sensitive trees, `global.get`, `table.get`, contiguous `memory.load` leaves, and trailing-suffix partial apply, without adding handlers
   - `call.import_direct`
-    - relower canonicalizes import direct-call arg materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
+    - relower canonicalizes import direct-call arg materialization, including stable slot alias, safe scalar select trees, const-like `ref/v128` zero-input leaves, nested `op_call*`, numeric trap-sensitive trees, `global.get`, `table.get`, contiguous `memory.load` leaves, and trailing-suffix partial apply, without adding handlers
   - `call.return_import_direct`
-    - relower canonicalizes import direct-return-call arg materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
+    - relower canonicalizes import direct-return-call arg materialization, including stable slot alias, safe scalar select trees, const-like `ref/v128` zero-input leaves, nested `op_call*`, numeric trap-sensitive trees, `global.get`, `table.get`, contiguous `memory.load` leaves, and trailing-suffix partial apply, without adding handlers
   - `call.indirect`
-    - relower canonicalizes indirect-call arg and table-index materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
+    - relower canonicalizes indirect-call arg and table-index materialization, including stable slot alias, safe scalar select trees, const-like `ref/v128` zero-input leaves, nested `op_call*`, numeric trap-sensitive trees, `global.get`, `table.get`, contiguous `memory.load` leaves, and trailing-suffix partial apply, without adding handlers
   - `call.return_indirect`
-    - relower canonicalizes indirect-return-call arg and table-index materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
+    - relower canonicalizes indirect-return-call arg and table-index materialization, including stable slot alias, safe scalar select trees, const-like `ref/v128` zero-input leaves, nested `op_call*`, numeric trap-sensitive trees, `global.get`, `table.get`, contiguous `memory.load` leaves, and trailing-suffix partial apply, without adding handlers
   - `select.4`
   - `select.8`
   - `select.16`
