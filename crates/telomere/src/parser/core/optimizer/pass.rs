@@ -4463,14 +4463,6 @@ fn buffer_call_input_through_temp_local(
         return None;
     }
     let buffer_idx = call_temp_window_buffer_anchor(body, provider_idx, call_idx);
-    if value_use_count_after(body, buffer_idx, input) != 1
-        || body
-            .terminator
-            .as_ref()
-            .is_some_and(|terminator| terminator.inputs.contains(&input))
-    {
-        return None;
-    }
     let ty = graph[input.0].ty;
     let size = value_type_size(ty)?;
     let temp = LocalSlot::new(
@@ -4492,21 +4484,23 @@ fn buffer_call_input_through_temp_local(
     );
     shift_absorbed_op_indices(occupied_suffix_ops, tee_idx, 1);
 
-    let mut call_idx = call_idx + usize::from(tee_idx <= call_idx);
-    let temp_value = make_call_temp_local_value(config.block_id, graph, temp, ty);
-    body.ops.insert(
-        call_idx,
-        BlockOp {
-            source_start: None,
-            op: local_get_op(size),
-            kind: BlockOpKind::LocalGet,
-            operands: vec![BlockOperand::LocalAddr(temp.addr)],
-            inputs: Vec::new(),
-            values: vec![temp_value],
-        },
-    );
-    call_idx += 1;
-    body.ops.get_mut(call_idx)?.inputs[arg_idx] = temp_value;
+    let mut rewrite_state = TempLocalRewriteState {
+        block_id: config.block_id,
+        graph,
+        occupied_suffix_ops,
+    };
+    let call_idx = rewrite_value_uses_after_to_temp_local(
+        body,
+        &mut rewrite_state,
+        tee_idx + 1,
+        input,
+        temp,
+        call_idx + usize::from(tee_idx <= call_idx),
+    )?;
+    let normalized_input = *body.ops.get(call_idx)?.inputs.get(arg_idx)?;
+    if normalized_input == input {
+        return None;
+    }
     Some(call_idx)
 }
 
@@ -4524,7 +4518,7 @@ fn call_temp_window_bufferable_provider(op: &BlockOp) -> bool {
         BlockOpKind::CallLike => {
             block_op_single_result(op).is_some() && call_materializer_nested_call_op(op.op)
         }
-        _ => false,
+        _ => block_op_single_result(op).is_some() && call_materializer_is_trap_sensitive_op(op.op),
     }
 }
 
@@ -4595,26 +4589,32 @@ fn normalize_cross_block_call_relower_regions(
                     input,
                     &mut visiting,
                 ) {
-                    let input_ty = rewrite.graph[input.0].ty;
-                    let temp_value = make_call_temp_local_value(
+                    let mut rewrite_state = TempLocalRewriteState {
                         block_id,
-                        &mut rewrite.graph,
-                        temp_slot,
-                        input_ty,
-                    );
-                    let local_get = BlockOp {
-                        source_start: None,
-                        op: local_get_op(temp_slot.size),
-                        kind: BlockOpKind::LocalGet,
-                        operands: vec![BlockOperand::LocalAddr(temp_slot.addr)],
-                        inputs: Vec::new(),
-                        values: vec![temp_value],
+                        graph: &mut rewrite.graph,
+                        occupied_suffix_ops: &mut occupied_suffix_ops,
                     };
-                    {
-                        let body = &mut rewrite.relower.block_bodies[block_id];
-                        body.ops.insert(op_idx, local_get);
-                        op_idx += 1;
-                        body.ops[op_idx].inputs[arg_idx] = temp_value;
+                    let Some(next_op_idx) = rewrite_value_uses_after_to_temp_local(
+                        &mut rewrite.relower.block_bodies[block_id],
+                        &mut rewrite_state,
+                        0,
+                        input,
+                        temp_slot,
+                        op_idx,
+                    ) else {
+                        break;
+                    };
+                    op_idx = next_op_idx;
+                    let Some(normalized_input) = rewrite.relower.block_bodies[block_id]
+                        .ops
+                        .get(op_idx)
+                        .and_then(|call| call.inputs.get(arg_idx))
+                        .copied()
+                    else {
+                        break;
+                    };
+                    if normalized_input == input {
+                        break;
                     }
                     recompute_body_materialization_indices(
                         block_id,
@@ -4626,7 +4626,7 @@ fn normalize_cross_block_call_relower_regions(
                         &rewrite.relower.block_bodies[block_id],
                         op_idx,
                         &occupied_suffix_ops,
-                        temp_value,
+                        normalized_input,
                     )
                     .expect("cross-block temp-local windowing must leave the buffered arg materializable");
                     occupied_suffix_ops.extend(matched.absorbed_ops);
@@ -4657,9 +4657,7 @@ fn ensure_cross_block_call_input_temp(
         return Some(slot);
     }
     let node = rewrite.graph[value.0].clone();
-    if node.is_effect_result() || value_type_size(node.ty).is_none() {
-        return None;
-    }
+    value_type_size(node.ty)?;
     if successor_entry_stack_ordinal_for_input(rewrite, block_id, value).is_some() {
         let size = value_type_size(node.ty)?;
         let temp = LocalSlot::new(
@@ -4811,6 +4809,20 @@ fn buffer_cross_block_predecessor_value(
                 values: Vec::new(),
             },
         );
+        let mut ignored_suffix_ops = BTreeSet::new();
+        let mut rewrite_state = TempLocalRewriteState {
+            block_id: pred_block_id,
+            graph: &mut rewrite.graph,
+            occupied_suffix_ops: &mut ignored_suffix_ops,
+        };
+        rewrite_value_uses_after_to_temp_local(
+            body,
+            &mut rewrite_state,
+            insert_idx + 1,
+            value,
+            temp,
+            body.ops.len(),
+        )?;
         recompute_body_materialization_indices(pred_block_id, body, &mut rewrite.graph);
         return Some(());
     }
@@ -5023,6 +5035,96 @@ fn make_call_temp_local_value(
     value
 }
 
+struct TempLocalRewriteState<'a> {
+    block_id: usize,
+    graph: &'a mut ValueGraph,
+    occupied_suffix_ops: &'a mut BTreeSet<usize>,
+}
+
+fn rewrite_value_uses_after_to_temp_local(
+    body: &mut BlockBody,
+    state: &mut TempLocalRewriteState<'_>,
+    start_idx: usize,
+    value: ValueRef,
+    temp: LocalSlot,
+    tracked_op_idx: usize,
+) -> Option<usize> {
+    let ty = state.graph[value.0].ty;
+    value_type_size(ty)?;
+    let mut tracked_op_idx = tracked_op_idx;
+
+    for op_idx in (start_idx..body.ops.len()).rev() {
+        let positions = body.ops[op_idx]
+            .inputs
+            .iter()
+            .enumerate()
+            .filter_map(|(input_idx, input)| (*input == value).then_some(input_idx))
+            .collect::<Vec<_>>();
+        if positions.is_empty() {
+            continue;
+        }
+
+        let mut consumer_idx = op_idx;
+        for input_idx in positions {
+            let temp_value = make_call_temp_local_value(state.block_id, state.graph, temp, ty);
+            body.ops.insert(
+                consumer_idx,
+                BlockOp {
+                    source_start: None,
+                    op: local_get_op(temp.size),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(temp.addr)],
+                    inputs: Vec::new(),
+                    values: vec![temp_value],
+                },
+            );
+            shift_absorbed_op_indices(state.occupied_suffix_ops, consumer_idx, 1);
+            if consumer_idx <= tracked_op_idx {
+                tracked_op_idx += 1;
+            }
+            body.ops[consumer_idx + 1].inputs[input_idx] = temp_value;
+            state.graph[value.0].use_count = state.graph[value.0].use_count.saturating_sub(1);
+            consumer_idx += 1;
+        }
+    }
+
+    let terminator_positions = body
+        .terminator
+        .as_ref()
+        .map(|terminator| {
+            terminator
+                .inputs
+                .iter()
+                .enumerate()
+                .filter_map(|(input_idx, input)| (*input == value).then_some(input_idx))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !terminator_positions.is_empty() {
+        let mut replacements = Vec::with_capacity(terminator_positions.len());
+        for _ in &terminator_positions {
+            let temp_value = make_call_temp_local_value(state.block_id, state.graph, temp, ty);
+            body.ops.push(BlockOp {
+                source_start: None,
+                op: local_get_op(temp.size),
+                kind: BlockOpKind::LocalGet,
+                operands: vec![BlockOperand::LocalAddr(temp.addr)],
+                inputs: Vec::new(),
+                values: vec![temp_value],
+            });
+            state.graph[value.0].use_count = state.graph[value.0].use_count.saturating_sub(1);
+            replacements.push(temp_value);
+        }
+        if let Some(terminator) = &mut body.terminator {
+            for (input_idx, temp_value) in terminator_positions.into_iter().zip(replacements) {
+                terminator.inputs[input_idx] = temp_value;
+            }
+        }
+    }
+
+    Some(tracked_op_idx)
+}
+
 fn recompute_body_materialization_indices(
     block_id: usize,
     body: &BlockBody,
@@ -5048,6 +5150,31 @@ fn recompute_body_materialization_indices(
 fn verify_call_relower_window_normalization(graph: &ValueGraph, relower: &RelowerPlan) -> bool {
     for block_id in 0..relower.block_bodies.len() {
         let body = combined_relower_block_body(relower, block_id);
+        for op in &body.ops {
+            if op.source_start.is_some() || op.kind != BlockOpKind::LocalGet {
+                continue;
+            }
+            let Some(value) = block_op_single_result(op) else {
+                continue;
+            };
+            let Some(temp_slot) = graph[value.0]
+                .slot_shape
+                .as_ref()
+                .and_then(|shape| shape.slot)
+                .filter(|slot_ref| slot_ref.class == SlotClass::TempLocal)
+            else {
+                continue;
+            };
+            let Some(slot) = block_op_local_get_slot(op) else {
+                return false;
+            };
+            if temp_slot != SlotRef::temp_local(slot)
+                || graph[value.0].materialized_block != Some(block_id)
+                || value_type_size(graph[value.0].ty) != Some(slot.size)
+            {
+                return false;
+            }
+        }
         for (op_idx, op) in body.ops.iter().enumerate() {
             if op.kind != BlockOpKind::CallLike || !call_relower_target_op(op.op) {
                 continue;
@@ -19510,6 +19637,525 @@ mod tests {
             spec.arg_materializers[0][0].op,
             vm::op_local_get4 as Op
         ));
+        assert!(verify_call_relower_window_normalization(
+            &rewrite.graph,
+            &rewrite.relower,
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_temp_window_rewrites_same_block_store_consumer() {
+        let mut graph = ValueGraph::default();
+        let inner_result = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 21,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(21),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 2,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 21,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(0)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(21),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let outer_result = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 21,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(1), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(3),
+                materialized_block: Some(21),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(10),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(1)],
+                    inputs: Vec::new(),
+                    values: vec![inner_result],
+                },
+                BlockOp {
+                    source_start: Some(12),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(0)],
+                    inputs: Vec::new(),
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(14),
+                    op: vm::op_i32_store as Op,
+                    kind: BlockOpKind::MemoryStore,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address, inner_result],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(16),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(2)],
+                    inputs: vec![inner_result],
+                    values: vec![outer_result],
+                },
+            ],
+            terminator: None,
+        };
+        let mut locals = LocalsData::default();
+
+        normalize_call_relower_body_windows(21, &mut body, &mut graph, &mut locals, 0);
+        recompute_body_materialization_indices(21, &body, &mut graph);
+
+        let store_idx = body
+            .ops
+            .iter()
+            .position(|op| op.kind == BlockOpKind::MemoryStore)
+            .expect("store must remain in body");
+        let call_idx = body
+            .ops
+            .iter()
+            .position(|op| op.kind == BlockOpKind::CallLike && op.source_start == Some(16))
+            .expect("outer call must remain in body");
+        assert_ne!(body.ops[store_idx].inputs[1], inner_result);
+        assert_ne!(body.ops[call_idx].inputs[0], inner_result);
+        assert_eq!(
+            body.ops
+                .iter()
+                .filter(|op| op.source_start.is_none() && op.kind == BlockOpKind::LocalSet)
+                .count(),
+            1
+        );
+        assert_eq!(
+            body.ops
+                .iter()
+                .filter(|op| op.source_start.is_none() && op.kind == BlockOpKind::LocalGet)
+                .count(),
+            2
+        );
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, call_idx);
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, call_idx, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_temp_window_rewrites_terminator_consumer() {
+        let mut graph = ValueGraph::default();
+        let inner_result = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 22,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(22),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 2,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let outer_result = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 22,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(1), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(1),
+                materialized_block: Some(22),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(30),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(1)],
+                    inputs: Vec::new(),
+                    values: vec![inner_result],
+                },
+                BlockOp {
+                    source_start: Some(32),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(2)],
+                    inputs: vec![inner_result],
+                    values: vec![outer_result],
+                },
+            ],
+            terminator: Some(BlockTerminator {
+                source_start: Some(34),
+                op: vm::op_br_if as Op,
+                kind: BlockTerminatorKind::BrIf,
+                operands: vec![BlockOperand::JumpTarget(0)],
+                inputs: vec![inner_result],
+                values: Vec::new(),
+            }),
+        };
+        let mut locals = LocalsData::default();
+
+        normalize_call_relower_body_windows(22, &mut body, &mut graph, &mut locals, 0);
+        recompute_body_materialization_indices(22, &body, &mut graph);
+
+        let call_idx = body
+            .ops
+            .iter()
+            .position(|op| op.kind == BlockOpKind::CallLike && op.source_start == Some(32))
+            .expect("outer call must remain in body");
+        assert_ne!(body.ops[call_idx].inputs[0], inner_result);
+        assert_ne!(
+            body.terminator
+                .as_ref()
+                .expect("terminator must remain")
+                .inputs[0],
+            inner_result
+        );
+        assert_eq!(
+            body.ops
+                .iter()
+                .filter(|op| op.source_start.is_none() && op.kind == BlockOpKind::LocalGet)
+                .count(),
+            2
+        );
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, call_idx);
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, call_idx, &spec
+        ));
+    }
+
+    #[test]
+    fn cross_block_call_relower_normalization_handles_irreducible_predecessor_graph() {
+        let slot1 = LocalSlot::new(0, 4);
+        let slot2 = LocalSlot::new(4, 4);
+        let mut graph = ValueGraph::default();
+        let pred1_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 1,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(slot1),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(slot1)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(slot1)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(slot1),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(slot1)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(1),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let pred2_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 2,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(slot2),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(slot2)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(slot2)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(slot2),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(slot2)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(2),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let block_arg =
+            graph.ensure_block_argument(3, 0, ValType::I32, None, None, None, None, None);
+        let call_result = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 3,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(2), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(3),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let program = BasicBlockProgram {
+            records: Vec::new(),
+            blocks: vec![
+                BasicBlock {
+                    id: 0,
+                    start: 0,
+                    end: 0,
+                },
+                BasicBlock {
+                    id: 1,
+                    start: 0,
+                    end: 0,
+                },
+                BasicBlock {
+                    id: 2,
+                    start: 0,
+                    end: 0,
+                },
+                BasicBlock {
+                    id: 3,
+                    start: 0,
+                    end: 0,
+                },
+            ],
+            old_start_to_block: HashMap::new(),
+            successors: vec![vec![1, 2], vec![2, 3], vec![1, 3], Vec::new()],
+            predecessors: vec![Vec::new(), vec![0, 2], vec![0, 1], vec![1, 2]],
+        };
+        let mut rewrite = FunctionRewrite {
+            entries: vec![
+                BlockEntryState {
+                    reachable: true,
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState {
+                    reachable: true,
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState {
+                    reachable: true,
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState {
+                    reachable: true,
+                    stack: vec![block_arg],
+                    ..BlockEntryState::default()
+                },
+            ],
+            exits: vec![
+                BlockEntryState::default(),
+                BlockEntryState {
+                    reachable: true,
+                    stack: vec![pred1_value],
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState {
+                    reachable: true,
+                    stack: vec![pred2_value],
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState::default(),
+            ],
+            graph,
+            relower: RelowerPlan {
+                block_bodies: vec![
+                    BlockBody::default(),
+                    BlockBody {
+                        ops: vec![BlockOp {
+                            source_start: Some(40),
+                            op: local_get_op(4),
+                            kind: BlockOpKind::LocalGet,
+                            operands: vec![BlockOperand::LocalAddr(slot1.addr)],
+                            inputs: Vec::new(),
+                            values: vec![pred1_value],
+                        }],
+                        terminator: None,
+                    },
+                    BlockBody {
+                        ops: vec![BlockOp {
+                            source_start: Some(42),
+                            op: local_get_op(4),
+                            kind: BlockOpKind::LocalGet,
+                            operands: vec![BlockOperand::LocalAddr(slot2.addr)],
+                            inputs: Vec::new(),
+                            values: vec![pred2_value],
+                        }],
+                        terminator: None,
+                    },
+                    BlockBody {
+                        ops: vec![BlockOp {
+                            source_start: Some(44),
+                            op: vm::op_call as Op,
+                            kind: BlockOpKind::CallLike,
+                            operands: vec![BlockOperand::U32(9)],
+                            inputs: vec![block_arg],
+                            values: vec![call_result],
+                        }],
+                        terminator: None,
+                    },
+                ],
+                loop_invariants: vec![LoopInvariantSet::default(); 4],
+                block_copy_plans: vec![BlockCopyPlan::default(); 4],
+                entry_prefix_ops: Vec::new(),
+                block_prefix_ops: vec![Vec::new(); 4],
+                block_suffix_ops: vec![Vec::new(); 4],
+            },
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(normalize_cross_block_call_relower_regions(
+            &program,
+            &mut rewrite,
+            &mut locals,
+            0,
+        ));
+        assert_eq!(rewrite.relower.block_prefix_ops[3].len(), 1);
+        assert!(matches!(
+            rewrite.relower.block_prefix_ops[3][0].kind,
+            BlockOpKind::LocalSet
+        ));
+        assert!(matches!(
+            rewrite.relower.block_bodies[3].ops[0].kind,
+            BlockOpKind::LocalGet
+        ));
+
+        let combined = combined_relower_block_body(&rewrite.relower, 3);
+        let call_idx = combined.ops.len() - 1;
+        let spec = expect_specialized_direct_call_consumer(&rewrite.graph, &combined, call_idx);
+        assert_eq!(spec.specialized_arg_start, 0);
         assert!(verify_call_relower_window_normalization(
             &rewrite.graph,
             &rewrite.relower,
