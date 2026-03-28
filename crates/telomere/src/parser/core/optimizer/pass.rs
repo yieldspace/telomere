@@ -1618,6 +1618,20 @@ pub(crate) fn optimize_function(
         &program,
         &rewrite.relower.block_bodies
     ));
+    normalize_call_relower_windows(
+        &mut rewrite.relower.block_bodies,
+        &mut rewrite.graph,
+        locals,
+        param_bytes,
+    );
+    debug_assert!(verify_call_relower_window_normalization(
+        &rewrite.graph,
+        &rewrite.relower.block_bodies
+    ));
+    debug_assert!(verify_explicit_effect_ir(
+        &program,
+        &rewrite.relower.block_bodies
+    ));
     let reachable = reachable_blocks(&program, &rewrite.relower.block_bodies);
     let spill_plan = build_effect_result_spill_plan(
         &rewrite.graph,
@@ -2572,6 +2586,12 @@ struct MatchedDirectCallSuffix {
     absorbed_ops: BTreeSet<usize>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CallMaterializationMode {
+    Absorb,
+    Replay,
+}
+
 #[derive(Clone, Debug)]
 struct MatchedAddressLowering {
     base: LocalSlot,
@@ -3359,6 +3379,11 @@ fn match_direct_call_input_materializer_for_call(
     occupied_suffix_ops: &BTreeSet<usize>,
     input: ValueRef,
 ) -> Option<MatchedCallInputMaterializer> {
+    if let Some(provider_idx) = producer_op_index_before(body, input, op_idx) {
+        if call_input_requires_temp_window(body, provider_idx, op_idx) {
+            return None;
+        }
+    }
     let matched = match_direct_call_input_materializer(graph, body, op_idx, input)?;
     if matched.requires_contiguous_root
         && !call_materializer_tree_forms_contiguous_suffix(body, op_idx, input, occupied_suffix_ops)
@@ -3384,13 +3409,46 @@ fn match_direct_call_input_materializer_with_address_exception(
     allowed_address_consumer_idx: Option<usize>,
     input: ValueRef,
 ) -> Option<MatchedCallInputMaterializer> {
+    match_direct_call_input_materializer_mode(
+        graph,
+        body,
+        op_idx,
+        allowed_address_consumer_idx,
+        input,
+        CallMaterializationMode::Absorb,
+    )
+}
+
+fn match_direct_call_input_materializer_replay_with_address_exception(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    allowed_address_consumer_idx: Option<usize>,
+    input: ValueRef,
+) -> Option<MatchedCallInputMaterializer> {
+    match_direct_call_input_materializer_mode(
+        graph,
+        body,
+        op_idx,
+        allowed_address_consumer_idx,
+        input,
+        CallMaterializationMode::Replay,
+    )
+}
+
+fn match_direct_call_input_materializer_mode(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    allowed_address_consumer_idx: Option<usize>,
+    input: ValueRef,
+    forced_mode: CallMaterializationMode,
+) -> Option<MatchedCallInputMaterializer> {
     let node = &graph[input.0];
-    if node.use_count > 1 || node.needs_spill {
-        return None;
-    }
-    if value_feeds_memory_address_except(body, 0, input, allowed_address_consumer_idx) {
-        return None;
-    }
+    let replay_only = forced_mode == CallMaterializationMode::Replay
+        || node.use_count > 1
+        || node.needs_spill
+        || value_feeds_memory_address_except(body, 0, input, allowed_address_consumer_idx);
 
     if let Some(provider_idx) = producer_op_index_before(body, input, op_idx) {
         let provider = body.ops.get(provider_idx)?;
@@ -3404,7 +3462,7 @@ fn match_direct_call_input_materializer_with_address_exception(
             allowed_address_consumer_idx,
             provider,
             provider_idx,
-            node.ty,
+            replay_only,
         );
     }
 
@@ -3412,16 +3470,8 @@ fn match_direct_call_input_materializer_with_address_exception(
         return None;
     }
 
-    if let Some(operand) = scalar_const_operand_from_value(node.const_value) {
-        return Some(MatchedCallInputMaterializer {
-            materializers: vec![CallMaterializer {
-                source_start: None,
-                op: scalar_const_operand_op(operand)?,
-                operands: vec![operand],
-            }],
-            absorbed_ops: BTreeSet::new(),
-            requires_contiguous_root: false,
-        });
+    if scalar_const_operand_from_value(node.const_value).is_some() {
+        return None;
     }
 
     if node.origin.kind != ExprOriginKind::BlockArgument && !node.is_block_argument() {
@@ -3447,6 +3497,7 @@ fn match_direct_call_extended_leaf_materializer(
     provider: &BlockOp,
     provider_idx: usize,
     result_ty: ValType,
+    replay_only: bool,
 ) -> Option<MatchedCallInputMaterializer> {
     if let Some((op, operands)) = call_materializer_const_like_leaf(provider, result_ty) {
         return Some(MatchedCallInputMaterializer {
@@ -3455,12 +3506,26 @@ fn match_direct_call_extended_leaf_materializer(
                 op,
                 operands,
             }],
-            absorbed_ops: BTreeSet::from([provider_idx]),
+            absorbed_ops: if !replay_only {
+                BTreeSet::from([provider_idx])
+            } else {
+                BTreeSet::new()
+            },
             requires_contiguous_root: false,
         });
     }
 
-    match_direct_call_memory_load_materializer(graph, body, provider, provider_idx, result_ty)
+    (!replay_only)
+        .then(|| {
+            match_direct_call_memory_load_materializer(
+                graph,
+                body,
+                provider,
+                provider_idx,
+                result_ty,
+            )
+        })
+        .flatten()
 }
 
 fn match_direct_call_input_materializer_from_provider(
@@ -3470,15 +3535,24 @@ fn match_direct_call_input_materializer_from_provider(
     allowed_address_consumer_idx: Option<usize>,
     provider: &BlockOp,
     provider_idx: usize,
-    result_ty: ValType,
+    replay_only: bool,
 ) -> Option<MatchedCallInputMaterializer> {
-    if let Some(matched) =
-        match_direct_call_extended_leaf_materializer(graph, body, provider, provider_idx, result_ty)
-    {
+    let result_ty = graph[block_op_single_result(provider)?.0].ty;
+    if let Some(matched) = match_direct_call_extended_leaf_materializer(
+        graph,
+        body,
+        provider,
+        provider_idx,
+        result_ty,
+        replay_only,
+    ) {
         return Some(matched);
     }
 
     if provider.kind == BlockOpKind::CallLike {
+        if replay_only {
+            return None;
+        }
         if !call_materializer_nested_call_op(provider.op) {
             return None;
         }
@@ -3509,6 +3583,9 @@ fn match_direct_call_input_materializer_from_provider(
     }
 
     if provider.kind == BlockOpKind::GlobalGet {
+        if replay_only {
+            return None;
+        }
         return Some(MatchedCallInputMaterializer {
             materializers: vec![CallMaterializer {
                 source_start: provider.source_start,
@@ -3521,6 +3598,9 @@ fn match_direct_call_input_materializer_from_provider(
     }
 
     if provider.kind == BlockOpKind::TableGet {
+        if replay_only {
+            return None;
+        }
         let index = *provider.inputs.first()?;
         let mut matched = match_direct_call_input_materializer_with_address_exception(
             graph,
@@ -3540,6 +3620,9 @@ fn match_direct_call_input_materializer_from_provider(
     }
 
     if call_materializer_is_trap_sensitive_op(provider.op) {
+        if replay_only {
+            return None;
+        }
         let mut materializers = Vec::new();
         let mut absorbed_ops = BTreeSet::new();
         for input in &provider.inputs {
@@ -3581,7 +3664,11 @@ fn match_direct_call_input_materializer_from_provider(
                 op: local_get_op(expected_size),
                 operands: vec![src],
             }],
-            absorbed_ops: BTreeSet::from([provider_idx]),
+            absorbed_ops: if !replay_only {
+                BTreeSet::from([provider_idx])
+            } else {
+                BTreeSet::new()
+            },
             requires_contiguous_root: false,
         });
     }
@@ -3595,11 +3682,25 @@ fn match_direct_call_input_materializer_from_provider(
         if !call_materializer_motion_is_legal(body, provider_idx, call_idx, provider) {
             return None;
         }
-        let input = *provider.inputs.first()?;
-        let mut matched = match_direct_call_input_materializer(graph, body, call_idx, input)?;
-        if matched.requires_contiguous_root {
-            return None;
+        if replay_only {
+            return Some(MatchedCallInputMaterializer {
+                materializers: vec![CallMaterializer {
+                    source_start: provider.source_start,
+                    op: local_get_op(expected_size),
+                    operands: vec![dst],
+                }],
+                absorbed_ops: BTreeSet::new(),
+                requires_contiguous_root: false,
+            });
         }
+        let input = *provider.inputs.first()?;
+        let mut matched = match_direct_call_input_materializer_with_address_exception(
+            graph,
+            body,
+            call_idx,
+            allowed_address_consumer_idx,
+            input,
+        )?;
         matched.materializers.push(CallMaterializer {
             source_start: provider.source_start,
             op: local_set_op(expected_size),
@@ -3626,48 +3727,91 @@ fn match_direct_call_input_materializer_from_provider(
                 op: scalar_const_operand_op(operand)?,
                 operands: vec![operand],
             }],
-            absorbed_ops: BTreeSet::from([provider_idx]),
+            absorbed_ops: if !replay_only {
+                BTreeSet::from([provider_idx])
+            } else {
+                BTreeSet::new()
+            },
             requires_contiguous_root: false,
         });
     }
 
     if provider.kind == BlockOpKind::Select {
         let expected_size = value_type_size(result_ty)?;
-        if !block_op_single_use(graph, provider) {
+        if !replay_only && !block_op_single_use(graph, provider) {
             return None;
         }
-        if value_feeds_memory_address_except(
-            body,
-            call_idx,
-            block_op_single_result(provider)?,
-            allowed_address_consumer_idx,
-        ) {
+        if !replay_only
+            && value_feeds_memory_address_except(
+                body,
+                call_idx,
+                block_op_single_result(provider)?,
+                allowed_address_consumer_idx,
+            )
+        {
             return None;
         }
         let lhs = *provider.inputs.first()?;
         let rhs = *provider.inputs.get(1)?;
         let cond = *provider.inputs.get(2)?;
-        let lhs_matched = match_direct_call_input_materializer_with_address_exception(
-            graph,
-            body,
-            call_idx,
-            allowed_address_consumer_idx,
-            lhs,
-        )?;
-        let rhs_matched = match_direct_call_input_materializer_with_address_exception(
-            graph,
-            body,
-            call_idx,
-            allowed_address_consumer_idx,
-            rhs,
-        )?;
-        let cond_matched = match_direct_call_input_materializer_with_address_exception(
-            graph,
-            body,
-            call_idx,
-            allowed_address_consumer_idx,
-            cond,
-        )?;
+        let lhs_matched = if replay_only {
+            match_direct_call_input_materializer_replay_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                lhs,
+            )?
+        } else {
+            match_direct_call_input_materializer_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                lhs,
+            )?
+        };
+        let rhs_matched = if replay_only {
+            match_direct_call_input_materializer_replay_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                rhs,
+            )?
+        } else {
+            match_direct_call_input_materializer_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                rhs,
+            )?
+        };
+        let cond_matched = if replay_only {
+            match_direct_call_input_materializer_replay_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                cond,
+            )?
+        } else {
+            match_direct_call_input_materializer_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                cond,
+            )?
+        };
+        if replay_only
+            && (lhs_matched.requires_contiguous_root
+                || rhs_matched.requires_contiguous_root
+                || cond_matched.requires_contiguous_root)
+        {
+            return None;
+        }
         let (select_op, select_operands) = call_materializer_select(provider, expected_size)?;
         let mut materializers = lhs_matched.materializers;
         materializers.extend(rhs_matched.materializers);
@@ -3677,13 +3821,23 @@ fn match_direct_call_input_materializer_from_provider(
             op: select_op,
             operands: select_operands,
         });
-        let requires_contiguous_root = lhs_matched.requires_contiguous_root
-            || rhs_matched.requires_contiguous_root
-            || cond_matched.requires_contiguous_root;
-        let mut absorbed_ops = lhs_matched.absorbed_ops;
-        absorbed_ops.extend(rhs_matched.absorbed_ops);
-        absorbed_ops.extend(cond_matched.absorbed_ops);
-        absorbed_ops.insert(provider_idx);
+        let requires_contiguous_root = if replay_only {
+            false
+        } else {
+            lhs_matched.requires_contiguous_root
+                || rhs_matched.requires_contiguous_root
+                || cond_matched.requires_contiguous_root
+        };
+        let mut absorbed_ops = if replay_only {
+            BTreeSet::new()
+        } else {
+            lhs_matched.absorbed_ops
+        };
+        if !replay_only {
+            absorbed_ops.extend(rhs_matched.absorbed_ops);
+            absorbed_ops.extend(cond_matched.absorbed_ops);
+            absorbed_ops.insert(provider_idx);
+        }
         return Some(MatchedCallInputMaterializer {
             materializers,
             absorbed_ops,
@@ -3693,63 +3847,110 @@ fn match_direct_call_input_materializer_from_provider(
 
     if let BlockOpKind::PureUnary(pure_op) = provider.kind {
         let unary = unary_op(pure_op)?;
-        if !block_op_single_use(graph, provider) {
+        if !replay_only && !block_op_single_use(graph, provider) {
             return None;
         }
-        if value_feeds_memory_address_except(
-            body,
-            call_idx,
-            block_op_single_result(provider)?,
-            allowed_address_consumer_idx,
-        ) {
+        if !replay_only
+            && value_feeds_memory_address_except(
+                body,
+                call_idx,
+                block_op_single_result(provider)?,
+                allowed_address_consumer_idx,
+            )
+        {
             return None;
         }
         let input = *provider.inputs.first()?;
-        let mut matched = match_direct_call_input_materializer_with_address_exception(
-            graph,
-            body,
-            call_idx,
-            allowed_address_consumer_idx,
-            input,
-        )?;
+        let mut matched = if replay_only {
+            match_direct_call_input_materializer_replay_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                input,
+            )?
+        } else {
+            match_direct_call_input_materializer_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                input,
+            )?
+        };
+        if replay_only && matched.requires_contiguous_root {
+            return None;
+        }
         matched.materializers.push(CallMaterializer {
             source_start: provider.source_start,
             op: unary,
             operands: Vec::new(),
         });
-        matched.absorbed_ops.insert(provider_idx);
+        if replay_only {
+            matched.absorbed_ops.clear();
+            matched.requires_contiguous_root = false;
+        } else {
+            matched.absorbed_ops.insert(provider_idx);
+        }
         return Some(matched);
     }
 
     if let BlockOpKind::PureBinary(pure_op) = provider.kind {
         let binary = binary_op(pure_op)?;
-        if !block_op_single_use(graph, provider) {
+        if !replay_only && !block_op_single_use(graph, provider) {
             return None;
         }
-        if value_feeds_memory_address_except(
-            body,
-            call_idx,
-            block_op_single_result(provider)?,
-            allowed_address_consumer_idx,
-        ) {
+        if !replay_only
+            && value_feeds_memory_address_except(
+                body,
+                call_idx,
+                block_op_single_result(provider)?,
+                allowed_address_consumer_idx,
+            )
+        {
             return None;
         }
         let lhs = *provider.inputs.first()?;
         let rhs = *provider.inputs.get(1)?;
-        let lhs_matched = match_direct_call_input_materializer_with_address_exception(
-            graph,
-            body,
-            call_idx,
-            allowed_address_consumer_idx,
-            lhs,
-        )?;
-        let rhs_matched = match_direct_call_input_materializer_with_address_exception(
-            graph,
-            body,
-            call_idx,
-            allowed_address_consumer_idx,
-            rhs,
-        )?;
+        let lhs_matched = if replay_only {
+            match_direct_call_input_materializer_replay_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                lhs,
+            )?
+        } else {
+            match_direct_call_input_materializer_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                lhs,
+            )?
+        };
+        let rhs_matched = if replay_only {
+            match_direct_call_input_materializer_replay_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                rhs,
+            )?
+        } else {
+            match_direct_call_input_materializer_with_address_exception(
+                graph,
+                body,
+                call_idx,
+                allowed_address_consumer_idx,
+                rhs,
+            )?
+        };
+        if replay_only
+            && (lhs_matched.requires_contiguous_root || rhs_matched.requires_contiguous_root)
+        {
+            return None;
+        }
         let mut materializers = lhs_matched.materializers;
         materializers.extend(rhs_matched.materializers);
         materializers.push(CallMaterializer {
@@ -3757,11 +3958,20 @@ fn match_direct_call_input_materializer_from_provider(
             op: binary,
             operands: Vec::new(),
         });
-        let requires_contiguous_root =
-            lhs_matched.requires_contiguous_root || rhs_matched.requires_contiguous_root;
-        let mut absorbed_ops = lhs_matched.absorbed_ops;
-        absorbed_ops.extend(rhs_matched.absorbed_ops);
-        absorbed_ops.insert(provider_idx);
+        let requires_contiguous_root = if replay_only {
+            false
+        } else {
+            lhs_matched.requires_contiguous_root || rhs_matched.requires_contiguous_root
+        };
+        let mut absorbed_ops = if replay_only {
+            BTreeSet::new()
+        } else {
+            lhs_matched.absorbed_ops
+        };
+        if !replay_only {
+            absorbed_ops.extend(rhs_matched.absorbed_ops);
+            absorbed_ops.insert(provider_idx);
+        }
         return Some(MatchedCallInputMaterializer {
             materializers,
             absorbed_ops,
@@ -4063,6 +4273,357 @@ fn build_effect_result_spill_plan(
 
 fn allocate_optimizer_temp_slot(locals: &mut LocalsData, param_bytes: u32, ty: ValType) -> u32 {
     param_bytes + locals.allocate_temp_slot(ty)
+}
+
+fn normalize_call_relower_windows(
+    bodies: &mut [BlockBody],
+    graph: &mut ValueGraph,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+) {
+    for (block_id, body) in bodies.iter_mut().enumerate() {
+        normalize_call_relower_body_windows(block_id, body, graph, locals, param_bytes);
+        recompute_body_materialization_indices(block_id, body, graph);
+    }
+}
+
+fn normalize_call_relower_body_windows(
+    block_id: usize,
+    body: &mut BlockBody,
+    graph: &mut ValueGraph,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+) {
+    let mut search_from = 0usize;
+    while let Some(call_idx) =
+        body.ops
+            .iter()
+            .enumerate()
+            .skip(search_from)
+            .find_map(|(idx, op)| {
+                (op.kind == BlockOpKind::CallLike
+                    && call_relower_target_op(op.op)
+                    && !op.inputs.is_empty())
+                .then_some(idx)
+            })
+    {
+        let next_idx = normalize_call_relower_window_for_call(
+            block_id,
+            body,
+            graph,
+            locals,
+            param_bytes,
+            call_idx,
+        );
+        search_from = next_idx.saturating_add(1);
+    }
+}
+
+fn normalize_call_relower_window_for_call(
+    block_id: usize,
+    body: &mut BlockBody,
+    graph: &mut ValueGraph,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+    call_idx: usize,
+) -> usize {
+    let mut call_idx = call_idx;
+    let mut occupied_suffix_ops = BTreeSet::new();
+    let input_len = body
+        .ops
+        .get(call_idx)
+        .map(|op| op.inputs.len())
+        .unwrap_or_default();
+    for arg_idx in (0..input_len).rev() {
+        let Some(input) = body
+            .ops
+            .get(call_idx)
+            .and_then(|op| op.inputs.get(arg_idx))
+            .copied()
+        else {
+            break;
+        };
+        if let Some(matched) = match_direct_call_input_materializer_for_call(
+            graph,
+            body,
+            call_idx,
+            &occupied_suffix_ops,
+            input,
+        ) {
+            occupied_suffix_ops.extend(matched.absorbed_ops);
+            continue;
+        }
+        let Some(next_call_idx) = buffer_call_input_through_temp_local(
+            CallTempWindowConfig {
+                block_id,
+                param_bytes,
+            },
+            body,
+            graph,
+            locals,
+            CallTempWindowTarget {
+                call_idx,
+                arg_idx,
+                input,
+            },
+            &mut occupied_suffix_ops,
+        ) else {
+            break;
+        };
+        call_idx = next_call_idx;
+        let Some(normalized_input) = body
+            .ops
+            .get(call_idx)
+            .and_then(|op| op.inputs.get(arg_idx))
+            .copied()
+        else {
+            break;
+        };
+        let Some(matched) = match_direct_call_input_materializer_for_call(
+            graph,
+            body,
+            call_idx,
+            &occupied_suffix_ops,
+            normalized_input,
+        ) else {
+            debug_assert!(
+                false,
+                "temp-local windowing must leave the buffered arg materializable",
+            );
+            break;
+        };
+        occupied_suffix_ops.extend(matched.absorbed_ops);
+    }
+    call_idx
+}
+
+#[derive(Clone, Copy)]
+struct CallTempWindowConfig {
+    block_id: usize,
+    param_bytes: u32,
+}
+
+#[derive(Clone, Copy)]
+struct CallTempWindowTarget {
+    call_idx: usize,
+    arg_idx: usize,
+    input: ValueRef,
+}
+
+fn buffer_call_input_through_temp_local(
+    config: CallTempWindowConfig,
+    body: &mut BlockBody,
+    graph: &mut ValueGraph,
+    locals: &mut LocalsData,
+    target: CallTempWindowTarget,
+    occupied_suffix_ops: &mut BTreeSet<usize>,
+) -> Option<usize> {
+    let CallTempWindowTarget {
+        call_idx,
+        arg_idx,
+        input,
+    } = target;
+    if call_temp_window_tree_intersects_suffix(body, call_idx, input, occupied_suffix_ops) {
+        return None;
+    }
+    let provider_idx = producer_op_index_before(body, input, call_idx)?;
+    let provider = body.ops.get(provider_idx)?.clone();
+    if block_op_single_result(&provider) != Some(input)
+        || !call_temp_window_bufferable_provider(&provider)
+    {
+        return None;
+    }
+    let buffer_idx = call_temp_window_buffer_anchor(body, provider_idx, call_idx);
+    if value_use_count_after(body, buffer_idx, input) != 1
+        || body
+            .terminator
+            .as_ref()
+            .is_some_and(|terminator| terminator.inputs.contains(&input))
+    {
+        return None;
+    }
+    let ty = graph[input.0].ty;
+    let size = value_type_size(ty)?;
+    let temp = LocalSlot::new(
+        allocate_optimizer_temp_slot(locals, config.param_bytes, ty),
+        size,
+    );
+
+    let tee_idx = buffer_idx;
+    body.ops.insert(
+        tee_idx,
+        BlockOp {
+            source_start: None,
+            op: local_set_op(size),
+            kind: BlockOpKind::LocalSet,
+            operands: vec![BlockOperand::LocalAddr(temp.addr)],
+            inputs: vec![input],
+            values: Vec::new(),
+        },
+    );
+    shift_absorbed_op_indices(occupied_suffix_ops, tee_idx, 1);
+
+    let mut call_idx = call_idx + usize::from(tee_idx <= call_idx);
+    let temp_value = make_call_temp_local_value(config.block_id, graph, temp, ty);
+    body.ops.insert(
+        call_idx,
+        BlockOp {
+            source_start: None,
+            op: local_get_op(size),
+            kind: BlockOpKind::LocalGet,
+            operands: vec![BlockOperand::LocalAddr(temp.addr)],
+            inputs: Vec::new(),
+            values: vec![temp_value],
+        },
+    );
+    call_idx += 1;
+    body.ops.get_mut(call_idx)?.inputs[arg_idx] = temp_value;
+    Some(call_idx)
+}
+
+fn call_temp_window_bufferable_provider(op: &BlockOp) -> bool {
+    match op.kind {
+        BlockOpKind::Const
+        | BlockOpKind::LocalGet
+        | BlockOpKind::LocalTee
+        | BlockOpKind::Select
+        | BlockOpKind::PureUnary(_)
+        | BlockOpKind::PureBinary(_)
+        | BlockOpKind::GlobalGet
+        | BlockOpKind::TableGet
+        | BlockOpKind::MemoryLoad => block_op_single_result(op).is_some(),
+        BlockOpKind::CallLike => {
+            block_op_single_result(op).is_some() && call_materializer_nested_call_op(op.op)
+        }
+        _ => false,
+    }
+}
+
+fn call_temp_window_tree_intersects_suffix(
+    body: &BlockBody,
+    call_idx: usize,
+    input: ValueRef,
+    occupied_suffix_ops: &BTreeSet<usize>,
+) -> bool {
+    let mut seen_values = HashSet::new();
+    let mut tree_ops = BTreeSet::new();
+    collect_trailing_value_ops(body, call_idx, input, &mut seen_values, &mut tree_ops)
+        .is_some_and(|()| tree_ops.iter().any(|idx| occupied_suffix_ops.contains(idx)))
+}
+
+fn call_input_requires_temp_window(body: &BlockBody, provider_idx: usize, call_idx: usize) -> bool {
+    call_temp_window_buffer_anchor(body, provider_idx, call_idx) != provider_idx + 1
+}
+
+fn call_temp_window_buffer_anchor(body: &BlockBody, provider_idx: usize, call_idx: usize) -> usize {
+    body.ops
+        .iter()
+        .enumerate()
+        .skip(provider_idx + 1)
+        .take(call_idx.saturating_sub(provider_idx + 1))
+        .filter_map(|(idx, op)| {
+            std::ptr::fn_addr_eq(op.op, vm::special_block_return as Op).then_some(idx + 1)
+        })
+        .next_back()
+        .unwrap_or(provider_idx + 1)
+}
+
+fn shift_absorbed_op_indices(indices: &mut BTreeSet<usize>, from_idx: usize, delta: usize) {
+    if delta == 0 || indices.is_empty() {
+        return;
+    }
+    let shifted = indices
+        .iter()
+        .map(|idx| if *idx >= from_idx { idx + delta } else { *idx })
+        .collect::<BTreeSet<_>>();
+    *indices = shifted;
+}
+
+fn make_call_temp_local_value(
+    block_id: usize,
+    graph: &mut ValueGraph,
+    temp: LocalSlot,
+    ty: ValType,
+) -> ValueRef {
+    let value = ensure_seed_value(
+        graph,
+        ty,
+        ExprOrigin {
+            block_id,
+            ordinal: temp.addr as usize,
+            kind: ExprOriginKind::EntryLocal,
+        },
+    );
+    set_value_slot_shape(graph, value, Some(SlotRef::temp_local(temp)), None, None);
+    let node = &mut graph[value.0];
+    node.use_count = 1;
+    node.removable = true;
+    node.refresh_optimizer_metadata();
+    value
+}
+
+fn recompute_body_materialization_indices(
+    block_id: usize,
+    body: &BlockBody,
+    graph: &mut ValueGraph,
+) {
+    for node in &mut graph.nodes {
+        if node.materialized_block == Some(block_id) {
+            node.producer_op = None;
+            node.materialized_block = None;
+            node.materialized_op = None;
+        }
+    }
+    for (op_idx, op) in body.ops.iter().enumerate() {
+        for value in &op.values {
+            let node = &mut graph[value.0];
+            node.producer_op = Some(op_idx);
+            node.materialized_block = Some(block_id);
+            node.materialized_op = Some(op_idx);
+        }
+    }
+}
+
+fn verify_call_relower_window_normalization(graph: &ValueGraph, bodies: &[BlockBody]) -> bool {
+    for (block_id, body) in bodies.iter().enumerate() {
+        for (op_idx, op) in body.ops.iter().enumerate() {
+            if op.kind != BlockOpKind::CallLike || !call_relower_target_op(op.op) {
+                continue;
+            }
+            for input in &op.inputs {
+                let Some(provider_idx) = producer_op_index_before(body, *input, op_idx) else {
+                    continue;
+                };
+                let Some(provider) = body.ops.get(provider_idx) else {
+                    return false;
+                };
+                if provider.source_start.is_some() || provider.kind != BlockOpKind::LocalGet {
+                    continue;
+                }
+                let Some(slot) = block_op_local_get_slot(provider) else {
+                    continue;
+                };
+                let Some(temp_slot) = graph[input.0]
+                    .slot_shape
+                    .as_ref()
+                    .and_then(|shape| shape.slot)
+                    .filter(|slot_ref| slot_ref.class == SlotClass::TempLocal)
+                else {
+                    continue;
+                };
+                if temp_slot != SlotRef::temp_local(slot)
+                    || graph[input.0].materialized_block != Some(block_id)
+                    || graph[input.0].materialized_op != Some(provider_idx)
+                {
+                    return false;
+                }
+                if value_type_size(graph[input.0].ty) != Some(slot.size) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 fn relower_block_body(
@@ -17299,6 +17860,1025 @@ mod tests {
         assert!(verify_specialized_direct_call_lowering(
             &graph, &body, 5, &spec
         ));
+    }
+
+    #[test]
+    fn direct_call_relower_replays_multi_use_pure_tree_arg() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 44,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(44),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let const_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 44,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(5)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(44),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let add_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 44,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(2),
+                materialized_block: Some(44),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 2,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let eqz_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 44,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureUnary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(4),
+                materialized_block: Some(44),
+                materialized_op: Some(4),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(200),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local_value],
+                },
+                BlockOp {
+                    source_start: Some(202),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(5)],
+                    inputs: Vec::new(),
+                    values: vec![const_value],
+                },
+                BlockOp {
+                    source_start: Some(204),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![local_value, const_value],
+                    values: vec![add_value],
+                },
+                BlockOp {
+                    source_start: Some(206),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(21)],
+                    inputs: vec![add_value],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(208),
+                    op: vm::op_i32_eqz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Eqz),
+                    operands: Vec::new(),
+                    inputs: vec![add_value],
+                    values: vec![eqz_value],
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 3);
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert!(spec.absorbed_ops.is_empty());
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 3);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][1].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][2].op,
+            vm::op_i32_add as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 3, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_replays_needs_spill_local_arg() {
+        let src = LocalSlot::new(8, 4);
+        let mut graph = ValueGraph::default();
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 45,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(45),
+                materialized_op: Some(0),
+                needs_spill: true,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(220),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local_value],
+                },
+                BlockOp {
+                    source_start: Some(222),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(22)],
+                    inputs: vec![local_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 1);
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert!(spec.absorbed_ops.is_empty());
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 1);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 1, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_replays_memory_address_shared_pure_arg() {
+        let base = LocalSlot::new(12, 4);
+        let mut graph = ValueGraph::default();
+        let base_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 46,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(base)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(base)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(base),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(base)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(46),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let offset_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 46,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(8)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(46),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let address_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 46,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: 8,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4ConstAdd { base, imm: 8 }),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(base)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(base),
+                        offset_delta: 8,
+                    }),
+                    Some(LoopValueShape::Local4ConstAdd { base, imm: 8 }),
+                ),
+                provider_class: ProviderClass::PureBinary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(2),
+                materialized_block: Some(46),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 2,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let load_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 46,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(3),
+                materialized_block: Some(46),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(240),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(base.addr)],
+                    inputs: Vec::new(),
+                    values: vec![base_value],
+                },
+                BlockOp {
+                    source_start: Some(242),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(8)],
+                    inputs: Vec::new(),
+                    values: vec![offset_value],
+                },
+                BlockOp {
+                    source_start: Some(244),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![base_value, offset_value],
+                    values: vec![address_value],
+                },
+                BlockOp {
+                    source_start: Some(246),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address_value],
+                    values: vec![load_value],
+                },
+                BlockOp {
+                    source_start: Some(248),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(23)],
+                    inputs: vec![address_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let _ = load_value;
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 4);
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert!(spec.absorbed_ops.is_empty());
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 3);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][1].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][2].op,
+            vm::op_i32_add as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 4, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_local_tee_with_anchored_child() {
+        let dst = LocalSlot::new(20, 4);
+        let mut graph = ValueGraph::default();
+        let nested_arg = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 47,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(6)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(0),
+                materialized_block: Some(47),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let nested_call_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 47,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(1), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(1),
+                materialized_block: Some(47),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let tee_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 47,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(dst),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(dst)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(dst)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(dst),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(dst)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(2),
+                materialized_block: Some(47),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(260),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(6)],
+                    inputs: Vec::new(),
+                    values: vec![nested_arg],
+                },
+                BlockOp {
+                    source_start: Some(262),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(24)],
+                    inputs: vec![nested_arg],
+                    values: vec![nested_call_value],
+                },
+                BlockOp {
+                    source_start: Some(264),
+                    op: vm::op_local_tee4 as Op,
+                    kind: BlockOpKind::LocalTee,
+                    operands: vec![BlockOperand::LocalAddr(dst.addr)],
+                    inputs: vec![nested_call_value],
+                    values: vec![tee_value],
+                },
+                BlockOp {
+                    source_start: Some(266),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(25)],
+                    inputs: vec![tee_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 3);
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 4);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][1].op,
+            vm::op_call as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][2].op,
+            vm::op_local_set4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][3].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 3, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_temp_window_buffers_non_contiguous_anchored_arg() {
+        let mut graph = ValueGraph::default();
+        let nested_arg = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 48,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(11)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(0),
+                materialized_block: Some(48),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let nested_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 48,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(1), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(1),
+                materialized_block: Some(48),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let hole_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 48,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(3)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(48),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(280),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(11)],
+                    inputs: Vec::new(),
+                    values: vec![nested_arg],
+                },
+                BlockOp {
+                    source_start: Some(282),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(30)],
+                    inputs: vec![nested_arg],
+                    values: vec![nested_value],
+                },
+                BlockOp {
+                    source_start: Some(284),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(3)],
+                    inputs: Vec::new(),
+                    values: vec![hole_value],
+                },
+                BlockOp {
+                    source_start: Some(286),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(31)],
+                    inputs: vec![nested_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        assert!(build_specialized_direct_call_lowering(&graph, &body, 3, &body.ops[3]).is_none());
+
+        let mut locals = LocalsData::default();
+        normalize_call_relower_body_windows(48, &mut body, &mut graph, &mut locals, 0);
+        recompute_body_materialization_indices(48, &body, &mut graph);
+
+        assert_eq!(body.ops.len(), 6);
+        assert!(matches!(body.ops[2].kind, BlockOpKind::LocalSet));
+        assert!(body.ops[2].source_start.is_none());
+        assert!(matches!(body.ops[4].kind, BlockOpKind::LocalGet));
+        assert!(body.ops[4].source_start.is_none());
+
+        let call = &body.ops[5];
+        let temp_input = call.inputs[0];
+        assert_eq!(
+            graph[temp_input.0]
+                .slot_shape
+                .as_ref()
+                .and_then(|shape| shape.slot)
+                .map(|slot| slot.class),
+            Some(SlotClass::TempLocal)
+        );
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 5);
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([4usize]));
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 1);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 5, &spec
+        ));
+
+        let _ = hole_value;
+    }
+
+    #[test]
+    fn direct_call_relower_temp_window_extends_suffix_across_anchored_hole() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let prefix_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 49,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(49),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let nested_arg = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 49,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(49),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let anchored_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 49,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(1), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(2),
+                materialized_block: Some(49),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let hole_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 49,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(4)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(3),
+                materialized_block: Some(49),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let tail_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 49,
+                    ordinal: 4,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(2)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(4),
+                materialized_block: Some(49),
+                materialized_op: Some(4),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let mut body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(300),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![prefix_value],
+                },
+                BlockOp {
+                    source_start: Some(302),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![nested_arg],
+                },
+                BlockOp {
+                    source_start: Some(304),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(32)],
+                    inputs: vec![nested_arg],
+                    values: vec![anchored_value],
+                },
+                BlockOp {
+                    source_start: Some(306),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(4)],
+                    inputs: Vec::new(),
+                    values: vec![hole_value],
+                },
+                BlockOp {
+                    source_start: Some(308),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(2)],
+                    inputs: Vec::new(),
+                    values: vec![tail_value],
+                },
+                BlockOp {
+                    source_start: Some(310),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(33)],
+                    inputs: vec![prefix_value, anchored_value, tail_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let original = expect_specialized_direct_call_consumer(&graph, &body, 5);
+        assert_eq!(original.specialized_arg_start, 2);
+
+        let mut locals = LocalsData::default();
+        normalize_call_relower_body_windows(49, &mut body, &mut graph, &mut locals, 0);
+        recompute_body_materialization_indices(49, &body, &mut graph);
+
+        let call_idx = body.ops.len() - 1;
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, call_idx);
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert_eq!(spec.arg_materializers.len(), 3);
+        assert_eq!(spec.arg_materializers[0].len(), 1);
+        assert_eq!(spec.arg_materializers[1].len(), 1);
+        assert_eq!(spec.arg_materializers[2].len(), 1);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[1][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[2][0].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(body
+            .ops
+            .iter()
+            .any(|op| { op.source_start.is_none() && matches!(op.kind, BlockOpKind::LocalSet) }));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, call_idx, &spec
+        ));
+
+        let _ = hole_value;
     }
 
     #[test]

@@ -2713,6 +2713,168 @@ async fn optimizer_call_relower_global_table_select_and_load_trees_remain_correc
 }
 
 #[tokio::test]
+async fn optimizer_call_relower_replayed_shared_pure_values_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (type $id_t (func (param i32) (result i32)))
+          (func $id (type $id_t) (param i32) (result i32)
+            local.get 0)
+          (table funcref (elem $id))
+          (memory 1)
+
+          (func (export "shared_pure") (param i32) (result i32)
+            (drop
+              (i32.eqz
+                (i32.add
+                  (local.get 0)
+                  (i32.const 1))))
+            (call $id
+              (i32.add
+                (local.get 0)
+                (i32.const 1))))
+
+          (func (export "shared_address_direct") (result i32)
+            (local $base i32)
+            (local.set $base (i32.const 0))
+            (i32.store (i32.const 8) (i32.const 77))
+            (drop
+              (i32.load
+                (i32.add
+                  (local.get $base)
+                  (i32.const 8))))
+            (call $id
+              (i32.add
+                (local.get $base)
+                (i32.const 8))))
+
+          (func (export "shared_address_indirect") (result i32)
+            (local $base i32)
+            (local.set $base (i32.const 0))
+            (i32.store (i32.const 4) (i32.const 0))
+            (drop
+              (i32.load
+                (i32.add
+                  (local.get $base)
+                  (i32.const 4))))
+            (call_indirect (type $id_t)
+              (i32.add
+                (local.get $base)
+                (i32.const 4))
+              (i32.const 0))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args, expected) in [
+        (
+            "shared_pure",
+            vec![WasmValue::I32(6)],
+            ResultValue::new(vec![WasmValue::I32(7)]),
+        ),
+        (
+            "shared_address_direct",
+            vec![],
+            ResultValue::new(vec![WasmValue::I32(8)]),
+        ),
+        (
+            "shared_address_indirect",
+            vec![],
+            ResultValue::new(vec![WasmValue::I32(4)]),
+        ),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, expected),
+            other => panic!("{name} replayed call relower case must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_call_relower_temp_local_windowing_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (type $inc_t (func (param i32) (result i32)))
+          (type $sum3_t (func (param i32 i32 i32) (result i32)))
+
+          (func $inc (type $inc_t) (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+
+          (func $sum3 (type $sum3_t) (param i32 i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add
+            local.get 2
+            i32.add)
+
+          (table 1 funcref)
+          (elem (i32.const 0) $sum3)
+
+          (func (export "direct_window") (param i32) (result i32)
+            (local $tmp i32)
+            (call $sum3
+              (i32.const 10)
+              (local.tee $tmp
+                (call $inc (local.get 0)))
+              (block (result i32)
+                (drop (i32.eqz (local.get $tmp)))
+                (i32.const 2))))
+
+          (func (export "indirect_window") (param i32) (result i32)
+            (local $tmp i32)
+            (call_indirect (type $sum3_t)
+              (i32.const 10)
+              (local.tee $tmp
+                (call $inc (local.get 0)))
+              (block (result i32)
+                (drop (i32.eqz (local.get $tmp)))
+                (i32.const 2))
+              (i32.const 0)))
+
+          (func (export "return_indirect_window") (param i32) (result i32)
+            (local $tmp i32)
+            (return_call_indirect (type $sum3_t)
+              (i32.const 10)
+              (local.tee $tmp
+                (call $inc (local.get 0)))
+              (block (result i32)
+                (drop (i32.eqz (local.get $tmp)))
+                (i32.const 2))
+              (i32.const 0))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for name in ["direct_window", "indirect_window", "return_indirect_window"] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            name,
+            &ResultValue::new(vec![WasmValue::I32(5)]),
+        )
+        .await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(18)]), "{name}")
+            }
+            other => panic!("{name} temp-local call windowing case must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn optimizer_preserves_break_and_block_param_flows() {
     let store = Store::new();
     let registry = Registry::new();
