@@ -59,6 +59,48 @@ async fn optimizer_small_call_loop_remains_correct() {
 }
 
 #[tokio::test]
+async fn optimizer_direct_call_with_mixed_local_const_args_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $mix (param i32 i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add
+            local.get 2
+            i32.add)
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            i32.const 4
+            local.get 0
+            call $mix))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (input, expected) in [(0, 4), (1, 6), (7, 18)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(input)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("mixed direct call({input}) must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn optimizer_small_memory_loop_remains_correct() {
     let store = Store::new();
     let registry = Registry::new();
@@ -111,6 +153,338 @@ async fn optimizer_small_memory_loop_remains_correct() {
             assert_eq!(values, ResultValue::new(vec![WasmValue::I32(64)]));
         }
         other => panic!("memory loop must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_direct_call_neighboring_select_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $pair (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add)
+          (func (export "run") (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            local.get 0
+            select
+            i32.const 5
+            call $pair))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((lhs, rhs), expected) in [((0, 9), 14), ((1, 9), 6), ((7, 3), 12)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(lhs), WasmValue::I32(rhs)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => {
+                panic!("select-neighbor direct call({lhs}, {rhs}) must succeed, got {other:?}")
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_direct_call_with_unary_binop_tree_args_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $mix (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add)
+          (func (export "run") (param i32 i32) (result i32)
+            local.get 0
+            i32.popcnt
+            i32.const 9
+            drop
+            local.get 1
+            i32.const 2
+            i32.add
+            i32.clz
+            call $mix))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((lhs, rhs), expected) in [((0, 0), 30), ((7, 1), 33), ((15, 3), 33)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(lhs), WasmValue::I32(rhs)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => {
+                panic!("direct call unary/binop tree({lhs}, {rhs}) must succeed, got {other:?}")
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_import_direct_call_with_unary_binop_tree_args_remains_correct() {
+    let store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+        (module
+          (func (export "mix") (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "mix" (func $mix (param i32 i32) (result i32)))
+          (func (export "run") (param i32 i32) (result i32)
+            local.get 0
+            i32.popcnt
+            i32.const 9
+            drop
+            local.get 1
+            i32.const 2
+            i32.add
+            i32.clz
+            call $mix))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((lhs, rhs), expected) in [((0, 0), 30), ((7, 1), 33), ((15, 3), 33)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(lhs), WasmValue::I32(rhs)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => {
+                panic!(
+                    "import direct call unary/binop tree({lhs}, {rhs}) must succeed, got {other:?}"
+                )
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_import_return_call_with_binop_arg_remains_correct() {
+    let store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+        (module
+          (func (export "step") (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "step" (func $step (param i32) (result i32)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            i32.const 3
+            i32.mul
+            return_call $step))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (input, expected) in [(0, 1), (2, 7), (9, 28)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(input)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => {
+                panic!("import return_call binop arg({input}) must succeed, got {other:?}")
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_direct_call_with_local_tee_eqz_suffix_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func $mix (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add)
+          (func (export "run") (param i32 i32 i32) (result i32)
+            (local i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            select
+            local.get 1
+            i32.const 1
+            i32.add
+            local.tee 3
+            i32.eqz
+            call $mix))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((lhs, rhs, cond), expected) in [
+        ((4, -1, 1), 5),
+        ((4, 5, 1), 4),
+        ((9, -1, 0), 0),
+        ((9, 5, 0), 5),
+    ] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![
+                WasmValue::I32(lhs),
+                WasmValue::I32(rhs),
+                WasmValue::I32(cond),
+            ]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => {
+                panic!(
+                    "direct call local_tee eqz suffix({lhs}, {rhs}, {cond}) must succeed, got {other:?}"
+                )
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_import_direct_call_with_local_tee_eqz_suffix_remains_correct() {
+    let store = Store::new();
+    let mut registry = Registry::new();
+    let host = instantiate_wat(
+        r#"
+        (module
+          (func (export "mix") (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    registry.register("host", host);
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (import "host" "mix" (func $mix (param i32 i32) (result i32)))
+          (func (export "run") (param i32 i32 i32) (result i32)
+            (local i32)
+            local.get 0
+            local.get 1
+            local.get 2
+            select
+            local.get 1
+            i32.const 1
+            i32.add
+            local.tee 3
+            i32.eqz
+            call $mix))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((lhs, rhs, cond), expected) in [
+        ((4, -1, 1), 5),
+        ((4, 5, 1), 4),
+        ((9, -1, 0), 0),
+        ((9, 5, 0), 5),
+    ] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![
+                WasmValue::I32(lhs),
+                WasmValue::I32(rhs),
+                WasmValue::I32(cond),
+            ]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => {
+                panic!(
+                    "import direct call local_tee eqz suffix({lhs}, {rhs}, {cond}) must succeed, got {other:?}"
+                )
+            }
+        }
     }
 }
 
@@ -837,6 +1211,55 @@ async fn optimizer_tail_recursive_return_call_remains_correct() {
 }
 
 #[tokio::test]
+async fn optimizer_tail_recursive_return_call_with_const_accumulator_step_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            i32.const 0
+            call 1)
+          (func (param $n i32) (param $acc i32) (result i32)
+            local.get $n
+            i32.eqz
+            if
+              local.get $acc
+              return
+            end
+            local.get $n
+            i32.const 1
+            i32.sub
+            local.get $acc
+            i32.const 2
+            i32.add
+            return_call 1))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (input, expected) in [(0, 0), (1, 2), (5, 10), (16, 32)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(input)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("tail-recursive const-step sum({input}) must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn optimizer_br_if_families_remain_correct() {
     let store = Store::new();
     let registry = Registry::new();
@@ -998,6 +1421,306 @@ async fn optimizer_spill_reused_br_if_families_remain_correct() {
             VMResult::Success(values) => {
                 assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
             }
+            other => panic!("{name} must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_numeric_local_binop_families_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "i32_sub") (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.sub)
+
+          (func (export "i32_and") (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.and)
+
+          (func (export "i64_xor") (param i64 i64) (result i64)
+            local.get 0
+            local.get 1
+            i64.xor)
+
+          (func (export "i64_shr_u") (param i64) (result i64)
+            local.get 0
+            i64.const 1
+            i64.shr_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args, expected) in [
+        (
+            "i32_sub",
+            vec![WasmValue::I32(9)],
+            ResultValue::new(vec![WasmValue::I32(8)]),
+        ),
+        (
+            "i32_and",
+            vec![WasmValue::I32(0b1011), WasmValue::I32(0b0110)],
+            ResultValue::new(vec![WasmValue::I32(0b0010)]),
+        ),
+        (
+            "i64_xor",
+            vec![WasmValue::I64(0b1010), WasmValue::I64(0b1100)],
+            ResultValue::new(vec![WasmValue::I64(0b0110)]),
+        ),
+        (
+            "i64_shr_u",
+            vec![WasmValue::I64(8)],
+            ResultValue::new(vec![WasmValue::I64(4)]),
+        ),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, expected),
+            other => panic!("{name} must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_numeric_local_float_and_compare_families_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "f32_mul") (param f32) (result f32)
+            local.get 0
+            f32.const 1.5
+            f32.mul)
+
+          (func (export "f64_div") (param f64 f64) (result f64)
+            local.get 0
+            local.get 1
+            f64.div)
+
+          (func (export "f32_nan_eq") (param f32 f32) (result i32)
+            local.get 0
+            local.get 1
+            f32.eq)
+
+          (func (export "f32_nan_ne") (param f32 f32) (result i32)
+            local.get 0
+            local.get 1
+            f32.ne)
+
+          (func (export "f64_lt_br_if") (param f64 f64) (result i32)
+            block $done
+              local.get 0
+              local.get 1
+              f64.lt
+              br_if $done
+              i32.const 11
+              return
+            end
+            i32.const 22))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args, expected) in [
+        (
+            "f32_mul",
+            vec![WasmValue::F32(3.0)],
+            ResultValue::new(vec![WasmValue::F32(4.5)]),
+        ),
+        (
+            "f64_div",
+            vec![WasmValue::F64(9.0), WasmValue::F64(2.0)],
+            ResultValue::new(vec![WasmValue::F64(4.5)]),
+        ),
+        (
+            "f32_nan_eq",
+            vec![WasmValue::F32(f32::NAN), WasmValue::F32(1.0)],
+            ResultValue::new(vec![WasmValue::I32(0)]),
+        ),
+        (
+            "f32_nan_ne",
+            vec![WasmValue::F32(f32::NAN), WasmValue::F32(1.0)],
+            ResultValue::new(vec![WasmValue::I32(1)]),
+        ),
+        (
+            "f64_lt_br_if",
+            vec![WasmValue::F64(1.0), WasmValue::F64(2.0)],
+            ResultValue::new(vec![WasmValue::I32(22)]),
+        ),
+        (
+            "f64_lt_br_if",
+            vec![WasmValue::F64(2.0), WasmValue::F64(1.0)],
+            ResultValue::new(vec![WasmValue::I32(11)]),
+        ),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, expected),
+            other => panic!("{name} must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_unary_local_families_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (func (export "i32_clz") (param i32) (result i32)
+            local.get 0
+            i32.clz)
+
+          (func (export "i64_popcnt") (param i64) (result i64)
+            local.get 0
+            i64.popcnt)
+
+          (func (export "f32_neg") (param f32) (result f32)
+            local.get 0
+            f32.neg)
+
+          (func (export "f32_nearest") (param f32) (result f32)
+            local.get 0
+            f32.nearest)
+
+          (func (export "f64_sqrt") (param f64) (result f64)
+            local.get 0
+            f64.sqrt)
+
+          (func (export "f64_nearest") (param f64) (result f64)
+            local.get 0
+            f64.nearest))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args, expected) in [
+        (
+            "i32_clz",
+            vec![WasmValue::I32(0b0001_0000)],
+            ResultValue::new(vec![WasmValue::I32(27)]),
+        ),
+        (
+            "i64_popcnt",
+            vec![WasmValue::I64(0b1011_0001)],
+            ResultValue::new(vec![WasmValue::I64(4)]),
+        ),
+        (
+            "f32_neg",
+            vec![WasmValue::F32(0.0)],
+            ResultValue::new(vec![WasmValue::F32(-0.0)]),
+        ),
+        (
+            "f32_nearest",
+            vec![WasmValue::F32(2.5)],
+            ResultValue::new(vec![WasmValue::F32(2.0)]),
+        ),
+        (
+            "f64_sqrt",
+            vec![WasmValue::F64(9.0)],
+            ResultValue::new(vec![WasmValue::F64(3.0)]),
+        ),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, expected),
+            other => panic!("{name} must succeed, got {other:?}"),
+        }
+    }
+
+    let neg_zero = run_module_function(
+        &instance,
+        &store,
+        "f32_neg",
+        &ResultValue::new(vec![WasmValue::F32(0.0)]),
+    )
+    .await;
+    match neg_zero {
+        VMResult::Success(values) => match values.iter().next() {
+            Some(WasmValue::F32(value)) => assert_eq!(value.to_bits(), (-0.0f32).to_bits()),
+            other => panic!("unexpected result: {other:?}"),
+        },
+        other => panic!("f32_neg must succeed, got {other:?}"),
+    }
+
+    let nearest_nan = run_module_function(
+        &instance,
+        &store,
+        "f64_nearest",
+        &ResultValue::new(vec![WasmValue::F64(f64::NAN)]),
+    )
+    .await;
+    match nearest_nan {
+        VMResult::Success(values) => match values.iter().next() {
+            Some(WasmValue::F64(value)) => assert!(value.is_nan()),
+            other => panic!("unexpected result: {other:?}"),
+        },
+        other => panic!("f64_nearest must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_residual_address_shape_memory_families_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+
+          (func (export "block_arg_load") (param i32) (result i32)
+            local.get 0
+            i32.const 7
+            i32.store offset=4
+            block (result i32)
+              local.get 0
+              br 0
+            end
+            i32.load offset=4)
+
+          (func (export "block_arg_store_load") (param i32 i32) (result i32)
+            block (result i32)
+              local.get 0
+              br 0
+            end
+            local.get 1
+            i32.store offset=8
+            local.get 0
+            i32.load offset=8))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args, expected) in [
+        (
+            "block_arg_load",
+            vec![WasmValue::I32(0)],
+            ResultValue::new(vec![WasmValue::I32(7)]),
+        ),
+        (
+            "block_arg_store_load",
+            vec![WasmValue::I32(16), WasmValue::I32(99)],
+            ResultValue::new(vec![WasmValue::I32(99)]),
+        ),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, expected),
             other => panic!("{name} must succeed, got {other:?}"),
         }
     }
@@ -1396,6 +2119,133 @@ async fn optimizer_preserves_block_values_in_call_indirect_and_control_operands(
                 assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
             }
             other => panic!("{name} block operand case must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_specializes_indirect_call_materializers_without_changing_abi() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (type $pick (func (param i32 i32) (result i32)))
+          (func $first (type $pick) (param i32 i32) (result i32) (local.get 0))
+          (func $second (type $pick) (param i32 i32) (result i32) (local.get 1))
+          (func $sum (type $pick) (param i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add)
+          (table funcref (elem $first $second $sum))
+
+          (func (export "call_indirect_local_const_tree") (result i32)
+            (local i32)
+            (local.set 0 (i32.const 0))
+            (call_indirect (type $pick)
+              (i32.add (i32.const 40) (i32.const 2))
+              (i32.eqz (local.get 0))
+              (i32.const 1)))
+
+          (func (export "call_indirect_suffix_partial") (result i32)
+            (call_indirect (type $pick)
+              (select (i32.const 11) (i32.const 22) (i32.const 0))
+              (i32.eqz (i32.const 0))
+              (i32.add (i32.const 0) (i32.const 1))))
+
+          (func (export "call_indirect_loop") (result i32)
+            (loop (result i32)
+              (call_indirect (type $pick)
+                (i32.const 9)
+                (i32.eqz (i32.const 0))
+                (i32.const 1))))
+
+          (func (export "return_call_indirect_eqz") (result i32)
+            (return_call_indirect (type $pick)
+              (i32.const 11)
+              (i32.eqz (i32.const 0))
+              (i32.const 1)))
+
+          (func (export "call_indirect_select_tree") (param i32 i32 i32) (result i32)
+            (local i32)
+            (call_indirect (type $pick)
+              (local.get 0)
+              (local.get 1)
+              (local.get 2)
+              select
+              (local.get 1)
+              (i32.const 1)
+              i32.add
+              local.tee 3
+              i32.eqz
+              (i32.const 2)))
+
+          (func (export "return_call_indirect_select_tree") (param i32 i32 i32) (result i32)
+            (local i32)
+            (return_call_indirect (type $pick)
+              (local.get 0)
+              (local.get 1)
+              (local.get 2)
+              select
+              (local.get 1)
+              (i32.const 1)
+              i32.add
+              local.tee 3
+              i32.eqz
+              (i32.const 2))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, expected) in [
+        ("call_indirect_local_const_tree", 1),
+        ("call_indirect_suffix_partial", 1),
+        ("call_indirect_loop", 1),
+        ("return_call_indirect_eqz", 1),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(vec![])).await;
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!("{name} indirect call relower case must succeed, got {other:?}"),
+        }
+    }
+
+    for name in [
+        "call_indirect_select_tree",
+        "return_call_indirect_select_tree",
+    ] {
+        for ((lhs, rhs, cond), expected) in [
+            ((4, -1, 1), 5),
+            ((4, 5, 1), 4),
+            ((9, -1, 0), 0),
+            ((9, 5, 0), 5),
+        ] {
+            let result = run_module_function(
+                &instance,
+                &store,
+                name,
+                &ResultValue::new(vec![
+                    WasmValue::I32(lhs),
+                    WasmValue::I32(rhs),
+                    WasmValue::I32(cond),
+                ]),
+            )
+            .await;
+
+            match result {
+                VMResult::Success(values) => {
+                    assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+                }
+                other => {
+                    panic!(
+                        "{name} indirect call select tree({lhs}, {rhs}, {cond}) must succeed, got {other:?}"
+                    )
+                }
+            }
         }
     }
 }

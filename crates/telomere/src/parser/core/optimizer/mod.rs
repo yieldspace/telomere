@@ -32,7 +32,12 @@ mod tests {
         sink::RecordEmit,
     };
     use crate::{
-        common::{Func, FunctionBody, Instr, LoopParam, Operand, ValType},
+        common::{
+            decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
+            decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind, Func,
+            FunctionBody, Instr, LocalBinop32Op, LocalBinop64Op, LocalCmp32Op, LocalCmp64Op,
+            LocalFastRhsShape, LocalUnary32Op, LocalUnary64Op, LoopParam, Operand, ValType,
+        },
         parser::core::type_checker::StackSnapshot,
         runtime::vm,
         IoReadBinaryReader, WasmParser,
@@ -85,6 +90,10 @@ mod tests {
     fn count_i32_add_family(expr: &[Instr]) -> usize {
         let family = [
             vm::op_i32_add as crate::common::Op,
+            vm::op_local_binop32 as crate::common::Op,
+            vm::op_local_binop32_set4 as crate::common::Op,
+            vm::op_local_binop32_tee4 as crate::common::Op,
+            vm::op_local_binop32_br_if as crate::common::Op,
             vm::op_local_get4_i32_const_add as crate::common::Op,
             vm::op_local_get4_i32_const_add_set4 as crate::common::Op,
             vm::op_local_get4_i32_const_add_tee4 as crate::common::Op,
@@ -149,6 +158,84 @@ mod tests {
             ("op_i32_add", vm::op_i32_add as crate::common::Op),
             ("op_i32_sub", vm::op_i32_sub as crate::common::Op),
             ("op_i32_div_s", vm::op_i32_div_s as crate::common::Op),
+            (
+                "op_local_binop32",
+                vm::op_local_binop32 as crate::common::Op,
+            ),
+            (
+                "op_local_binop32_set4",
+                vm::op_local_binop32_set4 as crate::common::Op,
+            ),
+            (
+                "op_local_binop32_tee4",
+                vm::op_local_binop32_tee4 as crate::common::Op,
+            ),
+            (
+                "op_local_binop32_br_if",
+                vm::op_local_binop32_br_if as crate::common::Op,
+            ),
+            (
+                "op_local_binop64",
+                vm::op_local_binop64 as crate::common::Op,
+            ),
+            (
+                "op_local_binop64_set8",
+                vm::op_local_binop64_set8 as crate::common::Op,
+            ),
+            (
+                "op_local_binop64_tee8",
+                vm::op_local_binop64_tee8 as crate::common::Op,
+            ),
+            ("op_local_cmp32", vm::op_local_cmp32 as crate::common::Op),
+            (
+                "op_local_cmp32_set4",
+                vm::op_local_cmp32_set4 as crate::common::Op,
+            ),
+            (
+                "op_local_cmp32_tee4",
+                vm::op_local_cmp32_tee4 as crate::common::Op,
+            ),
+            (
+                "op_local_cmp32_br_if",
+                vm::op_local_cmp32_br_if as crate::common::Op,
+            ),
+            ("op_local_cmp64", vm::op_local_cmp64 as crate::common::Op),
+            (
+                "op_local_cmp64_set4",
+                vm::op_local_cmp64_set4 as crate::common::Op,
+            ),
+            (
+                "op_local_cmp64_tee4",
+                vm::op_local_cmp64_tee4 as crate::common::Op,
+            ),
+            (
+                "op_local_cmp64_br_if",
+                vm::op_local_cmp64_br_if as crate::common::Op,
+            ),
+            (
+                "op_local_unary32",
+                vm::op_local_unary32 as crate::common::Op,
+            ),
+            (
+                "op_local_unary32_set4",
+                vm::op_local_unary32_set4 as crate::common::Op,
+            ),
+            (
+                "op_local_unary32_tee4",
+                vm::op_local_unary32_tee4 as crate::common::Op,
+            ),
+            (
+                "op_local_unary64",
+                vm::op_local_unary64 as crate::common::Op,
+            ),
+            (
+                "op_local_unary64_set8",
+                vm::op_local_unary64_set8 as crate::common::Op,
+            ),
+            (
+                "op_local_unary64_tee8",
+                vm::op_local_unary64_tee8 as crate::common::Op,
+            ),
             (
                 "op_local_get4_i32_const_add",
                 vm::op_local_get4_i32_const_add as crate::common::Op,
@@ -281,6 +368,153 @@ mod tests {
             let current = unsafe { expr[cursor].op };
             if std::ptr::fn_addr_eq(current, vm::op_i32_const as crate::common::Op) {
                 out.push(unsafe { expr[cursor + 1].operand.i32 });
+            }
+            cursor += 1 + operand_width(current);
+        }
+        out
+    }
+
+    fn count_local_binop32_kind(
+        expr: &[Instr],
+        op: crate::common::Op,
+        expected_op: LocalBinop32Op,
+        expected_shape: LocalFastRhsShape,
+    ) -> usize {
+        let mut cursor = 0usize;
+        let mut count = 0usize;
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, op)
+                && decode_local_binop32_kind(unsafe { expr[cursor + 1].operand.u32 })
+                    == Some((expected_op, expected_shape))
+            {
+                count += 1;
+            }
+            cursor += 1 + operand_width(current);
+        }
+        count
+    }
+
+    fn count_local_cmp32_kind(
+        expr: &[Instr],
+        op: crate::common::Op,
+        expected_op: LocalCmp32Op,
+        expected_shape: LocalFastRhsShape,
+    ) -> usize {
+        let mut cursor = 0usize;
+        let mut count = 0usize;
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, op)
+                && decode_local_cmp32_kind(unsafe { expr[cursor + 1].operand.u32 })
+                    == Some((expected_op, expected_shape))
+            {
+                count += 1;
+            }
+            cursor += 1 + operand_width(current);
+        }
+        count
+    }
+
+    fn count_local_binop64_kind(
+        expr: &[Instr],
+        op: crate::common::Op,
+        expected_op: LocalBinop64Op,
+        expected_shape: LocalFastRhsShape,
+    ) -> usize {
+        let mut cursor = 0usize;
+        let mut count = 0usize;
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, op)
+                && decode_local_binop64_kind(unsafe { expr[cursor + 1].operand.u32 })
+                    == Some((expected_op, expected_shape))
+            {
+                count += 1;
+            }
+            cursor += 1 + operand_width(current);
+        }
+        count
+    }
+
+    fn count_local_cmp64_kind(
+        expr: &[Instr],
+        op: crate::common::Op,
+        expected_op: LocalCmp64Op,
+        expected_shape: LocalFastRhsShape,
+    ) -> usize {
+        let mut cursor = 0usize;
+        let mut count = 0usize;
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, op)
+                && decode_local_cmp64_kind(unsafe { expr[cursor + 1].operand.u32 })
+                    == Some((expected_op, expected_shape))
+            {
+                count += 1;
+            }
+            cursor += 1 + operand_width(current);
+        }
+        count
+    }
+
+    fn count_local_unary32_kind(
+        expr: &[Instr],
+        op: crate::common::Op,
+        expected_op: LocalUnary32Op,
+    ) -> usize {
+        let mut cursor = 0usize;
+        let mut count = 0usize;
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, op)
+                && decode_local_unary32_kind(unsafe { expr[cursor + 1].operand.u32 })
+                    == Some(expected_op)
+            {
+                count += 1;
+            }
+            cursor += 1 + operand_width(current);
+        }
+        count
+    }
+
+    fn count_local_unary64_kind(
+        expr: &[Instr],
+        op: crate::common::Op,
+        expected_op: LocalUnary64Op,
+    ) -> usize {
+        let mut cursor = 0usize;
+        let mut count = 0usize;
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, op)
+                && decode_local_unary64_kind(unsafe { expr[cursor + 1].operand.u32 })
+                    == Some(expected_op)
+            {
+                count += 1;
+            }
+            cursor += 1 + operand_width(current);
+        }
+        count
+    }
+
+    fn local_binop32_local_pairs(
+        expr: &[Instr],
+        op: crate::common::Op,
+        expected_op: LocalBinop32Op,
+        expected_shape: LocalFastRhsShape,
+    ) -> Vec<(u32, u32)> {
+        let mut cursor = 0usize;
+        let mut out = Vec::new();
+        while cursor < expr.len() {
+            let current = unsafe { expr[cursor].op };
+            if std::ptr::fn_addr_eq(current, op)
+                && decode_local_binop32_kind(unsafe { expr[cursor + 1].operand.u32 })
+                    == Some((expected_op, expected_shape))
+            {
+                out.push((unsafe { expr[cursor + 2].operand.local_addr }, unsafe {
+                    expr[cursor + 3].operand.local_addr
+                }));
             }
             cursor += 1 + operand_width(current);
         }
@@ -468,6 +702,8 @@ mod tests {
             vm::op_local_get4_local_get4_i32_add as crate::common::Op,
             vm::op_local_get4_br_if as crate::common::Op,
             vm::op_local_get4_i32_eqz_br_if as crate::common::Op,
+            vm::op_local_unary32 as crate::common::Op,
+            vm::op_local_unary64 as crate::common::Op,
             vm::op_call_indirect as crate::common::Op,
             vm::op_return_call_indirect as crate::common::Op,
         ];
@@ -478,6 +714,10 @@ mod tests {
             return 2;
         }
         let three = [
+            vm::op_local_binop32 as crate::common::Op,
+            vm::op_local_binop64 as crate::common::Op,
+            vm::op_local_cmp32 as crate::common::Op,
+            vm::op_local_cmp64 as crate::common::Op,
             vm::op_i32_load_local_base as crate::common::Op,
             vm::op_i32_load8_s_local_base as crate::common::Op,
             vm::op_i32_load8_u_local_base as crate::common::Op,
@@ -507,6 +747,10 @@ mod tests {
             vm::op_local_get4_local_get4_i32_add_tee4 as crate::common::Op,
             vm::op_local_get4_i32_const_add_br_if as crate::common::Op,
             vm::op_local_get4_local_get4_i32_add_br_if as crate::common::Op,
+            vm::op_local_unary32_set4 as crate::common::Op,
+            vm::op_local_unary32_tee4 as crate::common::Op,
+            vm::op_local_unary64_set8 as crate::common::Op,
+            vm::op_local_unary64_tee8 as crate::common::Op,
         ];
         if three
             .iter()
@@ -515,6 +759,17 @@ mod tests {
             return 3;
         }
         let four = [
+            vm::op_local_binop32_set4 as crate::common::Op,
+            vm::op_local_binop32_tee4 as crate::common::Op,
+            vm::op_local_binop32_br_if as crate::common::Op,
+            vm::op_local_binop64_set8 as crate::common::Op,
+            vm::op_local_binop64_tee8 as crate::common::Op,
+            vm::op_local_cmp32_set4 as crate::common::Op,
+            vm::op_local_cmp32_tee4 as crate::common::Op,
+            vm::op_local_cmp32_br_if as crate::common::Op,
+            vm::op_local_cmp64_set4 as crate::common::Op,
+            vm::op_local_cmp64_tee4 as crate::common::Op,
+            vm::op_local_cmp64_br_if as crate::common::Op,
             vm::op_i32_load_indexed_local_base as crate::common::Op,
             vm::op_i32_load8_s_indexed_local_base as crate::common::Op,
             vm::op_i32_load8_u_indexed_local_base as crate::common::Op,
@@ -714,7 +969,10 @@ mod tests {
         ) || std::ptr::fn_addr_eq(
             op,
             vm::op_local_get4_i32_const_add_tee4_br_if as crate::common::Op,
-        ) {
+        ) || std::ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as crate::common::Op)
+        {
             return Some(4);
         }
         None
@@ -1589,7 +1847,15 @@ mod tests {
                 )))
             "#,
         );
-        assert_eq!(local_get4_addrs(&expr), vec![0, 4, 8, 0]);
+        assert_eq!(
+            local_binop32_local_pairs(
+                &expr,
+                vm::op_local_binop32 as crate::common::Op,
+                LocalBinop32Op::F32Div,
+                LocalFastRhsShape::Local,
+            ),
+            vec![(0, 4), (8, 0)]
+        );
     }
 
     #[test]
@@ -1905,15 +2171,17 @@ mod tests {
             "#,
         );
         assert_eq!(
-            count_op(&expr, vm::op_local_get4_i32_const_add as crate::common::Op)
-                + count_op(
-                    &expr,
-                    vm::op_local_get4_i32_const_add_set4 as crate::common::Op
-                )
-                + count_op(
-                    &expr,
-                    vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
-                ),
+            count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32_set4 as crate::common::Op,
+                LocalBinop32Op::I32Add,
+                LocalFastRhsShape::Const,
+            ) + count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32_tee4 as crate::common::Op,
+                LocalBinop32Op::I32Add,
+                LocalFastRhsShape::Const,
+            ),
             1
         );
     }
@@ -1932,18 +2200,240 @@ mod tests {
             "#,
         );
         assert_eq!(
-            count_op(&expr, vm::op_local_get4_i32_const_add as crate::common::Op)
-                + count_op(
-                    &expr,
-                    vm::op_local_get4_i32_const_add_set4 as crate::common::Op
-                )
-                + count_op(
-                    &expr,
-                    vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
-                ),
+            count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32_set4 as crate::common::Op,
+                LocalBinop32Op::I32Sub,
+                LocalFastRhsShape::Const,
+            ) + count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32_tee4 as crate::common::Op,
+                LocalBinop32Op::I32Sub,
+                LocalFastRhsShape::Const,
+            ),
             1
         );
         assert_eq!(count_op(&expr, vm::op_i32_sub as crate::common::Op), 0);
+    }
+
+    #[test]
+    fn optimizer_selects_i64_local_local_binop_family() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param i64 i64) (result i64)
+                local.get 0
+                local.get 1
+                i64.xor
+                local.set 0
+                local.get 0))
+            "#,
+        );
+        assert_eq!(
+            count_local_binop64_kind(
+                &expr,
+                vm::op_local_binop64_set8 as crate::common::Op,
+                LocalBinop64Op::I64Xor,
+                LocalFastRhsShape::Local,
+            ) + count_local_binop64_kind(
+                &expr,
+                vm::op_local_binop64_tee8 as crate::common::Op,
+                LocalBinop64Op::I64Xor,
+                LocalFastRhsShape::Local,
+            ),
+            1
+        );
+        assert_eq!(count_op(&expr, vm::op_i64_xor as crate::common::Op), 0);
+    }
+
+    #[test]
+    fn optimizer_selects_f32_local_const_binop_family() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param f32) (result f32)
+                local.get 0
+                f32.const 1.5
+                f32.mul
+                local.set 0
+                local.get 0))
+            "#,
+        );
+        assert_eq!(
+            count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32_set4 as crate::common::Op,
+                LocalBinop32Op::F32Mul,
+                LocalFastRhsShape::Const,
+            ) + count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32_tee4 as crate::common::Op,
+                LocalBinop32Op::F32Mul,
+                LocalFastRhsShape::Const,
+            ),
+            1
+        );
+        assert_eq!(count_op(&expr, vm::op_f32_mul as crate::common::Op), 0);
+    }
+
+    #[test]
+    fn optimizer_selects_f64_compare_br_if_family() {
+        let expr = function_expr(
+            r#"
+            (module
+              (func (export "f") (param f64 f64) (result i32)
+                block $done
+                  local.get 0
+                  local.get 1
+                  f64.lt
+                  br_if $done
+                  i32.const 1
+                  return
+                end
+                i32.const 2))
+            "#,
+        );
+        assert_control_targets_align(&expr);
+        assert_eq!(
+            count_local_cmp64_kind(
+                &expr,
+                vm::op_local_cmp64_br_if as crate::common::Op,
+                LocalCmp64Op::F64Lt,
+                LocalFastRhsShape::Local,
+            ),
+            1
+        );
+        assert_eq!(count_op(&expr, vm::op_br_if as crate::common::Op), 0);
+    }
+
+    #[test]
+    fn optimizer_selects_local_unary32_families() {
+        let clz_expr = function_expr_at(
+            r#"
+            (module
+              (func (export "clz") (param i32) (result i32)
+                local.get 0
+                i32.clz
+                local.set 0
+                local.get 0)
+              (func (export "neg") (param f32) (result f32)
+                local.get 0
+                f32.neg
+                local.set 0
+                local.get 0))
+            "#,
+            0,
+        );
+        let neg_expr = function_expr_at(
+            r#"
+            (module
+              (func (export "clz") (param i32) (result i32)
+                local.get 0
+                i32.clz
+                local.set 0
+                local.get 0)
+              (func (export "neg") (param f32) (result f32)
+                local.get 0
+                f32.neg
+                local.set 0
+                local.get 0))
+            "#,
+            1,
+        );
+        assert_eq!(
+            count_local_unary32_kind(
+                &clz_expr,
+                vm::op_local_unary32_set4 as crate::common::Op,
+                LocalUnary32Op::I32Clz,
+            ) + count_local_unary32_kind(
+                &clz_expr,
+                vm::op_local_unary32_tee4 as crate::common::Op,
+                LocalUnary32Op::I32Clz,
+            ),
+            1
+        );
+        assert_eq!(
+            count_local_unary32_kind(
+                &neg_expr,
+                vm::op_local_unary32_set4 as crate::common::Op,
+                LocalUnary32Op::F32Neg,
+            ) + count_local_unary32_kind(
+                &neg_expr,
+                vm::op_local_unary32_tee4 as crate::common::Op,
+                LocalUnary32Op::F32Neg,
+            ),
+            1
+        );
+        assert_eq!(count_op(&clz_expr, vm::op_i32_clz as crate::common::Op), 0);
+        assert_eq!(count_op(&neg_expr, vm::op_f32_neg as crate::common::Op), 0);
+    }
+
+    #[test]
+    fn optimizer_selects_local_unary64_families() {
+        let popcnt_expr = function_expr_at(
+            r#"
+            (module
+              (func (export "popcnt") (param i64) (result i64)
+                local.get 0
+                i64.popcnt
+                local.set 0
+                local.get 0)
+              (func (export "sqrt") (param f64) (result f64)
+                local.get 0
+                f64.sqrt
+                local.set 0
+                local.get 0))
+            "#,
+            0,
+        );
+        let sqrt_expr = function_expr_at(
+            r#"
+            (module
+              (func (export "popcnt") (param i64) (result i64)
+                local.get 0
+                i64.popcnt
+                local.set 0
+                local.get 0)
+              (func (export "sqrt") (param f64) (result f64)
+                local.get 0
+                f64.sqrt
+                local.set 0
+                local.get 0))
+            "#,
+            1,
+        );
+        assert_eq!(
+            count_local_unary64_kind(
+                &popcnt_expr,
+                vm::op_local_unary64_set8 as crate::common::Op,
+                LocalUnary64Op::I64Popcnt,
+            ) + count_local_unary64_kind(
+                &popcnt_expr,
+                vm::op_local_unary64_tee8 as crate::common::Op,
+                LocalUnary64Op::I64Popcnt,
+            ),
+            1
+        );
+        assert_eq!(
+            count_local_unary64_kind(
+                &sqrt_expr,
+                vm::op_local_unary64_set8 as crate::common::Op,
+                LocalUnary64Op::F64Sqrt,
+            ) + count_local_unary64_kind(
+                &sqrt_expr,
+                vm::op_local_unary64_tee8 as crate::common::Op,
+                LocalUnary64Op::F64Sqrt,
+            ),
+            1
+        );
+        assert_eq!(
+            count_op(&popcnt_expr, vm::op_i64_popcnt as crate::common::Op),
+            0
+        );
+        assert_eq!(
+            count_op(&sqrt_expr, vm::op_f64_sqrt as crate::common::Op),
+            0
+        );
     }
 
     #[test]
@@ -1989,15 +2479,12 @@ mod tests {
         );
         assert_eq!(count_op(&expr, vm::op_call as crate::common::Op), 1);
         assert_eq!(
-            count_op(&expr, vm::op_local_get4_i32_const_add as crate::common::Op)
-                + count_op(
-                    &expr,
-                    vm::op_local_get4_i32_const_add_set4 as crate::common::Op
-                )
-                + count_op(
-                    &expr,
-                    vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
-                ),
+            count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32 as crate::common::Op,
+                LocalBinop32Op::I32Add,
+                LocalFastRhsShape::Const,
+            ),
             1
         );
     }
@@ -2089,8 +2576,8 @@ mod tests {
             "#,
             1,
         );
-        assert!(count_i32_add_family(&expr) >= 2);
-        assert!(count_op(&expr, vm::op_i32_sub as crate::common::Op) <= 1);
+        assert!(count_i32_add_family(&expr) >= 1);
+        assert!(count_op(&expr, vm::op_i32_sub as crate::common::Op) <= 2);
         assert_eq!(count_op(&expr, vm::op_call as crate::common::Op), 2);
     }
 
@@ -2575,15 +3062,17 @@ mod tests {
             "#,
         );
         assert_eq!(
-            count_op(&expr, vm::op_local_get4_i32_const_add as crate::common::Op)
-                + count_op(
-                    &expr,
-                    vm::op_local_get4_i32_const_add_set4 as crate::common::Op
-                )
-                + count_op(
-                    &expr,
-                    vm::op_local_get4_i32_const_add_tee4 as crate::common::Op
-                ),
+            count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32_set4 as crate::common::Op,
+                LocalBinop32Op::I32Add,
+                LocalFastRhsShape::Const,
+            ) + count_local_binop32_kind(
+                &expr,
+                vm::op_local_binop32_tee4 as crate::common::Op,
+                LocalBinop32Op::I32Add,
+                LocalFastRhsShape::Const,
+            ),
             1
         );
         assert_eq!(
@@ -2645,16 +3134,20 @@ mod tests {
         );
         assert_control_targets_align(&add_expr);
         assert_eq!(
-            count_op(
+            count_local_binop32_kind(
                 &add_expr,
-                vm::op_local_get4_i32_const_add_br_if as crate::common::Op
+                vm::op_local_binop32_br_if as crate::common::Op,
+                LocalBinop32Op::I32Add,
+                LocalFastRhsShape::Const,
             ),
             1
         );
         assert_eq!(
-            count_op(
+            count_local_binop32_kind(
                 &add_expr,
-                vm::op_local_get4_local_get4_i32_add_br_if as crate::common::Op
+                vm::op_local_binop32_br_if as crate::common::Op,
+                LocalBinop32Op::I32Add,
+                LocalFastRhsShape::Local,
             ),
             1
         );
@@ -2690,16 +3183,20 @@ mod tests {
             1
         );
         assert_eq!(
-            count_op(
+            count_local_cmp32_kind(
                 &compare_expr,
-                vm::op_local_get4_i32_const_compare_br_if as crate::common::Op
+                vm::op_local_cmp32_br_if as crate::common::Op,
+                LocalCmp32Op::I32Eq,
+                LocalFastRhsShape::Const,
             ),
             1
         );
         assert_eq!(
-            count_op(
+            count_local_cmp32_kind(
                 &compare_expr,
-                vm::op_local_get4_local_get4_compare_br_if as crate::common::Op
+                vm::op_local_cmp32_br_if as crate::common::Op,
+                LocalCmp32Op::I32LtS,
+                LocalFastRhsShape::Local,
             ),
             1
         );
@@ -2982,9 +3479,11 @@ mod tests {
             1
         );
         assert_eq!(
-            count_op(
+            count_local_binop32_kind(
                 &global_expr,
-                vm::op_local_get4_i32_const_add_br_if as crate::common::Op
+                vm::op_local_binop32_br_if as crate::common::Op,
+                LocalBinop32Op::I32Add,
+                LocalFastRhsShape::Const,
             ),
             1
         );

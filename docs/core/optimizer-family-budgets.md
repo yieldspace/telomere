@@ -14,7 +14,7 @@ handler-layout contract used by the current optimizer implementation.
   - absolute slack: `+8 instrs`
   - acceptance rule: the packed stream must fit within `original + max(10%, 8)`
 - runtime handler count budget:
-  - current handler count baseline: `264`
+  - current handler count baseline: `285`
   - v1 ceiling: `288`
   - Phase 7 must improve layout without adding new handlers
 
@@ -23,18 +23,35 @@ handler-layout contract used by the current optimizer implementation.
 - `local/control`
   - `op_local_get4_br_if`
   - `op_local_get4_i32_eqz_br_if`
-  - `op_local_get4_i32_const_compare_br_if`
-  - `op_local_get4_local_get4_compare_br_if`
-  - `op_local_get4_i32_const_add*`
-  - `op_local_get4_local_get4_i32_add*`
+  - `op_local_get4_i32_const_add_tee4_br_if`
+  - `op_local_binop32`
+  - `op_local_binop32_set_tee4`
+  - `op_local_binop32_br_if`
+  - `op_local_binop64`
+  - `op_local_binop64_set_tee8`
+  - `op_local_unary32`
+  - `op_local_unary32_set_tee4`
+  - `op_local_unary64`
+  - `op_local_unary64_set_tee8`
+  - `op_local_cmp`
+  - `op_local_cmp_set_tee4`
+  - `op_local_cmp_br_if`
 - `memory`
   - `memory.local_base`
   - `memory.indexed_local_base`
 - `call/select`
   - `call.direct`
+    - relower canonicalizes direct-call arg materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
   - `call.return_direct`
+    - relower canonicalizes direct-return-call arg materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
+  - `call.import_direct`
+    - relower canonicalizes import direct-call arg materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
+  - `call.return_import_direct`
+    - relower canonicalizes import direct-return-call arg materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
   - `call.indirect`
+    - relower canonicalizes indirect-call arg and table-index materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
   - `call.return_indirect`
+    - relower canonicalizes indirect-return-call arg and table-index materialization, including stable slot alias, safe scalar select trees, and trailing-suffix partial apply, without adding handlers
   - `select.4`
   - `select.8`
   - `select.16`

@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 use std::ptr;
 
-use crate::common::{CallRecipeRef, Instr, Op, Operand};
+use crate::common::{
+    decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
+    decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind, CallRecipeRef,
+    Instr, LocalFastConstKind, LocalFastRhsShape, Op, Operand,
+};
 use crate::{
     common::{BlockReturn, LoopParam, MemArg},
     runtime::vm,
@@ -350,6 +354,12 @@ fn pack_operands(
 #[cold]
 #[inline(never)]
 fn pack_fused_local_control_operands(op: Op, operands: &[Operand]) -> Option<Vec<PackedOperand>> {
+    if let Some(packed) = pack_local_unary_operands(op, operands) {
+        return Some(packed);
+    }
+    if let Some(packed) = pack_local_fast_operands(op, operands) {
+        return Some(packed);
+    }
     if ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add as Op) {
         return Some(vec![
             PackedOperand::LocalAddr(unsafe { operands[0].local_addr }),
@@ -425,6 +435,134 @@ fn pack_fused_local_control_operands(op: Op, operands: &[Operand]) -> Option<Vec
             PackedOperand::LocalAddr(unsafe { operands[2].local_addr }),
             PackedOperand::JumpTarget(unsafe { operands[3].jump_addr }),
         ]);
+    }
+    None
+}
+
+#[cold]
+#[inline(never)]
+fn pack_local_unary_operands(op: Op, operands: &[Operand]) -> Option<Vec<PackedOperand>> {
+    let kind = unsafe { operands.first()?.u32 };
+    local_unary_kind_width(op, kind)?;
+    let mut out = vec![
+        PackedOperand::U32(kind),
+        PackedOperand::LocalAddr(unsafe { operands.get(1)?.local_addr }),
+    ];
+    if ptr::fn_addr_eq(op, vm::op_local_unary32_set4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_unary32_tee4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_unary64_set8 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_unary64_tee8 as Op)
+    {
+        out.push(PackedOperand::LocalAddr(unsafe {
+            operands.get(2)?.local_addr
+        }));
+    }
+    Some(out)
+}
+
+#[cold]
+#[inline(never)]
+fn pack_local_fast_operands(op: Op, operands: &[Operand]) -> Option<Vec<PackedOperand>> {
+    let kind = unsafe { operands.first()?.u32 };
+    let (rhs_shape, const_kind) = local_fast_kind_metadata(op, kind)?;
+    let mut out = vec![
+        PackedOperand::U32(kind),
+        PackedOperand::LocalAddr(unsafe { operands.get(1)?.local_addr }),
+        pack_local_fast_rhs(rhs_shape, const_kind, operands.get(2)?),
+    ];
+    if ptr::fn_addr_eq(op, vm::op_local_binop32_set4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop32_tee4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop64_set8 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop64_tee8 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp32_set4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp32_tee4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp64_set4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp64_tee4 as Op)
+    {
+        out.push(PackedOperand::LocalAddr(unsafe {
+            operands.get(3)?.local_addr
+        }));
+    } else if ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as Op)
+    {
+        out.push(PackedOperand::JumpTarget(unsafe {
+            operands.get(3)?.jump_addr
+        }));
+    }
+    Some(out)
+}
+
+#[inline(always)]
+fn pack_local_fast_rhs(
+    rhs_shape: LocalFastRhsShape,
+    const_kind: LocalFastConstKind,
+    operand: &Operand,
+) -> PackedOperand {
+    match rhs_shape {
+        LocalFastRhsShape::Local => PackedOperand::LocalAddr(unsafe { operand.local_addr }),
+        LocalFastRhsShape::Const => match const_kind {
+            LocalFastConstKind::I32 => PackedOperand::I32(unsafe { operand.i32 }),
+            LocalFastConstKind::I64 => PackedOperand::I64(unsafe { operand.i64 }),
+            LocalFastConstKind::F32 => PackedOperand::F32(unsafe { operand.f32 }),
+            LocalFastConstKind::F64 => PackedOperand::F64(unsafe { operand.f64 }),
+        },
+    }
+}
+
+#[inline(always)]
+fn local_unary_kind_width(op: Op, kind: u32) -> Option<u32> {
+    if ptr::fn_addr_eq(op, vm::op_local_unary32 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_unary32_set4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_unary32_tee4 as Op)
+    {
+        let decoded = decode_local_unary32_kind(kind)?;
+        let _ = decoded.const_kind();
+        return Some(4);
+    }
+    if ptr::fn_addr_eq(op, vm::op_local_unary64 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_unary64_set8 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_unary64_tee8 as Op)
+    {
+        let decoded = decode_local_unary64_kind(kind)?;
+        let _ = decoded.const_kind();
+        return Some(8);
+    }
+    None
+}
+
+#[inline(always)]
+fn local_fast_kind_metadata(op: Op, kind: u32) -> Option<(LocalFastRhsShape, LocalFastConstKind)> {
+    if ptr::fn_addr_eq(op, vm::op_local_binop32 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop32_set4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop32_tee4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op)
+    {
+        let (decoded, rhs_shape) = decode_local_binop32_kind(kind)?;
+        return Some((rhs_shape, decoded.const_kind()));
+    }
+    if ptr::fn_addr_eq(op, vm::op_local_binop64 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop64_set8 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop64_tee8 as Op)
+    {
+        let (decoded, rhs_shape) = decode_local_binop64_kind(kind)?;
+        return Some((rhs_shape, decoded.const_kind()));
+    }
+    if ptr::fn_addr_eq(op, vm::op_local_cmp32 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp32_set4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp32_tee4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+    {
+        let (decoded, rhs_shape) = decode_local_cmp32_kind(kind)?;
+        return Some((rhs_shape, decoded.const_kind()));
+    }
+    if ptr::fn_addr_eq(op, vm::op_local_cmp64 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp64_set4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp64_tee4 as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as Op)
+    {
+        let (decoded, rhs_shape) = decode_local_cmp64_kind(kind)?;
+        return Some((rhs_shape, decoded.const_kind()));
     }
     None
 }
@@ -547,18 +685,20 @@ pub(crate) fn verify_packed_stream(stream: &PackedOpStream) -> bool {
             return false;
         }
         if is_direct_call_op(op.op)
-            && !op
-                .operands
-                .iter()
-                .all(|operand| matches!(operand, PackedOperand::CallRecipeRef(_)))
+            && (op.operands.len() != 1
+                || !op
+                    .operands
+                    .iter()
+                    .all(|operand| matches!(operand, PackedOperand::CallRecipeRef(_))))
         {
             return false;
         }
         if is_indirect_call_op(op.op)
-            && !op
-                .operands
-                .iter()
-                .all(|operand| matches!(operand, PackedOperand::U32(_)))
+            && (op.operands.len() != 2
+                || !op
+                    .operands
+                    .iter()
+                    .all(|operand| matches!(operand, PackedOperand::U32(_))))
         {
             return false;
         }
@@ -625,6 +765,12 @@ fn verify_const_pool_operand(
 #[inline(never)]
 fn verify_fused_local_control_operands(op: &PackedOp, instr_len: u32) -> Option<bool> {
     let operands = op.operands.as_slice();
+    if let Some(valid) = verify_local_unary_operands(op) {
+        return Some(valid);
+    }
+    if let Some(valid) = verify_local_fast_operands(op, instr_len) {
+        return Some(valid);
+    }
     if ptr::fn_addr_eq(op.op, vm::op_local_get4_i32_const_add as Op) {
         return Some(matches!(
             operands,
@@ -730,6 +876,153 @@ fn verify_fused_local_control_operands(op: &PackedOp, instr_len: u32) -> Option<
 
 #[cold]
 #[inline(never)]
+fn verify_local_unary_operands(op: &PackedOp) -> Option<bool> {
+    let is_unary32 = ptr::fn_addr_eq(op.op, vm::op_local_unary32 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_unary32_set4 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_unary32_tee4 as Op);
+    let is_unary64 = ptr::fn_addr_eq(op.op, vm::op_local_unary64 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_unary64_set8 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_unary64_tee8 as Op);
+    if !is_unary32 && !is_unary64 {
+        return None;
+    }
+    let operands = op.operands.as_slice();
+    let Some(PackedOperand::U32(kind)) = operands.first() else {
+        return Some(false);
+    };
+    let Some(width) = local_unary_kind_width(op.op, *kind) else {
+        return Some(false);
+    };
+    let src_matches = matches!(operands.get(1), Some(PackedOperand::LocalAddr(_)));
+    let dst_matches = matches!(operands.get(2), Some(PackedOperand::LocalAddr(_)));
+    let expected_dst_width = matches!(
+        op.op,
+        op if ptr::fn_addr_eq(op, vm::op_local_unary32_set4 as Op)
+            || ptr::fn_addr_eq(op, vm::op_local_unary32_tee4 as Op)
+    )
+    .then_some(4)
+    .or_else(|| {
+        matches!(
+            op.op,
+            op if ptr::fn_addr_eq(op, vm::op_local_unary64_set8 as Op)
+                || ptr::fn_addr_eq(op, vm::op_local_unary64_tee8 as Op)
+        )
+        .then_some(8)
+    });
+
+    if ptr::fn_addr_eq(op.op, vm::op_local_unary32 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_unary64 as Op)
+    {
+        return Some(operands.len() == 2 && src_matches && width > 0);
+    }
+
+    if let Some(expected_dst_width) = expected_dst_width {
+        return Some(
+            operands.len() == 3 && src_matches && dst_matches && width == expected_dst_width,
+        );
+    }
+
+    Some(false)
+}
+
+#[cold]
+#[inline(never)]
+fn verify_local_fast_operands(op: &PackedOp, instr_len: u32) -> Option<bool> {
+    let operands = op.operands.as_slice();
+    let Some(PackedOperand::U32(kind)) = operands.first() else {
+        if local_fast_kind_metadata(op.op, 0).is_some() {
+            return Some(false);
+        }
+        return None;
+    };
+    let (rhs_shape, const_kind) = local_fast_kind_metadata(op.op, *kind)?;
+
+    let rhs_matches = matches_local_fast_rhs(operands.get(2)?, rhs_shape, const_kind);
+    let lhs_matches = matches!(operands.get(1), Some(PackedOperand::LocalAddr(_)));
+
+    if ptr::fn_addr_eq(op.op, vm::op_local_binop32 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_binop64 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_cmp32 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_cmp64 as Op)
+    {
+        return Some(operands.len() == 3 && lhs_matches && rhs_matches);
+    }
+
+    if ptr::fn_addr_eq(op.op, vm::op_local_binop32_set4 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_binop32_tee4 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_binop64_set8 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_binop64_tee8 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_cmp32_set4 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_cmp32_tee4 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_cmp64_set4 as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_cmp64_tee4 as Op)
+    {
+        return Some(
+            operands.len() == 4
+                && lhs_matches
+                && rhs_matches
+                && matches!(operands.get(3), Some(PackedOperand::LocalAddr(_))),
+        );
+    }
+
+    if ptr::fn_addr_eq(op.op, vm::op_local_binop32_br_if as Op) {
+        return Some(
+            operands.len() == 4
+                && lhs_matches
+                && rhs_matches
+                && const_kind == LocalFastConstKind::I32
+                && matches!(operands.get(3), Some(PackedOperand::JumpTarget(target)) if *target < instr_len),
+        );
+    }
+
+    if ptr::fn_addr_eq(op.op, vm::op_local_cmp32_br_if as Op)
+        || ptr::fn_addr_eq(op.op, vm::op_local_cmp64_br_if as Op)
+    {
+        return Some(
+            operands.len() == 4
+                && lhs_matches
+                && rhs_matches
+                && matches!(operands.get(3), Some(PackedOperand::JumpTarget(target)) if *target < instr_len),
+        );
+    }
+
+    Some(false)
+}
+
+#[inline(always)]
+fn matches_local_fast_rhs(
+    operand: &PackedOperand,
+    rhs_shape: LocalFastRhsShape,
+    const_kind: LocalFastConstKind,
+) -> bool {
+    matches!(
+        (rhs_shape, const_kind, operand),
+        (LocalFastRhsShape::Local, _, PackedOperand::LocalAddr(_))
+            | (
+                LocalFastRhsShape::Const,
+                LocalFastConstKind::I32,
+                PackedOperand::I32(_)
+            )
+            | (
+                LocalFastRhsShape::Const,
+                LocalFastConstKind::I64,
+                PackedOperand::I64(_)
+            )
+            | (
+                LocalFastRhsShape::Const,
+                LocalFastConstKind::F32,
+                PackedOperand::F32(_)
+            )
+            | (
+                LocalFastRhsShape::Const,
+                LocalFastConstKind::F64,
+                PackedOperand::F64(_)
+            )
+    )
+}
+
+#[cold]
+#[inline(never)]
 fn is_local_addr_operand_op(op: Op) -> bool {
     ptr::fn_addr_eq(op, vm::op_local_get4 as Op)
         || ptr::fn_addr_eq(op, vm::op_local_get8 as Op)
@@ -807,6 +1100,9 @@ fn jump_target_operand_index(op: Op) -> Option<usize> {
     if ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_compare_br_if as Op)
         || ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_compare_br_if as Op)
         || ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add_tee4_br_if as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+        || ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as Op)
     {
         return Some(3);
     }
@@ -1221,6 +1517,186 @@ mod tests {
     }
 
     #[test]
+    fn pack_records_types_local_fast_numeric_operands() {
+        let records = vec![
+            RecordEmit {
+                source_start: Some(1),
+                op: vm::op_local_binop64_tee8 as Op,
+                operands: vec![
+                    Operand {
+                        u32: crate::common::encode_local_binop64_kind(
+                            crate::common::LocalBinop64Op::I64Xor,
+                            crate::common::LocalFastRhsShape::Local,
+                        ),
+                    },
+                    Operand { local_addr: 8 },
+                    Operand { local_addr: 16 },
+                    Operand { local_addr: 24 },
+                ],
+            },
+            RecordEmit {
+                source_start: Some(2),
+                op: vm::op_local_cmp64_br_if as Op,
+                operands: vec![
+                    Operand {
+                        u32: crate::common::encode_local_cmp64_kind(
+                            crate::common::LocalCmp64Op::F64Lt,
+                            crate::common::LocalFastRhsShape::Const,
+                        ),
+                    },
+                    Operand { local_addr: 0 },
+                    Operand { f64: 1.5 },
+                    Operand { jump_addr: 9 },
+                ],
+            },
+        ];
+
+        let packed = pack_records(&records);
+        assert!(matches!(
+            packed.ops[0].operands.as_slice(),
+            [
+                PackedOperand::U32(kind),
+                PackedOperand::LocalAddr(8),
+                PackedOperand::LocalAddr(16),
+                PackedOperand::LocalAddr(24)
+            ] if crate::common::decode_local_binop64_kind(*kind)
+                == Some((crate::common::LocalBinop64Op::I64Xor, crate::common::LocalFastRhsShape::Local))
+        ));
+        assert!(matches!(
+            packed.ops[1].operands.as_slice(),
+            [
+                PackedOperand::U32(kind),
+                PackedOperand::LocalAddr(0),
+                PackedOperand::F64(value),
+                PackedOperand::JumpTarget(9)
+            ] if *value == 1.5
+                && crate::common::decode_local_cmp64_kind(*kind)
+                    == Some((crate::common::LocalCmp64Op::F64Lt, crate::common::LocalFastRhsShape::Const))
+        ));
+    }
+
+    #[test]
+    fn verify_packed_stream_rejects_float_binop32_br_if_kind() {
+        let stream = PackedOpStream {
+            const_pool: Vec::new(),
+            ops: vec![PackedOp {
+                source_start: None,
+                op: vm::op_local_binop32_br_if as Op,
+                operands: vec![
+                    PackedOperand::U32(crate::common::encode_local_binop32_kind(
+                        crate::common::LocalBinop32Op::F32Add,
+                        crate::common::LocalFastRhsShape::Local,
+                    )),
+                    PackedOperand::LocalAddr(0),
+                    PackedOperand::LocalAddr(4),
+                    PackedOperand::JumpTarget(7),
+                ],
+            }],
+        };
+        assert!(!verify_packed_stream(&stream));
+    }
+
+    #[test]
+    fn verify_packed_stream_rejects_local_fast_payload_mismatch() {
+        let stream = PackedOpStream {
+            const_pool: Vec::new(),
+            ops: vec![PackedOp {
+                source_start: None,
+                op: vm::op_local_cmp64 as Op,
+                operands: vec![
+                    PackedOperand::U32(crate::common::encode_local_cmp64_kind(
+                        crate::common::LocalCmp64Op::F64Lt,
+                        crate::common::LocalFastRhsShape::Const,
+                    )),
+                    PackedOperand::LocalAddr(0),
+                    PackedOperand::I64(7),
+                ],
+            }],
+        };
+        assert!(!verify_packed_stream(&stream));
+    }
+
+    #[test]
+    fn pack_records_types_local_unary_operands() {
+        let records = vec![
+            RecordEmit {
+                source_start: Some(1),
+                op: vm::op_local_unary32_tee4 as Op,
+                operands: vec![
+                    Operand {
+                        u32: crate::common::encode_local_unary32_kind(
+                            crate::common::LocalUnary32Op::F32Neg,
+                        ),
+                    },
+                    Operand { local_addr: 8 },
+                    Operand { local_addr: 12 },
+                ],
+            },
+            RecordEmit {
+                source_start: Some(2),
+                op: vm::op_local_unary64 as Op,
+                operands: vec![
+                    Operand {
+                        u32: crate::common::encode_local_unary64_kind(
+                            crate::common::LocalUnary64Op::I64Popcnt,
+                        ),
+                    },
+                    Operand { local_addr: 16 },
+                ],
+            },
+        ];
+
+        let packed = pack_records(&records);
+        assert!(matches!(
+            packed.ops[0].operands.as_slice(),
+            [
+                PackedOperand::U32(kind),
+                PackedOperand::LocalAddr(8),
+                PackedOperand::LocalAddr(12)
+            ] if crate::common::decode_local_unary32_kind(*kind)
+                == Some(crate::common::LocalUnary32Op::F32Neg)
+        ));
+        assert!(matches!(
+            packed.ops[1].operands.as_slice(),
+            [PackedOperand::U32(kind), PackedOperand::LocalAddr(16)]
+                if crate::common::decode_local_unary64_kind(*kind)
+                    == Some(crate::common::LocalUnary64Op::I64Popcnt)
+        ));
+    }
+
+    #[test]
+    fn verify_packed_stream_rejects_local_unary_payload_mismatch() {
+        let stream = PackedOpStream {
+            const_pool: Vec::new(),
+            ops: vec![PackedOp {
+                source_start: None,
+                op: vm::op_local_unary32_set4 as Op,
+                operands: vec![
+                    PackedOperand::U32(crate::common::encode_local_unary32_kind(
+                        crate::common::LocalUnary32Op::I32Clz,
+                    )),
+                    PackedOperand::LocalAddr(0),
+                    PackedOperand::JumpTarget(7),
+                ],
+            }],
+        };
+        assert!(!verify_packed_stream(&stream));
+    }
+
+    #[test]
+    fn verify_packed_stream_rejects_invalid_local_unary_kind() {
+        let stream = PackedOpStream {
+            const_pool: Vec::new(),
+            ops: vec![PackedOp {
+                source_start: None,
+                op: vm::op_local_unary64 as Op,
+                operands: vec![PackedOperand::U32(u32::MAX), PackedOperand::LocalAddr(0)],
+            }],
+        };
+        assert!(!verify_packed_stream(&stream));
+    }
+
+    #[test]
     fn verify_packed_stream_rejects_mismatched_const_pool_ref() {
         let stream = PackedOpStream {
             const_pool: vec![ConstPoolValue::I64(11)],
@@ -1228,6 +1704,32 @@ mod tests {
                 source_start: None,
                 op: vm::op_i32_const as Op,
                 operands: vec![PackedOperand::ConstPoolRef(ConstPoolRef(0))],
+            }],
+        };
+        assert!(!verify_packed_stream(&stream));
+    }
+
+    #[test]
+    fn verify_packed_stream_rejects_direct_call_without_recipe_ref() {
+        let stream = PackedOpStream {
+            const_pool: Vec::new(),
+            ops: vec![PackedOp {
+                source_start: None,
+                op: vm::op_call as Op,
+                operands: vec![PackedOperand::U32(7)],
+            }],
+        };
+        assert!(!verify_packed_stream(&stream));
+    }
+
+    #[test]
+    fn verify_packed_stream_rejects_indirect_call_with_wrong_arity() {
+        let stream = PackedOpStream {
+            const_pool: Vec::new(),
+            ops: vec![PackedOp {
+                source_start: None,
+                op: vm::op_call_indirect as Op,
+                operands: vec![PackedOperand::U32(0)],
             }],
         };
         assert!(!verify_packed_stream(&stream));

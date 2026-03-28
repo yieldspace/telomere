@@ -1,4 +1,10 @@
 use super::*;
+use crate::common::{
+    decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
+    decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind,
+    encode_local_binop32_kind, LocalBinop32Op, LocalBinop64Op, LocalCmp32Op, LocalCmp64Op,
+    LocalFastConstKind, LocalFastRhsShape, LocalUnary32Op, LocalUnary64Op,
+};
 
 #[inline(always)]
 fn local_i32(ctx: &mut ExecuteContext, addr: usize) -> i32 {
@@ -6,6 +12,345 @@ fn local_i32(ctx: &mut ExecuteContext, addr: usize) -> i32 {
         ctx.stack
             .local_u32_from_base(ctx.local_base_ptr as *const u8, addr) as i32
     }
+}
+
+#[inline(always)]
+fn local_u32_bits(ctx: &mut ExecuteContext, addr: usize) -> u32 {
+    unsafe {
+        ctx.stack
+            .local_u32_from_base(ctx.local_base_ptr as *const u8, addr)
+    }
+}
+
+#[inline(always)]
+fn local_u64_bits(ctx: &mut ExecuteContext, addr: usize) -> u64 {
+    unsafe {
+        u64::from_le(
+            (ctx.local_base_ptr as *const u8)
+                .add(addr)
+                .cast::<u64>()
+                .read_unaligned(),
+        )
+    }
+}
+
+#[inline(always)]
+fn store_local8_bits(ctx: &mut ExecuteContext, addr: usize, value: u64) {
+    unsafe {
+        ctx.local_base_ptr
+            .add(addr)
+            .cast::<u64>()
+            .write_unaligned(value.to_le());
+    }
+}
+
+#[inline(always)]
+fn local_fast_rhs_shape_name(shape: LocalFastRhsShape) -> &'static str {
+    match shape {
+        LocalFastRhsShape::Local => "local",
+        LocalFastRhsShape::Const => "const",
+    }
+}
+
+#[inline(always)]
+fn binop32_const_kind(op: LocalBinop32Op) -> LocalFastConstKind {
+    op.const_kind()
+}
+
+#[inline(always)]
+fn binop64_const_kind(op: LocalBinop64Op) -> LocalFastConstKind {
+    op.const_kind()
+}
+
+#[inline(always)]
+fn cmp32_const_kind(op: LocalCmp32Op) -> LocalFastConstKind {
+    op.const_kind()
+}
+
+#[inline(always)]
+fn cmp64_const_kind(op: LocalCmp64Op) -> LocalFastConstKind {
+    op.const_kind()
+}
+
+#[inline(always)]
+fn eval_local_unary32(op: LocalUnary32Op, src_bits: u32) -> u32 {
+    match op {
+        LocalUnary32Op::I32Clz => (src_bits as i32).leading_zeros(),
+        LocalUnary32Op::I32Ctz => (src_bits as i32).trailing_zeros(),
+        LocalUnary32Op::I32Popcnt => (src_bits as i32).count_ones(),
+        LocalUnary32Op::F32Abs => f32::from_bits(src_bits).abs().to_bits(),
+        LocalUnary32Op::F32Neg => (-f32::from_bits(src_bits)).to_bits(),
+        LocalUnary32Op::F32Sqrt => f32::from_bits(src_bits).sqrt().to_bits(),
+        LocalUnary32Op::F32Ceil => f32::from_bits(src_bits).ceil().to_bits(),
+        LocalUnary32Op::F32Floor => f32::from_bits(src_bits).floor().to_bits(),
+        LocalUnary32Op::F32Trunc => f32::from_bits(src_bits).trunc().to_bits(),
+        LocalUnary32Op::F32Nearest => f32::from_bits(src_bits).round_ties_even().to_bits(),
+    }
+}
+
+#[inline(always)]
+fn eval_local_unary64(op: LocalUnary64Op, src_bits: u64) -> u64 {
+    match op {
+        LocalUnary64Op::I64Clz => (src_bits as i64).leading_zeros() as u64,
+        LocalUnary64Op::I64Ctz => (src_bits as i64).trailing_zeros() as u64,
+        LocalUnary64Op::I64Popcnt => (src_bits as i64).count_ones() as u64,
+        LocalUnary64Op::F64Abs => f64::from_bits(src_bits).abs().to_bits(),
+        LocalUnary64Op::F64Neg => (-f64::from_bits(src_bits)).to_bits(),
+        LocalUnary64Op::F64Sqrt => f64::from_bits(src_bits).sqrt().to_bits(),
+        LocalUnary64Op::F64Ceil => f64::from_bits(src_bits).ceil().to_bits(),
+        LocalUnary64Op::F64Floor => f64::from_bits(src_bits).floor().to_bits(),
+        LocalUnary64Op::F64Trunc => f64::from_bits(src_bits).trunc().to_bits(),
+        LocalUnary64Op::F64Nearest => f64::from_bits(src_bits).round_ties_even().to_bits(),
+    }
+}
+
+#[inline(always)]
+fn binop32_allows_br_if(op: LocalBinop32Op) -> bool {
+    matches!(
+        op,
+        LocalBinop32Op::I32Add
+            | LocalBinop32Op::I32Sub
+            | LocalBinop32Op::I32Mul
+            | LocalBinop32Op::I32And
+            | LocalBinop32Op::I32Or
+            | LocalBinop32Op::I32Xor
+            | LocalBinop32Op::I32Shl
+            | LocalBinop32Op::I32ShrS
+            | LocalBinop32Op::I32ShrU
+            | LocalBinop32Op::I32Rotl
+            | LocalBinop32Op::I32Rotr
+    )
+}
+
+#[inline(always)]
+fn eval_local_binop32(op: LocalBinop32Op, lhs_bits: u32, rhs_bits: u32) -> u32 {
+    match op {
+        LocalBinop32Op::I32Add => (lhs_bits as i32).wrapping_add(rhs_bits as i32) as u32,
+        LocalBinop32Op::I32Sub => (lhs_bits as i32).wrapping_sub(rhs_bits as i32) as u32,
+        LocalBinop32Op::I32Mul => (lhs_bits as i32).wrapping_mul(rhs_bits as i32) as u32,
+        LocalBinop32Op::I32And => lhs_bits & rhs_bits,
+        LocalBinop32Op::I32Or => lhs_bits | rhs_bits,
+        LocalBinop32Op::I32Xor => lhs_bits ^ rhs_bits,
+        LocalBinop32Op::I32Shl => wasm_i32_shl(lhs_bits as i32, rhs_bits as i32) as u32,
+        LocalBinop32Op::I32ShrS => wasm_i32_shr_s(lhs_bits as i32, rhs_bits as i32) as u32,
+        LocalBinop32Op::I32ShrU => wasm_i32_shr_u(lhs_bits, rhs_bits),
+        LocalBinop32Op::I32Rotl => lhs_bits.rotate_left(rhs_bits),
+        LocalBinop32Op::I32Rotr => lhs_bits.rotate_right(rhs_bits),
+        LocalBinop32Op::F32Add => (f32::from_bits(lhs_bits) + f32::from_bits(rhs_bits)).to_bits(),
+        LocalBinop32Op::F32Sub => (f32::from_bits(lhs_bits) - f32::from_bits(rhs_bits)).to_bits(),
+        LocalBinop32Op::F32Mul => (f32::from_bits(lhs_bits) * f32::from_bits(rhs_bits)).to_bits(),
+        LocalBinop32Op::F32Div => (f32::from_bits(lhs_bits) / f32::from_bits(rhs_bits)).to_bits(),
+    }
+}
+
+#[inline(always)]
+fn eval_local_binop64(op: LocalBinop64Op, lhs_bits: u64, rhs_bits: u64) -> u64 {
+    match op {
+        LocalBinop64Op::I64Add => (lhs_bits as i64).wrapping_add(rhs_bits as i64) as u64,
+        LocalBinop64Op::I64Sub => (lhs_bits as i64).wrapping_sub(rhs_bits as i64) as u64,
+        LocalBinop64Op::I64Mul => (lhs_bits as i64).wrapping_mul(rhs_bits as i64) as u64,
+        LocalBinop64Op::I64And => lhs_bits & rhs_bits,
+        LocalBinop64Op::I64Or => lhs_bits | rhs_bits,
+        LocalBinop64Op::I64Xor => lhs_bits ^ rhs_bits,
+        LocalBinop64Op::I64Shl => wasm_i64_shl(lhs_bits as i64, rhs_bits as i64) as u64,
+        LocalBinop64Op::I64ShrS => wasm_i64_shr_s(lhs_bits as i64, rhs_bits as i64) as u64,
+        LocalBinop64Op::I64ShrU => wasm_i64_shr_u(lhs_bits, rhs_bits),
+        LocalBinop64Op::I64Rotl => lhs_bits.rotate_left(rhs_bits as u32),
+        LocalBinop64Op::I64Rotr => lhs_bits.rotate_right(rhs_bits as u32),
+        LocalBinop64Op::F64Add => (f64::from_bits(lhs_bits) + f64::from_bits(rhs_bits)).to_bits(),
+        LocalBinop64Op::F64Sub => (f64::from_bits(lhs_bits) - f64::from_bits(rhs_bits)).to_bits(),
+        LocalBinop64Op::F64Mul => (f64::from_bits(lhs_bits) * f64::from_bits(rhs_bits)).to_bits(),
+        LocalBinop64Op::F64Div => (f64::from_bits(lhs_bits) / f64::from_bits(rhs_bits)).to_bits(),
+    }
+}
+
+#[inline(always)]
+fn eval_local_cmp32(op: LocalCmp32Op, lhs_bits: u32, rhs_bits: u32) -> u32 {
+    let cond = match op {
+        LocalCmp32Op::I32Eq => lhs_bits == rhs_bits,
+        LocalCmp32Op::I32Ne => lhs_bits != rhs_bits,
+        LocalCmp32Op::I32LtS => (lhs_bits as i32) < (rhs_bits as i32),
+        LocalCmp32Op::I32LtU => lhs_bits < rhs_bits,
+        LocalCmp32Op::I32GtS => (lhs_bits as i32) > (rhs_bits as i32),
+        LocalCmp32Op::I32GtU => lhs_bits > rhs_bits,
+        LocalCmp32Op::I32LeS => (lhs_bits as i32) <= (rhs_bits as i32),
+        LocalCmp32Op::I32LeU => lhs_bits <= rhs_bits,
+        LocalCmp32Op::I32GeS => (lhs_bits as i32) >= (rhs_bits as i32),
+        LocalCmp32Op::I32GeU => lhs_bits >= rhs_bits,
+        LocalCmp32Op::F32Eq => f32::from_bits(lhs_bits) == f32::from_bits(rhs_bits),
+        LocalCmp32Op::F32Ne => f32::from_bits(lhs_bits) != f32::from_bits(rhs_bits),
+        LocalCmp32Op::F32Lt => f32::from_bits(lhs_bits) < f32::from_bits(rhs_bits),
+        LocalCmp32Op::F32Gt => f32::from_bits(lhs_bits) > f32::from_bits(rhs_bits),
+        LocalCmp32Op::F32Le => f32::from_bits(lhs_bits) <= f32::from_bits(rhs_bits),
+        LocalCmp32Op::F32Ge => f32::from_bits(lhs_bits) >= f32::from_bits(rhs_bits),
+    };
+    cond as u32
+}
+
+#[inline(always)]
+fn eval_local_cmp64(op: LocalCmp64Op, lhs_bits: u64, rhs_bits: u64) -> u32 {
+    let cond = match op {
+        LocalCmp64Op::I64Eq => lhs_bits == rhs_bits,
+        LocalCmp64Op::I64Ne => lhs_bits != rhs_bits,
+        LocalCmp64Op::I64LtS => (lhs_bits as i64) < (rhs_bits as i64),
+        LocalCmp64Op::I64LtU => lhs_bits < rhs_bits,
+        LocalCmp64Op::I64GtS => (lhs_bits as i64) > (rhs_bits as i64),
+        LocalCmp64Op::I64GtU => lhs_bits > rhs_bits,
+        LocalCmp64Op::I64LeS => (lhs_bits as i64) <= (rhs_bits as i64),
+        LocalCmp64Op::I64LeU => lhs_bits <= rhs_bits,
+        LocalCmp64Op::I64GeS => (lhs_bits as i64) >= (rhs_bits as i64),
+        LocalCmp64Op::I64GeU => lhs_bits >= rhs_bits,
+        LocalCmp64Op::F64Eq => f64::from_bits(lhs_bits) == f64::from_bits(rhs_bits),
+        LocalCmp64Op::F64Ne => f64::from_bits(lhs_bits) != f64::from_bits(rhs_bits),
+        LocalCmp64Op::F64Lt => f64::from_bits(lhs_bits) < f64::from_bits(rhs_bits),
+        LocalCmp64Op::F64Gt => f64::from_bits(lhs_bits) > f64::from_bits(rhs_bits),
+        LocalCmp64Op::F64Le => f64::from_bits(lhs_bits) <= f64::from_bits(rhs_bits),
+        LocalCmp64Op::F64Ge => f64::from_bits(lhs_bits) >= f64::from_bits(rhs_bits),
+    };
+    cond as u32
+}
+
+#[inline(always)]
+fn load_binop32_rhs(
+    tail_code: *const Instr,
+    shape: LocalFastRhsShape,
+    const_kind: LocalFastConstKind,
+    ctx: &mut ExecuteContext,
+) -> u32 {
+    match shape {
+        LocalFastRhsShape::Local => {
+            let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
+            local_u32_bits(ctx, rhs)
+        }
+        LocalFastRhsShape::Const => match const_kind {
+            LocalFastConstKind::I32 => unsafe { (*tail_code.add(2)).operand.i32 as u32 },
+            LocalFastConstKind::F32 => unsafe { (*tail_code.add(2)).operand.f32.to_bits() },
+            _ => unreachable!("invalid 32-bit const kind"),
+        },
+    }
+}
+
+#[inline(always)]
+fn load_binop64_rhs(
+    tail_code: *const Instr,
+    shape: LocalFastRhsShape,
+    const_kind: LocalFastConstKind,
+    ctx: &mut ExecuteContext,
+) -> u64 {
+    match shape {
+        LocalFastRhsShape::Local => {
+            let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
+            local_u64_bits(ctx, rhs)
+        }
+        LocalFastRhsShape::Const => match const_kind {
+            LocalFastConstKind::I64 => unsafe { (*tail_code.add(2)).operand.i64 as u64 },
+            LocalFastConstKind::F64 => unsafe { (*tail_code.add(2)).operand.f64.to_bits() },
+            _ => unreachable!("invalid 64-bit const kind"),
+        },
+    }
+}
+
+#[inline(always)]
+fn load_cmp32_rhs(
+    tail_code: *const Instr,
+    shape: LocalFastRhsShape,
+    const_kind: LocalFastConstKind,
+    ctx: &mut ExecuteContext,
+) -> u32 {
+    load_binop32_rhs(tail_code, shape, const_kind, ctx)
+}
+
+#[inline(always)]
+fn load_cmp64_rhs(
+    tail_code: *const Instr,
+    shape: LocalFastRhsShape,
+    const_kind: LocalFastConstKind,
+    ctx: &mut ExecuteContext,
+) -> u64 {
+    load_binop64_rhs(tail_code, shape, const_kind, ctx)
+}
+
+#[inline(always)]
+unsafe fn eval_binop32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
+    let kind = unsafe { (*tail_code).operand.u32 };
+    if let Some(result) = fast_i32_local_binop32(kind, tail_code, ctx) {
+        return Some(result);
+    }
+    let (op, shape) = decode_local_binop32_kind(kind)?;
+    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+    let lhs_bits = local_u32_bits(ctx, lhs);
+    let rhs_bits = load_binop32_rhs(tail_code, shape, binop32_const_kind(op), ctx);
+    Some(eval_local_binop32(op, lhs_bits, rhs_bits))
+}
+
+#[inline(always)]
+unsafe fn fast_i32_local_binop32(
+    kind: u32,
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Option<u32> {
+    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+    let lhs_value = local_u32_bits(ctx, lhs);
+
+    if kind == encode_local_binop32_kind(LocalBinop32Op::I32Add, LocalFastRhsShape::Local) {
+        let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
+        return Some(lhs_value.wrapping_add(local_u32_bits(ctx, rhs)));
+    }
+    if kind == encode_local_binop32_kind(LocalBinop32Op::I32Add, LocalFastRhsShape::Const) {
+        return Some(lhs_value.wrapping_add(unsafe { (*tail_code.add(2)).operand.i32 as u32 }));
+    }
+    if kind == encode_local_binop32_kind(LocalBinop32Op::I32Sub, LocalFastRhsShape::Local) {
+        let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
+        return Some(lhs_value.wrapping_sub(local_u32_bits(ctx, rhs)));
+    }
+    if kind == encode_local_binop32_kind(LocalBinop32Op::I32Sub, LocalFastRhsShape::Const) {
+        return Some(lhs_value.wrapping_sub(unsafe { (*tail_code.add(2)).operand.i32 as u32 }));
+    }
+    None
+}
+
+#[inline(always)]
+unsafe fn eval_binop64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u64> {
+    let kind = unsafe { (*tail_code).operand.u32 };
+    let (op, shape) = decode_local_binop64_kind(kind)?;
+    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+    let lhs_bits = local_u64_bits(ctx, lhs);
+    let rhs_bits = load_binop64_rhs(tail_code, shape, binop64_const_kind(op), ctx);
+    Some(eval_local_binop64(op, lhs_bits, rhs_bits))
+}
+
+#[inline(always)]
+unsafe fn eval_cmp32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
+    let kind = unsafe { (*tail_code).operand.u32 };
+    let (op, shape) = decode_local_cmp32_kind(kind)?;
+    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+    let lhs_bits = local_u32_bits(ctx, lhs);
+    let rhs_bits = load_cmp32_rhs(tail_code, shape, cmp32_const_kind(op), ctx);
+    Some(eval_local_cmp32(op, lhs_bits, rhs_bits))
+}
+
+#[inline(always)]
+unsafe fn eval_cmp64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
+    let kind = unsafe { (*tail_code).operand.u32 };
+    let (op, shape) = decode_local_cmp64_kind(kind)?;
+    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+    let lhs_bits = local_u64_bits(ctx, lhs);
+    let rhs_bits = load_cmp64_rhs(tail_code, shape, cmp64_const_kind(op), ctx);
+    Some(eval_local_cmp64(op, lhs_bits, rhs_bits))
+}
+
+#[inline(always)]
+unsafe fn eval_unary32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
+    let op = decode_local_unary32_kind(unsafe { (*tail_code).operand.u32 })?;
+    let src = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+    Some(eval_local_unary32(op, local_u32_bits(ctx, src)))
+}
+
+#[inline(always)]
+unsafe fn eval_unary64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u64> {
+    let op = decode_local_unary64_kind(unsafe { (*tail_code).operand.u32 })?;
+    let src = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+    Some(eval_local_unary64(op, local_u64_bits(ctx, src)))
 }
 
 #[inline(always)]
@@ -198,4 +543,208 @@ pub unsafe fn op_local_get4_i32_const_add_tee4_br_if(
         .local_set4_from_base_value(ctx.local_base_ptr, dst, cond);
     let ptr = br_if_ptr(tail_code, 3, 4, cond, ctx);
     call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_local_binop32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let result = eval_binop32_from_tail(tail_code, ctx).expect("invalid local_binop32 kind");
+    vm_try!(ctx.stack.push_u32_fast(result));
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_local_binop32_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_binop32_from_tail(tail_code, ctx).expect("invalid local_binop32 kind");
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_local_binop32_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_binop32_from_tail(tail_code, ctx).expect("invalid local_binop32 kind");
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_u32_fast(result));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_local_binop32_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let kind = (*tail_code).operand.u32;
+    let (op, shape) = decode_local_binop32_kind(kind).expect("invalid local_binop32 kind");
+    debug_assert!(
+        binop32_allows_br_if(op),
+        "unsupported br_if kind for {}",
+        local_fast_rhs_shape_name(shape)
+    );
+    let result = eval_binop32_from_tail(tail_code, ctx).expect("invalid local_binop32 kind");
+    let ptr = br_if_ptr(tail_code, 3, 4, result, ctx);
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_local_binop64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let result = eval_binop64_from_tail(tail_code, ctx).expect("invalid local_binop64 kind");
+    vm_try!(ctx.stack.push_u64_fast(result));
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_local_binop64_set8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_binop64_from_tail(tail_code, ctx).expect("invalid local_binop64 kind");
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    store_local8_bits(ctx, dst, result);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_local_binop64_tee8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_binop64_from_tail(tail_code, ctx).expect("invalid local_binop64 kind");
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_u64_fast(result));
+    store_local8_bits(ctx, dst, result);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_local_cmp32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let result = eval_cmp32_from_tail(tail_code, ctx).expect("invalid local_cmp32 kind");
+    vm_try!(ctx.stack.push_u32_fast(result));
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_local_cmp32_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_cmp32_from_tail(tail_code, ctx).expect("invalid local_cmp32 kind");
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_local_cmp32_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_cmp32_from_tail(tail_code, ctx).expect("invalid local_cmp32 kind");
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_u32_fast(result));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_local_cmp32_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_cmp32_from_tail(tail_code, ctx).expect("invalid local_cmp32 kind");
+    let ptr = br_if_ptr(tail_code, 3, 4, result, ctx);
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_local_cmp64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let result = eval_cmp64_from_tail(tail_code, ctx).expect("invalid local_cmp64 kind");
+    vm_try!(ctx.stack.push_u32_fast(result));
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_local_cmp64_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_cmp64_from_tail(tail_code, ctx).expect("invalid local_cmp64 kind");
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_local_cmp64_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_cmp64_from_tail(tail_code, ctx).expect("invalid local_cmp64 kind");
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_u32_fast(result));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 4, ctx)
+}
+
+pub unsafe fn op_local_cmp64_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_cmp64_from_tail(tail_code, ctx).expect("invalid local_cmp64 kind");
+    let ptr = br_if_ptr(tail_code, 3, 4, result, ctx);
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_local_unary32(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let result = eval_unary32_from_tail(tail_code, ctx).expect("invalid local_unary32 kind");
+    vm_try!(ctx.stack.push_u32_fast(result));
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_local_unary32_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_unary32_from_tail(tail_code, ctx).expect("invalid local_unary32 kind");
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_local_unary32_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_unary32_from_tail(tail_code, ctx).expect("invalid local_unary32 kind");
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_u32_fast(result));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_local_unary64(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let result = eval_unary64_from_tail(tail_code, ctx).expect("invalid local_unary64 kind");
+    vm_try!(ctx.stack.push_u64_fast(result));
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_local_unary64_set8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_unary64_from_tail(tail_code, ctx).expect("invalid local_unary64 kind");
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    store_local8_bits(ctx, dst, result);
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_local_unary64_tee8(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_unary64_from_tail(tail_code, ctx).expect("invalid local_unary64 kind");
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_u64_fast(result));
+    store_local8_bits(ctx, dst, result);
+    call_next(tail_code, 3, ctx)
 }

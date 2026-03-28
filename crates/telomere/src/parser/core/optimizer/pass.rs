@@ -6,7 +6,14 @@ use std::{
 };
 
 use crate::{
-    common::{CallRecipeRef, FuncIdx, FuncType, Instr, LocalsData, Op, Operand, ValType},
+    common::{
+        decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
+        decode_local_cmp64_kind, encode_local_binop32_kind, encode_local_binop64_kind,
+        encode_local_cmp32_kind, encode_local_cmp64_kind, encode_local_unary32_kind,
+        encode_local_unary64_kind, CallRecipeRef, FuncIdx, FuncType, Instr, LocalBinop32Op,
+        LocalBinop64Op, LocalCmp32Op, LocalCmp64Op, LocalFastConstKind, LocalFastRhsShape,
+        LocalUnary32Op, LocalUnary64Op, LocalsData, Op, Operand, ValType,
+    },
     runtime::vm,
 };
 
@@ -246,6 +253,82 @@ fn collect_optimizer_family_candidates(
 }
 
 fn optimizer_family_candidate(op: Op) -> Option<(OptimizerFamilyGroup, &'static str, u8)> {
+    if std::ptr::fn_addr_eq(op, vm::op_local_unary32 as Op) {
+        return Some((OptimizerFamilyGroup::LocalControl, "op_local_unary32", 1));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_unary32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary32_tee4 as Op)
+    {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_unary32_set_tee4",
+            2,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_unary64 as Op) {
+        return Some((OptimizerFamilyGroup::LocalControl, "op_local_unary64", 1));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_unary64_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary64_tee8 as Op)
+    {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_unary64_set_tee8",
+            2,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_binop32 as Op) {
+        return Some((OptimizerFamilyGroup::LocalControl, "op_local_binop32", 2));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_binop32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_tee4 as Op)
+    {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_binop32_set_tee4",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op) {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_binop32_br_if",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_binop64 as Op) {
+        return Some((OptimizerFamilyGroup::LocalControl, "op_local_binop64", 2));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_binop64_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop64_tee8 as Op)
+    {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_binop64_set_tee8",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_cmp32 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64 as Op)
+    {
+        return Some((OptimizerFamilyGroup::LocalControl, "op_local_cmp", 2));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_cmp32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_tee4 as Op)
+    {
+        return Some((
+            OptimizerFamilyGroup::LocalControl,
+            "op_local_cmp_set_tee4",
+            3,
+        ));
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as Op)
+    {
+        return Some((OptimizerFamilyGroup::LocalControl, "op_local_cmp_br_if", 3));
+    }
     if std::ptr::fn_addr_eq(op, vm::op_local_get4_br_if as Op) {
         return Some((OptimizerFamilyGroup::LocalControl, "op_local_get4_br_if", 1));
     }
@@ -797,6 +880,9 @@ fn classify_terminator_kind(op: Op) -> Option<BlockTerminatorKind> {
         return Some(BlockTerminatorKind::BrIf);
     }
     if std::ptr::fn_addr_eq(op, vm::op_local_get4_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as Op)
         || std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add_br_if as Op)
         || std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_i32_add_br_if as Op)
         || std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_eqz_br_if as Op)
@@ -831,6 +917,33 @@ fn classify_terminator_kind(op: Op) -> Option<BlockTerminatorKind> {
 }
 
 fn typed_operands_from_raw(op: Op, operands: &[Operand]) -> Vec<BlockOperand> {
+    if std::ptr::fn_addr_eq(op, vm::op_local_unary32 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary64 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary64_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary64_tee8 as Op)
+    {
+        return typed_local_unary_operands_from_raw(op, operands);
+    }
+    if std::ptr::fn_addr_eq(op, vm::op_local_binop32 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop64 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop64_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop64_tee8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as Op)
+    {
+        return typed_local_fast_operands_from_raw(op, operands);
+    }
     if std::ptr::fn_addr_eq(op, vm::op_i32_const as Op) {
         return vec![BlockOperand::I32(unsafe { operands[0].i32 })];
     }
@@ -943,6 +1056,93 @@ fn typed_operands_from_raw(op: Op, operands: &[Operand]) -> Vec<BlockOperand> {
             .collect();
     }
     operands.iter().copied().map(BlockOperand::Raw).collect()
+}
+
+fn typed_local_unary_operands_from_raw(op: Op, operands: &[Operand]) -> Vec<BlockOperand> {
+    let mut out = vec![
+        BlockOperand::U32(unsafe { operands[0].u32 }),
+        BlockOperand::LocalAddr(unsafe { operands[1].local_addr }),
+    ];
+    if std::ptr::fn_addr_eq(op, vm::op_local_unary32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary64_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_unary64_tee8 as Op)
+    {
+        out.push(BlockOperand::LocalAddr(unsafe { operands[2].local_addr }));
+    }
+    out
+}
+
+fn typed_local_fast_operands_from_raw(op: Op, operands: &[Operand]) -> Vec<BlockOperand> {
+    let (rhs_shape, const_kind) = if std::ptr::fn_addr_eq(op, vm::op_local_binop32 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op)
+    {
+        let (kind, rhs_shape) = decode_local_binop32_kind(unsafe { operands[0].u32 })
+            .expect("invalid local_binop32 kind");
+        (rhs_shape, kind.const_kind())
+    } else if std::ptr::fn_addr_eq(op, vm::op_local_binop64 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop64_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop64_tee8 as Op)
+    {
+        let (kind, rhs_shape) = decode_local_binop64_kind(unsafe { operands[0].u32 })
+            .expect("invalid local_binop64 kind");
+        (rhs_shape, kind.const_kind())
+    } else if std::ptr::fn_addr_eq(op, vm::op_local_cmp32 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+    {
+        let (kind, rhs_shape) =
+            decode_local_cmp32_kind(unsafe { operands[0].u32 }).expect("invalid local_cmp32 kind");
+        (rhs_shape, kind.const_kind())
+    } else {
+        let (kind, rhs_shape) =
+            decode_local_cmp64_kind(unsafe { operands[0].u32 }).expect("invalid local_cmp64 kind");
+        (rhs_shape, kind.const_kind())
+    };
+
+    let rhs = match rhs_shape {
+        LocalFastRhsShape::Local => BlockOperand::LocalAddr(unsafe { operands[2].local_addr }),
+        LocalFastRhsShape::Const => match const_kind {
+            LocalFastConstKind::I32 => BlockOperand::I32(unsafe { operands[2].i32 }),
+            LocalFastConstKind::I64 => BlockOperand::I64(unsafe { operands[2].i64 }),
+            LocalFastConstKind::F32 => BlockOperand::F32(unsafe { operands[2].f32 }),
+            LocalFastConstKind::F64 => BlockOperand::F64(unsafe { operands[2].f64 }),
+        },
+    };
+
+    let mut out = vec![
+        BlockOperand::U32(unsafe { operands[0].u32 }),
+        BlockOperand::LocalAddr(unsafe { operands[1].local_addr }),
+        rhs,
+    ];
+
+    if std::ptr::fn_addr_eq(op, vm::op_local_binop32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop64_set8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop64_tee8 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_tee4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_set4 as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_tee4 as Op)
+    {
+        out.push(BlockOperand::LocalAddr(unsafe { operands[3].local_addr }));
+        return out;
+    }
+
+    if std::ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as Op)
+    {
+        out.insert(
+            0,
+            BlockOperand::JumpTarget(unsafe { operands[3].jump_addr as usize }),
+        );
+    }
+
+    out
 }
 
 fn block_operand_to_raw_for_op(op: Op, operand: &BlockOperand) -> Operand {
@@ -2341,6 +2541,36 @@ struct SpecializedMemoryLowering {
     operands: Vec<BlockOperand>,
 }
 
+#[derive(Clone)]
+struct SpecializedDirectCallLowering {
+    call_source_start: Option<usize>,
+    call_op: Op,
+    call_operands: Vec<BlockOperand>,
+    specialized_arg_start: usize,
+    arg_materializers: Vec<Vec<CallMaterializer>>,
+    absorbed_ops: BTreeSet<usize>,
+}
+
+#[derive(Clone)]
+struct CallMaterializer {
+    source_start: Option<usize>,
+    op: Op,
+    operands: Vec<BlockOperand>,
+}
+
+#[derive(Clone)]
+struct MatchedCallInputMaterializer {
+    materializers: Vec<CallMaterializer>,
+    absorbed_ops: BTreeSet<usize>,
+}
+
+#[derive(Clone)]
+struct MatchedDirectCallSuffix {
+    specialized_arg_start: usize,
+    arg_materializers: Vec<Vec<CallMaterializer>>,
+    absorbed_ops: BTreeSet<usize>,
+}
+
 #[derive(Clone, Debug)]
 struct MatchedAddressLowering {
     base: LocalSlot,
@@ -2772,6 +3002,7 @@ fn match_memory_address_shape(
 ) -> Option<MatchedAddressLowering> {
     match_direct_address_shape(body, graph, spill_plan, op_idx, value)
         .or_else(|| match_offset_address_shape(body, graph, spill_plan, op_idx, value))
+        .or_else(|| match_residual_address_shape(body, graph, op_idx, value))
 }
 
 fn match_store_address_shape(
@@ -2782,9 +3013,11 @@ fn match_store_address_shape(
     address: ValueRef,
     value: ValueRef,
 ) -> Option<MatchedAddressLowering> {
-    match_store_direct_address_shape(body, graph, spill_plan, op_idx, address, value).or_else(
-        || match_store_offset_address_shape(body, graph, spill_plan, op_idx, address, value),
-    )
+    match_store_direct_address_shape(body, graph, spill_plan, op_idx, address, value)
+        .or_else(|| {
+            match_store_offset_address_shape(body, graph, spill_plan, op_idx, address, value)
+        })
+        .or_else(|| match_residual_store_address_shape(body, graph, op_idx, address, value))
 }
 
 fn match_direct_address_shape(
@@ -2920,6 +3153,51 @@ fn match_store_offset_address_shape(
     }
 }
 
+fn match_residual_address_shape(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    op_idx: usize,
+    value: ValueRef,
+) -> Option<MatchedAddressLowering> {
+    match_residual_address_shape_before(body, graph, op_idx, value)
+}
+
+fn match_residual_store_address_shape(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    op_idx: usize,
+    address: ValueRef,
+    value: ValueRef,
+) -> Option<MatchedAddressLowering> {
+    find_contiguous_trailing_value_slice(body, op_idx, value)?;
+    match_residual_address_shape_before(body, graph, op_idx, address)
+}
+
+fn match_residual_address_shape_before(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    before_idx: usize,
+    value: ValueRef,
+) -> Option<MatchedAddressLowering> {
+    if producer_op_index_before(body, value, before_idx).is_some() {
+        return None;
+    }
+    let shape = effective_slot_shape(graph, value)
+        .and_then(|shape| shape.address)
+        .or(graph[value.0].address_shape)?;
+    let base = match shape.base {
+        AddressBaseKind::EntryLocal(slot) | AddressBaseKind::SpillLocal(slot) if slot.size == 4 => {
+            slot
+        }
+        _ => return None,
+    };
+    Some(MatchedAddressLowering {
+        base,
+        offset_delta: shape.offset_delta,
+        absorbed_ops: BTreeSet::new(),
+    })
+}
+
 fn match_store_adjacent_base_and_const(
     body: &BlockBody,
     graph: &ValueGraph,
@@ -3007,6 +3285,353 @@ fn find_contiguous_trailing_value_slice(
         #[cfg(debug_assertions)]
         op_indices,
     })
+}
+
+fn build_specialized_direct_call_lowering(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    op: &BlockOp,
+) -> Option<SpecializedDirectCallLowering> {
+    if op.kind != BlockOpKind::CallLike || !call_relower_target_op(op.op) || op.inputs.is_empty() {
+        return None;
+    }
+
+    let matched = match_direct_call_trailing_suffix(graph, body, op_idx, &op.inputs)?;
+
+    Some(SpecializedDirectCallLowering {
+        call_source_start: op.source_start,
+        call_op: op.op,
+        call_operands: op.operands.clone(),
+        specialized_arg_start: matched.specialized_arg_start,
+        arg_materializers: matched.arg_materializers,
+        absorbed_ops: matched.absorbed_ops,
+    })
+}
+
+fn call_relower_target_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::op_call as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
+}
+
+fn match_direct_call_trailing_suffix(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    inputs: &[ValueRef],
+) -> Option<MatchedDirectCallSuffix> {
+    let mut matched_rev = Vec::new();
+    let mut absorbed_ops = BTreeSet::new();
+    for (arg_idx, input) in inputs.iter().copied().enumerate().rev() {
+        let Some(matched) = match_direct_call_input_materializer(graph, body, op_idx, input) else {
+            break;
+        };
+        absorbed_ops.extend(matched.absorbed_ops.iter().copied());
+        matched_rev.push((arg_idx, matched.materializers));
+    }
+    let specialized_arg_start = matched_rev.last().map(|(idx, _)| *idx)?;
+    matched_rev.reverse();
+    Some(MatchedDirectCallSuffix {
+        specialized_arg_start,
+        arg_materializers: matched_rev
+            .into_iter()
+            .map(|(_, materializers)| materializers)
+            .collect(),
+        absorbed_ops,
+    })
+}
+
+fn match_direct_call_input_materializer(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    input: ValueRef,
+) -> Option<MatchedCallInputMaterializer> {
+    let node = &graph[input.0];
+    if node.use_count > 1 || node.needs_spill || node.is_effect_result() {
+        return None;
+    }
+    if value_feeds_memory_address(body, 0, input) {
+        return None;
+    }
+    let expected_size = value_type_size(node.ty)?;
+
+    if let Some(provider_idx) = producer_op_index_before(body, input, op_idx) {
+        let provider = body.ops.get(provider_idx)?;
+        if block_op_single_result(provider) != Some(input) {
+            return None;
+        }
+        return match_direct_call_input_materializer_from_provider(
+            graph,
+            body,
+            op_idx,
+            provider,
+            provider_idx,
+            expected_size,
+        );
+    }
+
+    if let Some(operand) = scalar_const_operand_from_value(node.const_value) {
+        return Some(MatchedCallInputMaterializer {
+            materializers: vec![CallMaterializer {
+                source_start: None,
+                op: scalar_const_operand_op(operand)?,
+                operands: vec![operand],
+            }],
+            absorbed_ops: BTreeSet::new(),
+        });
+    }
+
+    if node.origin.kind != ExprOriginKind::BlockArgument && !node.is_block_argument() {
+        return None;
+    }
+
+    let src = selector_value_slot_ref_operand(graph, input, expected_size)?;
+    Some(MatchedCallInputMaterializer {
+        materializers: vec![CallMaterializer {
+            source_start: None,
+            op: local_get_op(expected_size),
+            operands: vec![src],
+        }],
+        absorbed_ops: BTreeSet::new(),
+    })
+}
+
+fn match_direct_call_input_materializer_from_provider(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    call_idx: usize,
+    provider: &BlockOp,
+    provider_idx: usize,
+    expected_size: u32,
+) -> Option<MatchedCallInputMaterializer> {
+    if provider.kind == BlockOpKind::LocalGet {
+        if local_get_reads_block_argument(graph, provider) {
+            return None;
+        }
+        if !call_materializer_motion_is_legal(body, provider_idx, call_idx, provider) {
+            return None;
+        }
+        let src = selector_any_local_get_operand(provider, expected_size)?;
+        return Some(MatchedCallInputMaterializer {
+            materializers: vec![CallMaterializer {
+                source_start: provider.source_start,
+                op: local_get_op(expected_size),
+                operands: vec![src],
+            }],
+            absorbed_ops: BTreeSet::from([provider_idx]),
+        });
+    }
+
+    if provider.kind == BlockOpKind::LocalTee {
+        if !block_op_single_use(graph, provider) {
+            return None;
+        }
+        let dst = call_materializer_local_tee_operand(provider, expected_size)?;
+        if !call_materializer_motion_is_legal(body, provider_idx, call_idx, provider) {
+            return None;
+        }
+        let input = *provider.inputs.first()?;
+        let mut matched = match_direct_call_input_materializer(graph, body, call_idx, input)?;
+        matched.materializers.push(CallMaterializer {
+            source_start: provider.source_start,
+            op: local_set_op(expected_size),
+            operands: vec![dst],
+        });
+        matched.materializers.push(CallMaterializer {
+            source_start: provider.source_start,
+            op: local_get_op(expected_size),
+            operands: vec![dst],
+        });
+        matched.absorbed_ops.insert(provider_idx);
+        return Some(matched);
+    }
+
+    if provider.kind == BlockOpKind::Const {
+        let operand = block_op_scalar_const_operand(provider)?;
+        if scalar_const_operand_size(operand)? != expected_size {
+            return None;
+        }
+        return Some(MatchedCallInputMaterializer {
+            materializers: vec![CallMaterializer {
+                source_start: provider.source_start,
+                op: scalar_const_operand_op(operand)?,
+                operands: vec![operand],
+            }],
+            absorbed_ops: BTreeSet::from([provider_idx]),
+        });
+    }
+
+    if provider.kind == BlockOpKind::Select {
+        if !block_op_single_use(graph, provider) {
+            return None;
+        }
+        if value_feeds_memory_address(body, call_idx, block_op_single_result(provider)?) {
+            return None;
+        }
+        let lhs = *provider.inputs.first()?;
+        let rhs = *provider.inputs.get(1)?;
+        let cond = *provider.inputs.get(2)?;
+        let lhs_matched = match_direct_call_input_materializer(graph, body, call_idx, lhs)?;
+        let rhs_matched = match_direct_call_input_materializer(graph, body, call_idx, rhs)?;
+        let cond_matched = match_direct_call_input_materializer(graph, body, call_idx, cond)?;
+        let (select_op, select_operands) = call_materializer_select(provider, expected_size)?;
+        let mut materializers = lhs_matched.materializers;
+        materializers.extend(rhs_matched.materializers);
+        materializers.extend(cond_matched.materializers);
+        materializers.push(CallMaterializer {
+            source_start: provider.source_start,
+            op: select_op,
+            operands: select_operands,
+        });
+        let mut absorbed_ops = lhs_matched.absorbed_ops;
+        absorbed_ops.extend(rhs_matched.absorbed_ops);
+        absorbed_ops.extend(cond_matched.absorbed_ops);
+        absorbed_ops.insert(provider_idx);
+        return Some(MatchedCallInputMaterializer {
+            materializers,
+            absorbed_ops,
+        });
+    }
+
+    if let BlockOpKind::PureUnary(pure_op) = provider.kind {
+        let unary = unary_op(pure_op)?;
+        if !block_op_single_use(graph, provider) {
+            return None;
+        }
+        if value_feeds_memory_address(body, call_idx, block_op_single_result(provider)?) {
+            return None;
+        }
+        let input = *provider.inputs.first()?;
+        let mut matched = match_direct_call_input_materializer(graph, body, call_idx, input)?;
+        matched.materializers.push(CallMaterializer {
+            source_start: provider.source_start,
+            op: unary,
+            operands: Vec::new(),
+        });
+        matched.absorbed_ops.insert(provider_idx);
+        return Some(matched);
+    }
+
+    if let BlockOpKind::PureBinary(pure_op) = provider.kind {
+        let binary = binary_op(pure_op)?;
+        if !block_op_single_use(graph, provider) {
+            return None;
+        }
+        if value_feeds_memory_address(body, call_idx, block_op_single_result(provider)?) {
+            return None;
+        }
+        let lhs = *provider.inputs.first()?;
+        let rhs = *provider.inputs.get(1)?;
+        let lhs_matched = match_direct_call_input_materializer(graph, body, call_idx, lhs)?;
+        let rhs_matched = match_direct_call_input_materializer(graph, body, call_idx, rhs)?;
+        let mut materializers = lhs_matched.materializers;
+        materializers.extend(rhs_matched.materializers);
+        materializers.push(CallMaterializer {
+            source_start: provider.source_start,
+            op: binary,
+            operands: Vec::new(),
+        });
+        let mut absorbed_ops = lhs_matched.absorbed_ops;
+        absorbed_ops.extend(rhs_matched.absorbed_ops);
+        absorbed_ops.insert(provider_idx);
+        return Some(MatchedCallInputMaterializer {
+            materializers,
+            absorbed_ops,
+        });
+    }
+
+    None
+}
+
+fn call_materializer_motion_is_legal(
+    body: &BlockBody,
+    provider_idx: usize,
+    call_idx: usize,
+    provider: &BlockOp,
+) -> bool {
+    let Some(source_slot) = call_materializer_source_slot(provider) else {
+        return false;
+    };
+    let reject_reads = provider.kind == BlockOpKind::LocalTee;
+    !body
+        .ops
+        .iter()
+        .enumerate()
+        .skip(provider_idx + 1)
+        .take(call_idx.saturating_sub(provider_idx + 1))
+        .any(|(_, op)| {
+            block_op_written_local_slot(op) == Some(source_slot)
+                || (reject_reads && block_op_local_get_slot(op) == Some(source_slot))
+        })
+}
+
+fn call_materializer_source_slot(op: &BlockOp) -> Option<LocalSlot> {
+    match op.kind {
+        BlockOpKind::LocalGet => {
+            let size = local_get_size_from_op(op.op)?;
+            match *op.operands.first()? {
+                BlockOperand::LocalAddr(addr) => Some(LocalSlot::new(addr, size)),
+                BlockOperand::SpillValue(source) => Some(symbolic_spill_slot(source, size)),
+                _ => None,
+            }
+        }
+        BlockOpKind::LocalTee => block_op_written_local_slot(op),
+        _ => None,
+    }
+}
+
+fn call_materializer_local_tee_operand(op: &BlockOp, expected_size: u32) -> Option<BlockOperand> {
+    let slot = block_op_written_local_slot(op)?;
+    (slot.size == expected_size).then_some(BlockOperand::LocalAddr(slot.addr))
+}
+
+fn call_materializer_select(op: &BlockOp, expected_size: u32) -> Option<(Op, Vec<BlockOperand>)> {
+    let size = block_op_select_size(op)?;
+    if size != expected_size {
+        return None;
+    }
+    let typed_op = match size {
+        4 => Some(vm::op_select4 as Op),
+        8 => Some(vm::op_select8 as Op),
+        16 => Some(vm::op_select16 as Op),
+        _ => None,
+    };
+    if let Some(opcode) = typed_op {
+        Some((opcode, Vec::new()))
+    } else {
+        Some((op.op, op.operands.clone()))
+    }
+}
+
+fn block_op_written_local_slot(op: &BlockOp) -> Option<LocalSlot> {
+    if !matches!(op.kind, BlockOpKind::LocalSet | BlockOpKind::LocalTee) {
+        return None;
+    }
+    let addr = match *op.operands.first()? {
+        BlockOperand::LocalAddr(addr) => addr,
+        _ => return None,
+    };
+    let size = if std::ptr::fn_addr_eq(op.op, vm::op_local_set4 as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_local_tee4 as Op)
+    {
+        4
+    } else if std::ptr::fn_addr_eq(op.op, vm::op_local_set8 as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_local_tee8 as Op)
+    {
+        8
+    } else if std::ptr::fn_addr_eq(op.op, vm::op_local_set16 as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_local_tee16 as Op)
+    {
+        16
+    } else {
+        return None;
+    };
+    Some(LocalSlot::new(addr, size))
 }
 
 fn collect_trailing_value_ops(
@@ -3132,9 +3757,20 @@ fn relower_block_body(
             continue;
         }
 
-        let lowered = if let Some(spec) =
-            build_specialized_local_set_tee_lowering(graph, body, op_idx, op)
-                .or_else(|| build_specialized_local_root_lowering(graph, body, op_idx, op))
+        let lowered_ops = if let Some(spec) =
+            build_specialized_direct_call_lowering(graph, body, op_idx, op)
+        {
+            debug_assert!(verify_specialized_direct_call_lowering(
+                graph, body, op_idx, &spec
+            ));
+            debug_assert!(spec
+                .absorbed_ops
+                .iter()
+                .all(|absorbed_idx| !skipped_ops.contains(absorbed_idx)));
+            skipped_ops.extend(spec.absorbed_ops.iter().copied());
+            relower_specialized_direct_call_ops(&spec, spill_plan)
+        } else if let Some(spec) = build_specialized_local_set_tee_lowering(graph, body, op_idx, op)
+            .or_else(|| build_specialized_local_root_lowering(graph, body, op_idx, op))
         {
             debug_assert!(verify_specialized_local_control_lowering(body, &spec));
             debug_assert!(spec
@@ -3142,7 +3778,7 @@ fn relower_block_body(
                 .iter()
                 .all(|absorbed_idx| !skipped_ops.contains(absorbed_idx)));
             skipped_ops.extend(spec.absorbed_ops.iter().copied());
-            relower_specialized_local_control_op(&spec, spill_plan)
+            vec![relower_specialized_local_control_op(&spec, spill_plan)]
         } else if let Some((spec, absorbed_ops)) =
             build_specialized_memory_lowering(body, graph, spill_plan, op_idx, op)
         {
@@ -3151,13 +3787,13 @@ fn relower_block_body(
                 .iter()
                 .all(|absorbed_idx| !skipped_ops.contains(absorbed_idx)));
             skipped_ops.extend(absorbed_ops);
-            pack_emitted_op(
+            vec![pack_emitted_op(
                 op.source_start,
                 spec.op,
                 block_operands_to_raw_with_spills_for_op(spec.op, &spec.operands, spill_plan),
-            )
+            )]
         } else {
-            relower_block_op(op, spill_plan)
+            vec![relower_block_op(op, spill_plan)]
         };
 
         if let Some(slot) = spill_slot_for_effect_result(graph, op, spill_plan) {
@@ -3169,7 +3805,7 @@ fn relower_block_body(
                 }],
             ));
         }
-        ops_rev.push(lowered);
+        ops_rev.extend(lowered_ops.into_iter().rev());
     }
 
     ops_rev.reverse();
@@ -3189,6 +3825,33 @@ fn relower_specialized_local_control_op(
         spec.op,
         block_operands_to_raw_with_spills_for_op(spec.op, &spec.operands, spill_plan),
     )
+}
+
+fn relower_specialized_direct_call_ops(
+    spec: &SpecializedDirectCallLowering,
+    spill_plan: &EffectResultSpillPlan,
+) -> Vec<PackedOp> {
+    let materializer_count = spec.arg_materializers.iter().map(Vec::len).sum::<usize>();
+    let mut out = Vec::with_capacity(materializer_count + 1);
+    for arg_materializers in &spec.arg_materializers {
+        for materializer in arg_materializers {
+            out.push(pack_emitted_op(
+                materializer.source_start,
+                materializer.op,
+                block_operands_to_raw_with_spills_for_op(
+                    materializer.op,
+                    &materializer.operands,
+                    spill_plan,
+                ),
+            ));
+        }
+    }
+    out.push(pack_emitted_op(
+        spec.call_source_start,
+        spec.call_op,
+        block_operands_to_raw_with_spills_for_op(spec.call_op, &spec.call_operands, spill_plan),
+    ));
+    out
 }
 
 fn relower_specialized_local_control_terminator(
@@ -3365,6 +4028,88 @@ fn verify_specialized_local_control_lowering(
     true
 }
 
+fn verify_specialized_direct_call_lowering(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    spec: &SpecializedDirectCallLowering,
+) -> bool {
+    let Some(op) = body.ops.get(op_idx) else {
+        return false;
+    };
+    if op.kind != BlockOpKind::CallLike
+        || !call_relower_target_op(op.op)
+        || !std::ptr::fn_addr_eq(spec.call_op, op.op)
+        || spec.call_source_start != op.source_start
+        || spec.call_operands.len() != op.operands.len()
+        || spec.specialized_arg_start > op.inputs.len()
+        || spec.specialized_arg_start + spec.arg_materializers.len() != op.inputs.len()
+    {
+        return false;
+    }
+    if !spec
+        .call_operands
+        .iter()
+        .zip(&op.operands)
+        .all(|(lhs, rhs)| block_operand_eq(*lhs, *rhs))
+    {
+        return false;
+    }
+
+    let Some(expected) = match_direct_call_trailing_suffix(graph, body, op_idx, &op.inputs) else {
+        return false;
+    };
+    if spec.specialized_arg_start != expected.specialized_arg_start
+        || spec.arg_materializers.len() != expected.arg_materializers.len()
+    {
+        return false;
+    }
+    for (lhs, rhs) in spec
+        .arg_materializers
+        .iter()
+        .zip(&expected.arg_materializers)
+    {
+        if !call_materializer_seq_eq(lhs, rhs) {
+            return false;
+        }
+    }
+    expected.absorbed_ops == spec.absorbed_ops
+}
+
+fn call_materializer_seq_eq(lhs: &[CallMaterializer], rhs: &[CallMaterializer]) -> bool {
+    lhs.len() == rhs.len()
+        && lhs
+            .iter()
+            .zip(rhs)
+            .all(|(lhs, rhs)| call_materializer_eq(lhs, rhs))
+}
+
+fn call_materializer_eq(lhs: &CallMaterializer, rhs: &CallMaterializer) -> bool {
+    lhs.source_start == rhs.source_start
+        && std::ptr::fn_addr_eq(lhs.op, rhs.op)
+        && lhs.operands.len() == rhs.operands.len()
+        && lhs
+            .operands
+            .iter()
+            .zip(&rhs.operands)
+            .all(|(lhs, rhs)| block_operand_eq(*lhs, *rhs))
+}
+
+fn block_operand_eq(lhs: BlockOperand, rhs: BlockOperand) -> bool {
+    match (lhs, rhs) {
+        (BlockOperand::I32(lhs), BlockOperand::I32(rhs)) => lhs == rhs,
+        (BlockOperand::I64(lhs), BlockOperand::I64(rhs)) => lhs == rhs,
+        (BlockOperand::F32(lhs), BlockOperand::F32(rhs)) => lhs.to_bits() == rhs.to_bits(),
+        (BlockOperand::F64(lhs), BlockOperand::F64(rhs)) => lhs.to_bits() == rhs.to_bits(),
+        (BlockOperand::U32(lhs), BlockOperand::U32(rhs)) => lhs == rhs,
+        (BlockOperand::LocalAddr(lhs), BlockOperand::LocalAddr(rhs)) => lhs == rhs,
+        (BlockOperand::SpillValue(lhs), BlockOperand::SpillValue(rhs)) => lhs == rhs,
+        (BlockOperand::JumpTarget(lhs), BlockOperand::JumpTarget(rhs)) => lhs == rhs,
+        (BlockOperand::Raw(lhs), BlockOperand::Raw(rhs)) => unsafe { lhs.encoded == rhs.encoded },
+        _ => false,
+    }
+}
+
 #[cfg(debug_assertions)]
 fn same_memarg(lhs: Option<crate::common::MemArg>, rhs: Option<crate::common::MemArg>) -> bool {
     match (lhs, rhs) {
@@ -3427,6 +4172,33 @@ fn terminator_operands_to_raw_with_spills(
     terminator: &BlockTerminator,
     spill_plan: &EffectResultSpillPlan,
 ) -> Vec<Operand> {
+    if std::ptr::fn_addr_eq(terminator.op, vm::op_local_binop32_br_if as Op)
+        || std::ptr::fn_addr_eq(terminator.op, vm::op_local_cmp32_br_if as Op)
+        || std::ptr::fn_addr_eq(terminator.op, vm::op_local_cmp64_br_if as Op)
+    {
+        return vec![
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[1],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[2],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[3],
+                spill_plan,
+            ),
+            block_operand_to_raw_with_spills_for_op(
+                terminator.op,
+                &terminator.operands[0],
+                spill_plan,
+            ),
+        ];
+    }
     if std::ptr::fn_addr_eq(terminator.op, vm::op_local_get4_br_if as Op) {
         return vec![
             block_operand_to_raw_with_spills_for_op(
@@ -6286,6 +7058,46 @@ fn block_op_i32_const(op: &BlockOp) -> Option<i32> {
     })?
 }
 
+fn block_op_scalar_const_operand(op: &BlockOp) -> Option<BlockOperand> {
+    if op.kind != BlockOpKind::Const {
+        return None;
+    }
+    match *op.operands.first()? {
+        operand @ (BlockOperand::I32(_)
+        | BlockOperand::I64(_)
+        | BlockOperand::F32(_)
+        | BlockOperand::F64(_)) => Some(operand),
+        _ => None,
+    }
+}
+
+fn scalar_const_operand_from_value(value: Option<ConstValue>) -> Option<BlockOperand> {
+    match value? {
+        ConstValue::I32(value) => Some(BlockOperand::I32(value)),
+        ConstValue::I64(value) => Some(BlockOperand::I64(value)),
+        ConstValue::F32(value) => Some(BlockOperand::F32(value)),
+        ConstValue::F64(value) => Some(BlockOperand::F64(value)),
+    }
+}
+
+fn scalar_const_operand_size(operand: BlockOperand) -> Option<u32> {
+    match operand {
+        BlockOperand::I32(_) | BlockOperand::F32(_) => Some(4),
+        BlockOperand::I64(_) | BlockOperand::F64(_) => Some(8),
+        _ => None,
+    }
+}
+
+fn scalar_const_operand_op(operand: BlockOperand) -> Option<Op> {
+    match operand {
+        BlockOperand::I32(_) => Some(vm::op_i32_const as Op),
+        BlockOperand::I64(_) => Some(vm::op_i64_const as Op),
+        BlockOperand::F32(_) => Some(vm::op_f32_const as Op),
+        BlockOperand::F64(_) => Some(vm::op_f64_const as Op),
+        _ => None,
+    }
+}
+
 fn licm_origin_values(graph: &ValueGraph) -> HashMap<ExprOrigin, ValueRef> {
     let mut origin_values = HashMap::new();
     for (expr_idx, node) in graph.nodes.iter().enumerate() {
@@ -6417,6 +7229,22 @@ fn build_specialized_local_root_lowering(
     if next_entry_is_barrier(body, op_idx + 1) {
         return None;
     }
+    if let Some((matched, _root_value, provider_idx)) =
+        match_unary_selector_root_shape(graph, body, op_idx, op_idx + 1)
+    {
+        let absorbed_ops = provider_idx.into_iter().collect();
+        let source_start = provider_idx
+            .and_then(|idx| body.ops.get(idx))
+            .and_then(|provider| provider.source_start)
+            .or(op.source_start);
+        return Some(SpecializedLocalControlLowering {
+            source_start,
+            op: matched.kind.root_op(),
+            operands: unary_root_operands(matched),
+            absorbed_ops,
+            consumer_after_idx: op_idx + 1,
+        });
+    }
     let start_idx = op_idx.checked_sub(2)?;
     if body.ops[start_idx..start_idx + 2]
         .iter()
@@ -6424,14 +7252,20 @@ fn build_specialized_local_root_lowering(
     {
         return None;
     }
-    let (matched, _) = match_selector_root_shape(graph, body, start_idx, op_idx + 1)?;
-    let (specialized_op, operands) = match matched {
-        SelectorRootMatch::LocalConstAdd { base, imm } => (
-            vm::op_local_get4_i32_const_add as Op,
-            vec![base, BlockOperand::I32(imm)],
-        ),
-        SelectorRootMatch::LocalLocalAdd { lhs, rhs } => {
-            (vm::op_local_get4_local_get4_i32_add as Op, vec![lhs, rhs])
+    let (specialized_op, operands) = if let Some((matched, _)) =
+        match_numeric_selector_root_shape(graph, body, start_idx, op_idx + 1)
+    {
+        (numeric_root_opcode(matched), numeric_root_operands(matched))
+    } else {
+        let (matched, _) = match_selector_root_shape(graph, body, start_idx, op_idx + 1)?;
+        match matched {
+            SelectorRootMatch::LocalConstAdd { base, imm } => (
+                vm::op_local_get4_i32_const_add as Op,
+                vec![base, BlockOperand::I32(imm)],
+            ),
+            SelectorRootMatch::LocalLocalAdd { lhs, rhs } => {
+                (vm::op_local_get4_local_get4_i32_add as Op, vec![lhs, rhs])
+            }
         }
     };
     Some(SpecializedLocalControlLowering {
@@ -6465,6 +7299,38 @@ fn build_specialized_local_set_tee_lowering(
     {
         return None;
     }
+    let input = *op.inputs.first()?;
+    if let Some(root_idx) = op_idx.checked_sub(1) {
+        if let Some((matched, root_value, provider_idx)) =
+            match_unary_selector_root_shape(graph, body, root_idx, op_idx + 1)
+        {
+            if root_value == input && !value_used_after(body, op_idx + 1, root_value) {
+                let dst = *op.operands.first()?;
+                let mut operands = unary_root_operands(matched);
+                operands.push(dst);
+                let mut absorbed_ops = BTreeSet::from([root_idx]);
+                if let Some(provider_idx) = provider_idx {
+                    absorbed_ops.insert(provider_idx);
+                }
+                let source_start = provider_idx
+                    .and_then(|idx| body.ops.get(idx))
+                    .and_then(|provider| provider.source_start)
+                    .or_else(|| body.ops.get(root_idx).and_then(|root| root.source_start))
+                    .or(op.source_start);
+                return Some(SpecializedLocalControlLowering {
+                    source_start,
+                    op: match op.kind {
+                        BlockOpKind::LocalSet => matched.kind.set_op(),
+                        BlockOpKind::LocalTee => matched.kind.tee_op(),
+                        _ => unreachable!("checked above"),
+                    },
+                    operands,
+                    absorbed_ops,
+                    consumer_after_idx: op_idx + 1,
+                });
+            }
+        }
+    }
     let start_idx = op_idx.checked_sub(3)?;
     if body.ops[start_idx..start_idx + 2]
         .iter()
@@ -6472,8 +7338,28 @@ fn build_specialized_local_set_tee_lowering(
     {
         return None;
     }
-    let input = *op.inputs.first()?;
     let root_op = &body.ops[start_idx + 2];
+    if let Some((matched, root_value)) =
+        match_numeric_selector_root_shape(graph, body, start_idx, op_idx + 1)
+    {
+        if root_value == input && !value_used_after(body, op_idx + 1, root_value) {
+            let dst = *op.operands.first()?;
+            let specialized_op = numeric_set_tee_opcode(matched.kind, op.kind)?;
+            let mut operands = numeric_root_operands(matched);
+            operands.push(dst);
+            return Some(SpecializedLocalControlLowering {
+                source_start: body
+                    .ops
+                    .get(start_idx)
+                    .and_then(|provider| provider.source_start)
+                    .or(op.source_start),
+                op: specialized_op,
+                operands,
+                absorbed_ops: absorbed_ops_range(start_idx, op_idx),
+                consumer_after_idx: op_idx + 1,
+            });
+        }
+    }
     let matched = match_selector_root_shape(graph, body, start_idx, op_idx + 1)
         .and_then(|(matched, root_value)| {
             (root_value == input && !value_used_after(body, op_idx + 1, root_value))
@@ -6559,6 +7445,116 @@ fn absorbed_ops_range(start_idx: usize, end_exclusive: usize) -> BTreeSet<usize>
     (start_idx..end_exclusive).collect()
 }
 
+fn numeric_rhs_shape(rhs: BlockOperand) -> LocalFastRhsShape {
+    match rhs {
+        BlockOperand::LocalAddr(_) | BlockOperand::SpillValue(_) => LocalFastRhsShape::Local,
+        BlockOperand::I32(_)
+        | BlockOperand::I64(_)
+        | BlockOperand::F32(_)
+        | BlockOperand::F64(_) => LocalFastRhsShape::Const,
+        _ => unreachable!("unsupported numeric rhs operand"),
+    }
+}
+
+fn numeric_root_operands(matched: NumericSelectorRootMatch) -> Vec<BlockOperand> {
+    vec![
+        BlockOperand::U32(matched.kind.encode_kind(numeric_rhs_shape(matched.rhs))),
+        matched.lhs,
+        matched.rhs,
+    ]
+}
+
+fn numeric_root_opcode(matched: NumericSelectorRootMatch) -> Op {
+    matched.kind.root_op()
+}
+
+fn numeric_set_tee_opcode(kind: NumericSelectorRootKind, op_kind: BlockOpKind) -> Option<Op> {
+    match op_kind {
+        BlockOpKind::LocalSet => Some(kind.set_op()),
+        BlockOpKind::LocalTee => Some(kind.tee_op()),
+        _ => None,
+    }
+}
+
+fn unary_root_operands(matched: UnarySelectorRootMatch) -> Vec<BlockOperand> {
+    vec![BlockOperand::U32(matched.kind.encode_kind()), matched.src]
+}
+
+#[derive(Clone, Copy)]
+enum UnarySelectorRootKind {
+    Unary32(LocalUnary32Op),
+    Unary64(LocalUnary64Op),
+}
+
+impl UnarySelectorRootKind {
+    fn from_pure_op(op: PureOpKind) -> Option<Self> {
+        Some(match op {
+            PureOpKind::I32Clz => Self::Unary32(LocalUnary32Op::I32Clz),
+            PureOpKind::I32Ctz => Self::Unary32(LocalUnary32Op::I32Ctz),
+            PureOpKind::I32Popcnt => Self::Unary32(LocalUnary32Op::I32Popcnt),
+            PureOpKind::I64Clz => Self::Unary64(LocalUnary64Op::I64Clz),
+            PureOpKind::I64Ctz => Self::Unary64(LocalUnary64Op::I64Ctz),
+            PureOpKind::I64Popcnt => Self::Unary64(LocalUnary64Op::I64Popcnt),
+            PureOpKind::F32Abs => Self::Unary32(LocalUnary32Op::F32Abs),
+            PureOpKind::F32Neg => Self::Unary32(LocalUnary32Op::F32Neg),
+            PureOpKind::F32Sqrt => Self::Unary32(LocalUnary32Op::F32Sqrt),
+            PureOpKind::F32Ceil => Self::Unary32(LocalUnary32Op::F32Ceil),
+            PureOpKind::F32Floor => Self::Unary32(LocalUnary32Op::F32Floor),
+            PureOpKind::F32Trunc => Self::Unary32(LocalUnary32Op::F32Trunc),
+            PureOpKind::F32Nearest => Self::Unary32(LocalUnary32Op::F32Nearest),
+            PureOpKind::F64Abs => Self::Unary64(LocalUnary64Op::F64Abs),
+            PureOpKind::F64Neg => Self::Unary64(LocalUnary64Op::F64Neg),
+            PureOpKind::F64Sqrt => Self::Unary64(LocalUnary64Op::F64Sqrt),
+            PureOpKind::F64Ceil => Self::Unary64(LocalUnary64Op::F64Ceil),
+            PureOpKind::F64Floor => Self::Unary64(LocalUnary64Op::F64Floor),
+            PureOpKind::F64Trunc => Self::Unary64(LocalUnary64Op::F64Trunc),
+            PureOpKind::F64Nearest => Self::Unary64(LocalUnary64Op::F64Nearest),
+            _ => return None,
+        })
+    }
+
+    const fn input_size(self) -> u32 {
+        match self {
+            Self::Unary32(_) => 4,
+            Self::Unary64(_) => 8,
+        }
+    }
+
+    fn encode_kind(self) -> u32 {
+        match self {
+            Self::Unary32(op) => encode_local_unary32_kind(op),
+            Self::Unary64(op) => encode_local_unary64_kind(op),
+        }
+    }
+
+    const fn root_op(self) -> Op {
+        match self {
+            Self::Unary32(_) => vm::op_local_unary32 as Op,
+            Self::Unary64(_) => vm::op_local_unary64 as Op,
+        }
+    }
+
+    const fn set_op(self) -> Op {
+        match self {
+            Self::Unary32(_) => vm::op_local_unary32_set4 as Op,
+            Self::Unary64(_) => vm::op_local_unary64_set8 as Op,
+        }
+    }
+
+    const fn tee_op(self) -> Op {
+        match self {
+            Self::Unary32(_) => vm::op_local_unary32_tee4 as Op,
+            Self::Unary64(_) => vm::op_local_unary64_tee8 as Op,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct UnarySelectorRootMatch {
+    kind: UnarySelectorRootKind,
+    src: BlockOperand,
+}
+
 #[derive(Clone, Copy)]
 enum SelectorRootMatch {
     LocalConstAdd {
@@ -6586,6 +7582,296 @@ enum SelectorCompareMatch {
         rhs: BlockOperand,
         cmp_kind: u32,
     },
+}
+
+#[derive(Clone, Copy)]
+enum NumericSelectorRootKind {
+    Binop32(LocalBinop32Op),
+    Binop64(LocalBinop64Op),
+    Cmp32(LocalCmp32Op),
+    Cmp64(LocalCmp64Op),
+}
+
+impl NumericSelectorRootKind {
+    fn from_pure_op(op: PureOpKind) -> Option<Self> {
+        Some(match op {
+            PureOpKind::I32Add => Self::Binop32(LocalBinop32Op::I32Add),
+            PureOpKind::I32Sub => Self::Binop32(LocalBinop32Op::I32Sub),
+            PureOpKind::I32Mul => Self::Binop32(LocalBinop32Op::I32Mul),
+            PureOpKind::I32And => Self::Binop32(LocalBinop32Op::I32And),
+            PureOpKind::I32Or => Self::Binop32(LocalBinop32Op::I32Or),
+            PureOpKind::I32Xor => Self::Binop32(LocalBinop32Op::I32Xor),
+            PureOpKind::I32Shl => Self::Binop32(LocalBinop32Op::I32Shl),
+            PureOpKind::I32ShrS => Self::Binop32(LocalBinop32Op::I32ShrS),
+            PureOpKind::I32ShrU => Self::Binop32(LocalBinop32Op::I32ShrU),
+            PureOpKind::I32Rotl => Self::Binop32(LocalBinop32Op::I32Rotl),
+            PureOpKind::I32Rotr => Self::Binop32(LocalBinop32Op::I32Rotr),
+            PureOpKind::I64Add => Self::Binop64(LocalBinop64Op::I64Add),
+            PureOpKind::I64Sub => Self::Binop64(LocalBinop64Op::I64Sub),
+            PureOpKind::I64Mul => Self::Binop64(LocalBinop64Op::I64Mul),
+            PureOpKind::I64And => Self::Binop64(LocalBinop64Op::I64And),
+            PureOpKind::I64Or => Self::Binop64(LocalBinop64Op::I64Or),
+            PureOpKind::I64Xor => Self::Binop64(LocalBinop64Op::I64Xor),
+            PureOpKind::I64Shl => Self::Binop64(LocalBinop64Op::I64Shl),
+            PureOpKind::I64ShrS => Self::Binop64(LocalBinop64Op::I64ShrS),
+            PureOpKind::I64ShrU => Self::Binop64(LocalBinop64Op::I64ShrU),
+            PureOpKind::I64Rotl => Self::Binop64(LocalBinop64Op::I64Rotl),
+            PureOpKind::I64Rotr => Self::Binop64(LocalBinop64Op::I64Rotr),
+            PureOpKind::F32Add => Self::Binop32(LocalBinop32Op::F32Add),
+            PureOpKind::F32Sub => Self::Binop32(LocalBinop32Op::F32Sub),
+            PureOpKind::F32Mul => Self::Binop32(LocalBinop32Op::F32Mul),
+            PureOpKind::F32Div => Self::Binop32(LocalBinop32Op::F32Div),
+            PureOpKind::F64Add => Self::Binop64(LocalBinop64Op::F64Add),
+            PureOpKind::F64Sub => Self::Binop64(LocalBinop64Op::F64Sub),
+            PureOpKind::F64Mul => Self::Binop64(LocalBinop64Op::F64Mul),
+            PureOpKind::F64Div => Self::Binop64(LocalBinop64Op::F64Div),
+            PureOpKind::I32Eq => Self::Cmp32(LocalCmp32Op::I32Eq),
+            PureOpKind::I32Ne => Self::Cmp32(LocalCmp32Op::I32Ne),
+            PureOpKind::I32LtS => Self::Cmp32(LocalCmp32Op::I32LtS),
+            PureOpKind::I32LtU => Self::Cmp32(LocalCmp32Op::I32LtU),
+            PureOpKind::I32GtS => Self::Cmp32(LocalCmp32Op::I32GtS),
+            PureOpKind::I32GtU => Self::Cmp32(LocalCmp32Op::I32GtU),
+            PureOpKind::I32LeS => Self::Cmp32(LocalCmp32Op::I32LeS),
+            PureOpKind::I32LeU => Self::Cmp32(LocalCmp32Op::I32LeU),
+            PureOpKind::I32GeS => Self::Cmp32(LocalCmp32Op::I32GeS),
+            PureOpKind::I32GeU => Self::Cmp32(LocalCmp32Op::I32GeU),
+            PureOpKind::I64Eq => Self::Cmp64(LocalCmp64Op::I64Eq),
+            PureOpKind::I64Ne => Self::Cmp64(LocalCmp64Op::I64Ne),
+            PureOpKind::I64LtS => Self::Cmp64(LocalCmp64Op::I64LtS),
+            PureOpKind::I64LtU => Self::Cmp64(LocalCmp64Op::I64LtU),
+            PureOpKind::I64GtS => Self::Cmp64(LocalCmp64Op::I64GtS),
+            PureOpKind::I64GtU => Self::Cmp64(LocalCmp64Op::I64GtU),
+            PureOpKind::I64LeS => Self::Cmp64(LocalCmp64Op::I64LeS),
+            PureOpKind::I64LeU => Self::Cmp64(LocalCmp64Op::I64LeU),
+            PureOpKind::I64GeS => Self::Cmp64(LocalCmp64Op::I64GeS),
+            PureOpKind::I64GeU => Self::Cmp64(LocalCmp64Op::I64GeU),
+            PureOpKind::F32Eq => Self::Cmp32(LocalCmp32Op::F32Eq),
+            PureOpKind::F32Ne => Self::Cmp32(LocalCmp32Op::F32Ne),
+            PureOpKind::F32Lt => Self::Cmp32(LocalCmp32Op::F32Lt),
+            PureOpKind::F32Gt => Self::Cmp32(LocalCmp32Op::F32Gt),
+            PureOpKind::F32Le => Self::Cmp32(LocalCmp32Op::F32Le),
+            PureOpKind::F32Ge => Self::Cmp32(LocalCmp32Op::F32Ge),
+            PureOpKind::F64Eq => Self::Cmp64(LocalCmp64Op::F64Eq),
+            PureOpKind::F64Ne => Self::Cmp64(LocalCmp64Op::F64Ne),
+            PureOpKind::F64Lt => Self::Cmp64(LocalCmp64Op::F64Lt),
+            PureOpKind::F64Gt => Self::Cmp64(LocalCmp64Op::F64Gt),
+            PureOpKind::F64Le => Self::Cmp64(LocalCmp64Op::F64Le),
+            PureOpKind::F64Ge => Self::Cmp64(LocalCmp64Op::F64Ge),
+            _ => return None,
+        })
+    }
+
+    const fn input_size(self) -> u32 {
+        match self {
+            Self::Binop32(_) | Self::Cmp32(_) => 4,
+            Self::Binop64(_) | Self::Cmp64(_) => 8,
+        }
+    }
+
+    const fn rhs_const_kind(self) -> LocalFastConstKind {
+        match self {
+            Self::Binop32(op) => op.const_kind(),
+            Self::Binop64(op) => op.const_kind(),
+            Self::Cmp32(op) => op.const_kind(),
+            Self::Cmp64(op) => op.const_kind(),
+        }
+    }
+
+    const fn allows_br_if(self) -> bool {
+        match self {
+            Self::Binop32(op) => matches!(
+                op,
+                LocalBinop32Op::I32Add
+                    | LocalBinop32Op::I32Sub
+                    | LocalBinop32Op::I32Mul
+                    | LocalBinop32Op::I32And
+                    | LocalBinop32Op::I32Or
+                    | LocalBinop32Op::I32Xor
+                    | LocalBinop32Op::I32Shl
+                    | LocalBinop32Op::I32ShrS
+                    | LocalBinop32Op::I32ShrU
+                    | LocalBinop32Op::I32Rotl
+                    | LocalBinop32Op::I32Rotr
+            ),
+            Self::Cmp32(_) | Self::Cmp64(_) => true,
+            Self::Binop64(_) => false,
+        }
+    }
+
+    fn encode_kind(self, rhs_shape: LocalFastRhsShape) -> u32 {
+        match self {
+            Self::Binop32(op) => encode_local_binop32_kind(op, rhs_shape),
+            Self::Binop64(op) => encode_local_binop64_kind(op, rhs_shape),
+            Self::Cmp32(op) => encode_local_cmp32_kind(op, rhs_shape),
+            Self::Cmp64(op) => encode_local_cmp64_kind(op, rhs_shape),
+        }
+    }
+
+    const fn root_op(self) -> Op {
+        match self {
+            Self::Binop32(_) => vm::op_local_binop32 as Op,
+            Self::Binop64(_) => vm::op_local_binop64 as Op,
+            Self::Cmp32(_) => vm::op_local_cmp32 as Op,
+            Self::Cmp64(_) => vm::op_local_cmp64 as Op,
+        }
+    }
+
+    const fn set_op(self) -> Op {
+        match self {
+            Self::Binop32(_) => vm::op_local_binop32_set4 as Op,
+            Self::Binop64(_) => vm::op_local_binop64_set8 as Op,
+            Self::Cmp32(_) => vm::op_local_cmp32_set4 as Op,
+            Self::Cmp64(_) => vm::op_local_cmp64_set4 as Op,
+        }
+    }
+
+    const fn tee_op(self) -> Op {
+        match self {
+            Self::Binop32(_) => vm::op_local_binop32_tee4 as Op,
+            Self::Binop64(_) => vm::op_local_binop64_tee8 as Op,
+            Self::Cmp32(_) => vm::op_local_cmp32_tee4 as Op,
+            Self::Cmp64(_) => vm::op_local_cmp64_tee4 as Op,
+        }
+    }
+
+    const fn br_if_op(self) -> Option<Op> {
+        match self {
+            Self::Binop32(_) if self.allows_br_if() => Some(vm::op_local_binop32_br_if as Op),
+            Self::Cmp32(_) => Some(vm::op_local_cmp32_br_if as Op),
+            Self::Cmp64(_) => Some(vm::op_local_cmp64_br_if as Op),
+            Self::Binop64(_) | Self::Binop32(_) => None,
+        }
+    }
+
+    fn flipped(self) -> Option<Self> {
+        match self {
+            Self::Cmp32(LocalCmp32Op::I32Eq) => Some(Self::Cmp32(LocalCmp32Op::I32Eq)),
+            Self::Cmp32(LocalCmp32Op::I32Ne) => Some(Self::Cmp32(LocalCmp32Op::I32Ne)),
+            Self::Cmp32(LocalCmp32Op::I32LtS) => Some(Self::Cmp32(LocalCmp32Op::I32GtS)),
+            Self::Cmp32(LocalCmp32Op::I32LtU) => Some(Self::Cmp32(LocalCmp32Op::I32GtU)),
+            Self::Cmp32(LocalCmp32Op::I32GtS) => Some(Self::Cmp32(LocalCmp32Op::I32LtS)),
+            Self::Cmp32(LocalCmp32Op::I32GtU) => Some(Self::Cmp32(LocalCmp32Op::I32LtU)),
+            Self::Cmp32(LocalCmp32Op::I32LeS) => Some(Self::Cmp32(LocalCmp32Op::I32GeS)),
+            Self::Cmp32(LocalCmp32Op::I32LeU) => Some(Self::Cmp32(LocalCmp32Op::I32GeU)),
+            Self::Cmp32(LocalCmp32Op::I32GeS) => Some(Self::Cmp32(LocalCmp32Op::I32LeS)),
+            Self::Cmp32(LocalCmp32Op::I32GeU) => Some(Self::Cmp32(LocalCmp32Op::I32LeU)),
+            Self::Cmp32(LocalCmp32Op::F32Eq) => Some(Self::Cmp32(LocalCmp32Op::F32Eq)),
+            Self::Cmp32(LocalCmp32Op::F32Ne) => Some(Self::Cmp32(LocalCmp32Op::F32Ne)),
+            Self::Cmp32(LocalCmp32Op::F32Lt) => Some(Self::Cmp32(LocalCmp32Op::F32Gt)),
+            Self::Cmp32(LocalCmp32Op::F32Gt) => Some(Self::Cmp32(LocalCmp32Op::F32Lt)),
+            Self::Cmp32(LocalCmp32Op::F32Le) => Some(Self::Cmp32(LocalCmp32Op::F32Ge)),
+            Self::Cmp32(LocalCmp32Op::F32Ge) => Some(Self::Cmp32(LocalCmp32Op::F32Le)),
+            Self::Cmp64(LocalCmp64Op::I64Eq) => Some(Self::Cmp64(LocalCmp64Op::I64Eq)),
+            Self::Cmp64(LocalCmp64Op::I64Ne) => Some(Self::Cmp64(LocalCmp64Op::I64Ne)),
+            Self::Cmp64(LocalCmp64Op::I64LtS) => Some(Self::Cmp64(LocalCmp64Op::I64GtS)),
+            Self::Cmp64(LocalCmp64Op::I64LtU) => Some(Self::Cmp64(LocalCmp64Op::I64GtU)),
+            Self::Cmp64(LocalCmp64Op::I64GtS) => Some(Self::Cmp64(LocalCmp64Op::I64LtS)),
+            Self::Cmp64(LocalCmp64Op::I64GtU) => Some(Self::Cmp64(LocalCmp64Op::I64LtU)),
+            Self::Cmp64(LocalCmp64Op::I64LeS) => Some(Self::Cmp64(LocalCmp64Op::I64GeS)),
+            Self::Cmp64(LocalCmp64Op::I64LeU) => Some(Self::Cmp64(LocalCmp64Op::I64GeU)),
+            Self::Cmp64(LocalCmp64Op::I64GeS) => Some(Self::Cmp64(LocalCmp64Op::I64LeS)),
+            Self::Cmp64(LocalCmp64Op::I64GeU) => Some(Self::Cmp64(LocalCmp64Op::I64LeU)),
+            Self::Cmp64(LocalCmp64Op::F64Eq) => Some(Self::Cmp64(LocalCmp64Op::F64Eq)),
+            Self::Cmp64(LocalCmp64Op::F64Ne) => Some(Self::Cmp64(LocalCmp64Op::F64Ne)),
+            Self::Cmp64(LocalCmp64Op::F64Lt) => Some(Self::Cmp64(LocalCmp64Op::F64Gt)),
+            Self::Cmp64(LocalCmp64Op::F64Gt) => Some(Self::Cmp64(LocalCmp64Op::F64Lt)),
+            Self::Cmp64(LocalCmp64Op::F64Le) => Some(Self::Cmp64(LocalCmp64Op::F64Ge)),
+            Self::Cmp64(LocalCmp64Op::F64Ge) => Some(Self::Cmp64(LocalCmp64Op::F64Le)),
+            Self::Binop32(_) | Self::Binop64(_) => None,
+        }
+    }
+
+    const fn is_commutative(self) -> bool {
+        match self {
+            Self::Binop32(op) => matches!(
+                op,
+                LocalBinop32Op::I32Add
+                    | LocalBinop32Op::I32Mul
+                    | LocalBinop32Op::I32And
+                    | LocalBinop32Op::I32Or
+                    | LocalBinop32Op::I32Xor
+                    | LocalBinop32Op::F32Add
+                    | LocalBinop32Op::F32Mul
+            ),
+            Self::Binop64(op) => matches!(
+                op,
+                LocalBinop64Op::I64Add
+                    | LocalBinop64Op::I64Mul
+                    | LocalBinop64Op::I64And
+                    | LocalBinop64Op::I64Or
+                    | LocalBinop64Op::I64Xor
+                    | LocalBinop64Op::F64Add
+                    | LocalBinop64Op::F64Mul
+            ),
+            Self::Cmp32(op) => matches!(
+                op,
+                LocalCmp32Op::I32Eq
+                    | LocalCmp32Op::I32Ne
+                    | LocalCmp32Op::F32Eq
+                    | LocalCmp32Op::F32Ne
+            ),
+            Self::Cmp64(op) => matches!(
+                op,
+                LocalCmp64Op::I64Eq
+                    | LocalCmp64Op::I64Ne
+                    | LocalCmp64Op::F64Eq
+                    | LocalCmp64Op::F64Ne
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct NumericSelectorRootMatch {
+    kind: NumericSelectorRootKind,
+    lhs: BlockOperand,
+    rhs: BlockOperand,
+}
+
+fn match_unary_selector_root_shape(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    root_idx: usize,
+    next_idx: usize,
+) -> Option<(UnarySelectorRootMatch, ValueRef, Option<usize>)> {
+    let root_op = body.ops.get(root_idx)?;
+    let BlockOpKind::PureUnary(pure_op) = root_op.kind else {
+        return None;
+    };
+    let kind = UnarySelectorRootKind::from_pure_op(pure_op)?;
+    if !block_op_single_use(graph, root_op) {
+        return None;
+    }
+    let root_value = block_op_single_result(root_op)?;
+    if value_feeds_memory_address(body, next_idx, root_value) {
+        return None;
+    }
+    let input = *root_op.inputs.first()?;
+    if producer_op_index_before(body, input, root_idx).is_none() {
+        return Some((
+            UnarySelectorRootMatch {
+                kind,
+                src: selector_value_slot_ref_operand(graph, input, kind.input_size())?,
+            },
+            root_value,
+            None,
+        ));
+    }
+    let provider_idx = root_idx.checked_sub(1)?;
+    let provider = body.ops.get(provider_idx)?;
+    if block_op_single_result(provider) != Some(input)
+        || local_get_reads_block_argument(graph, provider)
+    {
+        return None;
+    }
+    Some((
+        UnarySelectorRootMatch {
+            kind,
+            src: selector_non_block_argument_local_get_operand(graph, provider, kind.input_size())?,
+        },
+        root_value,
+        Some(provider_idx),
+    ))
 }
 
 fn match_selector_root_shape(
@@ -6641,6 +7927,80 @@ fn match_selector_root_shape(
         )
         .map(|matched| (matched, root_value)),
     }
+}
+
+fn match_numeric_selector_root_shape(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    cursor: usize,
+    next_idx: usize,
+) -> Option<(NumericSelectorRootMatch, ValueRef)> {
+    let ops = &body.ops;
+    let root_op = ops.get(cursor + 2)?;
+    if !block_op_single_use(graph, root_op) {
+        return None;
+    }
+    let root_value = block_op_single_result(root_op)?;
+    if value_feeds_memory_address(body, next_idx, root_value) {
+        return None;
+    }
+    match_numeric_selector_root_shape_from_body(
+        graph,
+        root_op,
+        ops.get(cursor)?,
+        ops.get(cursor + 1)?,
+    )
+    .map(|matched| (matched, root_value))
+}
+
+fn match_numeric_selector_root_shape_from_body(
+    graph: &ValueGraph,
+    root_op: &BlockOp,
+    first: &BlockOp,
+    second: &BlockOp,
+) -> Option<NumericSelectorRootMatch> {
+    let BlockOpKind::PureBinary(pure_op) = root_op.kind else {
+        return None;
+    };
+    let kind = NumericSelectorRootKind::from_pure_op(pure_op)?;
+    let input_size = kind.input_size();
+    let const_kind = kind.rhs_const_kind();
+
+    if let (Some(lhs), Some(rhs)) = (
+        selector_non_block_argument_local_get_operand(graph, first, input_size),
+        selector_non_block_argument_local_get_operand(graph, second, input_size),
+    ) {
+        return Some(NumericSelectorRootMatch { kind, lhs, rhs });
+    }
+
+    if let (Some(lhs), Some(rhs)) = (
+        selector_non_block_argument_local_get_operand(graph, first, input_size),
+        block_op_const_operand_of_kind(second, const_kind),
+    ) {
+        return Some(NumericSelectorRootMatch { kind, lhs, rhs });
+    }
+
+    if let (Some(lhs), Some(rhs)) = (
+        block_op_const_operand_of_kind(first, const_kind),
+        selector_non_block_argument_local_get_operand(graph, second, input_size),
+    ) {
+        if kind.is_commutative() {
+            return Some(NumericSelectorRootMatch {
+                kind,
+                lhs: rhs,
+                rhs: lhs,
+            });
+        }
+        if let Some(flipped) = kind.flipped() {
+            return Some(NumericSelectorRootMatch {
+                kind: flipped,
+                lhs: rhs,
+                rhs: lhs,
+            });
+        }
+    }
+
+    None
 }
 
 fn match_selector_root_shape_from_body(
@@ -6710,11 +8070,26 @@ fn selector_local_input_operand(
     }
 }
 
-fn selector_any_local_get4_operand(op: &BlockOp) -> Option<BlockOperand> {
-    if op.kind != BlockOpKind::LocalGet {
+fn const_operand_matches_kind(operand: BlockOperand, kind: LocalFastConstKind) -> bool {
+    matches!(
+        (operand, kind),
+        (BlockOperand::I32(_), LocalFastConstKind::I32)
+            | (BlockOperand::I64(_), LocalFastConstKind::I64)
+            | (BlockOperand::F32(_), LocalFastConstKind::F32)
+            | (BlockOperand::F64(_), LocalFastConstKind::F64)
+    )
+}
+
+fn block_op_const_operand_of_kind(op: &BlockOp, kind: LocalFastConstKind) -> Option<BlockOperand> {
+    if op.kind != BlockOpKind::Const {
         return None;
     }
-    if local_get_size_from_op(op.op)? != 4 {
+    let operand = *op.operands.first()?;
+    const_operand_matches_kind(operand, kind).then_some(operand)
+}
+
+fn selector_any_local_get_operand(op: &BlockOp, expected_size: u32) -> Option<BlockOperand> {
+    if op.kind != BlockOpKind::LocalGet || local_get_size_from_op(op.op)? != expected_size {
         return None;
     }
     match *op.operands.first()? {
@@ -6724,15 +8099,27 @@ fn selector_any_local_get4_operand(op: &BlockOp) -> Option<BlockOperand> {
     }
 }
 
-fn selector_non_block_argument_local_get4_operand(
+fn selector_non_block_argument_local_get_operand(
     graph: &ValueGraph,
     op: &BlockOp,
+    expected_size: u32,
 ) -> Option<BlockOperand> {
     let value = block_op_single_result(op)?;
     if local_get_result_is_non_lossless_block_argument(graph, value) {
         return None;
     }
-    selector_any_local_get4_operand(op)
+    selector_any_local_get_operand(op, expected_size)
+}
+
+fn selector_any_local_get4_operand(op: &BlockOp) -> Option<BlockOperand> {
+    selector_any_local_get_operand(op, 4)
+}
+
+fn selector_non_block_argument_local_get4_operand(
+    graph: &ValueGraph,
+    op: &BlockOp,
+) -> Option<BlockOperand> {
+    selector_non_block_argument_local_get_operand(graph, op, 4)
 }
 
 fn local_get_reads_block_argument(graph: &ValueGraph, op: &BlockOp) -> bool {
@@ -6789,6 +8176,16 @@ fn match_br_if_pattern(
     }
 
     if body.ops.len() >= 3 {
+        if let Some((matched, root_value)) =
+            match_numeric_selector_root_shape(graph, body, body.ops.len() - 3, body.ops.len())
+        {
+            if root_value == condition && matched.kind.allows_br_if() {
+                let mut operands = vec![branch_target_operand(terminator)?];
+                operands.extend(numeric_root_operands(matched));
+                let op = matched.kind.br_if_op()?;
+                return Some((fused_br_if_terminator(terminator, op, operands), 3));
+            }
+        }
         if let Some((matched, root_value)) =
             match_selector_root_shape(graph, body, body.ops.len() - 3, body.ops.len())
         {
@@ -7458,6 +8855,9 @@ fn record_jump_target_operand_index(op: Op) -> Option<usize> {
     if std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_compare_br_if as Op)
         || std::ptr::fn_addr_eq(op, vm::op_local_get4_local_get4_compare_br_if as Op)
         || std::ptr::fn_addr_eq(op, vm::op_local_get4_i32_const_add_tee4_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_binop32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp32_br_if as Op)
+        || std::ptr::fn_addr_eq(op, vm::op_local_cmp64_br_if as Op)
     {
         return Some(3);
     }
@@ -7545,7 +8945,35 @@ fn verify_relower_preserves_call_ops(
                 packed.source_start == Some(source_start) && std::ptr::fn_addr_eq(packed.op, op)
             })
             .count()
-    })
+    }) && verify_packed_call_operands(ops)
+}
+
+fn verify_packed_call_operands(ops: &[PackedOp]) -> bool {
+    for op in ops {
+        if std::ptr::fn_addr_eq(op.op, vm::op_call as Op)
+            || std::ptr::fn_addr_eq(op.op, vm::op_call_import as Op)
+            || std::ptr::fn_addr_eq(op.op, vm::op_return_call as Op)
+            || std::ptr::fn_addr_eq(op.op, vm::op_return_call_import as Op)
+        {
+            if op.operands.len() != 1
+                || !matches!(op.operands.first(), Some(PackedOperand::CallRecipeRef(_)))
+            {
+                return false;
+            }
+            continue;
+        }
+        if (std::ptr::fn_addr_eq(op.op, vm::op_call_indirect as Op)
+            || std::ptr::fn_addr_eq(op.op, vm::op_return_call_indirect as Op))
+            && (op.operands.len() != 2
+                || !op
+                    .operands
+                    .iter()
+                    .all(|operand| matches!(operand, PackedOperand::U32(_))))
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn verify_effect_result_spill_ir(
@@ -8914,6 +10342,16 @@ mod tests {
             .expect("consumer should specialize")
     }
 
+    fn expect_specialized_direct_call_consumer(
+        graph: &ValueGraph,
+        body: &BlockBody,
+        op_idx: usize,
+    ) -> SpecializedDirectCallLowering {
+        let op = &body.ops[op_idx];
+        build_specialized_direct_call_lowering(graph, body, op_idx, op)
+            .expect("direct call consumer should specialize")
+    }
+
     fn expect_specialized_br_if(
         graph: &ValueGraph,
         body: &BlockBody,
@@ -10263,10 +11701,14 @@ mod tests {
         };
 
         let spec = expect_specialized_local_control_consumer(&graph, &body, 2);
-        assert!(std::ptr::fn_addr_eq(
-            spec.op,
-            vm::op_local_get4_i32_const_add as Op
-        ));
+        assert!(std::ptr::fn_addr_eq(spec.op, vm::op_local_binop32 as Op));
+        let BlockOperand::U32(kind) = spec.operands[0] else {
+            panic!("expected encoded kind");
+        };
+        assert_eq!(
+            decode_local_binop32_kind(kind),
+            Some((LocalBinop32Op::I32Add, LocalFastRhsShape::Const))
+        );
         assert_eq!(spec.source_start, Some(10));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
         assert!(verify_specialized_local_control_lowering(&body, &spec));
@@ -10415,11 +11857,433 @@ mod tests {
         let spec = expect_specialized_local_control_consumer(&graph, &body, 3);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
-            vm::op_local_get4_i32_const_add_set4 as Op
+            vm::op_local_binop32_set4 as Op
         ));
+        let BlockOperand::U32(kind) = spec.operands[0] else {
+            panic!("expected encoded kind");
+        };
+        assert_eq!(
+            decode_local_binop32_kind(kind),
+            Some((LocalBinop32Op::I32Add, LocalFastRhsShape::Const))
+        );
         assert_eq!(spec.source_start, Some(20));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
         assert!(verify_specialized_local_control_lowering(&body, &spec));
+    }
+
+    #[test]
+    fn local_control_relower_specializes_unary_root_from_local_get_provider() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let base = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 3,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(3),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let base_origin = graph[base.0].origin;
+        let unary = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 3,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Unary {
+                    op: PureOpKind::I32Clz,
+                    input: base_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureUnary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(1),
+                materialized_block: Some(3),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(30),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![base],
+                },
+                BlockOp {
+                    source_start: Some(32),
+                    op: vm::op_i32_clz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Clz),
+                    operands: Vec::new(),
+                    inputs: vec![base],
+                    values: vec![unary],
+                },
+                BlockOp {
+                    source_start: Some(34),
+                    op: vm::op_drop as Op,
+                    kind: BlockOpKind::Drop,
+                    operands: Vec::new(),
+                    inputs: vec![unary],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_local_control_consumer(&graph, &body, 1);
+        assert!(std::ptr::fn_addr_eq(spec.op, vm::op_local_unary32 as Op));
+        let BlockOperand::U32(kind) = spec.operands[0] else {
+            panic!("expected encoded unary kind");
+        };
+        assert_eq!(
+            crate::common::decode_local_unary32_kind(kind),
+            Some(LocalUnary32Op::I32Clz)
+        );
+        assert_eq!(spec.source_start, Some(30));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
+    }
+
+    #[test]
+    fn local_control_relower_specializes_unary_set_from_slot_ref_without_provider_ops() {
+        let src = LocalSlot::new(0, 8);
+        let dst = LocalSlot::new(8, 8);
+        let mut graph = ValueGraph::default();
+        let base = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::F64,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(Some(SlotRef::entry_local(src)), None, None),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let base_origin = graph[base.0].origin;
+        let unary = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::F64,
+                origin: ExprOrigin {
+                    block_id: 5,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Unary {
+                    op: PureOpKind::F64Sqrt,
+                    input: base_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureUnary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(0),
+                materialized_block: Some(5),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(40),
+                    op: vm::op_f64_sqrt as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::F64Sqrt),
+                    operands: Vec::new(),
+                    inputs: vec![base],
+                    values: vec![unary],
+                },
+                BlockOp {
+                    source_start: Some(42),
+                    op: local_set_op(8),
+                    kind: BlockOpKind::LocalSet,
+                    operands: vec![BlockOperand::LocalAddr(dst.addr)],
+                    inputs: vec![unary],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_local_control_consumer(&graph, &body, 1);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_local_unary64_set8 as Op
+        ));
+        let BlockOperand::U32(kind) = spec.operands[0] else {
+            panic!("expected encoded unary kind");
+        };
+        assert_eq!(
+            crate::common::decode_local_unary64_kind(kind),
+            Some(LocalUnary64Op::F64Sqrt)
+        );
+        assert_eq!(spec.source_start, Some(40));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
+    }
+
+    #[test]
+    fn memory_relower_specializes_residual_address_shape_without_provider_ops() {
+        let base = LocalSlot::new(12, 4);
+        let mut graph = ValueGraph::default();
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 7,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(base),
+                    offset_delta: 6,
+                }),
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(base)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(base),
+                        offset_delta: 6,
+                    }),
+                    None,
+                ),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 7,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(7),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![BlockOp {
+                source_start: Some(50),
+                op: vm::op_i32_load as Op,
+                kind: BlockOpKind::MemoryLoad,
+                operands: vec![BlockOperand::Raw(Operand {
+                    memarg: crate::common::MemArg {
+                        align: 0,
+                        offset: 4,
+                    },
+                })],
+                inputs: vec![address],
+                values: vec![load],
+            }],
+            terminator: None,
+        };
+
+        let (spec, absorbed_ops) = build_specialized_memory_lowering(
+            &body,
+            &graph,
+            &EffectResultSpillPlan::default(),
+            0,
+            &body.ops[0],
+        )
+        .expect("memory load should specialize from residual address shape");
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_local_base as Op
+        ));
+        assert!(absorbed_ops.is_empty());
+        assert!(matches!(
+            spec.operands.as_slice(),
+            [BlockOperand::LocalAddr(addr), BlockOperand::I32(delta), BlockOperand::Raw(_)]
+                if *addr == base.addr && *delta == 6
+        ));
+        let BlockOperand::Raw(memarg_operand) = spec.operands[2] else {
+            panic!("expected memarg operand");
+        };
+        let memarg = unsafe { memarg_operand.memarg };
+        assert_eq!(memarg.align, 0);
+        assert_eq!(memarg.offset, 4);
+    }
+
+    #[test]
+    fn memory_relower_does_not_specialize_without_address_shape() {
+        let mut graph = ValueGraph::default();
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 8,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 8,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(8),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![BlockOp {
+                source_start: Some(60),
+                op: vm::op_i32_load as Op,
+                kind: BlockOpKind::MemoryLoad,
+                operands: vec![BlockOperand::Raw(Operand {
+                    memarg: crate::common::MemArg {
+                        align: 0,
+                        offset: 0,
+                    },
+                })],
+                inputs: vec![address],
+                values: vec![load],
+            }],
+            terminator: None,
+        };
+
+        assert!(build_specialized_memory_lowering(
+            &body,
+            &graph,
+            &EffectResultSpillPlan::default(),
+            0,
+            &body.ops[0],
+        )
+        .is_none());
     }
 
     #[test]
@@ -10563,8 +12427,15 @@ mod tests {
         let spec = expect_specialized_br_if(&graph, &body);
         assert!(std::ptr::fn_addr_eq(
             spec.op,
-            vm::op_local_get4_i32_const_add_br_if as Op
+            vm::op_local_binop32_br_if as Op
         ));
+        let BlockOperand::U32(kind) = spec.operands[1] else {
+            panic!("expected encoded kind");
+        };
+        assert_eq!(
+            decode_local_binop32_kind(kind),
+            Some((LocalBinop32Op::I32Add, LocalFastRhsShape::Const))
+        );
         assert_eq!(spec.source_start, Some(30));
         assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
         assert!(verify_specialized_local_control_lowering(&body, &spec));
@@ -11768,6 +13639,2453 @@ mod tests {
         assert_eq!(candidate.root_value, address_value);
         assert_eq!(candidate.result_size, 4);
         assert_eq!(candidate.source_start, Some(10));
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_local_const_args() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(9),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let const_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(7)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(9),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let call_result = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(2), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(2),
+                materialized_block: Some(9),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(10),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local_value],
+                },
+                BlockOp {
+                    source_start: Some(12),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(7)],
+                    inputs: Vec::new(),
+                    values: vec![const_value],
+                },
+                BlockOp {
+                    source_start: Some(14),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(3)],
+                    inputs: vec![local_value, const_value],
+                    values: vec![call_result],
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 2);
+        assert!(std::ptr::fn_addr_eq(spec.call_op, vm::op_call as Op));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert_eq!(spec.arg_materializers.len(), 2);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(matches!(
+            spec.arg_materializers[0][0].operands.as_slice(),
+            [BlockOperand::LocalAddr(addr)] if *addr == src.addr
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[1][0].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(matches!(
+            spec.arg_materializers[1][0].operands.as_slice(),
+            [BlockOperand::I32(7)]
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 2, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_block_argument_and_spill_local_args() {
+        let arg_slot = LocalSlot::new(0, 4);
+        let spill_slot = LocalSlot::new(12, 4);
+        let mut graph = ValueGraph::default();
+        let block_arg = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 11,
+                    ordinal: 0,
+                    kind: ExprOriginKind::BlockArgument,
+                },
+                def: ValueDef::BlockArgument(
+                    crate::parser::core::optimizer::expr::BlockArgumentId(0),
+                ),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: build_slot_shape(Some(SlotRef::entry_local(arg_slot)), None, None),
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let spill_source = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 11,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::SpillLocal(spill_slot),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(spill_slot)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::spill_local(spill_slot)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::SpillLocal(spill_slot),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(spill_slot)),
+                ),
+                provider_class: ProviderClass::EffectResultSpill,
+                materialization_cost: MaterializationCost::Spill,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: true,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let spill_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 11,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::SpillLocal(spill_slot),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(spill_slot)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::spill_local(spill_slot)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::SpillLocal(spill_slot),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(spill_slot)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Spill,
+                producer_op: Some(0),
+                materialized_block: Some(11),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(32),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::SpillValue(spill_source)],
+                    inputs: Vec::new(),
+                    values: vec![spill_value],
+                },
+                BlockOp {
+                    source_start: Some(33),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(34),
+                    op: vm::op_return_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(1)],
+                    inputs: vec![block_arg, spill_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 2);
+        assert!(std::ptr::fn_addr_eq(spec.call_op, vm::op_return_call as Op));
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert_eq!(spec.arg_materializers.len(), 2);
+        assert_eq!(spec.arg_materializers[0][0].source_start, None);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(matches!(
+            spec.arg_materializers[0][0].operands.as_slice(),
+            [BlockOperand::LocalAddr(addr)] if *addr == arg_slot.addr
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[1][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(matches!(
+            spec.arg_materializers[1][0].operands.as_slice(),
+            [BlockOperand::SpillValue(source)] if *source == spill_source
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 2, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_import_and_indirect_calls() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 12,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(12),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let table_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 12,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(1)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(12),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        for op in [vm::op_call_import as Op, vm::op_return_call_import as Op] {
+            let body = BlockBody {
+                ops: vec![
+                    BlockOp {
+                        source_start: Some(40),
+                        op: local_get_op(4),
+                        kind: BlockOpKind::LocalGet,
+                        operands: vec![BlockOperand::LocalAddr(src.addr)],
+                        inputs: Vec::new(),
+                        values: vec![local_value],
+                    },
+                    BlockOp {
+                        source_start: Some(42),
+                        op,
+                        kind: BlockOpKind::CallLike,
+                        operands: if std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
+                            || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
+                        {
+                            vec![BlockOperand::U32(4)]
+                        } else {
+                            vec![BlockOperand::U32(0), BlockOperand::U32(1)]
+                        },
+                        inputs: vec![local_value],
+                        values: Vec::new(),
+                    },
+                ],
+                terminator: None,
+            };
+
+            let spec = expect_specialized_direct_call_consumer(&graph, &body, 1);
+            assert!(std::ptr::fn_addr_eq(spec.call_op, op));
+            assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize]));
+            assert_eq!(spec.specialized_arg_start, 0);
+            assert_eq!(spec.arg_materializers.len(), 1);
+        }
+
+        for op in [
+            vm::op_call_indirect as Op,
+            vm::op_return_call_indirect as Op,
+        ] {
+            let body = BlockBody {
+                ops: vec![
+                    BlockOp {
+                        source_start: Some(40),
+                        op: local_get_op(4),
+                        kind: BlockOpKind::LocalGet,
+                        operands: vec![BlockOperand::LocalAddr(src.addr)],
+                        inputs: Vec::new(),
+                        values: vec![local_value],
+                    },
+                    BlockOp {
+                        source_start: Some(42),
+                        op: vm::op_i32_const as Op,
+                        kind: BlockOpKind::Const,
+                        operands: vec![BlockOperand::I32(1)],
+                        inputs: Vec::new(),
+                        values: vec![table_value],
+                    },
+                    BlockOp {
+                        source_start: Some(44),
+                        op,
+                        kind: BlockOpKind::CallLike,
+                        operands: vec![BlockOperand::U32(0), BlockOperand::U32(1)],
+                        inputs: vec![local_value, table_value],
+                        values: Vec::new(),
+                    },
+                ],
+                terminator: None,
+            };
+
+            let spec = expect_specialized_direct_call_consumer(&graph, &body, 2);
+            assert!(std::ptr::fn_addr_eq(spec.call_op, op));
+            assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
+            assert_eq!(spec.specialized_arg_start, 0);
+            assert_eq!(spec.arg_materializers.len(), 2);
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][0].op,
+                vm::op_local_get4 as Op
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[1][0].op,
+                vm::op_i32_const as Op
+            ));
+            assert!(verify_specialized_direct_call_lowering(
+                &graph, &body, 2, &spec
+            ));
+        }
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_select_derived_arg_for_call_variants() {
+        let lhs = LocalSlot::new(32, 4);
+        let cond = LocalSlot::new(36, 4);
+        let mut graph = ValueGraph::default();
+        let lhs_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(lhs),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(lhs)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(lhs)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(lhs),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(lhs)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(13),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let add_const = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(1)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(13),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let lhs_origin = graph[lhs_value.0].origin;
+        let add_const_origin = graph[add_const.0].origin;
+        let add_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Binary {
+                    op: PureOpKind::I32Add,
+                    lhs: lhs_origin,
+                    rhs: add_const_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureBinary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(2),
+                materialized_block: Some(13),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let rhs_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(3),
+                materialized_block: Some(13),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let cond_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 4,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(cond),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(cond)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(cond)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(cond),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(cond)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(4),
+                materialized_block: Some(13),
+                materialized_op: Some(4),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let cond_origin = graph[cond_value.0].origin;
+        let eqz_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 5,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Unary {
+                    op: PureOpKind::I32Eqz,
+                    input: cond_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureUnary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(5),
+                materialized_block: Some(13),
+                materialized_op: Some(5),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let select_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(6),
+                materialized_block: Some(13),
+                materialized_op: Some(6),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let table_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 13,
+                    ordinal: 7,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(1)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(7),
+                materialized_block: Some(13),
+                materialized_op: Some(7),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        for op in [
+            vm::op_call as Op,
+            vm::op_return_call as Op,
+            vm::op_call_import as Op,
+            vm::op_return_call_import as Op,
+            vm::op_call_indirect as Op,
+            vm::op_return_call_indirect as Op,
+        ] {
+            let mut ops = vec![
+                BlockOp {
+                    source_start: Some(50),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(lhs.addr)],
+                    inputs: Vec::new(),
+                    values: vec![lhs_value],
+                },
+                BlockOp {
+                    source_start: Some(52),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(1)],
+                    inputs: Vec::new(),
+                    values: vec![add_const],
+                },
+                BlockOp {
+                    source_start: Some(54),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![lhs_value, add_const],
+                    values: vec![add_value],
+                },
+                BlockOp {
+                    source_start: Some(56),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![rhs_value],
+                },
+                BlockOp {
+                    source_start: Some(58),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(cond.addr)],
+                    inputs: Vec::new(),
+                    values: vec![cond_value],
+                },
+                BlockOp {
+                    source_start: Some(60),
+                    op: vm::op_i32_eqz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Eqz),
+                    operands: Vec::new(),
+                    inputs: vec![cond_value],
+                    values: vec![eqz_value],
+                },
+                BlockOp {
+                    source_start: Some(62),
+                    op: vm::op_select as Op,
+                    kind: BlockOpKind::Select,
+                    operands: vec![BlockOperand::Raw(Operand { select: 4 })],
+                    inputs: vec![add_value, rhs_value, eqz_value],
+                    values: vec![select_value],
+                },
+            ];
+
+            let (call_operands, inputs) = if std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
+                || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
+            {
+                (vec![BlockOperand::U32(2)], vec![select_value])
+            } else if std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op)
+                || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
+            {
+                ops.push(BlockOp {
+                    source_start: Some(64),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(1)],
+                    inputs: Vec::new(),
+                    values: vec![table_value],
+                });
+                (
+                    vec![BlockOperand::U32(0), BlockOperand::U32(1)],
+                    vec![select_value, table_value],
+                )
+            } else {
+                (vec![BlockOperand::U32(2)], vec![select_value])
+            };
+
+            ops.push(BlockOp {
+                source_start: Some(66),
+                op,
+                kind: BlockOpKind::CallLike,
+                operands: call_operands,
+                inputs,
+                values: Vec::new(),
+            });
+            let body = BlockBody {
+                ops,
+                terminator: None,
+            };
+
+            let spec = expect_specialized_direct_call_consumer(&graph, &body, body.ops.len() - 1);
+            assert!(std::ptr::fn_addr_eq(spec.call_op, op));
+            assert_eq!(spec.specialized_arg_start, 0);
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][0].op,
+                vm::op_local_get4 as Op
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][1].op,
+                vm::op_i32_const as Op
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][2].op,
+                vm::op_i32_add as Op
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][3].op,
+                vm::op_i32_const as Op
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][4].op,
+                vm::op_local_get4 as Op
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][5].op,
+                vm::op_i32_eqz as Op
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][6].op,
+                vm::op_select4 as Op
+            ));
+            if std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op)
+                || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
+            {
+                assert_eq!(spec.arg_materializers.len(), 2);
+                assert!(std::ptr::fn_addr_eq(
+                    spec.arg_materializers[1][0].op,
+                    vm::op_i32_const as Op
+                ));
+                assert_eq!(
+                    spec.absorbed_ops,
+                    BTreeSet::from([
+                        0usize, 1usize, 2usize, 3usize, 4usize, 5usize, 6usize, 7usize
+                    ])
+                );
+            } else {
+                assert_eq!(spec.arg_materializers.len(), 1);
+                assert_eq!(
+                    spec.absorbed_ops,
+                    BTreeSet::from([0usize, 1usize, 2usize, 3usize, 4usize, 5usize, 6usize])
+                );
+            }
+            assert!(verify_specialized_direct_call_lowering(
+                &graph,
+                &body,
+                body.ops.len() - 1,
+                &spec
+            ));
+        }
+    }
+
+    #[test]
+    fn direct_call_relower_rejects_select_with_memory_derived_subtree() {
+        let mut graph = ValueGraph::default();
+        let load_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(14),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let rhs_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(14),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let cond_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(1)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(14),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let select_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(3),
+                materialized_block: Some(14),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(70),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: Vec::new(),
+                    values: vec![load_value],
+                },
+                BlockOp {
+                    source_start: Some(72),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![rhs_value],
+                },
+                BlockOp {
+                    source_start: Some(74),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(1)],
+                    inputs: Vec::new(),
+                    values: vec![cond_value],
+                },
+                BlockOp {
+                    source_start: Some(76),
+                    op: vm::op_select as Op,
+                    kind: BlockOpKind::Select,
+                    operands: vec![BlockOperand::Raw(Operand { select: 4 })],
+                    inputs: vec![load_value, rhs_value, cond_value],
+                    values: vec![select_value],
+                },
+                BlockOp {
+                    source_start: Some(78),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(2)],
+                    inputs: vec![select_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        assert!(build_specialized_direct_call_lowering(&graph, &body, 4, &body.ops[4]).is_none());
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_local_tee_alias_for_direct_and_import_call() {
+        let dst = LocalSlot::new(16, 4);
+        let mut graph = ValueGraph::default();
+        let const_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 16,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(5)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(0),
+                materialized_block: Some(16),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let tee_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 16,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(dst),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(dst)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(dst)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(dst),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(dst)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(1),
+                materialized_block: Some(16),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let unrelated = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 16,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(16),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        for op in [vm::op_call as Op, vm::op_call_import as Op] {
+            let body = BlockBody {
+                ops: vec![
+                    BlockOp {
+                        source_start: Some(90),
+                        op: vm::op_i32_const as Op,
+                        kind: BlockOpKind::Const,
+                        operands: vec![BlockOperand::I32(5)],
+                        inputs: Vec::new(),
+                        values: vec![const_value],
+                    },
+                    BlockOp {
+                        source_start: Some(92),
+                        op: vm::op_local_tee4 as Op,
+                        kind: BlockOpKind::LocalTee,
+                        operands: vec![BlockOperand::LocalAddr(dst.addr)],
+                        inputs: vec![const_value],
+                        values: vec![tee_value],
+                    },
+                    BlockOp {
+                        source_start: Some(94),
+                        op: vm::op_i32_const as Op,
+                        kind: BlockOpKind::Const,
+                        operands: vec![BlockOperand::I32(9)],
+                        inputs: Vec::new(),
+                        values: vec![unrelated],
+                    },
+                    BlockOp {
+                        source_start: Some(96),
+                        op,
+                        kind: BlockOpKind::CallLike,
+                        operands: vec![BlockOperand::U32(7)],
+                        inputs: vec![tee_value],
+                        values: Vec::new(),
+                    },
+                ],
+                terminator: None,
+            };
+
+            let spec = expect_specialized_direct_call_consumer(&graph, &body, 3);
+            assert_eq!(spec.specialized_arg_start, 0);
+            assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize]));
+            assert_eq!(spec.arg_materializers.len(), 1);
+            assert_eq!(spec.arg_materializers[0].len(), 3);
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][0].op,
+                vm::op_i32_const as Op
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][1].op,
+                vm::op_local_set4 as Op
+            ));
+            assert!(matches!(
+                spec.arg_materializers[0][1].operands.as_slice(),
+                [BlockOperand::LocalAddr(addr)] if *addr == dst.addr
+            ));
+            assert!(std::ptr::fn_addr_eq(
+                spec.arg_materializers[0][2].op,
+                vm::op_local_get4 as Op
+            ));
+            assert!(verify_specialized_direct_call_lowering(
+                &graph, &body, 3, &spec
+            ));
+        }
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_non_contiguous_pure_tree_args() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(14),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let const_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(5)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(14),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let _unrelated = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(14),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let add_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(3),
+                materialized_block: Some(14),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let unary_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 14,
+                    ordinal: 4,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(4),
+                materialized_block: Some(14),
+                materialized_op: Some(4),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(60),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local_value],
+                },
+                BlockOp {
+                    source_start: Some(62),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(5)],
+                    inputs: Vec::new(),
+                    values: vec![const_value],
+                },
+                BlockOp {
+                    source_start: Some(64),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![_unrelated],
+                },
+                BlockOp {
+                    source_start: Some(66),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![local_value, const_value],
+                    values: vec![add_value],
+                },
+                BlockOp {
+                    source_start: Some(68),
+                    op: vm::op_i32_clz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Clz),
+                    operands: Vec::new(),
+                    inputs: vec![add_value],
+                    values: vec![unary_value],
+                },
+                BlockOp {
+                    source_start: Some(70),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(9)],
+                    inputs: vec![unary_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 5);
+        assert_eq!(
+            spec.absorbed_ops,
+            BTreeSet::from([0usize, 1usize, 3usize, 4usize])
+        );
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 4);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][1].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][2].op,
+            vm::op_i32_add as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][3].op,
+            vm::op_i32_clz as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 5, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_supported_trailing_suffix_only() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let unsupported = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 17,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(17),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 17,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(1),
+                materialized_block: Some(17),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let local_origin = graph[local_value.0].origin;
+        let eqz_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 17,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Unary {
+                    op: PureOpKind::I32Eqz,
+                    input: local_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureUnary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(2),
+                materialized_block: Some(17),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(100),
+                    op: vm::op_select as Op,
+                    kind: BlockOpKind::Select,
+                    operands: vec![BlockOperand::Raw(Operand { select: 4 })],
+                    inputs: Vec::new(),
+                    values: vec![unsupported],
+                },
+                BlockOp {
+                    source_start: Some(102),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local_value],
+                },
+                BlockOp {
+                    source_start: Some(104),
+                    op: vm::op_i32_eqz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Eqz),
+                    operands: Vec::new(),
+                    inputs: vec![local_value],
+                    values: vec![eqz_value],
+                },
+                BlockOp {
+                    source_start: Some(106),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(5)],
+                    inputs: vec![unsupported, eqz_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 3);
+        assert_eq!(spec.specialized_arg_start, 1);
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([1usize, 2usize]));
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 2);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][1].op,
+            vm::op_i32_eqz as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 3, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_select_supported_trailing_suffix_only() {
+        let src = LocalSlot::new(4, 4);
+        let mut graph = ValueGraph::default();
+        let unsupported = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(18),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(1),
+                materialized_block: Some(18),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let rhs_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(18),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let cond_const = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(0)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(3),
+                materialized_block: Some(18),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let cond_const_origin = graph[cond_const.0].origin;
+        let cond_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 4,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Unary {
+                    op: PureOpKind::I32Eqz,
+                    input: cond_const_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureUnary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(4),
+                materialized_block: Some(18),
+                materialized_op: Some(4),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let select_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 5,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(5),
+                materialized_block: Some(18),
+                materialized_op: Some(5),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(110),
+                    op: vm::op_select as Op,
+                    kind: BlockOpKind::Select,
+                    operands: vec![BlockOperand::Raw(Operand { select: 4 })],
+                    inputs: Vec::new(),
+                    values: vec![unsupported],
+                },
+                BlockOp {
+                    source_start: Some(112),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local_value],
+                },
+                BlockOp {
+                    source_start: Some(114),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![rhs_value],
+                },
+                BlockOp {
+                    source_start: Some(116),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(0)],
+                    inputs: Vec::new(),
+                    values: vec![cond_const],
+                },
+                BlockOp {
+                    source_start: Some(118),
+                    op: vm::op_i32_eqz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Eqz),
+                    operands: Vec::new(),
+                    inputs: vec![cond_const],
+                    values: vec![cond_value],
+                },
+                BlockOp {
+                    source_start: Some(120),
+                    op: vm::op_select as Op,
+                    kind: BlockOpKind::Select,
+                    operands: vec![BlockOperand::Raw(Operand { select: 4 })],
+                    inputs: vec![local_value, rhs_value, cond_value],
+                    values: vec![select_value],
+                },
+                BlockOp {
+                    source_start: Some(122),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(5)],
+                    inputs: vec![unsupported, select_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 6);
+        assert_eq!(spec.specialized_arg_start, 1);
+        assert_eq!(
+            spec.absorbed_ops,
+            BTreeSet::from([1usize, 2usize, 3usize, 4usize, 5usize])
+        );
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 5);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][1].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][2].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][3].op,
+            vm::op_i32_eqz as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][4].op,
+            vm::op_select4 as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 6, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_local_tee_alias_for_indirect_call() {
+        let dst = LocalSlot::new(28, 4);
+        let mut graph = ValueGraph::default();
+        let const_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 19,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(5)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(0),
+                materialized_block: Some(19),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let tee_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 19,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(dst),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(dst)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(dst)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(dst),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(dst)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(1),
+                materialized_block: Some(19),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let table_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 19,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(1)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(19),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(120),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(5)],
+                    inputs: Vec::new(),
+                    values: vec![const_value],
+                },
+                BlockOp {
+                    source_start: Some(122),
+                    op: vm::op_local_tee4 as Op,
+                    kind: BlockOpKind::LocalTee,
+                    operands: vec![BlockOperand::LocalAddr(dst.addr)],
+                    inputs: vec![const_value],
+                    values: vec![tee_value],
+                },
+                BlockOp {
+                    source_start: Some(124),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(1)],
+                    inputs: Vec::new(),
+                    values: vec![table_value],
+                },
+                BlockOp {
+                    source_start: Some(126),
+                    op: vm::op_call_indirect as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(0), BlockOperand::U32(1)],
+                    inputs: vec![tee_value, table_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 3);
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([0usize, 1usize, 2usize]));
+        assert_eq!(spec.arg_materializers.len(), 2);
+        assert_eq!(spec.arg_materializers[0].len(), 3);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][1].op,
+            vm::op_local_set4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][2].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[1][0].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 3, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_specializes_indirect_supported_trailing_suffix_only() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let unsupported = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 20,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(20),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 20,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(1),
+                materialized_block: Some(20),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let local_origin = graph[local_value.0].origin;
+        let eqz_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 20,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Unary {
+                    op: PureOpKind::I32Eqz,
+                    input: local_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureUnary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(2),
+                materialized_block: Some(20),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let table_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 20,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(1)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(3),
+                materialized_block: Some(20),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(130),
+                    op: vm::op_select as Op,
+                    kind: BlockOpKind::Select,
+                    operands: vec![BlockOperand::Raw(Operand { select: 4 })],
+                    inputs: Vec::new(),
+                    values: vec![unsupported],
+                },
+                BlockOp {
+                    source_start: Some(132),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local_value],
+                },
+                BlockOp {
+                    source_start: Some(134),
+                    op: vm::op_i32_eqz as Op,
+                    kind: BlockOpKind::PureUnary(PureOpKind::I32Eqz),
+                    operands: Vec::new(),
+                    inputs: vec![local_value],
+                    values: vec![eqz_value],
+                },
+                BlockOp {
+                    source_start: Some(136),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(1)],
+                    inputs: Vec::new(),
+                    values: vec![table_value],
+                },
+                BlockOp {
+                    source_start: Some(138),
+                    op: vm::op_call_indirect as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(0), BlockOperand::U32(1)],
+                    inputs: vec![unsupported, eqz_value, table_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_direct_call_consumer(&graph, &body, 4);
+        assert_eq!(spec.specialized_arg_start, 1);
+        assert_eq!(spec.absorbed_ops, BTreeSet::from([1usize, 2usize, 3usize]));
+        assert_eq!(spec.arg_materializers.len(), 2);
+        assert_eq!(spec.arg_materializers[0].len(), 2);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][1].op,
+            vm::op_i32_eqz as Op
+        ));
+        assert_eq!(spec.arg_materializers[1].len(), 1);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[1][0].op,
+            vm::op_i32_const as Op
+        ));
+        assert!(verify_specialized_direct_call_lowering(
+            &graph, &body, 4, &spec
+        ));
+    }
+
+    #[test]
+    fn direct_call_relower_rejects_moved_local_get_across_same_slot_write() {
+        let src = LocalSlot::new(0, 4);
+        let mut graph = ValueGraph::default();
+        let local_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 15,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(15),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let overwrite = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 15,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(15),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(80),
+                    op: local_get_op(4),
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local_value],
+                },
+                BlockOp {
+                    source_start: Some(82),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![overwrite],
+                },
+                BlockOp {
+                    source_start: Some(84),
+                    op: vm::op_local_set4 as Op,
+                    kind: BlockOpKind::LocalSet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: vec![overwrite],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(86),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(3)],
+                    inputs: vec![local_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        assert!(build_specialized_direct_call_lowering(&graph, &body, 3, &body.ops[3]).is_none());
+    }
+
+    #[test]
+    fn direct_call_relower_rejects_local_tee_alias_across_same_slot_write() {
+        let dst = LocalSlot::new(24, 4);
+        let mut graph = ValueGraph::default();
+        let const_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(5)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(0),
+                materialized_block: Some(18),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let tee_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    base: AddressBaseKind::EntryLocal(dst),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(dst)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(dst)),
+                    Some(AddressShape {
+                        base: AddressBaseKind::EntryLocal(dst),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(dst)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(1),
+                materialized_block: Some(18),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let overwrite = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 18,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(9)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(2),
+                materialized_block: Some(18),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(110),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(5)],
+                    inputs: Vec::new(),
+                    values: vec![const_value],
+                },
+                BlockOp {
+                    source_start: Some(112),
+                    op: vm::op_local_tee4 as Op,
+                    kind: BlockOpKind::LocalTee,
+                    operands: vec![BlockOperand::LocalAddr(dst.addr)],
+                    inputs: vec![const_value],
+                    values: vec![tee_value],
+                },
+                BlockOp {
+                    source_start: Some(114),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(9)],
+                    inputs: Vec::new(),
+                    values: vec![overwrite],
+                },
+                BlockOp {
+                    source_start: Some(116),
+                    op: vm::op_local_set4 as Op,
+                    kind: BlockOpKind::LocalSet,
+                    operands: vec![BlockOperand::LocalAddr(dst.addr)],
+                    inputs: vec![overwrite],
+                    values: Vec::new(),
+                },
+                BlockOp {
+                    source_start: Some(118),
+                    op: vm::op_call as Op,
+                    kind: BlockOpKind::CallLike,
+                    operands: vec![BlockOperand::U32(8)],
+                    inputs: vec![tee_value],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        assert!(build_specialized_direct_call_lowering(&graph, &body, 4, &body.ops[4]).is_none());
     }
 
     #[test]

@@ -124,6 +124,7 @@ Phase 5 の call path は [`CallRecipeRef`](../../crates/telomere/src/common.rs)
 - runtime は [`decode_direct_call_recipe`](../../crates/telomere/src/runtime/vm/call.rs) で recipe slot を 1 回読むだけで callee を復元する。
 
 これにより、direct call hot path は repeated lookup を避けつつ、`op_call` / `op_return_call` の handler identity は保っている。
+import split (`op_call_import` / `op_return_call_import`) はこの ABI を共有したまま relower 対象に含める。indirect call path は handler と packed operand ABI を分離したまま、materializer canonicalization だけを relower が担当する。
 
 ## 6. Consumer-Driven Relower
 
@@ -133,12 +134,39 @@ Phase 5 の call path は [`CallRecipeRef`](../../crates/telomere/src/common.rs)
 
 ローカル系の specialization は [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) の consumer-driven builder 群で行う。
 
-- `local.set4`
-- `local.tee4`
-- `br_if`
-- `eqz/compare + br_if`
-- `local_get4 + i32.const + add/sub`
-- `local_get4 + local_get4 + i32.add`
+- direct `local.get4 + br_if`
+- `i32.eqz + br_if`
+- retained legacy `local_get4 + i32.const + add + tee + br_if`
+- generic `op_local_binop32*`
+  - `i32`: `add/sub/mul/and/or/xor/shl/shr_s/shr_u/rotl/rotr`
+  - `f32`: `add/sub/mul/div`
+- generic `op_local_binop64*`
+  - `i64`: `add/sub/mul/and/or/xor/shl/shr_s/shr_u/rotl/rotr`
+  - `f64`: `add/sub/mul/div`
+- generic `op_local_unary32*`
+  - `i32`: `clz/ctz/popcnt`
+  - `f32`: `abs/neg/sqrt/ceil/floor/trunc/nearest`
+- generic `op_local_unary64*`
+  - `i64`: `clz/ctz/popcnt`
+  - `f64`: `abs/neg/sqrt/ceil/floor/trunc/nearest`
+- generic `op_local_cmp32*`
+  - `i32`: `eq/ne/lt/le/gt/ge`
+  - `f32`: `eq/ne/lt/le/gt/ge`
+- generic `op_local_cmp64*`
+  - `i64`: `eq/ne/lt/le/gt/ge`
+  - `f64`: `eq/ne/lt/le/gt/ge`
+
+### 6.2 Call/Select family
+
+`select` は typed `op_select4/8/16` までを扱い、call path は handler identity を変えない。
+
+- direct / import direct / indirect call (`op_call` / `op_return_call` / `op_call_import` / `op_return_call_import` / `op_call_indirect` / `op_return_call_indirect`) は consumer-driven relower の対象に入っている
+- ただし call 自体を新 opcode family に置き換えるのではなく、call consumer 側で materializer 列だけを正本化する
+- direct call operand は引き続き `CallRecipeRef`
+- indirect call operand は引き続き `U32(tableidx), U32(typeidx)` のまま保つ
+- 正本化対象は local/scalar const leaf、`local.tee` の stable slot alias、そこからなる non-trapping unary/binop/cmp tree、`i32.eqz` / `i64.eqz`、およびそれらだけで構成された scalar `select` tree
+- partial apply は supported trailing suffix に限定する。unsupported prefix が 1 つでも出たら、その左側は generic materialization のまま残す。indirect call では table index もこの suffix 判定に含める
+- trap-sensitive tree、memory/call 由来値、ref/v128 const は generic fallback のまま残す
 
 provider elimination の条件は保守的に固定している。
 
@@ -150,7 +178,7 @@ provider elimination の条件は保守的に固定している。
 
 ### 6.2 Memory family
 
-memory は `AddressShape` を候補抽出に使いつつ、最終判定は `SlotRef` で行う。
+memory は `AddressShape` を候補抽出に使いつつ、最終判定は `SlotRef` で行う。adjacent provider pattern だけでなく、block argument / LICM / merge 後に residual graph 側へ残った `AddressShape` からでも、既存 `*_local_base` / `*_indexed_local_base` へ正規化できる場合は specialized path を選ぶ。
 
 - `local/spill + load`
 - `local/spill + const + add/sub + load`
@@ -206,6 +234,8 @@ family group は次の 3 群で固定する。
 - `local/control`
 - `memory`
 - `call/select`
+  - call relower は `op_call` / `op_return_call` / `op_call_import` / `op_return_call_import` / `op_call_indirect` / `op_return_call_indirect` の identity を保ったまま、materializer 列だけを consumer 側で正本化する
+  - 正本化対象は local/scalar const leaf、stable slot alias、`i32.eqz` / `i64.eqz` を含む non-trapping unary/binop/cmp tree と、それらだけで構成された scalar `select` tree。partial apply は trailing suffix 限定で、indirect call の table index もこの判定に含める
 
 ### 8.2 Runtime-side profiling
 

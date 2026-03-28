@@ -452,6 +452,222 @@ impl CallRecipeRef {
     }
 }
 
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalFastRhsShape {
+    Local = 0,
+    Const = 1,
+}
+
+impl LocalFastRhsShape {
+    const fn from_encoded(encoded: u32) -> Option<Self> {
+        match encoded & 1 {
+            0 => Some(Self::Local),
+            1 => Some(Self::Const),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalFastConstKind {
+    I32,
+    I64,
+    F32,
+    F64,
+}
+
+macro_rules! define_local_fast_kind {
+    ($name:ident { $($variant:ident => $const_kind:ident),+ $(,)? }) => {
+        #[repr(u32)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum $name {
+            $($variant,)+
+        }
+
+        impl $name {
+            pub(crate) const fn const_kind(self) -> LocalFastConstKind {
+                match self {
+                    $(Self::$variant => LocalFastConstKind::$const_kind,)+
+                }
+            }
+
+            const fn from_index(index: u32) -> Option<Self> {
+                match index {
+                    $(x if x == Self::$variant as u32 => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+define_local_fast_kind!(LocalBinop32Op {
+    I32Add => I32,
+    I32Sub => I32,
+    I32Mul => I32,
+    I32And => I32,
+    I32Or => I32,
+    I32Xor => I32,
+    I32Shl => I32,
+    I32ShrS => I32,
+    I32ShrU => I32,
+    I32Rotl => I32,
+    I32Rotr => I32,
+    F32Add => F32,
+    F32Sub => F32,
+    F32Mul => F32,
+    F32Div => F32,
+});
+
+define_local_fast_kind!(LocalBinop64Op {
+    I64Add => I64,
+    I64Sub => I64,
+    I64Mul => I64,
+    I64And => I64,
+    I64Or => I64,
+    I64Xor => I64,
+    I64Shl => I64,
+    I64ShrS => I64,
+    I64ShrU => I64,
+    I64Rotl => I64,
+    I64Rotr => I64,
+    F64Add => F64,
+    F64Sub => F64,
+    F64Mul => F64,
+    F64Div => F64,
+});
+
+define_local_fast_kind!(LocalCmp32Op {
+    I32Eq => I32,
+    I32Ne => I32,
+    I32LtS => I32,
+    I32LtU => I32,
+    I32GtS => I32,
+    I32GtU => I32,
+    I32LeS => I32,
+    I32LeU => I32,
+    I32GeS => I32,
+    I32GeU => I32,
+    F32Eq => F32,
+    F32Ne => F32,
+    F32Lt => F32,
+    F32Gt => F32,
+    F32Le => F32,
+    F32Ge => F32,
+});
+
+define_local_fast_kind!(LocalCmp64Op {
+    I64Eq => I64,
+    I64Ne => I64,
+    I64LtS => I64,
+    I64LtU => I64,
+    I64GtS => I64,
+    I64GtU => I64,
+    I64LeS => I64,
+    I64LeU => I64,
+    I64GeS => I64,
+    I64GeU => I64,
+    F64Eq => F64,
+    F64Ne => F64,
+    F64Lt => F64,
+    F64Gt => F64,
+    F64Le => F64,
+    F64Ge => F64,
+});
+
+define_local_fast_kind!(LocalUnary32Op {
+    I32Clz => I32,
+    I32Ctz => I32,
+    I32Popcnt => I32,
+    F32Abs => F32,
+    F32Neg => F32,
+    F32Sqrt => F32,
+    F32Ceil => F32,
+    F32Floor => F32,
+    F32Trunc => F32,
+    F32Nearest => F32,
+});
+
+define_local_fast_kind!(LocalUnary64Op {
+    I64Clz => I64,
+    I64Ctz => I64,
+    I64Popcnt => I64,
+    F64Abs => F64,
+    F64Neg => F64,
+    F64Sqrt => F64,
+    F64Ceil => F64,
+    F64Floor => F64,
+    F64Trunc => F64,
+    F64Nearest => F64,
+});
+
+pub(crate) const fn encode_local_binop32_kind(
+    op: LocalBinop32Op,
+    rhs_shape: LocalFastRhsShape,
+) -> u32 {
+    (op as u32) << 1 | rhs_shape as u32
+}
+
+pub(crate) const fn encode_local_binop64_kind(
+    op: LocalBinop64Op,
+    rhs_shape: LocalFastRhsShape,
+) -> u32 {
+    (op as u32) << 1 | rhs_shape as u32
+}
+
+pub(crate) const fn encode_local_cmp32_kind(op: LocalCmp32Op, rhs_shape: LocalFastRhsShape) -> u32 {
+    (op as u32) << 1 | rhs_shape as u32
+}
+
+pub(crate) const fn encode_local_cmp64_kind(op: LocalCmp64Op, rhs_shape: LocalFastRhsShape) -> u32 {
+    (op as u32) << 1 | rhs_shape as u32
+}
+
+pub(crate) const fn encode_local_unary32_kind(op: LocalUnary32Op) -> u32 {
+    op as u32
+}
+
+pub(crate) const fn encode_local_unary64_kind(op: LocalUnary64Op) -> u32 {
+    op as u32
+}
+
+pub(crate) fn decode_local_binop32_kind(kind: u32) -> Option<(LocalBinop32Op, LocalFastRhsShape)> {
+    Some((
+        LocalBinop32Op::from_index(kind >> 1)?,
+        LocalFastRhsShape::from_encoded(kind)?,
+    ))
+}
+
+pub(crate) fn decode_local_binop64_kind(kind: u32) -> Option<(LocalBinop64Op, LocalFastRhsShape)> {
+    Some((
+        LocalBinop64Op::from_index(kind >> 1)?,
+        LocalFastRhsShape::from_encoded(kind)?,
+    ))
+}
+
+pub(crate) fn decode_local_cmp32_kind(kind: u32) -> Option<(LocalCmp32Op, LocalFastRhsShape)> {
+    Some((
+        LocalCmp32Op::from_index(kind >> 1)?,
+        LocalFastRhsShape::from_encoded(kind)?,
+    ))
+}
+
+pub(crate) fn decode_local_cmp64_kind(kind: u32) -> Option<(LocalCmp64Op, LocalFastRhsShape)> {
+    Some((
+        LocalCmp64Op::from_index(kind >> 1)?,
+        LocalFastRhsShape::from_encoded(kind)?,
+    ))
+}
+
+pub(crate) fn decode_local_unary32_kind(kind: u32) -> Option<LocalUnary32Op> {
+    LocalUnary32Op::from_index(kind)
+}
+
+pub(crate) fn decode_local_unary64_kind(kind: u32) -> Option<LocalUnary64Op> {
+    LocalUnary64Op::from_index(kind)
+}
+
 #[derive(Clone, Copy)]
 pub union Operand {
     pub i32: i32,

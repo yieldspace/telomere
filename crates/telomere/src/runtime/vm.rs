@@ -197,6 +197,12 @@ fn handler_layout_group(label: &'static str) -> HandlerLayoutGroup {
     }
     if label.starts_with("op_local_get4_i32_const_add")
         || label.starts_with("op_local_get4_local_get4_i32_add")
+        || label.starts_with("op_local_binop32")
+        || label.starts_with("op_local_binop64")
+        || label.starts_with("op_local_cmp32")
+        || label.starts_with("op_local_cmp64")
+        || label.starts_with("op_local_unary32")
+        || label.starts_with("op_local_unary64")
         || matches!(
             label,
             "op_local_get4_br_if"
