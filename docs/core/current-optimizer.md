@@ -167,11 +167,10 @@ import split (`op_call_import` / `op_return_call_import`) はこの ABI を共�
 - 正本化対象は 2 系統ある。movable tree は local/scalar const leaf、`local.tee` の stable slot alias、`op_ref_null` / `op_ref_func` / `v128.const` の zero-input leaf、そこからなる non-trapping unary/binop/cmp tree、`i32.eqz` / `i64.eqz`、それらだけで構成された scalar `select` tree。anchored tree は nested `op_call*`、numeric trap-sensitive op (`i32/i64 div/rem`, `i32/i64 trunc_*`)、`global.get4/8/16`、`table.get`、それらを child に含む scalar `select` と contiguous `memory.load` leaf
 - partial apply は supported trailing suffix に限定する。unsupported prefix が 1 つでも出たら、その左側は generic materialization のまま残す。indirect call では table index もこの suffix 判定に含める
 - pure で non-anchored な tree については、provider elimination が `multi-use`、`needs_spill`、same-block の memory-address shared で止まる場合でも、call 直前で materializer 列だけを replay して specialized suffix に含められる
-- anchored tree や mixed site の hole で strict contiguous trailing suffix を満たせない場合は、same-block straight-line な範囲に限って temp-local windowing を行う。root producer の直後で synthetic `local.set temp` に退避し、call 直前で synthetic `local.get temp` を差し込んで suffix relower が扱える形へ寄せる
-- ただし providerless な control-produced scalar const は replay しない。nested block/if が元の値を stack へ返すケースでは duplicate stack を作るため、現状は generic fallback に残す
+- anchored tree や mixed site の hole で strict contiguous trailing suffix を満たせない場合は、CFG-aware な temp-local windowing を行う。same-block straight-line な rooted tree は producer 直後で synthetic `local.set temp` に退避し、call 直前で synthetic `local.get temp` を差し込む。cross-block な merge-fed value や successor block argument は、列挙可能な predecessor edge それぞれで temp write を差し込み、call block 側では同じ temp local を読む形へ寄せる
 - `memory.load` leaf は、address subtree も含めて contiguous trailing suffix に完全に収まり、address 側が safe scalar tree か anchored child を含む safe scalar tree に落ちる場合だけ許可する
-- temp-local windowing も call relower 本体の任意位置 partial apply ではなく、call 前の window を suffix へ正規化するだけに留める。cross-block / control-boundary rewrite や handler 差し替えは行わない
-- 依然として対象外なのは inner `return_call*` result、store、control、block 境界や control 境界を跨ぐ rewrite である
+- temp-local windowing も call relower 本体の任意位置 partial apply ではなく、call 前の window を suffix へ正規化するだけに留める。reducible CFG 上で predecessor edge を列挙できる範囲までは block/control 境界を跨いで temp local 化するが、irreducible CFG、cross-function consumer、handler 差し替えは行わない
+- 依然として対象外なのは inner `return_call*` result、store root、control terminator 自体、列挙不能な CFG を跨ぐ rewrite である
 
 provider elimination の条件は保守的に固定している。これに引っかかった pure tree は provider を消さず replay-only で扱うことがある。
 
@@ -240,7 +239,9 @@ family group は次の 3 群で固定する。
 - `memory`
 - `call/select`
   - call relower は `op_call` / `op_return_call` / `op_call_import` / `op_return_call_import` / `op_call_indirect` / `op_return_call_indirect` の identity を保ったまま、materializer 列だけを consumer 側で正本化する
-  - 正本化対象は local/scalar const leaf、stable slot alias、`op_ref_null` / `op_ref_func` / `v128.const` の zero-input leaf、`i32.eqz` / `i64.eqz` を含む non-trapping unary/binop/cmp tree、nested `op_call*`、numeric trap-sensitive op (`i32/i64 div/rem`, `i32/i64 trunc_*`)、`global.get4/8/16`、`table.get`、それらを child に含む scalar `select`、contiguous trailing suffix に閉じた `memory.load` leaf、そして replay-only pure tree と temp-local windowing で suffix 化した anchored/hole site。partial apply 自体は trailing suffix 限定のままで、indirect call の table index もこの判定に含める
+  - 正本化対象は local/scalar const leaf、stable slot alias、`op_ref_null` / `op_ref_func` / `v128.const` の zero-input leaf、`i32.eqz` / `i64.eqz` を含む non-trapping unary/binop/cmp tree、nested `op_call*`、numeric trap-sensitive op (`i32/i64 div/rem`, `i32/i64 trunc_*`)、`global.get4/8/16`、`table.get`、それらを child に含む scalar `select`、contiguous trailing suffix に閉じた `memory.load` leaf、replay-only pure tree、そして CFG-aware temp-local windowing で suffix 化した anchored / merge-fed / mixed site。partial apply 自体は trailing suffix 限定のままで、indirect call の table index もこの判定に含める
+  - temp-local windowing は same-block だけでなく、列挙可能な predecessor edge を持つ reducible CFG まで広げている。`if` / `br_if` / `special_block_return` を経た merge result や successor block argument は predecessor 側で temp write し、call block では synthetic `local.get temp` を読む
+  - `return_call*` 自体は terminator のまま保持し、値 producer には再分類しない。対象に入るのは `return_call*` を含む分岐の merge 結果までである
 
 ### 8.2 Runtime-side profiling
 

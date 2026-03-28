@@ -2875,6 +2875,163 @@ async fn optimizer_call_relower_temp_local_windowing_remains_correct() {
 }
 
 #[tokio::test]
+async fn optimizer_call_relower_cross_block_merge_and_return_paths_remain_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (type $id_t (func (param i32) (result i32)))
+          (type $inc_t (func (param i32) (result i32)))
+          (type $sum3_t (func (param i32 i32 i32) (result i32)))
+
+          (func $id (type $id_t) (param i32) (result i32)
+            local.get 0)
+
+          (func $inc (type $inc_t) (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+
+          (func $sum3 (type $sum3_t) (param i32 i32 i32) (result i32)
+            local.get 0
+            local.get 1
+            i32.add
+            local.get 2
+            i32.add)
+
+          (table 1 funcref)
+          (elem (i32.const 0) $sum3)
+
+          (func (export "merge_direct") (param i32 i32) (result i32)
+            (local $tmp i32)
+            (call $sum3
+              (i32.const 10)
+              (local.tee $tmp
+                (call $inc (local.get 0)))
+              (if (result i32)
+                (local.get 1)
+                (then
+                  (block (result i32)
+                    (drop (i32.eqz (local.get $tmp)))
+                    (i32.const 2)))
+                (else
+                  (block (result i32)
+                    (drop (i32.eqz (local.get $tmp)))
+                    (i32.const 3))))))
+
+          (func (export "merge_indirect") (param i32 i32) (result i32)
+            (local $tmp i32)
+            (call_indirect (type $sum3_t)
+              (i32.const 10)
+              (local.tee $tmp
+                (call $inc (local.get 0)))
+              (if (result i32)
+                (local.get 1)
+                (then
+                  (block (result i32)
+                    (drop (i32.eqz (local.get $tmp)))
+                    (i32.const 2)))
+                (else
+                  (block (result i32)
+                    (drop (i32.eqz (local.get $tmp)))
+                    (i32.const 3))))
+              (if (result i32)
+                (local.get 1)
+                (then (i32.const 0))
+                (else (i32.const 0)))))
+
+          (func (export "guarded_return_then_call") (param i32 i32) (result i32)
+            (local $tmp i32)
+            local.get 1
+            if
+              local.get 0
+              return_call $id
+            end
+            (call $sum3
+              (i32.const 10)
+              (local.tee $tmp
+                (call $inc (local.get 0)))
+              (block (result i32)
+                (drop (i32.eqz (local.get $tmp)))
+                (i32.const 2))))
+
+          (func (export "guarded_return_then_indirect") (param i32 i32) (result i32)
+            (local $tmp i32)
+            local.get 1
+            if
+              local.get 0
+              return_call $id
+            end
+            (return_call_indirect (type $sum3_t)
+              (i32.const 10)
+              (local.tee $tmp
+                (call $inc (local.get 0)))
+              (block (result i32)
+                (drop (i32.eqz (local.get $tmp)))
+                (i32.const 2))
+              (if (result i32)
+                (local.get 1)
+                (then (i32.const 0))
+                (else (i32.const 0)))))
+        )
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for (name, args, expected) in [
+        (
+            "merge_direct",
+            vec![WasmValue::I32(5), WasmValue::I32(1)],
+            ResultValue::new(vec![WasmValue::I32(18)]),
+        ),
+        (
+            "merge_direct",
+            vec![WasmValue::I32(5), WasmValue::I32(0)],
+            ResultValue::new(vec![WasmValue::I32(19)]),
+        ),
+        (
+            "merge_indirect",
+            vec![WasmValue::I32(5), WasmValue::I32(1)],
+            ResultValue::new(vec![WasmValue::I32(18)]),
+        ),
+        (
+            "merge_indirect",
+            vec![WasmValue::I32(5), WasmValue::I32(0)],
+            ResultValue::new(vec![WasmValue::I32(19)]),
+        ),
+        (
+            "guarded_return_then_call",
+            vec![WasmValue::I32(5), WasmValue::I32(0)],
+            ResultValue::new(vec![WasmValue::I32(18)]),
+        ),
+        (
+            "guarded_return_then_call",
+            vec![WasmValue::I32(5), WasmValue::I32(1)],
+            ResultValue::new(vec![WasmValue::I32(5)]),
+        ),
+        (
+            "guarded_return_then_indirect",
+            vec![WasmValue::I32(5), WasmValue::I32(0)],
+            ResultValue::new(vec![WasmValue::I32(18)]),
+        ),
+        (
+            "guarded_return_then_indirect",
+            vec![WasmValue::I32(5), WasmValue::I32(1)],
+            ResultValue::new(vec![WasmValue::I32(5)]),
+        ),
+    ] {
+        let result = run_module_function(&instance, &store, name, &ResultValue::new(args)).await;
+        match result {
+            VMResult::Success(values) => assert_eq!(values, expected, "{name}"),
+            other => panic!("{name} cross-block call relower case must succeed, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn optimizer_preserves_break_and_block_param_flows() {
     let store = Store::new();
     let registry = Registry::new();

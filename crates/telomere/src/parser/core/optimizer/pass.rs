@@ -108,6 +108,8 @@ struct RelowerPlan {
     loop_invariants: Vec<LoopInvariantSet>,
     block_copy_plans: Vec<BlockCopyPlan>,
     entry_prefix_ops: Vec<BlockOp>,
+    block_prefix_ops: Vec<Vec<BlockOp>>,
+    block_suffix_ops: Vec<Vec<BlockOp>>,
 }
 
 #[derive(Default)]
@@ -1618,15 +1620,10 @@ pub(crate) fn optimize_function(
         &program,
         &rewrite.relower.block_bodies
     ));
-    normalize_call_relower_windows(
-        &mut rewrite.relower.block_bodies,
-        &mut rewrite.graph,
-        locals,
-        param_bytes,
-    );
+    normalize_call_relower_regions(&program, &mut rewrite, locals, param_bytes);
     debug_assert!(verify_call_relower_window_normalization(
         &rewrite.graph,
-        &rewrite.relower.block_bodies
+        &rewrite.relower
     ));
     debug_assert!(verify_explicit_effect_ir(
         &program,
@@ -1670,7 +1667,7 @@ pub(crate) fn optimize_function(
                 ));
             }
             packed_ops.extend(relower_block_body(
-                &rewrite.relower.block_bodies[block.id],
+                &combined_relower_block_body(&rewrite.relower, block.id),
                 &rewrite.graph,
                 &spill_plan,
             ));
@@ -1728,6 +1725,8 @@ fn rewrite_program(
             loop_invariants: vec![LoopInvariantSet::default(); program.blocks.len()],
             block_copy_plans: vec![BlockCopyPlan::default(); program.blocks.len()],
             entry_prefix_ops: Vec::new(),
+            block_prefix_ops: vec![Vec::new(); program.blocks.len()],
+            block_suffix_ops: vec![Vec::new(); program.blocks.len()],
         },
         graph: ValueGraph::default(),
     };
@@ -1841,6 +1840,8 @@ fn clear_block_rewrite(graph: &ValueGraph, rewrite: &mut FunctionRewrite, block_
     let invariants_changed =
         rewrite.relower.loop_invariants[block_id] != LoopInvariantSet::default();
     let copy_plan_changed = rewrite.relower.block_copy_plans[block_id] != BlockCopyPlan::default();
+    let prefix_changed = !rewrite.relower.block_prefix_ops[block_id].is_empty();
+    let suffix_changed = !rewrite.relower.block_suffix_ops[block_id].is_empty();
     if entry_changed {
         rewrite.entries[block_id] = BlockEntryState::default();
     }
@@ -1856,7 +1857,19 @@ fn clear_block_rewrite(graph: &ValueGraph, rewrite: &mut FunctionRewrite, block_
     if copy_plan_changed {
         rewrite.relower.block_copy_plans[block_id] = BlockCopyPlan::default();
     }
-    entry_changed || exit_changed || body_changed || invariants_changed || copy_plan_changed
+    if prefix_changed {
+        rewrite.relower.block_prefix_ops[block_id].clear();
+    }
+    if suffix_changed {
+        rewrite.relower.block_suffix_ops[block_id].clear();
+    }
+    entry_changed
+        || exit_changed
+        || body_changed
+        || invariants_changed
+        || copy_plan_changed
+        || prefix_changed
+        || suffix_changed
 }
 
 fn enqueue_successors(
@@ -4275,15 +4288,31 @@ fn allocate_optimizer_temp_slot(locals: &mut LocalsData, param_bytes: u32, ty: V
     param_bytes + locals.allocate_temp_slot(ty)
 }
 
-fn normalize_call_relower_windows(
-    bodies: &mut [BlockBody],
-    graph: &mut ValueGraph,
+fn normalize_call_relower_regions(
+    program: &BasicBlockProgram,
+    rewrite: &mut FunctionRewrite,
     locals: &mut LocalsData,
     param_bytes: u32,
 ) {
-    for (block_id, body) in bodies.iter_mut().enumerate() {
-        normalize_call_relower_body_windows(block_id, body, graph, locals, param_bytes);
-        recompute_body_materialization_indices(block_id, body, graph);
+    loop {
+        let mut changed = false;
+        for (block_id, body) in rewrite.relower.block_bodies.iter_mut().enumerate() {
+            let before_len = body.ops.len();
+            normalize_call_relower_body_windows(
+                block_id,
+                body,
+                &mut rewrite.graph,
+                locals,
+                param_bytes,
+            );
+            recompute_body_materialization_indices(block_id, body, &mut rewrite.graph);
+            changed |= body.ops.len() != before_len;
+        }
+        changed |=
+            normalize_cross_block_call_relower_regions(program, rewrite, locals, param_bytes);
+        if !changed {
+            break;
+        }
     }
 }
 
@@ -4515,6 +4544,438 @@ fn call_input_requires_temp_window(body: &BlockBody, provider_idx: usize, call_i
     call_temp_window_buffer_anchor(body, provider_idx, call_idx) != provider_idx + 1
 }
 
+fn normalize_cross_block_call_relower_regions(
+    program: &BasicBlockProgram,
+    rewrite: &mut FunctionRewrite,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+) -> bool {
+    let mut changed = false;
+    let mut visiting = HashSet::new();
+    for block_id in 0..rewrite.relower.block_bodies.len() {
+        let mut op_idx = 0usize;
+        while op_idx < rewrite.relower.block_bodies[block_id].ops.len() {
+            let Some(op) = rewrite.relower.block_bodies[block_id]
+                .ops
+                .get(op_idx)
+                .cloned()
+            else {
+                break;
+            };
+            if op.kind != BlockOpKind::CallLike
+                || !call_relower_target_op(op.op)
+                || op.inputs.is_empty()
+            {
+                op_idx += 1;
+                continue;
+            }
+            let mut occupied_suffix_ops = BTreeSet::new();
+            for (arg_idx, input) in op.inputs.iter().copied().enumerate().rev() {
+                if let Some(matched) = match_direct_call_input_materializer_for_call(
+                    &rewrite.graph,
+                    &rewrite.relower.block_bodies[block_id],
+                    op_idx,
+                    &occupied_suffix_ops,
+                    input,
+                ) {
+                    occupied_suffix_ops.extend(matched.absorbed_ops);
+                    continue;
+                }
+                if producer_op_index_before(&rewrite.relower.block_bodies[block_id], input, op_idx)
+                    .is_some()
+                {
+                    break;
+                }
+                if let Some(temp_slot) = ensure_cross_block_call_input_temp(
+                    program,
+                    rewrite,
+                    locals,
+                    param_bytes,
+                    block_id,
+                    input,
+                    &mut visiting,
+                ) {
+                    let input_ty = rewrite.graph[input.0].ty;
+                    let temp_value = make_call_temp_local_value(
+                        block_id,
+                        &mut rewrite.graph,
+                        temp_slot,
+                        input_ty,
+                    );
+                    let local_get = BlockOp {
+                        source_start: None,
+                        op: local_get_op(temp_slot.size),
+                        kind: BlockOpKind::LocalGet,
+                        operands: vec![BlockOperand::LocalAddr(temp_slot.addr)],
+                        inputs: Vec::new(),
+                        values: vec![temp_value],
+                    };
+                    {
+                        let body = &mut rewrite.relower.block_bodies[block_id];
+                        body.ops.insert(op_idx, local_get);
+                        op_idx += 1;
+                        body.ops[op_idx].inputs[arg_idx] = temp_value;
+                    }
+                    recompute_body_materialization_indices(
+                        block_id,
+                        &rewrite.relower.block_bodies[block_id],
+                        &mut rewrite.graph,
+                    );
+                    let matched = match_direct_call_input_materializer_for_call(
+                        &rewrite.graph,
+                        &rewrite.relower.block_bodies[block_id],
+                        op_idx,
+                        &occupied_suffix_ops,
+                        temp_value,
+                    )
+                    .expect("cross-block temp-local windowing must leave the buffered arg materializable");
+                    occupied_suffix_ops.extend(matched.absorbed_ops);
+                    changed = true;
+                    continue;
+                }
+                break;
+            }
+            op_idx += 1;
+        }
+    }
+    changed
+}
+
+fn ensure_cross_block_call_input_temp(
+    program: &BasicBlockProgram,
+    rewrite: &mut FunctionRewrite,
+    locals: &mut LocalsData,
+    param_bytes: u32,
+    block_id: usize,
+    value: ValueRef,
+    visiting: &mut HashSet<(usize, usize)>,
+) -> Option<LocalSlot> {
+    if let Some(slot) = effective_slot_shape(&rewrite.graph, value)
+        .and_then(|shape| shape.slot)
+        .and_then(materializable_slot)
+    {
+        return Some(slot);
+    }
+    let node = rewrite.graph[value.0].clone();
+    if node.is_effect_result() || value_type_size(node.ty).is_none() {
+        return None;
+    }
+    if successor_entry_stack_ordinal_for_input(rewrite, block_id, value).is_some() {
+        let size = value_type_size(node.ty)?;
+        let temp = LocalSlot::new(
+            allocate_optimizer_temp_slot(locals, param_bytes, node.ty),
+            size,
+        );
+        rewrite.relower.block_prefix_ops[block_id].push(BlockOp {
+            source_start: None,
+            op: local_set_op(temp.size),
+            kind: BlockOpKind::LocalSet,
+            operands: vec![BlockOperand::LocalAddr(temp.addr)],
+            inputs: vec![value],
+            values: Vec::new(),
+        });
+        set_value_slot_shape(
+            &mut rewrite.graph,
+            value,
+            Some(SlotRef::temp_local(temp)),
+            node.address_shape,
+            node.loop_value_shape,
+        );
+        return Some(temp);
+    }
+    let visit_key = (block_id, value.0);
+    if !visiting.insert(visit_key) {
+        return None;
+    }
+    let size = value_type_size(node.ty)?;
+    let temp = LocalSlot::new(
+        allocate_optimizer_temp_slot(locals, param_bytes, node.ty),
+        size,
+    );
+    let mut saw_reachable_pred = false;
+    for pred in &program.predecessors[block_id] {
+        if !rewrite.exits[*pred].reachable {
+            continue;
+        }
+        saw_reachable_pred = true;
+        let pred_value =
+            resolve_predecessor_call_input_value(program, rewrite, block_id, *pred, value)?;
+        buffer_cross_block_predecessor_value(
+            program,
+            rewrite,
+            locals,
+            CrossBlockPredecessorBufferTarget {
+                pred_block_id: *pred,
+                value: pred_value,
+                temp,
+                param_bytes,
+            },
+            visiting,
+        )?;
+    }
+    visiting.remove(&visit_key);
+    if !saw_reachable_pred {
+        return None;
+    }
+    set_value_slot_shape(
+        &mut rewrite.graph,
+        value,
+        Some(SlotRef::temp_local(temp)),
+        node.address_shape,
+        node.loop_value_shape,
+    );
+    Some(temp)
+}
+
+#[derive(Clone, Copy)]
+struct CrossBlockPredecessorBufferTarget {
+    pred_block_id: usize,
+    value: ValueRef,
+    temp: LocalSlot,
+    param_bytes: u32,
+}
+
+fn successor_entry_stack_ordinal_for_input(
+    rewrite: &FunctionRewrite,
+    block_id: usize,
+    input: ValueRef,
+) -> Option<usize> {
+    rewrite.entries[block_id]
+        .stack
+        .iter()
+        .position(|value| *value == input)
+}
+
+fn resolve_predecessor_call_input_value(
+    _program: &BasicBlockProgram,
+    rewrite: &FunctionRewrite,
+    succ_block_id: usize,
+    pred_block_id: usize,
+    input: ValueRef,
+) -> Option<ValueRef> {
+    let entry = &rewrite.entries[succ_block_id];
+    let pred_exit = &rewrite.exits[pred_block_id];
+    if let Some((ordinal, _)) = entry
+        .stack
+        .iter()
+        .enumerate()
+        .find(|(_, value)| **value == input)
+    {
+        return pred_exit.stack.get(ordinal).copied();
+    }
+    if let Some((slot, _)) = entry.locals.iter().find(|(_, value)| **value == input) {
+        return pred_exit.locals.get(slot).copied();
+    }
+    let (alias_key, _) = entry.aliases.iter().find(|(_, value)| **value == input)?;
+    if let Some(value) = pred_exit.aliases.get(alias_key) {
+        return Some(*value);
+    }
+    let join_key = join_alias_key(alias_key)?;
+    let mut matches = pred_exit.aliases.iter().filter_map(|(pred_key, value)| {
+        (join_alias_key(pred_key) == Some(join_key.clone())).then_some(*value)
+    });
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
+}
+
+fn buffer_cross_block_predecessor_value(
+    program: &BasicBlockProgram,
+    rewrite: &mut FunctionRewrite,
+    locals: &mut LocalsData,
+    target: CrossBlockPredecessorBufferTarget,
+    visiting: &mut HashSet<(usize, usize)>,
+) -> Option<()> {
+    let CrossBlockPredecessorBufferTarget {
+        pred_block_id,
+        value,
+        temp,
+        param_bytes,
+    } = target;
+    let body = &mut rewrite.relower.block_bodies[pred_block_id];
+    if let Some(provider_idx) = producer_op_index_before(body, value, body.ops.len()) {
+        let provider = body.ops.get(provider_idx)?.clone();
+        if block_op_single_result(&provider) != Some(value)
+            || !call_temp_window_bufferable_provider(&provider)
+        {
+            return None;
+        }
+        let insert_idx = call_temp_window_buffer_anchor(body, provider_idx, body.ops.len());
+        body.ops.insert(
+            insert_idx,
+            BlockOp {
+                source_start: None,
+                op: local_set_op(temp.size),
+                kind: BlockOpKind::LocalSet,
+                operands: vec![BlockOperand::LocalAddr(temp.addr)],
+                inputs: vec![value],
+                values: Vec::new(),
+            },
+        );
+        recompute_body_materialization_indices(pred_block_id, body, &mut rewrite.graph);
+        return Some(());
+    }
+
+    if let Some(slot_ref) = effective_slot_shape(&rewrite.graph, value).and_then(|shape| shape.slot)
+    {
+        materializable_slot(slot_ref)?;
+        let value_ty = rewrite.graph[value.0].ty;
+        append_block_prefix_temp_write_from_slot(
+            &mut rewrite.relower.block_prefix_ops[pred_block_id],
+            pred_block_id,
+            &mut rewrite.graph,
+            slot_ref,
+            value_ty,
+            temp,
+        );
+        return Some(());
+    }
+
+    if let Some(operand) = scalar_const_operand_from_value(rewrite.graph[value.0].const_value) {
+        let value_ty = rewrite.graph[value.0].ty;
+        append_block_prefix_temp_write_from_const(
+            &mut rewrite.relower.block_prefix_ops[pred_block_id],
+            pred_block_id,
+            &mut rewrite.graph,
+            value_ty,
+            operand,
+            temp,
+        )?;
+        return Some(());
+    }
+
+    if rewrite.graph[value.0].is_block_argument() {
+        let source_slot = ensure_cross_block_call_input_temp(
+            program,
+            rewrite,
+            locals,
+            param_bytes,
+            pred_block_id,
+            value,
+            visiting,
+        )?;
+        let value_ty = rewrite.graph[value.0].ty;
+        append_block_prefix_temp_write_from_slot(
+            &mut rewrite.relower.block_prefix_ops[pred_block_id],
+            pred_block_id,
+            &mut rewrite.graph,
+            SlotRef::temp_local(source_slot),
+            value_ty,
+            temp,
+        );
+        return Some(());
+    }
+
+    None
+}
+
+fn append_block_prefix_temp_write_from_slot(
+    prefix_ops: &mut Vec<BlockOp>,
+    block_id: usize,
+    graph: &mut ValueGraph,
+    source_slot: SlotRef,
+    ty: ValType,
+    temp: LocalSlot,
+) {
+    let source_value = make_prefix_slot_value(block_id, graph, source_slot, ty);
+    prefix_ops.push(BlockOp {
+        source_start: None,
+        op: local_get_op(source_slot.slot.size),
+        kind: BlockOpKind::LocalGet,
+        operands: vec![BlockOperand::LocalAddr(source_slot.slot.addr)],
+        inputs: Vec::new(),
+        values: vec![source_value],
+    });
+    prefix_ops.push(BlockOp {
+        source_start: None,
+        op: local_set_op(temp.size),
+        kind: BlockOpKind::LocalSet,
+        operands: vec![BlockOperand::LocalAddr(temp.addr)],
+        inputs: vec![source_value],
+        values: Vec::new(),
+    });
+}
+
+fn append_block_prefix_temp_write_from_const(
+    prefix_ops: &mut Vec<BlockOp>,
+    block_id: usize,
+    graph: &mut ValueGraph,
+    ty: ValType,
+    operand: BlockOperand,
+    temp: LocalSlot,
+) -> Option<()> {
+    let (op, const_value) = match operand {
+        BlockOperand::I32(value) => (vm::op_i32_const as Op, ConstValue::I32(value)),
+        BlockOperand::I64(value) => (vm::op_i64_const as Op, ConstValue::I64(value)),
+        BlockOperand::F32(value) => (vm::op_f32_const as Op, ConstValue::F32(value)),
+        BlockOperand::F64(value) => (vm::op_f64_const as Op, ConstValue::F64(value)),
+        _ => return None,
+    };
+    let const_value_ref = make_prefix_const_value(block_id, graph, ty, const_value);
+    prefix_ops.push(BlockOp {
+        source_start: None,
+        op,
+        kind: BlockOpKind::Const,
+        operands: vec![operand],
+        inputs: Vec::new(),
+        values: vec![const_value_ref],
+    });
+    prefix_ops.push(BlockOp {
+        source_start: None,
+        op: local_set_op(temp.size),
+        kind: BlockOpKind::LocalSet,
+        operands: vec![BlockOperand::LocalAddr(temp.addr)],
+        inputs: vec![const_value_ref],
+        values: Vec::new(),
+    });
+    Some(())
+}
+
+fn make_prefix_slot_value(
+    block_id: usize,
+    graph: &mut ValueGraph,
+    slot_ref: SlotRef,
+    ty: ValType,
+) -> ValueRef {
+    let value = ensure_seed_value(
+        graph,
+        ty,
+        ExprOrigin {
+            block_id,
+            ordinal: slot_ref.slot.addr as usize,
+            kind: ExprOriginKind::EntryLocal,
+        },
+    );
+    set_value_slot_shape(graph, value, Some(slot_ref), None, None);
+    let node = &mut graph[value.0];
+    node.use_count = 1;
+    node.removable = true;
+    node.refresh_optimizer_metadata();
+    value
+}
+
+fn make_prefix_const_value(
+    block_id: usize,
+    graph: &mut ValueGraph,
+    ty: ValType,
+    const_value: ConstValue,
+) -> ValueRef {
+    let value = ensure_seed_value(
+        graph,
+        ty,
+        ExprOrigin {
+            block_id,
+            ordinal: graph.nodes.len(),
+            kind: ExprOriginKind::SyntheticConst,
+        },
+    );
+    let node = &mut graph[value.0];
+    node.const_value = Some(const_value);
+    node.use_count = 1;
+    node.removable = true;
+    node.refresh_optimizer_metadata();
+    value
+}
+
 fn call_temp_window_buffer_anchor(body: &BlockBody, provider_idx: usize, call_idx: usize) -> usize {
     body.ops
         .iter()
@@ -4584,14 +5045,15 @@ fn recompute_body_materialization_indices(
     }
 }
 
-fn verify_call_relower_window_normalization(graph: &ValueGraph, bodies: &[BlockBody]) -> bool {
-    for (block_id, body) in bodies.iter().enumerate() {
+fn verify_call_relower_window_normalization(graph: &ValueGraph, relower: &RelowerPlan) -> bool {
+    for block_id in 0..relower.block_bodies.len() {
+        let body = combined_relower_block_body(relower, block_id);
         for (op_idx, op) in body.ops.iter().enumerate() {
             if op.kind != BlockOpKind::CallLike || !call_relower_target_op(op.op) {
                 continue;
             }
             for input in &op.inputs {
-                let Some(provider_idx) = producer_op_index_before(body, *input, op_idx) else {
+                let Some(provider_idx) = producer_op_index_before(&body, *input, op_idx) else {
                     continue;
                 };
                 let Some(provider) = body.ops.get(provider_idx) else {
@@ -4613,7 +5075,6 @@ fn verify_call_relower_window_normalization(graph: &ValueGraph, bodies: &[BlockB
                 };
                 if temp_slot != SlotRef::temp_local(slot)
                     || graph[input.0].materialized_block != Some(block_id)
-                    || graph[input.0].materialized_op != Some(provider_idx)
                 {
                     return false;
                 }
@@ -4624,6 +5085,27 @@ fn verify_call_relower_window_normalization(graph: &ValueGraph, bodies: &[BlockB
         }
     }
     true
+}
+
+fn combined_relower_block_body(relower: &RelowerPlan, block_id: usize) -> BlockBody {
+    let body = &relower.block_bodies[block_id];
+    if relower.block_prefix_ops[block_id].is_empty()
+        && relower.block_suffix_ops[block_id].is_empty()
+    {
+        return body.clone();
+    }
+    let mut ops = Vec::with_capacity(
+        relower.block_prefix_ops[block_id].len()
+            + body.ops.len()
+            + relower.block_suffix_ops[block_id].len(),
+    );
+    ops.extend(relower.block_prefix_ops[block_id].iter().cloned());
+    ops.extend(body.ops.iter().cloned());
+    ops.extend(relower.block_suffix_ops[block_id].iter().cloned());
+    BlockBody {
+        ops,
+        terminator: body.terminator.clone(),
+    }
 }
 
 fn relower_block_body(
@@ -18879,6 +19361,159 @@ mod tests {
         ));
 
         let _ = hole_value;
+    }
+
+    #[test]
+    fn cross_block_call_relower_normalization_inserts_temp_read_for_block_entry_value() {
+        let mut graph = ValueGraph::default();
+        let pred_value = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 0,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(2)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: None,
+                materialized_block: None,
+                materialized_op: None,
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let block_arg =
+            graph.ensure_block_argument(1, 0, ValType::I32, None, None, None, None, None);
+        let call_result = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 1,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(0),
+                materialized_block: Some(1),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 0,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let program = BasicBlockProgram {
+            records: Vec::new(),
+            blocks: vec![
+                BasicBlock {
+                    id: 0,
+                    start: 0,
+                    end: 0,
+                },
+                BasicBlock {
+                    id: 1,
+                    start: 0,
+                    end: 0,
+                },
+            ],
+            old_start_to_block: HashMap::new(),
+            successors: vec![vec![1], Vec::new()],
+            predecessors: vec![Vec::new(), vec![0]],
+        };
+        let mut rewrite = FunctionRewrite {
+            entries: vec![
+                BlockEntryState {
+                    reachable: true,
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState {
+                    reachable: true,
+                    stack: vec![block_arg],
+                    ..BlockEntryState::default()
+                },
+            ],
+            exits: vec![
+                BlockEntryState {
+                    reachable: true,
+                    stack: vec![pred_value],
+                    ..BlockEntryState::default()
+                },
+                BlockEntryState::default(),
+            ],
+            graph,
+            relower: RelowerPlan {
+                block_bodies: vec![
+                    BlockBody::default(),
+                    BlockBody {
+                        ops: vec![BlockOp {
+                            source_start: Some(22),
+                            op: vm::op_call as Op,
+                            kind: BlockOpKind::CallLike,
+                            operands: vec![BlockOperand::U32(7)],
+                            inputs: vec![block_arg],
+                            values: vec![call_result],
+                        }],
+                        terminator: None,
+                    },
+                ],
+                loop_invariants: vec![LoopInvariantSet::default(); 2],
+                block_copy_plans: vec![BlockCopyPlan::default(); 2],
+                entry_prefix_ops: Vec::new(),
+                block_prefix_ops: vec![Vec::new(), Vec::new()],
+                block_suffix_ops: vec![Vec::new(), Vec::new()],
+            },
+        };
+        let mut locals = LocalsData::default();
+
+        assert!(normalize_cross_block_call_relower_regions(
+            &program,
+            &mut rewrite,
+            &mut locals,
+            0,
+        ));
+        assert_eq!(rewrite.relower.block_prefix_ops[1].len(), 1);
+        assert!(matches!(
+            rewrite.relower.block_prefix_ops[1][0].kind,
+            BlockOpKind::LocalSet
+        ));
+        assert_eq!(rewrite.relower.block_bodies[1].ops.len(), 2);
+        assert!(matches!(
+            rewrite.relower.block_bodies[1].ops[0].kind,
+            BlockOpKind::LocalGet
+        ));
+
+        let combined = combined_relower_block_body(&rewrite.relower, 1);
+        let call_idx = combined.ops.len() - 1;
+        let spec = expect_specialized_direct_call_consumer(&rewrite.graph, &combined, call_idx);
+        assert_eq!(spec.specialized_arg_start, 0);
+        assert_eq!(spec.arg_materializers.len(), 1);
+        assert_eq!(spec.arg_materializers[0].len(), 1);
+        assert!(std::ptr::fn_addr_eq(
+            spec.arg_materializers[0][0].op,
+            vm::op_local_get4 as Op
+        ));
+        assert!(verify_call_relower_window_normalization(
+            &rewrite.graph,
+            &rewrite.relower,
+        ));
     }
 
     #[test]
