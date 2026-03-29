@@ -139,6 +139,9 @@ Phase 5 の call path は [`CallRecipeRef`](../../crates/telomere/src/common.rs)
 - instantiate 時に [`predecode_direct_call_operands`](../../crates/telomere/src/runtime/instantiate.rs) が direct call operand を recipe slot 付き `CallRecipeRef` に変換する。
 - store は [`build_call_recipe`](../../crates/telomere/src/common/store.rs) で `param_size`, `local_size`, `return_arity`, `frame`, `target` を構築する。
 - runtime は [`decode_direct_call_recipe`](../../crates/telomere/src/runtime/vm/call.rs) で recipe slot を 1 回読むだけで callee を復元する。
+- frame 構築自体は [`Stack::function_call_cached`](../../crates/telomere/src/common/stack.rs) と [`Stack::function_return_call_cached`](../../crates/telomere/src/common/stack.rs) を thin helper 化し、`frame_end_from_local_top`, `copy_top_bytes_to`, `write_call_stack_info_at` を使って `param` copy / local zeroing / metadata write の固定費を分解した。
+- `function_call_cached` は frame end を 1 回だけ計算し、local tail zeroing と `CallStackInfo` 書き込みを inline に済ませる。
+- `function_return_call_cached` は return-call の parameter window を in-place で詰め直してから同じ fixed layout を再利用し、frame metadata の再 push を余計な stack helper 経由で行わない。
 
 これにより、direct call hot path は repeated lookup を避けつつ、`op_call` / `op_return_call` の handler identity は保っている。
 import split (`op_call_import` / `op_return_call_import`) はこの ABI を共有したまま relower 対象に含める。indirect call path は handler と packed operand ABI を分離したまま、materializer canonicalization だけを relower が担当する。
@@ -199,7 +202,7 @@ provider elimination の条件は保守的に固定している。これに引�
 
 ### 6.2 Memory family
 
-memory は `AddressShape` を候補抽出に使いつつ、最終判定は `SlotRef` と temp-local normalization で行う。現在の memory family は scalar load/store の canonical local/shared/default/indexed path を cover しており、最終 lowering 形は次の 8 family に固定している。
+memory は `AddressShape` を候補抽出に使いつつ、最終判定は `SlotRef` と temp-local normalization で行う。現在の memory family は scalar load/store の canonical local/shared/default/indexed path に加えて、default local memory の const-base fast path を cover している。最終 lowering 形は次の family に固定している。
 
 - `memory.local_base`
 - `memory.indexed_local_base`
@@ -209,6 +212,9 @@ memory は `AddressShape` を候補抽出に使いつつ、最終判定は `Slot
 - `memory.indexed_local_scaled_index`
 - `memory.shared_local_scaled_index`
 - `memory.indexed_shared_local_scaled_index`
+- `memory.const_base_load`
+- `memory.const_base_store_local4`
+- `memory.const_base_load_local4_add_set4`
 
 packed operand ABI は family ごとに additive に広がっている。
 
@@ -216,6 +222,9 @@ packed operand ABI は family ごとに additive に広がっている。
 - `*_indexed_*_local_base`: `LocalAddr(base), I32(delta), MemArg, U32(memidx)`
 - `*_local_scaled_index`: `LocalAddr(base), LocalAddr(index), U32(scale_log2), I32(delta), MemArg`
 - `*_indexed_*_local_scaled_index`: `LocalAddr(base), LocalAddr(index), U32(scale_log2), I32(delta), MemArg, U32(memidx)`
+- `memory.const_base_load`: `MemArg`
+- `memory.const_base_store_local4`: `MemArg, LocalAddr(value)`
+- `memory.const_base_load_local4_add_set4`: `MemArg, LocalAddr(rhs), LocalAddr(dst)`
 
 memory relower の成立順は固定している。
 
@@ -243,6 +252,14 @@ store specialization は `address family + value suffix relower` に分けてい
 - scalar store value tree は local/scalar const、stable slot alias / `LocalTee`、non-trapping unary/binop/cmp、`i32.eqz` / `i64.eqz`、scalar `select`、nested scalar `op_call*`、trap-sensitive scalar numeric op、contiguous scalar `memory.load` まで扱う
 
 shared/default/indexed の split と `memarg` / `memidx` は specialization 後も不変で、local/shared を混線させない。
+
+const-base family は Phase 3/4 の固定費圧縮として別枠で扱う。
+
+- `folded_const_base_memarg` が `i32.const + scalar load/store` の address を `memarg.offset` へ fold できる場合だけ成立する。
+- `memory.const_base_load` は default local memory の `i32.load` だけを対象にし、address stack push/pop を省く。
+- `memory.const_base_store_local4` は `i32.const(addr) + local.get4(value) + i32.store` を 1 handler に畳み、address materialization と store-value stack roundtrip を同時に削る。
+- `memory.const_base_load_local4_add_set4` は `i32.const(addr) + i32.load + local.get4 + i32.add + local.set4` を 1 family に畳み、load result を generic stack consumer に戻さず local write まで流す。
+- const-base family は default local memory / `i32` scalar path に限定し、shared memory / indexed memory / wider scalar / SIMD / atomics へは広げない。
 
 残る非対象は次だけである。
 
@@ -275,8 +292,8 @@ trap-sensitive な純粋数値 op は「pure だから消せる」扱いにし�
 | 1 | `PackedOpStream`、const pool、typed operand pack、branch target predecode | [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs) |
 | 2 | `SlotRef`、`SlotShape`、`BlockCopyPlan`、effect spill slot、whole-block temp-local rewrite | [`expr.rs`](../../crates/telomere/src/parser/core/optimizer/expr.rs), [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
 | 3 | `entry_availability` / `exit_availability` による same-block GVN + cross-block PRE と local/control provider elimination | [`expr.rs`](../../crates/telomere/src/parser/core/optimizer/expr.rs), [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
-| 4 | specialized memory family を slot-based に再構成 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs), [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs) |
-| 5 | `CallRecipeRef` / `CallRecipe` による direct call predecode | [`common.rs`](../../crates/telomere/src/common.rs), [`common/store.rs`](../../crates/telomere/src/common/store.rs), [`runtime/instantiate.rs`](../../crates/telomere/src/runtime/instantiate.rs), [`runtime/vm/call.rs`](../../crates/telomere/src/runtime/vm/call.rs) |
+| 4 | specialized memory family を slot-based に再構成し、default-memory const-base path を fixed-shape family に畳む | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs), [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs), [`runtime/vm/superinstructions.rs`](../../crates/telomere/src/runtime/vm/superinstructions.rs) |
+| 5 | `CallRecipeRef` / `CallRecipe` による direct call predecode と stack frame helper の micro-ABI 圧縮 | [`common.rs`](../../crates/telomere/src/common.rs), [`common/store.rs`](../../crates/telomere/src/common/store.rs), [`common/stack.rs`](../../crates/telomere/src/common/stack.rs), [`runtime/instantiate.rs`](../../crates/telomere/src/runtime/instantiate.rs), [`runtime/vm/call.rs`](../../crates/telomere/src/runtime/vm/call.rs) |
 | 6 | typed select と compare/control provider elimination を拡張 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
 | 7 | handler adjacency の計測、family-group 集計、logical layout order の固定 | [`runtime/vm.rs`](../../crates/telomere/src/runtime/vm.rs), [`optimizer-family-budgets.md`](./optimizer-family-budgets.md) |
 | 8 | selector を独立 pass として持たず、`relower_block_body` に内包 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs), [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs) |
@@ -300,6 +317,7 @@ family group は次の 3 群で固定する。
 
 - `local/control`
 - `memory`
+  - local/shared/indexed/scaled-index の canonical address family に加えて、default-memory const-base load/store と `local -> memory` の bounded cross-family fusion を含む
 - `call/select`
   - call relower は `op_call` / `op_return_call` / `op_call_import` / `op_return_call_import` / `op_call_indirect` / `op_return_call_indirect` の identity を保ったまま、materializer 列だけを consumer 側で正本化する
   - 正本化対象は local/scalar const leaf、stable slot alias、`op_ref_null` / `op_ref_func` / `v128.const` の zero-input leaf、`i32.eqz` / `i64.eqz` を含む non-trapping unary/binop/cmp tree、nested `op_call*`、numeric trap-sensitive op (`i32/i64 div/rem`, `i32/i64 trunc_*`)、`global.get4/8/16`、`table.get`、それらを child に含む scalar `select`、contiguous trailing suffix に閉じた `memory.load` leaf、replay-only pure tree、そして CFG-aware temp-local windowing で suffix 化した anchored / merge-fed / mixed site。partial apply 自体は trailing suffix 限定のままで、indirect call の table index もこの判定に含める
@@ -345,6 +363,9 @@ runtime 側は `vm-profile` feature 配下の [`DispatchProfileRunGuard`](../../
 - `cargo test -p telomere --release release_memory_loop_keeps_tail_call_threading -- --exact`
 - `cargo test -p telomere --release`
 - `cargo bench -p telomere --bench telomere_bench fib -- --sample-size 10 --measurement-time 1`
+- `cargo bench -p telomere --bench telomere_bench return_call_chain -- --sample-size 10 --measurement-time 1`
+- `cargo bench -p telomere --bench telomere_bench scalar_local_loop -- --sample-size 10 --measurement-time 1`
+- `cargo bench -p telomere --bench telomere_bench memory_load_store_loop -- --sample-size 10 --measurement-time 1`
 - `cargo run --release -- /Users/sizumita/Workspace/misc/coremark/coremark.wasm`
 
 回帰の見方は次の優先度で固定する。

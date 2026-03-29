@@ -438,6 +438,22 @@ fn pack_fused_local_control_operands(op: Op, operands: &[Operand]) -> Option<Vec
             PackedOperand::JumpTarget(unsafe { operands[3].jump_addr }),
         ]);
     }
+    if ptr::fn_addr_eq(op, vm::op_i32_load_const_base as Op) {
+        return Some(vec![PackedOperand::MemArg(unsafe { operands[0].memarg })]);
+    }
+    if ptr::fn_addr_eq(op, vm::op_i32_store_const_base_local4 as Op) {
+        return Some(vec![
+            PackedOperand::MemArg(unsafe { operands[0].memarg }),
+            PackedOperand::LocalAddr(unsafe { operands[1].local_addr }),
+        ]);
+    }
+    if ptr::fn_addr_eq(op, vm::op_i32_load_const_base_local_get4_i32_add_set4 as Op) {
+        return Some(vec![
+            PackedOperand::MemArg(unsafe { operands[0].memarg }),
+            PackedOperand::LocalAddr(unsafe { operands[1].local_addr }),
+            PackedOperand::LocalAddr(unsafe { operands[2].local_addr }),
+        ]);
+    }
     None
 }
 
@@ -956,6 +972,28 @@ fn verify_fused_local_control_operands(op: &PackedOp, instr_len: u32) -> Option<
                 PackedOperand::LocalAddr(_),
                 PackedOperand::JumpTarget(target)
             ] if *target < instr_len
+        ));
+    }
+    if ptr::fn_addr_eq(op.op, vm::op_i32_load_const_base as Op) {
+        return Some(matches!(operands, [PackedOperand::MemArg(_)]));
+    }
+    if ptr::fn_addr_eq(op.op, vm::op_i32_store_const_base_local4 as Op) {
+        return Some(matches!(
+            operands,
+            [PackedOperand::MemArg(_), PackedOperand::LocalAddr(_)]
+        ));
+    }
+    if ptr::fn_addr_eq(
+        op.op,
+        vm::op_i32_load_const_base_local_get4_i32_add_set4 as Op,
+    ) {
+        return Some(matches!(
+            operands,
+            [
+                PackedOperand::MemArg(_),
+                PackedOperand::LocalAddr(_),
+                PackedOperand::LocalAddr(_)
+            ]
         ));
     }
     None

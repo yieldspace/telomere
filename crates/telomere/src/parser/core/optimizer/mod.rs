@@ -126,6 +126,8 @@ mod tests {
             vm::op_i32_load_shared_local_scaled_index as crate::common::Op,
             vm::op_i32_load_indexed_local_scaled_index as crate::common::Op,
             vm::op_i32_load_indexed_shared_local_scaled_index as crate::common::Op,
+            vm::op_i32_load_const_base as crate::common::Op,
+            vm::op_i32_load_const_base_local_get4_i32_add_set4 as crate::common::Op,
         ];
         decoded_ops(expr)
             .into_iter()
@@ -299,6 +301,18 @@ mod tests {
             (
                 "op_i32_store_local_base",
                 vm::op_i32_store_local_base as crate::common::Op,
+            ),
+            (
+                "op_i32_load_const_base",
+                vm::op_i32_load_const_base as crate::common::Op,
+            ),
+            (
+                "op_i32_store_const_base_local4",
+                vm::op_i32_store_const_base_local4 as crate::common::Op,
+            ),
+            (
+                "op_i32_load_const_base_local_get4_i32_add_set4",
+                vm::op_i32_load_const_base_local_get4_i32_add_set4 as crate::common::Op,
             ),
             ("op_i32_load8_u", vm::op_i32_load8_u as crate::common::Op),
             (
@@ -566,6 +580,17 @@ mod tests {
         if let Some(family) = specialized_memory_family(op) {
             return Some(family.memarg_index() + 1);
         }
+        let first = [
+            vm::op_i32_load_const_base as crate::common::Op,
+            vm::op_i32_store_const_base_local4 as crate::common::Op,
+            vm::op_i32_load_const_base_local_get4_i32_add_set4 as crate::common::Op,
+        ];
+        if first
+            .iter()
+            .any(|candidate| std::ptr::fn_addr_eq(*candidate, op))
+        {
+            return Some(0);
+        }
         let second = [
             vm::op_i32_load_local as crate::common::Op,
             vm::op_i32_load8_s_local as crate::common::Op,
@@ -741,6 +766,7 @@ mod tests {
             vm::op_i64_store32_local as crate::common::Op,
             vm::op_f32_store_local as crate::common::Op,
             vm::op_f64_store_local as crate::common::Op,
+            vm::op_i32_load_const_base as crate::common::Op,
         ];
         if one
             .iter()
@@ -757,6 +783,7 @@ mod tests {
             vm::op_local_unary64 as crate::common::Op,
             vm::op_call_indirect as crate::common::Op,
             vm::op_return_call_indirect as crate::common::Op,
+            vm::op_i32_store_const_base_local4 as crate::common::Op,
         ];
         if two
             .iter()
@@ -802,6 +829,7 @@ mod tests {
             vm::op_local_unary32_tee4 as crate::common::Op,
             vm::op_local_unary64_set8 as crate::common::Op,
             vm::op_local_unary64_tee8 as crate::common::Op,
+            vm::op_i32_load_const_base_local_get4_i32_add_set4 as crate::common::Op,
         ];
         if three
             .iter()
@@ -1147,10 +1175,7 @@ mod tests {
                 i32.const 3))
             "#,
         );
-        assert_eq!(
-            count_op(&expr, vm::op_i32_load_local as crate::common::Op),
-            1
-        );
+        assert_eq!(count_i32_load_family(&expr), 1);
         assert_eq!(count_op(&expr, vm::op_drop as crate::common::Op), 1);
     }
 
@@ -1518,7 +1543,6 @@ mod tests {
                 i32.load))
             "#,
         );
-        assert_eq!(count_op(&expr, vm::op_i32_load as crate::common::Op), 1);
         assert_eq!(count_i32_load_family(&expr), 1);
     }
 
@@ -3443,6 +3467,52 @@ mod tests {
             specialized_store >= generic_store,
             "specialized store families must dominate generic store path: {ops:?}"
         );
+    }
+
+    #[test]
+    fn optimizer_selects_const_base_load_family_for_default_memory() {
+        let expr = function_expr(
+            r#"
+            (module
+              (memory 1)
+              (data (i32.const 0) "\2a\00\00\00")
+              (func (export "run") (result i32)
+                i32.const 0
+                i32.load))
+            "#,
+        );
+        let ops = debug_decoded_ops(&expr);
+        assert_eq!(
+            count_op(&expr, vm::op_i32_load_const_base as crate::common::Op),
+            1,
+            "const-base load should specialize: {ops:?}"
+        );
+        assert_eq!(count_op(&expr, vm::op_i32_load as crate::common::Op), 0);
+    }
+
+    #[test]
+    fn optimizer_selects_const_base_store_family_for_default_memory() {
+        let expr = function_expr(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $value i32) (result i32)
+                i32.const 0
+                local.get $value
+                i32.store
+                local.get $value))
+            "#,
+        );
+        let ops = debug_decoded_ops(&expr);
+        assert_eq!(
+            count_op(
+                &expr,
+                vm::op_i32_store_const_base_local4 as crate::common::Op
+            ),
+            1,
+            "const-base store should specialize: {ops:?}"
+        );
+        assert_eq!(count_op(&expr, vm::op_i32_store as crate::common::Op), 0);
     }
 
     #[test]

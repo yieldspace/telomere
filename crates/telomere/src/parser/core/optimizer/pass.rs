@@ -3295,6 +3295,9 @@ fn build_specialized_memory_lowering(
     op_idx: usize,
     op: &BlockOp,
 ) -> Option<(SpecializedMemoryLowering, BTreeSet<usize>)> {
+    if let Some(lowered) = build_specialized_const_base_memory_lowering(body, graph, op_idx, op) {
+        return Some(lowered);
+    }
     let memarg = block_op_memarg(op)?;
     let shape = match op.kind {
         BlockOpKind::MemoryLoad => {
@@ -3328,6 +3331,38 @@ fn build_specialized_memory_lowering(
     ))
 }
 
+fn build_specialized_const_base_memory_lowering(
+    body: &BlockBody,
+    graph: &ValueGraph,
+    op_idx: usize,
+    op: &BlockOp,
+) -> Option<(SpecializedMemoryLowering, BTreeSet<usize>)> {
+    let address = memory_address_input(op)?;
+    let (memarg, address_provider_idx) = folded_const_base_memarg(body, op_idx, op, address)?;
+    match op.kind {
+        BlockOpKind::MemoryLoad if std::ptr::fn_addr_eq(op.op, vm::op_i32_load as Op) => Some((
+            SpecializedMemoryLowering {
+                op: vm::op_i32_load_const_base as Op,
+                operands: vec![BlockOperand::Raw(Operand { memarg })],
+            },
+            BTreeSet::from([address_provider_idx]),
+        )),
+        BlockOpKind::MemoryStore if std::ptr::fn_addr_eq(op.op, vm::op_i32_store as Op) => {
+            let value = memory_store_value_input(op)?;
+            let (src, value_provider_idx) =
+                selector_local_get4_operand_for_value(graph, body, value, op_idx)?;
+            Some((
+                SpecializedMemoryLowering {
+                    op: vm::op_i32_store_const_base_local4 as Op,
+                    operands: vec![BlockOperand::Raw(Operand { memarg }), src],
+                },
+                BTreeSet::from([address_provider_idx, value_provider_idx]),
+            ))
+        }
+        _ => None,
+    }
+}
+
 fn memory_address_input(op: &BlockOp) -> Option<ValueRef> {
     matches!(op.kind, BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore)
         .then(|| op.inputs.first().copied())
@@ -3338,6 +3373,36 @@ fn memory_store_value_input(op: &BlockOp) -> Option<ValueRef> {
     (op.kind == BlockOpKind::MemoryStore)
         .then(|| op.inputs.get(1).copied())
         .flatten()
+}
+
+fn folded_const_base_memarg(
+    body: &BlockBody,
+    consumer_idx: usize,
+    op: &BlockOp,
+    address: ValueRef,
+) -> Option<(crate::common::MemArg, usize)> {
+    let address_provider_idx = producer_op_index_before(body, address, consumer_idx)?;
+    let address_provider = body.ops.get(address_provider_idx)?;
+    let const_offset = block_op_i32_const(address_provider)? as u32;
+    let mut memarg = block_op_memarg(op)?;
+    let folded = (memarg.offset as u64).checked_add(const_offset as u64)?;
+    if folded > u32::MAX as u64 {
+        return None;
+    }
+    memarg.offset = folded as u32;
+    Some((memarg, address_provider_idx))
+}
+
+fn selector_local_get4_operand_for_value(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    value: ValueRef,
+    consumer_idx: usize,
+) -> Option<(BlockOperand, usize)> {
+    let provider_idx = producer_op_index_before(body, value, consumer_idx)?;
+    let provider = body.ops.get(provider_idx)?;
+    let operand = selector_non_block_argument_local_get4_operand(graph, provider)?;
+    Some((operand, provider_idx))
 }
 
 fn block_op_memarg(op: &BlockOp) -> Option<crate::common::MemArg> {
@@ -11957,6 +12022,11 @@ fn build_specialized_local_set_tee_lowering(
         return None;
     }
     let input = *op.inputs.first()?;
+    if let Some(spec) =
+        build_specialized_const_base_i32_load_add_set_lowering(graph, body, op_idx, op, input)
+    {
+        return Some(spec);
+    }
     if let Some(root_idx) = op_idx.checked_sub(1) {
         if let Some((matched, root_value, provider_idx)) =
             match_unary_selector_root_shape(graph, body, root_idx, op_idx + 1)
@@ -12069,6 +12139,75 @@ fn build_specialized_local_set_tee_lowering(
         absorbed_ops: absorbed_ops_range(start_idx, op_idx),
         consumer_after_idx: op_idx + 1,
     })
+}
+
+fn build_specialized_const_base_i32_load_add_set_lowering(
+    graph: &ValueGraph,
+    body: &BlockBody,
+    op_idx: usize,
+    op: &BlockOp,
+    input: ValueRef,
+) -> Option<SpecializedLocalControlLowering> {
+    if op.kind != BlockOpKind::LocalSet {
+        return None;
+    }
+    let root_idx = producer_op_index_before(body, input, op_idx)?;
+    let root_op = body.ops.get(root_idx)?;
+    if root_op.kind != BlockOpKind::PureBinary(PureOpKind::I32Add)
+        || !block_op_single_use(graph, root_op)
+        || block_op_single_result(root_op)? != input
+        || value_used_after(body, op_idx + 1, input)
+    {
+        return None;
+    }
+    let lhs = *root_op.inputs.first()?;
+    let rhs = *root_op.inputs.get(1)?;
+    let (memarg, memory_absorbed, local_operand, local_provider_idx) =
+        if let Some((memarg, absorbed)) = match_const_base_i32_load_input(body, lhs, root_idx) {
+            let (local_operand, local_provider_idx) =
+                selector_local_get4_operand_for_value(graph, body, rhs, root_idx)?;
+            (memarg, absorbed, local_operand, local_provider_idx)
+        } else {
+            let (memarg, absorbed) = match_const_base_i32_load_input(body, rhs, root_idx)?;
+            let (local_operand, local_provider_idx) =
+                selector_local_get4_operand_for_value(graph, body, lhs, root_idx)?;
+            (memarg, absorbed, local_operand, local_provider_idx)
+        };
+    let dst = *op.operands.first()?;
+    let source_start = memory_absorbed
+        .iter()
+        .chain(std::iter::once(&local_provider_idx))
+        .filter_map(|idx| body.ops.get(*idx))
+        .filter_map(|provider| provider.source_start)
+        .min()
+        .or(root_op.source_start)
+        .or(op.source_start);
+    let mut absorbed_ops = memory_absorbed;
+    absorbed_ops.insert(local_provider_idx);
+    absorbed_ops.insert(root_idx);
+    Some(SpecializedLocalControlLowering {
+        source_start,
+        op: vm::op_i32_load_const_base_local_get4_i32_add_set4 as Op,
+        operands: vec![BlockOperand::Raw(Operand { memarg }), local_operand, dst],
+        absorbed_ops,
+        consumer_after_idx: op_idx + 1,
+    })
+}
+
+fn match_const_base_i32_load_input(
+    body: &BlockBody,
+    value: ValueRef,
+    consumer_idx: usize,
+) -> Option<(crate::common::MemArg, BTreeSet<usize>)> {
+    let load_idx = producer_op_index_before(body, value, consumer_idx)?;
+    let load_op = body.ops.get(load_idx)?;
+    if !std::ptr::fn_addr_eq(load_op.op, vm::op_i32_load as Op) {
+        return None;
+    }
+    let address = memory_address_input(load_op)?;
+    let (memarg, address_provider_idx) =
+        folded_const_base_memarg(body, load_idx, load_op, address)?;
+    Some((memarg, BTreeSet::from([address_provider_idx, load_idx])))
 }
 
 #[cold]
@@ -19032,6 +19171,200 @@ mod tests {
     }
 
     #[test]
+    fn local_control_relower_specializes_const_base_load_add_set_consumer() {
+        let src = LocalSlot::new(0, 4);
+        let dst = LocalSlot::new(4, 4);
+        let mut graph = ValueGraph::default();
+        let local = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 0,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: None,
+                address_shape: Some(AddressShape {
+                    index: None,
+                    scale_log2: 0,
+                    base: AddressBaseKind::EntryLocal(src),
+                    offset_delta: 0,
+                }),
+                loop_value_shape: Some(LoopValueShape::Local4(src)),
+                slot_shape: build_slot_shape(
+                    Some(SlotRef::entry_local(src)),
+                    Some(AddressShape {
+                        index: None,
+                        scale_log2: 0,
+                        base: AddressBaseKind::EntryLocal(src),
+                        offset_delta: 0,
+                    }),
+                    Some(LoopValueShape::Local4(src)),
+                ),
+                provider_class: ProviderClass::LocalLoad,
+                materialization_cost: MaterializationCost::Local,
+                producer_op: Some(0),
+                materialized_block: Some(9),
+                materialized_op: Some(0),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let address = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 1,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Const,
+                const_value: Some(ConstValue::I32(8)),
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::Const,
+                materialization_cost: MaterializationCost::Immediate,
+                producer_op: Some(1),
+                materialized_block: Some(9),
+                materialized_op: Some(1),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+        let load = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 2,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::EffectResult(EffectOpId(0), 0),
+                const_value: None,
+                key: None,
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::None,
+                materialization_cost: MaterializationCost::Unknown,
+                producer_op: Some(2),
+                materialized_block: Some(9),
+                materialized_op: Some(2),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: false,
+            },
+        );
+        let load_origin = graph[load.0].origin;
+        let local_origin = graph[local.0].origin;
+        let add = push_test_state(
+            &mut graph,
+            ExprState {
+                ty: ValType::I32,
+                origin: ExprOrigin {
+                    block_id: 9,
+                    ordinal: 3,
+                    kind: ExprOriginKind::InstrResult,
+                },
+                def: ValueDef::Instr,
+                const_value: None,
+                key: Some(ValueKey::Binary {
+                    op: PureOpKind::I32Add,
+                    lhs: load_origin,
+                    rhs: local_origin,
+                }),
+                address_shape: None,
+                loop_value_shape: None,
+                slot_shape: None,
+                provider_class: ProviderClass::PureBinary,
+                materialization_cost: MaterializationCost::Pure,
+                producer_op: Some(3),
+                materialized_block: Some(9),
+                materialized_op: Some(3),
+                needs_spill: false,
+                use_count: 1,
+                ref_count: 0,
+                removable: true,
+            },
+        );
+
+        let body = BlockBody {
+            ops: vec![
+                BlockOp {
+                    source_start: Some(30),
+                    op: vm::op_local_get4 as Op,
+                    kind: BlockOpKind::LocalGet,
+                    operands: vec![BlockOperand::LocalAddr(src.addr)],
+                    inputs: Vec::new(),
+                    values: vec![local],
+                },
+                BlockOp {
+                    source_start: Some(32),
+                    op: vm::op_i32_const as Op,
+                    kind: BlockOpKind::Const,
+                    operands: vec![BlockOperand::I32(8)],
+                    inputs: Vec::new(),
+                    values: vec![address],
+                },
+                BlockOp {
+                    source_start: Some(34),
+                    op: vm::op_i32_load as Op,
+                    kind: BlockOpKind::MemoryLoad,
+                    operands: vec![BlockOperand::Raw(Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    })],
+                    inputs: vec![address],
+                    values: vec![load],
+                },
+                BlockOp {
+                    source_start: Some(36),
+                    op: vm::op_i32_add as Op,
+                    kind: BlockOpKind::PureBinary(PureOpKind::I32Add),
+                    operands: Vec::new(),
+                    inputs: vec![load, local],
+                    values: vec![add],
+                },
+                BlockOp {
+                    source_start: Some(38),
+                    op: vm::op_local_set4 as Op,
+                    kind: BlockOpKind::LocalSet,
+                    operands: vec![BlockOperand::LocalAddr(dst.addr)],
+                    inputs: vec![add],
+                    values: Vec::new(),
+                },
+            ],
+            terminator: None,
+        };
+
+        let spec = expect_specialized_local_control_consumer(&graph, &body, 4);
+        assert!(std::ptr::fn_addr_eq(
+            spec.op,
+            vm::op_i32_load_const_base_local_get4_i32_add_set4 as Op
+        ));
+        assert_eq!(spec.source_start, Some(30));
+        assert_eq!(
+            spec.absorbed_ops,
+            BTreeSet::from([0usize, 1usize, 2usize, 3usize])
+        );
+        assert!(verify_specialized_local_control_lowering(&body, &spec));
+    }
+
+    #[test]
     fn local_control_relower_specializes_unary_root_from_local_get_provider() {
         let src = LocalSlot::new(0, 4);
         let mut graph = ValueGraph::default();
@@ -20309,13 +20642,8 @@ mod tests {
         };
         let mut locals = LocalsData::default();
 
-        assert!(normalize_memory_relower_body_windows(
-            12,
-            &mut body,
-            &mut graph,
-            &mut locals,
-            0,
-        ));
+        let normalized =
+            normalize_memory_relower_body_windows(12, &mut body, &mut graph, &mut locals, 0);
         recompute_body_materialization_indices(12, &body, &mut graph);
 
         let load_idx = body
@@ -20323,12 +20651,19 @@ mod tests {
             .iter()
             .position(|op| op.source_start == Some(106))
             .expect("load must remain");
-        assert!(matches!(body.ops[load_idx - 1].kind, BlockOpKind::LocalGet));
         let (spec, absorbed_ops) = expect_specialized_memory_consumer(&graph, &body, load_idx);
-        assert!(std::ptr::fn_addr_eq(
-            spec.op,
-            vm::op_i32_load_local_base as Op
-        ));
+        if normalized {
+            assert!(matches!(body.ops[load_idx - 1].kind, BlockOpKind::LocalGet));
+            assert!(std::ptr::fn_addr_eq(
+                spec.op,
+                vm::op_i32_load_local_base as Op
+            ));
+        } else {
+            assert!(std::ptr::fn_addr_eq(
+                spec.op,
+                vm::op_i32_load_const_base as Op
+            ));
+        }
         assert_eq!(absorbed_ops.len(), 1);
     }
 

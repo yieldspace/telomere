@@ -883,6 +883,95 @@ pub unsafe fn op_i32_load(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     call_next(tail_code, 1, ctx)
 }
 
+/// WebAssembly `i32.load` const-base fast path for default local memory.
+///
+/// Spec:
+/// - Validation: equivalent to a validated `i32.const <addr>; i32.load` sequence.
+/// - Execution: uses the folded `memarg.offset` as the effective address.
+///
+/// Stack effect: `[] -> [i32]`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: This handler exists only for load-time-specialized const-base scalar loads and keeps tail dispatch unchanged.
+///
+/// # Safety
+/// - `tail_code` must point to a decoded instruction whose folded `memarg` came from a validated const-base `i32.load`.
+/// - `ctx` must reference a live execution context with a valid default local memory.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_i32_load_const_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_load_const_base");
+    let memarg = (*tail_code).operand.memarg;
+    let start = vm_try!(compute_memory_offset(memarg, 0));
+    let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(start));
+    vm_try!(ctx.stack.push_u32_fast(value));
+    call_next(tail_code, 1, ctx)
+}
+
+/// WebAssembly `i32.store` const-base fast path for default local memory with a local-backed value.
+///
+/// Spec:
+/// - Validation: equivalent to a validated `i32.const <addr>; local.get; i32.store` sequence.
+/// - Execution: uses the folded `memarg.offset` as the effective address and reads the value directly from the local slot.
+///
+/// Stack effect: `[] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: This handler removes both the address materialization and the store-value stack roundtrip.
+///
+/// # Safety
+/// - `tail_code` must point to a decoded instruction whose operands came from a validated const-base `i32.store` pattern.
+/// - `ctx` must reference a live execution context with a valid default local memory and local area.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_i32_store_const_base_local4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_store_const_base_local4");
+    let memarg = (*tail_code).operand.memarg;
+    let src = (*tail_code.add(1)).operand.local_addr as usize;
+    let start = vm_try!(compute_memory_offset(memarg, 0));
+    let value = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, src);
+    vm_try!(unsafe { ctx.default_local_memory_mut_unchecked() }
+        .write_bytes(start, &value.to_le_bytes()));
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `i32.load + local.get4 + i32.add + local.set4` fused const-base fast path.
+///
+/// Spec:
+/// - Validation: equivalent to a validated `i32.const <addr>; i32.load; local.get; i32.add; local.set` sequence.
+/// - Execution: loads from default local memory using the folded `memarg.offset`, adds a local-backed rhs, and writes the result directly to the destination local.
+///
+/// Stack effect: `[] -> []`.
+/// Traps: traps on out-of-bounds memory access.
+/// Notes: This is a bounded cross-family fusion used only for the default local-memory scalar path.
+///
+/// # Safety
+/// - `tail_code` must point to a decoded instruction whose operands came from a validated fused const-base pattern.
+/// - `ctx` must reference a live execution context with a valid default local memory and local area.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_i32_load_const_base_local_get4_i32_add_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_load_const_base_local_get4_i32_add_set4");
+    let memarg = (*tail_code).operand.memarg;
+    let rhs = (*tail_code.add(1)).operand.local_addr as usize;
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    let start = vm_try!(compute_memory_offset(memarg, 0));
+    let loaded = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(start));
+    let rhs = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, rhs);
+    let result = loaded.wrapping_add(rhs);
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 3, ctx)
+}
+
 /// WebAssembly `i64.load`.
 ///
 /// Spec:

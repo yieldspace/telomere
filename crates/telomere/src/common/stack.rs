@@ -120,6 +120,8 @@ pub(crate) struct CallStackInfo {
     memory0_raw: u32,
 }
 
+const CALL_STACK_INFO_SIZE: usize = std::mem::size_of::<CallStackInfo>();
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CachedMemoryKind {
@@ -834,13 +836,63 @@ impl Stack {
             )
         }
     }
-    fn push_call_stack_info(&mut self, info: CallStackInfo) -> VMResult<()> {
-        let size = std::mem::size_of::<CallStackInfo>();
-        let bytes = unsafe {
-            std::slice::from_raw_parts((&info as *const CallStackInfo).cast::<u8>(), size)
-        };
-        trusted_copy_from_slice(vm_try!(self.get_memory(size)), bytes);
-        self.add_top(size)
+    #[inline(always)]
+    fn write_call_stack_info_at(&mut self, info_top: usize, info: CallStackInfo) {
+        unsafe {
+            self.memory
+                .as_mut_ptr()
+                .add(info_top)
+                .cast::<CallStackInfo>()
+                .write_unaligned(info);
+        }
+    }
+    fn frame_end_from_local_top(
+        &self,
+        local_top: usize,
+        param_size: usize,
+        local_size: usize,
+    ) -> VMResult<usize> {
+        let info_top = vm_try!(VMResult::from_option(
+            local_top
+                .checked_add(param_size)
+                .and_then(|value| value.checked_add(local_size)),
+            || VMResult::StackOverflow
+        ));
+        let new_top = vm_try!(VMResult::from_option(
+            info_top.checked_add(CALL_STACK_INFO_SIZE),
+            || VMResult::StackOverflow
+        ));
+        if new_top > self.memory.len() {
+            return VMResult::StackOverflow;
+        }
+        VMResult::Success(new_top)
+    }
+    fn copy_top_bytes_to(&mut self, dst: usize, size: usize) -> VMResult<()> {
+        let src = vm_try!(VMResult::from_option(self.top.checked_sub(size), || {
+            VMResult::StackOverflow
+        }));
+        match size {
+            0 => VMResult::Success(()),
+            4 => {
+                let value = trusted_read_u32(&self.memory[src..src + 4]);
+                trusted_write_u32(&mut self.memory[dst..dst + 4], value);
+                VMResult::Success(())
+            }
+            8 => {
+                let value = trusted_read_u64(&self.memory[src..src + 8]);
+                trusted_write_u64(&mut self.memory[dst..dst + 8], value);
+                VMResult::Success(())
+            }
+            16 => {
+                let value = trusted_read_u128(&self.memory[src..src + 16]);
+                trusted_write_u128(&mut self.memory[dst..dst + 16], value);
+                VMResult::Success(())
+            }
+            _ => {
+                self.memory.copy_within(src..src + size, dst);
+                VMResult::Success(())
+            }
+        }
     }
     pub(crate) fn previous_local_reference(&self, reference: &LocalReference) -> LocalReference {
         let CallStackInfo {
@@ -902,23 +954,26 @@ impl Stack {
             self.top.checked_sub(param_size),
             || VMResult::StackOverflow
         ));
-
-        vm_try!(self.add_top(local_size));
+        let new_top = vm_try!(self.frame_end_from_local_top(local_top, param_size, local_size));
         vm_try!(self.zero_new_locals(local_top + param_size, local_size));
-        vm_try!(self.push_call_stack_info(CallStackInfo {
-            return_pc,
-            code_addr: frame.code_addr,
-            code_base: frame.code_base,
-            instance: frame.instance,
-            memory0_kind: frame.memory0_kind,
-            memory0_raw: frame.memory0_raw,
-            prev_local_reference_top: prev_local_reference.local_top,
-            prev_local_reference_size: prev_local_reference.local_size,
-        }));
+        self.write_call_stack_info_at(
+            local_top + param_size + local_size,
+            CallStackInfo {
+                return_pc,
+                code_addr: frame.code_addr,
+                code_base: frame.code_base,
+                instance: frame.instance,
+                memory0_kind: frame.memory0_kind,
+                memory0_raw: frame.memory0_raw,
+                prev_local_reference_top: prev_local_reference.local_top,
+                prev_local_reference_size: prev_local_reference.local_size,
+            },
+        );
+        self.top = new_top;
 
         VMResult::Success(LocalReference {
             local_top,
-            local_size: (param_size + local_size + std::mem::size_of::<CallStackInfo>()) as u32,
+            local_size: (new_top - local_top) as u32,
         })
     }
     pub fn function_return(
@@ -938,8 +993,11 @@ impl Stack {
             local_top: prev_local_reference_top,
         };
 
-        self.memory
-            .copy_within(self.top - return_size..self.top, reference.local_top);
+        match self.copy_top_bytes_to(reference.local_top, return_size) {
+            VMResult::Success(()) => {}
+            VMResult::StackOverflow => unreachable!("validated function return must fit in stack"),
+            other => unreachable!("unexpected return copy failure: {other:?}"),
+        }
         self.top = reference.local_top + return_size;
         (
             prev_local_reference,
@@ -994,11 +1052,9 @@ impl Stack {
             prev_local_reference_size,
             ..
         } = self.call_stack_info(reference);
-        self.memory
-            .copy_within(self.top - param_size..self.top, reference.local_top);
-        self.top = reference.local_top;
-        vm_try!(self.add_top(param_size));
-        vm_try!(self.add_top(local_size));
+        vm_try!(self.copy_top_bytes_to(reference.local_top, param_size));
+        let new_top =
+            vm_try!(self.frame_end_from_local_top(reference.local_top, param_size, local_size));
         vm_try!(self.zero_new_locals(reference.local_top + param_size, local_size));
 
         let info = CallStackInfo {
@@ -1011,11 +1067,12 @@ impl Stack {
             prev_local_reference_top,
             prev_local_reference_size,
         };
-        vm_try!(self.push_call_stack_info(info));
+        self.write_call_stack_info_at(reference.local_top + param_size + local_size, info);
+        self.top = new_top;
 
         VMResult::Success(LocalReference {
             local_top: reference.local_top,
-            local_size: (param_size + local_size + std::mem::size_of::<CallStackInfo>()) as u32,
+            local_size: (new_top - reference.local_top) as u32,
         })
     }
     pub fn block_return(
