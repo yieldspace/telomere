@@ -142,6 +142,50 @@ fn infer_generic_stack_shape(
     )
 }
 
+fn fixed_stack_shape(
+    input_count: usize,
+    result_count: usize,
+    stack_before: &crate::parser::core::type_checker::StackSnapshot,
+    stack_after: &crate::parser::core::type_checker::StackSnapshot,
+) -> (usize, usize) {
+    let preserved_prefix_len = stack_before.types.len().saturating_sub(input_count);
+    debug_assert_eq!(
+        preserved_prefix_len + result_count,
+        stack_after.types.len(),
+        "stack transition mismatch for fixed-shape instruction",
+    );
+    (preserved_prefix_len, result_count)
+}
+
+fn is_simd_replace_lane_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::simd::i8x16_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i16x8_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i32x4_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i64x2_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::f32x4_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::f64x2_replace_lane as Op)
+}
+
+fn is_simd_binary_v128_to_v128_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::simd::i8x16_swizzle as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i8x16_shuffle as Op)
+}
+
+fn is_simd_shift_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::simd::i8x16_shl as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i8x16_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::u8x16_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i16x8_shl as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i16x8_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::u16x8_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i32x4_shl as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i32x4_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::u32x4_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i64x2_shl as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i64x2_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::u64x2_shr as Op)
+}
+
 #[derive(Debug)]
 pub(crate) enum BlockKind {
     Block,
@@ -362,6 +406,10 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         stack_after: &crate::parser::core::type_checker::StackSnapshot,
     ) -> (usize, usize) {
         let op = unsafe { instrs[start].op };
+        if is_simd_replace_lane_op(op) || is_simd_shift_op(op) || is_simd_binary_v128_to_v128_op(op)
+        {
+            return fixed_stack_shape(2, 1, stack_before, stack_after);
+        }
         if std::ptr::fn_addr_eq(op, vm::op_call as Op)
             || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
         {

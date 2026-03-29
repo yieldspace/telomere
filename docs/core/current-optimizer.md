@@ -21,14 +21,17 @@ flowchart LR
     C --> D["rewrite_program"]
     D --> E["ValueGraph + BlockBody + BlockArgument"]
     E --> F["apply_licm"]
-    F --> G["effect-result spill planning"]
-    G --> H["relower_block_body"]
-    H --> I["PackedOp list"]
-    I --> J["build_packed_stream"]
-    J --> K["PackedOpStream"]
-    K --> L["flatten to Instr + op_lens"]
-    L --> M["instantiate-time direct-call predecode"]
-    M --> N["runtime direct-threaded execution"]
+    F --> G["apply_availability_pre_pass"]
+    G --> H["apply_whole_block_slot_lowering"]
+    H --> I["call/memory relower normalization"]
+    I --> J["effect-result spill planning"]
+    J --> K["relower_block_body"]
+    K --> L["PackedOp list"]
+    L --> M["build_packed_stream"]
+    M --> N["PackedOpStream"]
+    N --> O["flatten to Instr + op_lens"]
+    O --> P["instantiate-time direct-call predecode"]
+    P --> Q["runtime direct-threaded execution"]
 ```
 
 正本関数は以下である。
@@ -61,6 +64,8 @@ optimizer の正本 IR は [`expr.rs`](../../crates/telomere/src/parser/core/opt
 
 - `ValueGraph`
   - pure value と effect result の provenance を保持する。
+  - `entry_availability` / `exit_availability` で `ValueKey` の whole-block GVN domain を持ち、same-block CSE と cross-block PRE の seed を共有する。
+  - local-bound pure value は availability snapshot 時に slot-aware synthetic available value へ正規化し、join 後の PRE でも `local_get` reload を選べるようにしている。
 - `BlockBody`
   - raw emit 列ではなく、後段の consumer-driven relower が読む residual body。
 - `BlockArgument`
@@ -71,6 +76,9 @@ optimizer の正本 IR は [`expr.rs`](../../crates/telomere/src/parser/core/opt
   - `LocalLoad`, `Const`, `PureUnary`, `PureBinary`, `EffectResultSpill` を区別する。
 - `MaterializationCost`
   - `Immediate`, `Local`, `Pure`, `Spill` を持ち、rematerialization の aggressiveness を制御する。
+- `AvailabilityEntry`
+  - `value`, `effect_epoch`, `heap` をまとめて持ち、join で `effect epoch` / `heap version` が一致する pure availability だけを block entry へ持ち込む。
+  - key 生成時は materializable slot を持つ value を slot-canonical origin へ寄せる。これにより branch-local block argument を跨いでも同一 local source の pure key を join で一致させる。
 
 ### 3.2 Slot モデル
 
@@ -86,6 +94,15 @@ slot 正本化は [`SlotRef`](../../crates/telomere/src/parser/core/optimizer/ex
   - merge で slot-preserving にできるか、copy を入れるべきかを block ごとに固定する。
 - `EffectResultSpillPlan`
   - effect result を explicit spill local に割り当て、relower で再利用できるようにする。
+- whole-block slot lowering
+  - `apply_availability_pre_pass` は `rewrite_program` 後の residual body を block 全体で見直し、same-block source または slot-backed cross-block source がある pure op を dedicated PRE rewrite で落とす。
+  - correctness guard として、PRE rewrite は loop 参加 block、memory/call を含む block、compare/float op、`InstrResult` leaf を含む nested key を対象外にしている。
+  - PRE の value rewrite は関数全体一括置換ではなく、rewrite 元 block から前方到達可能な block 群だけに適用する。
+  - `apply_whole_block_slot_lowering` は block body 全体から `Const` / `PureUnary` / `PureBinary` / key-carrying pure fused provider の multi-use value を集め、use-site ごとの live interval を作る。
+  - allocator は linear-scan 相当で `TempLocal` を割り当て、non-overlapping interval は同じ temp slot を再利用する。
+  - producer input に dead な `TempLocal` があれば coalescing 候補として優先再利用し、rewrite は producer 直後の temp write と use-site 直前の temp read に正規化する。
+  - allocator pressure が閾値を超えた値は spill/fallback として generic path に残し、temp local を無制限には増やさない。
+  - `local` に現在束縛されている value は replay より `local_get` reload を優先し、effect result を入力に含む pure tree は replay しない。
 
 重要なのは、「slot は `BlockArgument` の代替ではなく lowering 先」であることだ。join はあくまで block argument 正本で行い、slot-preserving できるときだけ local-like な lowering に落とす。
 
@@ -256,8 +273,8 @@ trap-sensitive な純粋数値 op は「pure だから消せる」扱いにし�
 | --- | --- | --- |
 | 0 | family 候補群、`top-k=16`、budget、logical layout order を固定 | [`runtime/vm.rs`](../../crates/telomere/src/runtime/vm.rs), [`optimizer-family-budgets.md`](./optimizer-family-budgets.md) |
 | 1 | `PackedOpStream`、const pool、typed operand pack、branch target predecode | [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs) |
-| 2 | `SlotRef`、`SlotShape`、`BlockCopyPlan`、effect spill slot | [`expr.rs`](../../crates/telomere/src/parser/core/optimizer/expr.rs), [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
-| 3 | local/control provider elimination を consumer-driven lowering へ移行 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
+| 2 | `SlotRef`、`SlotShape`、`BlockCopyPlan`、effect spill slot、whole-block temp-local rewrite | [`expr.rs`](../../crates/telomere/src/parser/core/optimizer/expr.rs), [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
+| 3 | `entry_availability` / `exit_availability` による same-block GVN + cross-block PRE と local/control provider elimination | [`expr.rs`](../../crates/telomere/src/parser/core/optimizer/expr.rs), [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |
 | 4 | specialized memory family を slot-based に再構成 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs), [`sink.rs`](../../crates/telomere/src/parser/core/optimizer/sink.rs) |
 | 5 | `CallRecipeRef` / `CallRecipe` による direct call predecode | [`common.rs`](../../crates/telomere/src/common.rs), [`common/store.rs`](../../crates/telomere/src/common/store.rs), [`runtime/instantiate.rs`](../../crates/telomere/src/runtime/instantiate.rs), [`runtime/vm/call.rs`](../../crates/telomere/src/runtime/vm/call.rs) |
 | 6 | typed select と compare/control provider elimination を拡張 | [`pass.rs`](../../crates/telomere/src/parser/core/optimizer/pass.rs) |

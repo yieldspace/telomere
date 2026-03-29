@@ -85,6 +85,126 @@ async fn get_global_supports_v128() {
     );
 }
 
+#[cfg(feature = "simd")]
+#[tokio::test]
+async fn simd_replace_lane_value_flows_through_global_set_and_return() {
+    const F32_3_14: f32 = f32::from_bits(0x4048_f5c3);
+    const F64_3_14: f64 = f64::from_bits(0x4009_1eb8_51eb_851f);
+
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (global $g (export "g") (mut v128) (v128.const f32x4 0 0 0 0))
+          (func (export "return-f32-param") (param v128 f32) (result f32)
+            (return (local.get 1)))
+          (func (export "replace-f32-lane-only") (param v128 f32) (result v128)
+            (return (f32x4.replace_lane 0 (local.get 0) (local.get 1))))
+          (func (export "as-global_set-value-1") (param v128 f32) (result v128)
+            (global.set $g (f32x4.replace_lane 0 (local.get 0) (local.get 1)))
+            (return (global.get $g)))
+          (func (export "return-f64-param") (param v128 f64) (result f64)
+            (return (local.get 1)))
+          (func (export "replace-f64-lane-only") (param v128 f64) (result v128)
+            (return (f64x2.replace_lane 0 (local.get 0) (local.get 1))))
+          (func (export "as-global_set-value-3") (param v128 f64) (result v128)
+            (global.set $g (f64x2.replace_lane 0 (local.get 0) (local.get 1)))
+            (return (global.get $g))))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let f32_param = run_module_function(
+        &instance,
+        &store,
+        "return-f32-param",
+        &ResultValue::new(vec![WasmValue::V128(0), WasmValue::F32(F32_3_14)]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(f32_param, ResultValue::new(vec![WasmValue::F32(F32_3_14)]));
+
+    let f32_lane_only = run_module_function(
+        &instance,
+        &store,
+        "replace-f32-lane-only",
+        &ResultValue::new(vec![WasmValue::V128(0), WasmValue::F32(F32_3_14)]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f32_lane_only,
+        ResultValue::new(vec![WasmValue::V128(u128::from_le_bytes([
+            0xc3, 0xf5, 0x48, 0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]))])
+    );
+
+    let f32_result = run_module_function(
+        &instance,
+        &store,
+        "as-global_set-value-1",
+        &ResultValue::new(vec![WasmValue::V128(0), WasmValue::F32(F32_3_14)]),
+    )
+    .await
+    .unwrap();
+    let f32_global = get_global(&instance, &store, "g").unwrap();
+    assert_eq!(
+        f32_result,
+        ResultValue::new(vec![WasmValue::V128(u128::from_le_bytes([
+            0xc3, 0xf5, 0x48, 0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]))])
+    );
+    assert_eq!(
+        f32_global,
+        WasmValue::V128(u128::from_le_bytes([
+            0xc3, 0xf5, 0x48, 0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]))
+    );
+
+    let f64_param = run_module_function(
+        &instance,
+        &store,
+        "return-f64-param",
+        &ResultValue::new(vec![WasmValue::V128(0), WasmValue::F64(F64_3_14)]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(f64_param, ResultValue::new(vec![WasmValue::F64(F64_3_14)]));
+
+    let f64_lane_only = run_module_function(
+        &instance,
+        &store,
+        "replace-f64-lane-only",
+        &ResultValue::new(vec![WasmValue::V128(0), WasmValue::F64(F64_3_14)]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f64_lane_only,
+        ResultValue::new(vec![WasmValue::V128(u128::from_le_bytes([
+            0x1f, 0x85, 0xeb, 0x51, 0xb8, 0x1e, 0x09, 0x40, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]))])
+    );
+
+    let f64_result = run_module_function(
+        &instance,
+        &store,
+        "as-global_set-value-3",
+        &ResultValue::new(vec![WasmValue::V128(0), WasmValue::F64(F64_3_14)]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        f64_result,
+        ResultValue::new(vec![WasmValue::V128(u128::from_le_bytes([
+            0x1f, 0x85, 0xeb, 0x51, 0xb8, 0x1e, 0x09, 0x40, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]))])
+    );
+}
+
 #[tokio::test]
 async fn public_runtime_apis_fail_closed_for_missing_or_wrong_export_kind() {
     let store = Store::new();

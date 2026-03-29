@@ -377,7 +377,7 @@ pub(crate) enum PureOpKind {
     F64Ge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum ValueKey {
     Unary {
         op: PureOpKind,
@@ -427,6 +427,9 @@ pub(crate) struct ValueGraph {
     pub(crate) nodes: Vec<ValueNode>,
     pub(crate) block_arguments: Vec<BlockArgument>,
     block_argument_lookup: HashMap<(usize, usize), BlockArgumentId>,
+    available_value_lookup: HashMap<(usize, ValueKey), ValueRef>,
+    pub(crate) entry_availability: Vec<HashMap<ValueKey, AvailabilityEntry>>,
+    pub(crate) exit_availability: Vec<HashMap<ValueKey, AvailabilityEntry>>,
 }
 
 impl Deref for ValueGraph {
@@ -501,6 +504,13 @@ impl ValueNode {
 }
 
 impl ValueGraph {
+    pub(crate) fn resize_block_availability(&mut self, block_count: usize) {
+        self.entry_availability
+            .resize_with(block_count, HashMap::new);
+        self.exit_availability
+            .resize_with(block_count, HashMap::new);
+    }
+
     pub(crate) fn existing_block_argument_value(
         &self,
         block_id: usize,
@@ -581,6 +591,65 @@ impl ValueGraph {
     pub(crate) fn block_argument(&self, id: BlockArgumentId) -> Option<&BlockArgument> {
         self.block_arguments.get(id.0)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn ensure_available_value(
+        &mut self,
+        block_id: usize,
+        key: ValueKey,
+        ty: ValType,
+        const_value: Option<ConstValue>,
+        address_shape: Option<AddressShape>,
+        loop_value_shape: Option<LoopValueShape>,
+        slot_shape: Option<SlotShape>,
+    ) -> ValueRef {
+        if let Some(value) = self.available_value_lookup.get(&(block_id, key)).copied() {
+            let node = &mut self.nodes[value.0];
+            node.ty = ty;
+            node.const_value = const_value;
+            node.key = Some(key);
+            node.address_shape = address_shape;
+            node.loop_value_shape = loop_value_shape;
+            node.slot_shape = slot_shape;
+            node.refresh_optimizer_metadata();
+            return value;
+        }
+
+        let value = ExprId(self.nodes.len());
+        self.nodes.push(ValueNode {
+            ty,
+            origin: ExprOrigin {
+                block_id,
+                ordinal: self.nodes.len(),
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Synthetic,
+            const_value,
+            key: Some(key),
+            address_shape,
+            loop_value_shape,
+            slot_shape,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
+            producer_op: None,
+            materialized_block: None,
+            materialized_op: None,
+            needs_spill: false,
+            use_count: 0,
+            ref_count: 0,
+            removable: true,
+        });
+        self.nodes[value.0].refresh_optimizer_metadata();
+        self.available_value_lookup.insert((block_id, key), value);
+        value
+    }
 }
 
 pub(crate) type EffectEpoch = usize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AvailabilityEntry {
+    pub(crate) value: ValueRef,
+    pub(crate) effect_epoch: EffectEpoch,
+    pub(crate) heap: HeapVersion,
+}
