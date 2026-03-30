@@ -207,6 +207,12 @@ struct OptimizerProfiler {
     versioned_block_count: usize,
     specialized_block_count: usize,
     generic_fallback_edges: usize,
+    specialized_to_specialized_edges: usize,
+    selected_cfg_specialized_edges: usize,
+    selected_original_routable_edges: usize,
+    overlay_fixpoint_iterations: usize,
+    overlay_route_rewrites: usize,
+    overlay_fixpoint_fallback: bool,
     version_key_fact_breakdown: BTreeMap<&'static str, usize>,
     versionable_candidate_blocks: usize,
     blocks_with_entry_bindings: usize,
@@ -515,6 +521,12 @@ impl OptimizerProfiler {
             versioned_block_count: block_count,
             specialized_block_count: 0,
             generic_fallback_edges: 0,
+            specialized_to_specialized_edges: 0,
+            selected_cfg_specialized_edges: 0,
+            selected_original_routable_edges: 0,
+            overlay_fixpoint_iterations: 0,
+            overlay_route_rewrites: 0,
+            overlay_fixpoint_fallback: false,
             version_key_fact_breakdown: BTreeMap::new(),
             versionable_candidate_blocks: 0,
             blocks_with_entry_bindings: 0,
@@ -526,6 +538,12 @@ impl OptimizerProfiler {
         self.versioned_block_count = overlay.blocks.len();
         self.specialized_block_count = overlay.specialized_block_count;
         self.generic_fallback_edges = overlay.generic_fallback_edges;
+        self.specialized_to_specialized_edges = overlay.specialized_to_specialized_edges;
+        self.selected_cfg_specialized_edges = overlay.selected_cfg_specialized_edges;
+        self.selected_original_routable_edges = overlay.selected_original_routable_edges;
+        self.overlay_fixpoint_iterations = overlay.fixpoint_iterations;
+        self.overlay_route_rewrites = overlay.route_rewrites;
+        self.overlay_fixpoint_fallback = overlay.fixpoint_fallback;
         self.version_key_fact_breakdown = overlay.version_key_fact_breakdown.clone();
         self.versionable_candidate_blocks = overlay.versionable_candidate_blocks;
         self.blocks_with_entry_bindings = overlay.blocks_with_entry_bindings;
@@ -626,11 +644,17 @@ impl OptimizerProfiler {
             .collect::<Vec<_>>()
             .join(",");
         eprintln!(
-            "[telomere-opt-profile] func={} versioned_blocks={} specialized_blocks={} generic_fallback_edges={} versionable_candidates={} binding_blocks={} candidate_blocks={} version_key_facts=[{}]",
+            "[telomere-opt-profile] func={} versioned_blocks={} specialized_blocks={} generic_fallback_edges={} specialized_to_specialized_edges={} selected_cfg_specialized_edges={} selected_original_routable_edges={} overlay_fixpoint_iterations={} overlay_route_rewrites={} overlay_fixpoint_fallback={} versionable_candidates={} binding_blocks={} candidate_blocks={} version_key_facts=[{}]",
             self.funcidx.0,
             self.versioned_block_count,
             self.specialized_block_count,
             self.generic_fallback_edges,
+            self.specialized_to_specialized_edges,
+            self.selected_cfg_specialized_edges,
+            self.selected_original_routable_edges,
+            self.overlay_fixpoint_iterations,
+            self.overlay_route_rewrites,
+            self.overlay_fixpoint_fallback,
             self.versionable_candidate_blocks,
             self.blocks_with_entry_bindings,
             self.blocks_with_version_candidates,
@@ -2621,6 +2645,67 @@ fn same_state(graph: &ValueGraph, lhs: &BlockEntryState, rhs: &BlockEntryState) 
         && same_value_map(graph, &lhs.aliases, &rhs.aliases)
 }
 
+pub(super) fn block_entry_states_equal(
+    graph: &ValueGraph,
+    lhs: &BlockEntryState,
+    rhs: &BlockEntryState,
+) -> bool {
+    same_state(graph, lhs, rhs)
+}
+
+pub(super) fn merge_overlay_entry_state(
+    program: &BasicBlockProgram,
+    graph: &mut ValueGraph,
+    original_block: usize,
+    analysis_block_id: usize,
+    incoming: &[BlockEntryState],
+) -> Option<BlockEntryState> {
+    if incoming.is_empty() {
+        return None;
+    }
+    let block = program.block(original_block);
+    let first = program.records.get(block.start)?;
+    Some(merge_states(graph, analysis_block_id, first, incoming))
+}
+
+pub(super) fn replay_block_body_for_overlay(
+    graph: &mut ValueGraph,
+    analysis_block_id: usize,
+    entry: &BlockEntryState,
+    body: &BlockBody,
+    initial_value_map: &HashMap<ValueRef, ValueRef>,
+) -> Option<BlockEntryState> {
+    let mut state = entry.clone();
+    let mut value_map = initial_value_map.clone();
+    let mut latest_by_origin = HashMap::new();
+    for value in state
+        .stack
+        .iter()
+        .copied()
+        .chain(state.locals.values().copied())
+        .chain(state.aliases.values().copied())
+    {
+        overlay_record_latest_value(graph, &mut latest_by_origin, value);
+    }
+
+    for op in &body.ops {
+        overlay_apply_block_op(
+            graph,
+            analysis_block_id,
+            &mut state,
+            &mut value_map,
+            &mut latest_by_origin,
+            op,
+        )?;
+    }
+
+    if let Some(terminator) = &body.terminator {
+        overlay_apply_block_terminator(graph, &mut state, &mut value_map, terminator)?;
+    }
+
+    Some(state)
+}
+
 fn same_availability_map(
     graph: &ValueGraph,
     lhs: &HashMap<ValueKey, AvailabilityEntry>,
@@ -2775,6 +2860,553 @@ fn ensure_seed_value(graph: &mut ValueGraph, ty: ValType, origin: ExprOrigin) ->
         removable: false,
     });
     value
+}
+
+fn overlay_apply_block_op(
+    graph: &mut ValueGraph,
+    analysis_block_id: usize,
+    state: &mut BlockEntryState,
+    value_map: &mut HashMap<ValueRef, ValueRef>,
+    latest_by_origin: &mut HashMap<ExprOrigin, ValueRef>,
+    op: &BlockOp,
+) -> Option<()> {
+    let resolved_inputs = overlay_resolved_inputs(op.inputs.as_slice(), value_map);
+    let mut outputs = Vec::new();
+    match op.kind {
+        BlockOpKind::Const => {
+            outputs.extend(op.values.iter().copied());
+        }
+        BlockOpKind::LocalGet => {
+            outputs.push(overlay_local_get_result(state, value_map, op)?);
+        }
+        BlockOpKind::LocalSet | BlockOpKind::LocalTee => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            let slot = block_op_written_local_slot(op)?;
+            let value = *resolved_inputs.first()?;
+            state.locals.insert(slot, value);
+            if op.kind == BlockOpKind::LocalTee {
+                outputs.push(value);
+            }
+        }
+        BlockOpKind::Drop => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+        }
+        BlockOpKind::Select => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            outputs.push(overlay_select_result(graph, op, &resolved_inputs)?);
+        }
+        BlockOpKind::PureUnary(kind) => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            outputs.push(overlay_unary_result(graph, op, kind, &resolved_inputs)?);
+        }
+        BlockOpKind::PureBinary(kind) => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            outputs.push(overlay_binary_result(
+                graph,
+                op,
+                kind,
+                &resolved_inputs,
+                latest_by_origin,
+            )?);
+        }
+        BlockOpKind::GlobalGet => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            let result = block_op_single_result(op)?;
+            outputs.push(result);
+            if let Some(slot) = block_op_global_get_slot(op) {
+                state.aliases.insert(overlay_global_alias_key(slot), result);
+            }
+        }
+        BlockOpKind::GlobalSet => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            overlay_clear_alias_space(state, AliasSpace::Global);
+            state.heap.global = state.heap.global.saturating_add(1);
+        }
+        BlockOpKind::TableGet => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            outputs.extend(op.values.iter().copied());
+        }
+        BlockOpKind::TableSet => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            overlay_clear_alias_space(state, AliasSpace::Table);
+            state.heap.table = state.heap.table.saturating_add(1);
+        }
+        BlockOpKind::MemoryLoad => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            let result = block_op_single_result(op)?;
+            outputs.push(result);
+            if let Some(address) = resolved_inputs.first().copied() {
+                if let Some(alias) = overlay_memory_alias_key(graph, latest_by_origin, op, address)
+                {
+                    state.aliases.insert(alias, result);
+                }
+            }
+        }
+        BlockOpKind::MemoryStore => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            overlay_clear_alias_space(state, AliasSpace::Memory);
+            state.heap.memory = state.heap.memory.saturating_add(1);
+            if let (Some(address), Some(value)) = (
+                resolved_inputs.first().copied(),
+                resolved_inputs.get(1).copied(),
+            ) {
+                if let Some(alias) = overlay_memory_alias_key(graph, latest_by_origin, op, address)
+                {
+                    state.aliases.insert(alias, value);
+                }
+            }
+        }
+        BlockOpKind::CallLike => {
+            overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+            state.aliases.clear();
+            state.heap.memory = state.heap.memory.saturating_add(1);
+            state.heap.global = state.heap.global.saturating_add(1);
+            state.heap.table = state.heap.table.saturating_add(1);
+            outputs.extend(op.values.iter().copied());
+        }
+        BlockOpKind::Fused(kind) => {
+            overlay_apply_fused_op(graph, state, value_map, op, kind, &mut outputs)?;
+        }
+        BlockOpKind::Raw => return None,
+    }
+
+    overlay_push_outputs(
+        graph,
+        state,
+        value_map,
+        latest_by_origin,
+        op.values.as_slice(),
+        outputs,
+    );
+    let _ = analysis_block_id;
+    Some(())
+}
+
+fn overlay_apply_block_terminator(
+    graph: &ValueGraph,
+    state: &mut BlockEntryState,
+    value_map: &mut HashMap<ValueRef, ValueRef>,
+    terminator: &BlockTerminator,
+) -> Option<()> {
+    let resolved_inputs = overlay_resolved_inputs(terminator.inputs.as_slice(), value_map);
+    overlay_consume_stack_suffix(graph, &mut state.stack, &resolved_inputs)?;
+    for value in &terminator.values {
+        state
+            .stack
+            .push(value_map.get(value).copied().unwrap_or(*value));
+    }
+    Some(())
+}
+
+fn overlay_apply_fused_op(
+    graph: &ValueGraph,
+    state: &mut BlockEntryState,
+    value_map: &HashMap<ValueRef, ValueRef>,
+    op: &BlockOp,
+    kind: FusedOpKind,
+    outputs: &mut Vec<ValueRef>,
+) -> Option<()> {
+    match kind {
+        FusedOpKind::LocalGet4I32ConstAdd | FusedOpKind::LocalGet4LocalGet4I32Add => {
+            outputs.extend(op.values.iter().copied());
+        }
+        FusedOpKind::LocalGet4I32ConstAddSet4 | FusedOpKind::LocalGet4LocalGet4I32AddSet4 => {
+            let result = block_op_single_result(op)?;
+            let slot = overlay_fused_dst_slot(op)?;
+            state
+                .locals
+                .insert(slot, value_map.get(&result).copied().unwrap_or(result));
+        }
+        FusedOpKind::LocalGet4I32ConstAddTee4 | FusedOpKind::LocalGet4LocalGet4I32AddTee4 => {
+            let result = block_op_single_result(op)?;
+            let slot = overlay_fused_dst_slot(op)?;
+            let result = value_map.get(&result).copied().unwrap_or(result);
+            state.locals.insert(slot, result);
+            outputs.push(result);
+        }
+    }
+    let _ = graph;
+    Some(())
+}
+
+fn overlay_fused_dst_slot(op: &BlockOp) -> Option<LocalSlot> {
+    let BlockOperand::LocalAddr(addr) = *op.operands.get(2)? else {
+        return None;
+    };
+    Some(LocalSlot::new(addr, 4))
+}
+
+fn overlay_push_outputs(
+    graph: &ValueGraph,
+    state: &mut BlockEntryState,
+    value_map: &mut HashMap<ValueRef, ValueRef>,
+    latest_by_origin: &mut HashMap<ExprOrigin, ValueRef>,
+    templates: &[ValueRef],
+    outputs: Vec<ValueRef>,
+) {
+    for (template, output) in templates.iter().copied().zip(outputs.iter().copied()) {
+        value_map.insert(template, output);
+        overlay_record_latest_value(graph, latest_by_origin, output);
+        state.stack.push(output);
+    }
+}
+
+fn overlay_resolved_inputs(
+    inputs: &[ValueRef],
+    value_map: &HashMap<ValueRef, ValueRef>,
+) -> Vec<ValueRef> {
+    inputs
+        .iter()
+        .map(|input| value_map.get(input).copied().unwrap_or(*input))
+        .collect()
+}
+
+fn overlay_consume_stack_suffix(
+    graph: &ValueGraph,
+    stack: &mut Vec<ValueRef>,
+    inputs: &[ValueRef],
+) -> Option<()> {
+    if inputs.len() > stack.len() {
+        return Some(());
+    }
+    let start = stack.len().saturating_sub(inputs.len());
+    if !stack[start..]
+        .iter()
+        .zip(inputs.iter())
+        .all(|(lhs, rhs)| same_value(graph, *lhs, *rhs))
+    {
+        return Some(());
+    }
+    stack.truncate(start);
+    Some(())
+}
+
+fn overlay_local_get_result(
+    state: &BlockEntryState,
+    value_map: &HashMap<ValueRef, ValueRef>,
+    op: &BlockOp,
+) -> Option<ValueRef> {
+    if let Some(slot) = block_op_local_get_slot(op) {
+        return state
+            .locals
+            .get(&slot)
+            .copied()
+            .or_else(|| block_op_single_result(op));
+    }
+    match *op.operands.first()? {
+        BlockOperand::SpillValue(value) => value_map.get(&value).copied().or(Some(value)),
+        _ => block_op_single_result(op),
+    }
+}
+
+fn overlay_select_result(
+    graph: &mut ValueGraph,
+    op: &BlockOp,
+    resolved_inputs: &[ValueRef],
+) -> Option<ValueRef> {
+    let lhs = *resolved_inputs.first()?;
+    let rhs = *resolved_inputs.get(1)?;
+    let cond = *resolved_inputs.get(2)?;
+    let chosen = match graph[cond.0].const_value {
+        Some(ConstValue::I32(0)) => Some(rhs),
+        Some(ConstValue::I32(_)) => Some(lhs),
+        _ if same_expr(&graph[lhs.0], &graph[rhs.0]) => Some(lhs),
+        _ => None,
+    };
+    if let Some(chosen) = chosen {
+        return Some(chosen);
+    }
+    let template = block_op_single_result(op)?;
+    let expected_size = value_type_size(graph[template.0].ty)?;
+    let const_value = (graph[lhs.0].const_value == graph[rhs.0].const_value)
+        .then_some(graph[lhs.0].const_value)
+        .flatten();
+    let key = (graph[lhs.0].key == graph[rhs.0].key)
+        .then_some(graph[lhs.0].key)
+        .flatten();
+    let slot_shape = shared_select_slot_shape(graph, lhs, rhs, expected_size);
+    let address_shape = slot_shape.as_ref().and_then(|shape| shape.address);
+    let loop_value_shape = slot_shape
+        .as_ref()
+        .and_then(|shape| shape.loop_value.clone());
+    Some(overlay_value_with_metadata(
+        graph,
+        template,
+        const_value,
+        key,
+        address_shape,
+        loop_value_shape,
+        slot_shape,
+    ))
+}
+
+fn overlay_unary_result(
+    graph: &mut ValueGraph,
+    op: &BlockOp,
+    kind: PureOpKind,
+    resolved_inputs: &[ValueRef],
+) -> Option<ValueRef> {
+    let input = *resolved_inputs.first()?;
+    let template = block_op_single_result(op)?;
+    let const_value = graph[input.0]
+        .const_value
+        .and_then(|value| fold_unary(kind, value));
+    let key = Some(ValueKey::Unary {
+        op: kind,
+        input: canonical_key_origin_for_value(graph, input),
+    });
+    let loop_value_shape = derive_unary_loop_value_shape(graph, kind, input);
+    Some(overlay_value_with_metadata(
+        graph,
+        template,
+        const_value,
+        key,
+        None,
+        loop_value_shape.clone(),
+        build_slot_shape(
+            direct_slot_from_shape_parts(None, loop_value_shape.as_ref()),
+            None,
+            loop_value_shape,
+        ),
+    ))
+}
+
+fn overlay_binary_result(
+    graph: &mut ValueGraph,
+    op: &BlockOp,
+    kind: PureOpKind,
+    resolved_inputs: &[ValueRef],
+    latest_by_origin: &HashMap<ExprOrigin, ValueRef>,
+) -> Option<ValueRef> {
+    let lhs = *resolved_inputs.first()?;
+    let rhs = *resolved_inputs.get(1)?;
+    let template = block_op_single_result(op)?;
+    let const_value = match (graph[lhs.0].const_value, graph[rhs.0].const_value) {
+        (Some(lhs), Some(rhs)) => fold_binary(kind, lhs, rhs),
+        _ => None,
+    };
+    let (lhs_origin, rhs_origin) = canonicalize_binary_origins(
+        kind,
+        canonical_key_origin_for_value(graph, lhs),
+        canonical_key_origin_for_value(graph, rhs),
+    );
+    let key = Some(ValueKey::Binary {
+        op: kind,
+        lhs: lhs_origin,
+        rhs: rhs_origin,
+    });
+    let address_shape = derive_binary_address_shape(graph, latest_by_origin, kind, lhs, rhs);
+    let loop_value_shape = derive_binary_loop_value_shape(graph, kind, lhs, rhs);
+    Some(overlay_value_with_metadata(
+        graph,
+        template,
+        const_value,
+        key,
+        address_shape,
+        loop_value_shape.clone(),
+        build_slot_shape(
+            direct_slot_from_shape_parts(address_shape, loop_value_shape.as_ref()),
+            address_shape,
+            loop_value_shape,
+        ),
+    ))
+}
+
+fn overlay_value_with_metadata(
+    graph: &mut ValueGraph,
+    template: ValueRef,
+    const_value: Option<ConstValue>,
+    key: Option<ValueKey>,
+    address_shape: Option<AddressShape>,
+    loop_value_shape: Option<LoopValueShape>,
+    slot_shape: Option<SlotShape>,
+) -> ValueRef {
+    let current = &graph[template.0];
+    if current.const_value == const_value
+        && current.key == key
+        && current.address_shape == address_shape
+        && current.loop_value_shape == loop_value_shape
+        && current.slot_shape == slot_shape
+    {
+        return template;
+    }
+
+    let mut node = current.clone();
+    node.const_value = const_value;
+    node.key = key;
+    node.address_shape = address_shape;
+    node.loop_value_shape = loop_value_shape;
+    node.slot_shape = slot_shape;
+    node.producer_op = None;
+    node.materialized_block = None;
+    node.materialized_op = None;
+    node.needs_spill = false;
+    node.use_count = 0;
+    node.ref_count = 0;
+    node.removable = false;
+    node.refresh_optimizer_metadata();
+    let value = ExprId(graph.nodes.len());
+    graph.nodes.push(node);
+    value
+}
+
+fn overlay_record_latest_value(
+    graph: &ValueGraph,
+    latest_by_origin: &mut HashMap<ExprOrigin, ValueRef>,
+    value: ValueRef,
+) {
+    latest_by_origin.insert(graph[value.0].origin, value);
+    if let Some(slot) = effective_slot_shape(graph, value)
+        .and_then(|shape| shape.slot)
+        .and_then(materializable_slot)
+    {
+        latest_by_origin.insert(canonical_slot_origin(slot), value);
+    }
+}
+
+fn overlay_clear_alias_space(state: &mut BlockEntryState, space: AliasSpace) {
+    state.aliases.retain(|key, _| key.space != space);
+}
+
+fn overlay_global_alias_key(slot: LocalSlot) -> AliasKey {
+    AliasKey {
+        space: AliasSpace::Global,
+        index: slot.addr,
+        offset: 0,
+        width: slot.size as u8,
+        address: AliasAddress::Const(0),
+    }
+}
+
+fn overlay_memory_alias_key(
+    graph: &ValueGraph,
+    latest_by_origin: &HashMap<ExprOrigin, ValueRef>,
+    op: &BlockOp,
+    address: ValueRef,
+) -> Option<AliasKey> {
+    let memarg = block_op_memarg(op)?;
+    let memidx = block_op_index_memidx(op)?;
+    let width = overlay_memory_width(graph, op)?;
+    Some(AliasKey {
+        space: AliasSpace::Memory,
+        index: memidx,
+        offset: memarg.offset,
+        width,
+        address: overlay_alias_address_for_value(
+            graph,
+            latest_by_origin,
+            address,
+            &mut HashSet::new(),
+        )?,
+    })
+}
+
+fn overlay_alias_address_for_value(
+    graph: &ValueGraph,
+    latest_by_origin: &HashMap<ExprOrigin, ValueRef>,
+    value: ValueRef,
+    visiting: &mut HashSet<ValueRef>,
+) -> Option<AliasAddress> {
+    if !visiting.insert(value) {
+        return None;
+    }
+    let state = &graph[value.0];
+    if state.ty != ValType::I32 {
+        visiting.remove(&value);
+        return None;
+    }
+    if let Some(ConstValue::I32(const_i32)) = state.const_value {
+        visiting.remove(&value);
+        return Some(AliasAddress::Const(const_i32 as u32));
+    }
+    let address = match state.origin.kind {
+        ExprOriginKind::EntryLocal | ExprOriginKind::BlockArgument => {
+            Some(AliasAddress::Origin(state.origin))
+        }
+        _ => match state.key {
+            Some(ValueKey::Unary { op, input })
+                if alias_address_supports_pure_chain(op)
+                    && unary_output_type(op) == ValType::I32 =>
+            {
+                let input = latest_by_origin
+                    .get(&input)
+                    .copied()
+                    .filter(|input| *input != value)?;
+                Some(AliasAddress::Unary {
+                    op,
+                    input: Box::new(overlay_alias_address_for_value(
+                        graph,
+                        latest_by_origin,
+                        input,
+                        visiting,
+                    )?),
+                })
+            }
+            Some(ValueKey::Binary { op, lhs, rhs })
+                if alias_address_supports_pure_chain(op)
+                    && binary_output_type(op) == ValType::I32 =>
+            {
+                let lhs = latest_by_origin
+                    .get(&lhs)
+                    .copied()
+                    .filter(|lhs| *lhs != value)?;
+                let rhs = latest_by_origin
+                    .get(&rhs)
+                    .copied()
+                    .filter(|rhs| *rhs != value)?;
+                Some(AliasAddress::Binary {
+                    op,
+                    lhs: Box::new(overlay_alias_address_for_value(
+                        graph,
+                        latest_by_origin,
+                        lhs,
+                        visiting,
+                    )?),
+                    rhs: Box::new(overlay_alias_address_for_value(
+                        graph,
+                        latest_by_origin,
+                        rhs,
+                        visiting,
+                    )?),
+                })
+            }
+            _ => Some(AliasAddress::Origin(state.origin)),
+        },
+    };
+    visiting.remove(&value);
+    address
+}
+
+fn overlay_memory_width(graph: &ValueGraph, op: &BlockOp) -> Option<u8> {
+    if std::ptr::fn_addr_eq(op.op, vm::op_i32_load8_s as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i32_load8_u as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_load8_s as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_load8_u as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i32_store8 as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_store8 as Op)
+    {
+        return Some(1);
+    }
+    if std::ptr::fn_addr_eq(op.op, vm::op_i32_load16_s as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i32_load16_u as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_load16_s as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_load16_u as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i32_store16 as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_store16 as Op)
+    {
+        return Some(2);
+    }
+    if std::ptr::fn_addr_eq(op.op, vm::op_i64_load32_s as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_load32_u as Op)
+        || std::ptr::fn_addr_eq(op.op, vm::op_i64_store32 as Op)
+    {
+        return Some(4);
+    }
+    block_op_single_result(op)
+        .map(|value| graph[value.0].ty)
+        .or_else(|| memory_store_value_input(op).map(|value| graph[value.0].ty))
+        .and_then(value_type_size)
+        .map(|width| width as u8)
 }
 
 fn block_body_is_empty(body: &BlockBody) -> bool {
