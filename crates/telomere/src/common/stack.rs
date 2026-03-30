@@ -871,8 +871,10 @@ impl Stack {
         let src = vm_try!(VMResult::from_option(self.top.checked_sub(size), || {
             VMResult::StackOverflow
         }));
+        if size == 0 || src == dst {
+            return VMResult::Success(());
+        }
         match size {
-            0 => VMResult::Success(()),
             4 => {
                 let value = trusted_read_u32(&self.memory[src..src + 4]);
                 trusted_write_u32(&mut self.memory[dst..dst + 4], value);
@@ -992,7 +994,6 @@ impl Stack {
             local_size: prev_local_reference_size,
             local_top: prev_local_reference_top,
         };
-
         match self.copy_top_bytes_to(reference.local_top, return_size) {
             VMResult::Success(()) => {}
             VMResult::StackOverflow => unreachable!("validated function return must fit in stack"),
@@ -1081,11 +1082,13 @@ impl Stack {
         stack_top: usize,
         return_size: usize,
     ) {
-        self.memory.copy_within(
-            self.top - return_size..self.top,
-            reference.local_top + reference.local_size as usize + stack_top,
-        );
-        self.top = reference.local_top + reference.local_size as usize + stack_top + return_size;
+        let dst = reference.local_top + reference.local_size as usize + stack_top;
+        match self.copy_top_bytes_to(dst, return_size) {
+            VMResult::Success(()) => {}
+            VMResult::StackOverflow => unreachable!("validated block return must fit in stack"),
+            other => unreachable!("unexpected block return copy failure: {other:?}"),
+        }
+        self.top = dst + return_size;
     }
 }
 pub(crate) trait StackOperation<T> {
@@ -1350,6 +1353,37 @@ mod tests {
         assert_eq!(
             trusted_read_u32(&stack.memory[frame_top + 4..frame_top + 8]),
             0x3333_4444
+        );
+    }
+
+    #[test]
+    fn block_return_keeps_in_place_result_without_copying() {
+        let mut stack = Stack::new(256);
+        let runtime = StoreInner::new();
+        let empty = LocalReference {
+            local_top: 0,
+            local_size: 0,
+        };
+        let reference = stack
+            .function_call(
+                0,
+                4,
+                frame(CachedMemoryKind::Local, 1),
+                empty,
+                std::ptr::null(),
+                &runtime,
+            )
+            .unwrap();
+        let frame_top = reference.local_top + reference.local_size as usize;
+        stack.push_u32(0x5555_aaaa).unwrap();
+        assert_eq!(frame_top + 4, stack.top);
+
+        stack.block_return(&reference, 0, 4);
+
+        assert_eq!(stack.top, frame_top + 4);
+        assert_eq!(
+            trusted_read_u32(&stack.memory[frame_top..frame_top + 4]),
+            0x5555_aaaa
         );
     }
 
