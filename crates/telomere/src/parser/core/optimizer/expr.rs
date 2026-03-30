@@ -643,6 +643,45 @@ impl ValueGraph {
         self.available_value_lookup.insert((block_id, key), value);
         value
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_synthetic_specialized_value(
+        &mut self,
+        block_id: usize,
+        ordinal: usize,
+        ty: ValType,
+        const_value: Option<ConstValue>,
+        address_shape: Option<AddressShape>,
+        loop_value_shape: Option<LoopValueShape>,
+        slot_shape: Option<SlotShape>,
+    ) -> ValueRef {
+        let value = ExprId(self.nodes.len());
+        self.nodes.push(ValueNode {
+            ty,
+            origin: ExprOrigin {
+                block_id,
+                ordinal,
+                kind: ExprOriginKind::InstrResult,
+            },
+            def: ValueDef::Synthetic,
+            const_value,
+            key: None,
+            address_shape,
+            loop_value_shape,
+            slot_shape,
+            provider_class: ProviderClass::None,
+            materialization_cost: MaterializationCost::Unknown,
+            producer_op: None,
+            materialized_block: None,
+            materialized_op: None,
+            needs_spill: false,
+            use_count: 0,
+            ref_count: 0,
+            removable: false,
+        });
+        self.nodes[value.0].refresh_optimizer_metadata();
+        value
+    }
 }
 
 pub(crate) type EffectEpoch = usize;

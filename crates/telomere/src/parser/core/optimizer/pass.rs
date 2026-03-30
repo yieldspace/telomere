@@ -45,11 +45,11 @@ trait LocalPass {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct BlockEntryState {
-    reachable: bool,
-    locals: HashMap<LocalSlot, ValueRef>,
-    stack: Vec<ValueRef>,
-    heap: HeapVersion,
-    aliases: HashMap<AliasKey, ValueRef>,
+    pub(super) reachable: bool,
+    pub(super) locals: HashMap<LocalSlot, ValueRef>,
+    pub(super) stack: Vec<ValueRef>,
+    pub(super) heap: HeapVersion,
+    pub(super) aliases: HashMap<AliasKey, ValueRef>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -204,6 +204,13 @@ struct OptimizerProfiler {
     total_iterations: u64,
     block_visits: Vec<u64>,
     focus_logs_remaining: usize,
+    versioned_block_count: usize,
+    specialized_block_count: usize,
+    generic_fallback_edges: usize,
+    version_key_fact_breakdown: BTreeMap<&'static str, usize>,
+    versionable_candidate_blocks: usize,
+    blocks_with_entry_bindings: usize,
+    blocks_with_version_candidates: usize,
 }
 
 fn packed_stream_growth_pct(original_instrs: usize, packed_instrs: usize) -> f64 {
@@ -505,7 +512,24 @@ impl OptimizerProfiler {
             total_iterations: 0,
             block_visits: vec![0; block_count],
             focus_logs_remaining: config.max_focus_logs,
+            versioned_block_count: block_count,
+            specialized_block_count: 0,
+            generic_fallback_edges: 0,
+            version_key_fact_breakdown: BTreeMap::new(),
+            versionable_candidate_blocks: 0,
+            blocks_with_entry_bindings: 0,
+            blocks_with_version_candidates: 0,
         }
+    }
+
+    fn record_versioning_stats(&mut self, overlay: &super::versioning::VersionedRewriteOverlay) {
+        self.versioned_block_count = overlay.blocks.len();
+        self.specialized_block_count = overlay.specialized_block_count;
+        self.generic_fallback_edges = overlay.generic_fallback_edges;
+        self.version_key_fact_breakdown = overlay.version_key_fact_breakdown.clone();
+        self.versionable_candidate_blocks = overlay.versionable_candidate_blocks;
+        self.blocks_with_entry_bindings = overlay.blocks_with_entry_bindings;
+        self.blocks_with_version_candidates = overlay.blocks_with_version_candidates;
     }
 
     fn log_function_start(&self, program: &BasicBlockProgram) {
@@ -595,6 +619,23 @@ impl OptimizerProfiler {
             PACKED_STREAM_GROWTH_BUDGET_ABS,
             packed_stream_within_budget(original_instrs, packed_instrs),
         );
+        let fact_breakdown = self
+            .version_key_fact_breakdown
+            .iter()
+            .map(|(kind, count)| format!("{kind}:{count}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        eprintln!(
+            "[telomere-opt-profile] func={} versioned_blocks={} specialized_blocks={} generic_fallback_edges={} versionable_candidates={} binding_blocks={} candidate_blocks={} version_key_facts=[{}]",
+            self.funcidx.0,
+            self.versioned_block_count,
+            self.specialized_block_count,
+            self.generic_fallback_edges,
+            self.versionable_candidate_blocks,
+            self.blocks_with_entry_bindings,
+            self.blocks_with_version_candidates,
+            fact_breakdown,
+        );
         let grouped = collect_optimizer_family_candidates(&packed.ops);
         for (priority_rank, group) in OptimizerFamilyGroup::ORDER.iter().copied().enumerate() {
             let rendered = grouped[group.index()]
@@ -651,34 +692,34 @@ fn optimizer_profile_config() -> Option<OptimizerProfileConfig> {
 }
 
 #[derive(Clone, Default)]
-struct BlockBody {
-    ops: Vec<BlockOp>,
-    terminator: Option<BlockTerminator>,
+pub(super) struct BlockBody {
+    pub(super) ops: Vec<BlockOp>,
+    pub(super) terminator: Option<BlockTerminator>,
 }
 
 #[derive(Clone)]
-struct BlockOp {
-    source_start: Option<usize>,
-    op: Op,
-    kind: BlockOpKind,
-    operands: Vec<BlockOperand>,
-    inputs: Vec<ValueRef>,
-    values: Vec<ValueRef>,
+pub(super) struct BlockOp {
+    pub(super) source_start: Option<usize>,
+    pub(super) op: Op,
+    pub(super) kind: BlockOpKind,
+    pub(super) operands: Vec<BlockOperand>,
+    pub(super) inputs: Vec<ValueRef>,
+    pub(super) values: Vec<ValueRef>,
 }
 
 #[derive(Clone)]
-struct BlockTerminator {
-    source_start: Option<usize>,
-    op: Op,
-    kind: BlockTerminatorKind,
-    operands: Vec<BlockOperand>,
-    inputs: Vec<ValueRef>,
+pub(super) struct BlockTerminator {
+    pub(super) source_start: Option<usize>,
+    pub(super) op: Op,
+    pub(super) kind: BlockTerminatorKind,
+    pub(super) operands: Vec<BlockOperand>,
+    pub(super) inputs: Vec<ValueRef>,
     #[allow(dead_code)]
-    values: Vec<ValueRef>,
+    pub(super) values: Vec<ValueRef>,
 }
 
 #[derive(Clone, Copy)]
-enum BlockOperand {
+pub(super) enum BlockOperand {
     I32(i32),
     I64(i64),
     F32(f32),
@@ -691,7 +732,7 @@ enum BlockOperand {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FusedOpKind {
+pub(super) enum FusedOpKind {
     LocalGet4I32ConstAdd,
     LocalGet4I32ConstAddSet4,
     LocalGet4I32ConstAddTee4,
@@ -701,7 +742,7 @@ enum FusedOpKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BlockOpKind {
+pub(super) enum BlockOpKind {
     Const,
     LocalGet,
     LocalSet,
@@ -734,7 +775,7 @@ struct TrapSensitiveBarrierShape {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BlockTerminatorKind {
+pub(super) enum BlockTerminatorKind {
     If,
     Else,
     Br,
@@ -769,7 +810,7 @@ struct BlockBodyBuilder {
     entries: Vec<PendingBlockEntry>,
 }
 
-const UNKNOWN_HEAP_VERSION: u32 = u32::MAX;
+pub(super) const UNKNOWN_HEAP_VERSION: u32 = u32::MAX;
 const INSTR_RESULT_ORIGIN_STRIDE: usize = 256;
 const CANONICAL_SLOT_ORIGIN_BLOCK_ID: usize = 0;
 impl BlockBodyBuilder {
@@ -1688,17 +1729,36 @@ pub(crate) fn optimize_function(
         &program,
         &rewrite.relower.block_bodies
     ));
-    let reachable = reachable_blocks(&program, &rewrite.relower.block_bodies);
+    let base_bodies = program
+        .blocks
+        .iter()
+        .map(|block| combined_relower_block_body(&rewrite.relower, block.id))
+        .collect::<Vec<_>>();
+    let overlay = super::versioning::build_versioned_overlay(
+        &program,
+        &rewrite.entries,
+        &rewrite.exits,
+        &mut rewrite.graph,
+        &base_bodies,
+    );
+    if let Some(profiler) = profiler.as_mut() {
+        profiler.record_versioning_stats(&overlay);
+    }
+    let overlay_bodies = overlay
+        .blocks
+        .iter()
+        .map(|block| block.body.clone())
+        .collect::<Vec<_>>();
     let spill_plan = build_effect_result_spill_plan(
         &rewrite.graph,
-        &rewrite.relower.block_bodies,
-        &reachable,
+        &overlay_bodies,
+        &overlay.reachable,
         locals,
         param_bytes,
     );
     debug_assert!(verify_effect_result_spill_ir(
         &rewrite.graph,
-        &rewrite.relower.block_bodies,
+        &overlay_bodies,
         &spill_plan,
     ));
     let mut packed_ops = Vec::new();
@@ -1712,34 +1772,45 @@ pub(crate) fn optimize_function(
             &spill_plan,
         ));
     }
-    for block in &program.blocks {
-        if reachable[block.id] {
+    let mut next_reachable_block = vec![None; overlay.blocks.len()];
+    let mut next_emitted = None;
+    for block in overlay.blocks.iter().rev() {
+        if overlay.reachable[block.id] {
+            next_reachable_block[block.id] = next_emitted;
+            next_emitted = Some(block.id);
+        }
+    }
+    for block in &overlay.blocks {
+        if overlay.reachable[block.id] {
             if let Some(loop_header) = program
                 .records
-                .get(block.start)
+                .get(program.blocks[block.version.original_block].start)
                 .filter(|record| record.op_eq(vm::op_loop))
             {
                 packed_ops.push(pack_op(
-                    Some(loop_header.old_start),
+                    Some(block.block_label),
                     loop_header.op,
                     &loop_header.operands,
                 ));
             }
-            packed_ops.extend(relower_block_body(
-                &combined_relower_block_body(&rewrite.relower, block.id),
-                &rewrite.graph,
-                &spill_plan,
-            ));
+            packed_ops.extend(relower_block_body(&block.body, &rewrite.graph, &spill_plan));
+            if let Some(fallthrough_target) = block.fallthrough {
+                if next_reachable_block[block.id] != Some(fallthrough_target) {
+                    packed_ops.push(pack_op(
+                        None,
+                        vm::op_br,
+                        &[Operand {
+                            jump_addr: overlay.blocks[fallthrough_target].block_label as u32,
+                        }],
+                    ));
+                }
+            }
         }
     }
-    debug_assert!(verify_relower_preserves_call_ops(
-        &program,
-        &rewrite.relower.block_bodies,
-        &packed_ops,
-    ));
+    debug_assert!(verify_packed_call_operands(&packed_ops));
     debug_assert!(verify_relower_preserves_effect_result_spills(
         &rewrite.graph,
-        &rewrite.relower.block_bodies,
+        &overlay_bodies,
         &spill_plan,
         &packed_ops,
     ));
@@ -7626,13 +7697,29 @@ fn debug_verify_specialized_memory_lowering(
             original.kind,
             BlockOpKind::MemoryLoad | BlockOpKind::MemoryStore
         ));
+        let const_base_memarg = memory_address_input(original).and_then(|address| {
+            folded_const_base_memarg(_body, _op_idx, original, address).map(|(memarg, _)| memarg)
+        });
+        let const_base_candidate = match (original.kind, original.op) {
+            (BlockOpKind::MemoryLoad, op) if std::ptr::fn_addr_eq(op, vm::op_i32_load as Op) => {
+                Some(vm::op_i32_load_const_base as Op)
+            }
+            (BlockOpKind::MemoryStore, op) if std::ptr::fn_addr_eq(op, vm::op_i32_store as Op) => {
+                Some(vm::op_i32_store_const_base_local4 as Op)
+            }
+            _ => None,
+        };
         debug_assert!(specialized_memory_op(original.op)
             .into_iter()
             .chain(specialized_scaled_memory_op(original.op))
+            .chain(const_base_candidate)
             .any(|candidate| std::ptr::fn_addr_eq(candidate, _spec.op)));
-        debug_assert!(same_memarg(block_op_memarg(original), spec_memarg(_spec)));
+        let expected_memarg = const_base_memarg.or_else(|| block_op_memarg(original));
+        debug_assert!(same_memarg(expected_memarg, spec_memarg(_spec)));
         debug_assert_eq!(block_op_index_memidx(original), spec_memidx(_spec));
         if original.kind == BlockOpKind::MemoryStore {
+            let store_local_value_variant =
+                std::ptr::fn_addr_eq(_spec.op, vm::op_i32_store_const_base_local4 as Op);
             if let Some(value) = memory_store_value_input(original) {
                 if let Some(value_slice) =
                     find_contiguous_trailing_value_slice(_body, _op_idx, value)
@@ -7642,14 +7729,16 @@ fn debug_verify_specialized_memory_lowering(
                         _op_idx.checked_sub(1),
                         "store specialization must keep the trailing value suffix immediately before the store",
                     );
-                    for value_idx in &value_slice.op_indices {
-                        debug_assert!(
-                            !_absorbed_ops.contains(value_idx),
-                            "store specialization must not absorb value producer ops from the trailing value slice: store_op_idx={_op_idx} source_start={:?} value_op_idx={value_idx} value_slice={:?} absorbed={_absorbed_ops:?} body={}",
-                            original.source_start,
-                            value_slice.op_indices,
-                            debug_body_window(_body, value_slice.start_idx.saturating_sub(3), _op_idx + 1),
-                        );
+                    if !store_local_value_variant {
+                        for value_idx in &value_slice.op_indices {
+                            debug_assert!(
+                                !_absorbed_ops.contains(value_idx),
+                                "store specialization must not absorb value producer ops from the trailing value slice: store_op_idx={_op_idx} source_start={:?} value_op_idx={value_idx} value_slice={:?} absorbed={_absorbed_ops:?} body={}",
+                                original.source_start,
+                                value_slice.op_indices,
+                                debug_body_window(_body, value_slice.start_idx.saturating_sub(3), _op_idx + 1),
+                            );
+                        }
                     }
                 }
             }
@@ -7822,7 +7911,14 @@ fn same_memarg(lhs: Option<crate::common::MemArg>, rhs: Option<crate::common::Me
 
 #[cfg(debug_assertions)]
 fn spec_memarg(spec: &SpecializedMemoryLowering) -> Option<crate::common::MemArg> {
-    let BlockOperand::Raw(operand) = *spec.operands.get(2)? else {
+    let memarg_idx = if std::ptr::fn_addr_eq(spec.op, vm::op_i32_load_const_base as Op)
+        || std::ptr::fn_addr_eq(spec.op, vm::op_i32_store_const_base_local4 as Op)
+    {
+        0
+    } else {
+        specialized_memory_family(spec.op)?.memarg_index()
+    };
+    let BlockOperand::Raw(operand) = *spec.operands.get(memarg_idx)? else {
         return None;
     };
     Some(unsafe { operand.memarg })
@@ -7830,7 +7926,10 @@ fn spec_memarg(spec: &SpecializedMemoryLowering) -> Option<crate::common::MemArg
 
 #[cfg(debug_assertions)]
 fn spec_memidx(spec: &SpecializedMemoryLowering) -> Option<u32> {
-    match *spec.operands.get(3)? {
+    let memidx_idx = specialized_memory_family(spec.op)?
+        .memarg_index()
+        .saturating_add(1);
+    match *spec.operands.get(memidx_idx)? {
         BlockOperand::U32(memidx) => Some(memidx),
         BlockOperand::Raw(operand) => Some(unsafe { operand.u32 }),
         _ => None,
@@ -13729,6 +13828,7 @@ fn verify_slot_plan(program: &BasicBlockProgram, rewrite: &FunctionRewrite) -> b
     true
 }
 
+#[allow(dead_code)]
 fn verify_relower_preserves_call_ops(
     program: &BasicBlockProgram,
     bodies: &[BlockBody],

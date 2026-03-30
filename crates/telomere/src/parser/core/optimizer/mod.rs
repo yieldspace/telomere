@@ -2,6 +2,7 @@ mod cfg;
 mod expr;
 mod pass;
 mod sink;
+mod versioning;
 
 use crate::common::{FuncIdx, FuncType, Instr, LocalsData};
 
@@ -281,6 +282,7 @@ mod tests {
             ("op_i32_eq", vm::op_i32_eq as crate::common::Op),
             ("op_i32_eqz", vm::op_i32_eqz as crate::common::Op),
             ("op_br", vm::op_br as crate::common::Op),
+            ("op_return", vm::op_return as crate::common::Op),
             ("op_call", vm::op_call as crate::common::Op),
             ("op_loop", vm::op_loop as crate::common::Op),
             ("op_end", vm::op_end as crate::common::Op),
@@ -3374,13 +3376,12 @@ mod tests {
             count_op(&expr, vm::op_local_get4_i32_eqz_br_if as crate::common::Op)
                 + count_op(&expr, vm::op_local_get4_br_if as crate::common::Op);
         assert_control_targets_align(&expr);
-        assert_eq!(
-            count_op(&expr, vm::op_loop as crate::common::Op),
-            1,
-            "memory loop must retain an explicit loop header: {ops:?}"
+        assert!(
+            count_op(&expr, vm::op_loop as crate::common::Op) >= 1,
+            "memory loop must retain at least one explicit loop header: {ops:?}"
         );
-        assert_eq!(
-            direct_br_if_count, 1,
+        assert!(
+            direct_br_if_count >= 1,
             "memory loop should retain a direct local br_if family: {ops:?}"
         );
         assert_eq!(
@@ -3390,23 +3391,23 @@ mod tests {
         );
 
         let starts = decoded_starts(&expr);
-        let loop_start = starts
+        let loop_starts = starts
             .iter()
             .copied()
-            .find(|start| {
+            .filter(|start| {
                 std::ptr::fn_addr_eq(unsafe { expr[*start].op }, vm::op_loop as crate::common::Op)
             })
-            .expect("memory loop must contain op_loop");
-        let br_start = starts
-            .iter()
-            .copied()
-            .find(|start| {
-                std::ptr::fn_addr_eq(unsafe { expr[*start].op }, vm::op_br as crate::common::Op)
-            })
-            .expect("memory loop must contain op_br");
-        assert_eq!(
-            jump_target_for_start(&expr, br_start),
-            Some(loop_start),
+            .collect::<Vec<_>>();
+        assert!(
+            !loop_starts.is_empty(),
+            "memory loop must contain op_loop: {ops:?}"
+        );
+        assert!(
+            starts.iter().copied().any(|start| {
+                std::ptr::fn_addr_eq(unsafe { expr[start].op }, vm::op_br as crate::common::Op)
+                    && jump_target_for_start(&expr, start)
+                        .is_some_and(|target| loop_starts.contains(&target))
+            }),
             "memory loop backedge must target loop header: {ops:?}"
         );
     }
@@ -3554,13 +3555,12 @@ mod tests {
             count_op(&expr, vm::op_local_get4_i32_eqz_br_if as crate::common::Op)
                 + count_op(&expr, vm::op_local_get4_br_if as crate::common::Op);
         assert_control_targets_align(&expr);
-        assert_eq!(
-            count_op(&expr, vm::op_loop as crate::common::Op),
-            1,
-            "call loop must retain an explicit loop header: {ops:?}"
+        assert!(
+            count_op(&expr, vm::op_loop as crate::common::Op) >= 1,
+            "call loop must retain at least one explicit loop header: {ops:?}"
         );
-        assert_eq!(
-            direct_br_if_count, 1,
+        assert!(
+            direct_br_if_count >= 1,
             "call loop should retain a direct local br_if family: {ops:?}"
         );
         assert_eq!(
@@ -3570,23 +3570,23 @@ mod tests {
         );
 
         let starts = decoded_starts(&expr);
-        let loop_start = starts
+        let loop_starts = starts
             .iter()
             .copied()
-            .find(|start| {
+            .filter(|start| {
                 std::ptr::fn_addr_eq(unsafe { expr[*start].op }, vm::op_loop as crate::common::Op)
             })
-            .expect("call loop must contain op_loop");
-        let br_start = starts
-            .iter()
-            .copied()
-            .find(|start| {
-                std::ptr::fn_addr_eq(unsafe { expr[*start].op }, vm::op_br as crate::common::Op)
-            })
-            .expect("call loop must contain op_br");
-        assert_eq!(
-            jump_target_for_start(&expr, br_start),
-            Some(loop_start),
+            .collect::<Vec<_>>();
+        assert!(
+            !loop_starts.is_empty(),
+            "call loop must contain op_loop: {ops:?}"
+        );
+        assert!(
+            starts.iter().copied().any(|start| {
+                std::ptr::fn_addr_eq(unsafe { expr[start].op }, vm::op_br as crate::common::Op)
+                    && jump_target_for_start(&expr, start)
+                        .is_some_and(|target| loop_starts.contains(&target))
+            }),
             "call loop backedge must target loop header: {ops:?}"
         );
     }
@@ -3739,7 +3739,7 @@ mod tests {
                 "f32x4_replace_lane",
                 "op_global_set16",
                 "op_global_get16",
-                "op_br",
+                "op_return",
                 "op_end",
                 "special_function_return",
             ]
