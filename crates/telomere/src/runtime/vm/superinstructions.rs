@@ -1,9 +1,9 @@
 use super::*;
 use crate::common::{
     decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
-    decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind,
-    encode_local_binop32_kind, LocalBinop32Op, LocalBinop64Op, LocalCmp32Op, LocalCmp64Op,
-    LocalFastConstKind, LocalFastRhsShape, LocalUnary32Op, LocalUnary64Op,
+    decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind, LocalBinop32Op,
+    LocalBinop64Op, LocalCmp32Op, LocalCmp64Op, LocalFastConstKind, LocalFastRhsShape,
+    LocalUnary32Op, LocalUnary64Op,
 };
 
 #[inline(always)]
@@ -52,24 +52,196 @@ fn local_fast_rhs_shape_name(shape: LocalFastRhsShape) -> &'static str {
     }
 }
 
-#[inline(always)]
-fn binop32_const_kind(op: LocalBinop32Op) -> LocalFastConstKind {
-    op.const_kind()
+#[derive(Clone, Copy)]
+struct LocalBinop32Descriptor {
+    op: LocalBinop32Op,
+    rhs_shape: LocalFastRhsShape,
+    rhs_const_kind: LocalFastConstKind,
+    supports_br_if: bool,
 }
 
-#[inline(always)]
-fn binop64_const_kind(op: LocalBinop64Op) -> LocalFastConstKind {
-    op.const_kind()
+impl LocalBinop32Descriptor {
+    #[inline(always)]
+    fn decode(kind: u32) -> Option<Self> {
+        let (op, rhs_shape) = decode_local_binop32_kind(kind)?;
+        Some(Self {
+            op,
+            rhs_shape,
+            rhs_const_kind: op.const_kind(),
+            supports_br_if: matches!(
+                op,
+                LocalBinop32Op::I32Add
+                    | LocalBinop32Op::I32Sub
+                    | LocalBinop32Op::I32Mul
+                    | LocalBinop32Op::I32And
+                    | LocalBinop32Op::I32Or
+                    | LocalBinop32Op::I32Xor
+                    | LocalBinop32Op::I32Shl
+                    | LocalBinop32Op::I32ShrS
+                    | LocalBinop32Op::I32ShrU
+                    | LocalBinop32Op::I32Rotl
+                    | LocalBinop32Op::I32Rotr
+            ),
+        })
+    }
+
+    #[inline(always)]
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u32 {
+        if let Some(result) = self.fast_i32_eval(tail_code, ctx) {
+            return result;
+        }
+        let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+        let lhs_bits = local_u32_bits(ctx, lhs);
+        let rhs_bits = load_binop32_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx);
+        eval_local_binop32(self.op, lhs_bits, rhs_bits)
+    }
+
+    #[inline(always)]
+    unsafe fn fast_i32_eval(
+        self,
+        tail_code: *const Instr,
+        ctx: &mut ExecuteContext,
+    ) -> Option<u32> {
+        let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+        let lhs_value = local_u32_bits(ctx, lhs);
+
+        if self.op == LocalBinop32Op::I32Add && self.rhs_shape == LocalFastRhsShape::Local {
+            let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
+            return Some(lhs_value.wrapping_add(local_u32_bits(ctx, rhs)));
+        }
+        if self.op == LocalBinop32Op::I32Add && self.rhs_shape == LocalFastRhsShape::Const {
+            return Some(lhs_value.wrapping_add(unsafe { (*tail_code.add(2)).operand.i32 as u32 }));
+        }
+        if self.op == LocalBinop32Op::I32Sub && self.rhs_shape == LocalFastRhsShape::Local {
+            let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
+            return Some(lhs_value.wrapping_sub(local_u32_bits(ctx, rhs)));
+        }
+        if self.op == LocalBinop32Op::I32Sub && self.rhs_shape == LocalFastRhsShape::Const {
+            return Some(lhs_value.wrapping_sub(unsafe { (*tail_code.add(2)).operand.i32 as u32 }));
+        }
+        None
+    }
 }
 
-#[inline(always)]
-fn cmp32_const_kind(op: LocalCmp32Op) -> LocalFastConstKind {
-    op.const_kind()
+#[derive(Clone, Copy)]
+struct LocalBinop64Descriptor {
+    op: LocalBinop64Op,
+    rhs_shape: LocalFastRhsShape,
+    rhs_const_kind: LocalFastConstKind,
 }
 
-#[inline(always)]
-fn cmp64_const_kind(op: LocalCmp64Op) -> LocalFastConstKind {
-    op.const_kind()
+impl LocalBinop64Descriptor {
+    #[inline(always)]
+    fn decode(kind: u32) -> Option<Self> {
+        let (op, rhs_shape) = decode_local_binop64_kind(kind)?;
+        Some(Self {
+            op,
+            rhs_shape,
+            rhs_const_kind: op.const_kind(),
+        })
+    }
+
+    #[inline(always)]
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u64 {
+        let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+        let lhs_bits = local_u64_bits(ctx, lhs);
+        let rhs_bits = load_binop64_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx);
+        eval_local_binop64(self.op, lhs_bits, rhs_bits)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LocalCmp32Descriptor {
+    op: LocalCmp32Op,
+    rhs_shape: LocalFastRhsShape,
+    rhs_const_kind: LocalFastConstKind,
+}
+
+impl LocalCmp32Descriptor {
+    #[inline(always)]
+    fn decode(kind: u32) -> Option<Self> {
+        let (op, rhs_shape) = decode_local_cmp32_kind(kind)?;
+        Some(Self {
+            op,
+            rhs_shape,
+            rhs_const_kind: op.const_kind(),
+        })
+    }
+
+    #[inline(always)]
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u32 {
+        let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+        let lhs_bits = local_u32_bits(ctx, lhs);
+        let rhs_bits = load_cmp32_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx);
+        eval_local_cmp32(self.op, lhs_bits, rhs_bits)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LocalCmp64Descriptor {
+    op: LocalCmp64Op,
+    rhs_shape: LocalFastRhsShape,
+    rhs_const_kind: LocalFastConstKind,
+}
+
+impl LocalCmp64Descriptor {
+    #[inline(always)]
+    fn decode(kind: u32) -> Option<Self> {
+        let (op, rhs_shape) = decode_local_cmp64_kind(kind)?;
+        Some(Self {
+            op,
+            rhs_shape,
+            rhs_const_kind: op.const_kind(),
+        })
+    }
+
+    #[inline(always)]
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u32 {
+        let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+        let lhs_bits = local_u64_bits(ctx, lhs);
+        let rhs_bits = load_cmp64_rhs(tail_code, self.rhs_shape, self.rhs_const_kind, ctx);
+        eval_local_cmp64(self.op, lhs_bits, rhs_bits)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LocalUnary32Descriptor {
+    op: LocalUnary32Op,
+}
+
+impl LocalUnary32Descriptor {
+    #[inline(always)]
+    fn decode(kind: u32) -> Option<Self> {
+        Some(Self {
+            op: decode_local_unary32_kind(kind)?,
+        })
+    }
+
+    #[inline(always)]
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u32 {
+        let src = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+        eval_local_unary32(self.op, local_u32_bits(ctx, src))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LocalUnary64Descriptor {
+    op: LocalUnary64Op,
+}
+
+impl LocalUnary64Descriptor {
+    #[inline(always)]
+    fn decode(kind: u32) -> Option<Self> {
+        Some(Self {
+            op: decode_local_unary64_kind(kind)?,
+        })
+    }
+
+    #[inline(always)]
+    unsafe fn eval(self, tail_code: *const Instr, ctx: &mut ExecuteContext) -> u64 {
+        let src = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
+        eval_local_unary64(self.op, local_u64_bits(ctx, src))
+    }
 }
 
 #[inline(always)]
@@ -102,24 +274,6 @@ fn eval_local_unary64(op: LocalUnary64Op, src_bits: u64) -> u64 {
         LocalUnary64Op::F64Trunc => f64::from_bits(src_bits).trunc().to_bits(),
         LocalUnary64Op::F64Nearest => f64::from_bits(src_bits).round_ties_even().to_bits(),
     }
-}
-
-#[inline(always)]
-fn binop32_allows_br_if(op: LocalBinop32Op) -> bool {
-    matches!(
-        op,
-        LocalBinop32Op::I32Add
-            | LocalBinop32Op::I32Sub
-            | LocalBinop32Op::I32Mul
-            | LocalBinop32Op::I32And
-            | LocalBinop32Op::I32Or
-            | LocalBinop32Op::I32Xor
-            | LocalBinop32Op::I32Shl
-            | LocalBinop32Op::I32ShrS
-            | LocalBinop32Op::I32ShrU
-            | LocalBinop32Op::I32Rotl
-            | LocalBinop32Op::I32Rotr
-    )
 }
 
 #[inline(always)]
@@ -272,85 +426,38 @@ fn load_cmp64_rhs(
 
 #[inline(always)]
 unsafe fn eval_binop32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
-    let kind = unsafe { (*tail_code).operand.u32 };
-    if let Some(result) = fast_i32_local_binop32(kind, tail_code, ctx) {
-        return Some(result);
-    }
-    let (op, shape) = decode_local_binop32_kind(kind)?;
-    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
-    let lhs_bits = local_u32_bits(ctx, lhs);
-    let rhs_bits = load_binop32_rhs(tail_code, shape, binop32_const_kind(op), ctx);
-    Some(eval_local_binop32(op, lhs_bits, rhs_bits))
-}
-
-#[inline(always)]
-unsafe fn fast_i32_local_binop32(
-    kind: u32,
-    tail_code: *const Instr,
-    ctx: &mut ExecuteContext,
-) -> Option<u32> {
-    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
-    let lhs_value = local_u32_bits(ctx, lhs);
-
-    if kind == encode_local_binop32_kind(LocalBinop32Op::I32Add, LocalFastRhsShape::Local) {
-        let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
-        return Some(lhs_value.wrapping_add(local_u32_bits(ctx, rhs)));
-    }
-    if kind == encode_local_binop32_kind(LocalBinop32Op::I32Add, LocalFastRhsShape::Const) {
-        return Some(lhs_value.wrapping_add(unsafe { (*tail_code.add(2)).operand.i32 as u32 }));
-    }
-    if kind == encode_local_binop32_kind(LocalBinop32Op::I32Sub, LocalFastRhsShape::Local) {
-        let rhs = unsafe { (*tail_code.add(2)).operand.local_addr as usize };
-        return Some(lhs_value.wrapping_sub(local_u32_bits(ctx, rhs)));
-    }
-    if kind == encode_local_binop32_kind(LocalBinop32Op::I32Sub, LocalFastRhsShape::Const) {
-        return Some(lhs_value.wrapping_sub(unsafe { (*tail_code.add(2)).operand.i32 as u32 }));
-    }
-    None
+    let descriptor = LocalBinop32Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
+    Some(unsafe { descriptor.eval(tail_code, ctx) })
 }
 
 #[inline(always)]
 unsafe fn eval_binop64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u64> {
-    let kind = unsafe { (*tail_code).operand.u32 };
-    let (op, shape) = decode_local_binop64_kind(kind)?;
-    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
-    let lhs_bits = local_u64_bits(ctx, lhs);
-    let rhs_bits = load_binop64_rhs(tail_code, shape, binop64_const_kind(op), ctx);
-    Some(eval_local_binop64(op, lhs_bits, rhs_bits))
+    let descriptor = LocalBinop64Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
+    Some(unsafe { descriptor.eval(tail_code, ctx) })
 }
 
 #[inline(always)]
 unsafe fn eval_cmp32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
-    let kind = unsafe { (*tail_code).operand.u32 };
-    let (op, shape) = decode_local_cmp32_kind(kind)?;
-    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
-    let lhs_bits = local_u32_bits(ctx, lhs);
-    let rhs_bits = load_cmp32_rhs(tail_code, shape, cmp32_const_kind(op), ctx);
-    Some(eval_local_cmp32(op, lhs_bits, rhs_bits))
+    let descriptor = LocalCmp32Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
+    Some(unsafe { descriptor.eval(tail_code, ctx) })
 }
 
 #[inline(always)]
 unsafe fn eval_cmp64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
-    let kind = unsafe { (*tail_code).operand.u32 };
-    let (op, shape) = decode_local_cmp64_kind(kind)?;
-    let lhs = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
-    let lhs_bits = local_u64_bits(ctx, lhs);
-    let rhs_bits = load_cmp64_rhs(tail_code, shape, cmp64_const_kind(op), ctx);
-    Some(eval_local_cmp64(op, lhs_bits, rhs_bits))
+    let descriptor = LocalCmp64Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
+    Some(unsafe { descriptor.eval(tail_code, ctx) })
 }
 
 #[inline(always)]
 unsafe fn eval_unary32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u32> {
-    let op = decode_local_unary32_kind(unsafe { (*tail_code).operand.u32 })?;
-    let src = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
-    Some(eval_local_unary32(op, local_u32_bits(ctx, src)))
+    let descriptor = LocalUnary32Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
+    Some(unsafe { descriptor.eval(tail_code, ctx) })
 }
 
 #[inline(always)]
 unsafe fn eval_unary64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u64> {
-    let op = decode_local_unary64_kind(unsafe { (*tail_code).operand.u32 })?;
-    let src = unsafe { (*tail_code.add(1)).operand.local_addr as usize };
-    Some(eval_local_unary64(op, local_u64_bits(ctx, src)))
+    let descriptor = LocalUnary64Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
+    Some(unsafe { descriptor.eval(tail_code, ctx) })
 }
 
 #[inline(always)]
@@ -578,14 +685,14 @@ pub unsafe fn op_local_binop32_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    let kind = (*tail_code).operand.u32;
-    let (op, shape) = decode_local_binop32_kind(kind).expect("invalid local_binop32 kind");
+    let descriptor = LocalBinop32Descriptor::decode((*tail_code).operand.u32)
+        .expect("invalid local_binop32 kind");
     debug_assert!(
-        binop32_allows_br_if(op),
+        descriptor.supports_br_if,
         "unsupported br_if kind for {}",
-        local_fast_rhs_shape_name(shape)
+        local_fast_rhs_shape_name(descriptor.rhs_shape)
     );
-    let result = eval_binop32_from_tail(tail_code, ctx).expect("invalid local_binop32 kind");
+    let result = descriptor.eval(tail_code, ctx);
     let ptr = br_if_ptr(tail_code, 3, 4, result, ctx);
     call_next(ptr, 0, ctx)
 }

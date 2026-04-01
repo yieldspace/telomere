@@ -32,30 +32,37 @@ impl DecodedInstr {
         unsafe { self.operands[idx].u32 }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn operand_i32(&self, idx: usize) -> i32 {
         unsafe { self.operands[idx].i32 }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn operand_i64(&self, idx: usize) -> i64 {
         unsafe { self.operands[idx].i64 }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn operand_f32(&self, idx: usize) -> f32 {
         unsafe { self.operands[idx].f32 }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn operand_f64(&self, idx: usize) -> f64 {
         unsafe { self.operands[idx].f64 }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn operand_select(&self) -> u32 {
         unsafe { self.operands[0].select }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn operand_local_addr(&self) -> u32 {
         unsafe { self.operands[0].local_addr }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn operand_memarg(&self, idx: usize) -> MemArg {
         unsafe { self.operands[idx].memarg }
     }
@@ -86,6 +93,7 @@ pub(crate) struct BasicBlockProgram {
 }
 
 impl BasicBlockProgram {
+    #[allow(dead_code)]
     pub(crate) fn block(&self, block_id: usize) -> BasicBlock {
         self.blocks[block_id]
     }
@@ -94,6 +102,7 @@ impl BasicBlockProgram {
         self.old_start_to_block.get(&old_start).copied()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn next_block_id(&self, block_id: usize) -> Option<usize> {
         (block_id + 1 < self.blocks.len()).then_some(block_id + 1)
     }

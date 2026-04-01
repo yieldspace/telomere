@@ -2,7 +2,7 @@
 
 #[macro_use]
 mod vm_result;
-use std::{fmt::Display, future::Future, pin::Pin};
+use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
 
@@ -330,6 +330,7 @@ pub struct Func {
     pub locals: LocalsData,
     pub expr: Vec<Instr>,
     pub op_lens: Vec<u16>,
+    pub(crate) lowered: Arc<LoweredFunction>,
 }
 impl Func {
     pub fn local_size(&self) -> usize {
@@ -486,6 +487,7 @@ macro_rules! define_local_fast_kind {
         }
 
         impl $name {
+            #[allow(dead_code)]
             pub(crate) const fn const_kind(self) -> LocalFastConstKind {
                 match self {
                     $(Self::$variant => LocalFastConstKind::$const_kind,)+
@@ -698,6 +700,204 @@ pub union Instr {
 }
 unsafe impl Send for Instr {}
 unsafe impl Sync for Instr {}
+
+#[derive(Clone)]
+pub(crate) struct MaterializedFunction {
+    pub(crate) instrs: Vec<Instr>,
+    pub(crate) op_lens: Vec<u16>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+pub(crate) struct LoweredFunction {
+    pub(crate) code: Vec<LoweredOp>,
+    pub(crate) const_pool: Vec<[u8; 8]>,
+    pub(crate) call_recipes: Vec<CallRecipeRef>,
+    pub(crate) jump_table: Vec<LoweredJumpTarget>,
+    pub(crate) block_map: Vec<LoweredBlockMap>,
+    pub(crate) materialized_preview: Option<MaterializedFunction>,
+}
+
+impl LoweredFunction {
+    pub(crate) fn from_materialized(instrs: Vec<Instr>, op_lens: Vec<u16>) -> Self {
+        let mut code = Vec::with_capacity(op_lens.len());
+        let mut cursor = 0usize;
+        for len in &op_lens {
+            let width = usize::from(*len);
+            let op = unsafe { instrs[cursor].op };
+            let operands = (1..width)
+                .map(|offset| {
+                    lower_materialized_operand(op, offset, unsafe {
+                        instrs[cursor + offset].operand
+                    })
+                })
+                .collect();
+            code.push(LoweredOp {
+                label: None,
+                op,
+                operands,
+            });
+            cursor += width;
+        }
+        debug_assert_eq!(cursor, instrs.len());
+        Self {
+            code,
+            const_pool: Vec::new(),
+            call_recipes: Vec::new(),
+            jump_table: Vec::new(),
+            block_map: Vec::new(),
+            materialized_preview: Some(MaterializedFunction { instrs, op_lens }),
+        }
+    }
+
+    pub(crate) fn materialize(&self) -> MaterializedFunction {
+        self.materialize_inner(None)
+    }
+
+    pub(crate) fn materialize_with_recipe_slots(
+        &self,
+        recipe_slots: &[u32],
+    ) -> MaterializedFunction {
+        if let Some(preview) = &self.materialized_preview {
+            let mut preview = preview.clone();
+            resolve_direct_call_operands_in_materialized(
+                &mut preview.instrs,
+                &preview.op_lens,
+                recipe_slots,
+            );
+            return preview;
+        }
+        self.materialize_inner(Some(recipe_slots))
+    }
+
+    fn materialize_inner(&self, recipe_slots: Option<&[u32]>) -> MaterializedFunction {
+        if recipe_slots.is_none() {
+            if let Some(preview) = &self.materialized_preview {
+                return preview.clone();
+            }
+        }
+        let mut label_to_addr = vec![0usize; self.block_map.len()];
+        let mut cursor = 0usize;
+        for op in &self.code {
+            if let Some(label) = op.label {
+                if label >= label_to_addr.len() {
+                    label_to_addr.resize(label + 1, 0);
+                }
+                label_to_addr[label] = cursor;
+            }
+            cursor += 1 + op.operands.len();
+        }
+        let mut instrs = Vec::with_capacity(cursor);
+        let mut op_lens = Vec::with_capacity(self.code.len());
+        for op in &self.code {
+            instrs.push(Instr { op: op.op });
+            for operand in &op.operands {
+                instrs.push(Instr {
+                    operand: operand.materialize(&label_to_addr, &self.const_pool, recipe_slots),
+                });
+            }
+            op_lens.push(
+                u16::try_from(1 + op.operands.len())
+                    .expect("lowered instruction length exceeds u16::MAX"),
+            );
+        }
+        MaterializedFunction { instrs, op_lens }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LoweredOp {
+    pub(crate) label: Option<usize>,
+    pub(crate) op: Op,
+    pub(crate) operands: Vec<LoweredOperand>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum LoweredOperand {
+    Raw([u8; 8]),
+    ConstPoolRef(u32),
+    JumpTarget(usize),
+    CallRecipeRef(CallRecipeRef),
+}
+
+impl LoweredOperand {
+    fn materialize(
+        &self,
+        label_to_addr: &[usize],
+        const_pool: &[[u8; 8]],
+        recipe_slots: Option<&[u32]>,
+    ) -> Operand {
+        match self {
+            Self::Raw(encoded) => Operand { encoded: *encoded },
+            Self::ConstPoolRef(index) => Operand {
+                encoded: const_pool[*index as usize],
+            },
+            Self::JumpTarget(label) => Operand {
+                jump_addr: u32::try_from(label_to_addr[*label])
+                    .expect("lowered jump target exceeds u32::MAX"),
+            },
+            Self::CallRecipeRef(target) => {
+                let resolved = recipe_slots
+                    .and_then(|slots| slots.get(target.funcidx as usize).copied())
+                    .map(|slot| target.with_recipe_slot(slot))
+                    .unwrap_or(*target);
+                Operand {
+                    call_recipe_ref: resolved,
+                }
+            }
+        }
+    }
+}
+
+fn lower_materialized_operand(op: Op, offset: usize, operand: Operand) -> LoweredOperand {
+    if offset == 1 && is_direct_call_op(op) {
+        return LoweredOperand::CallRecipeRef(unsafe { operand.call_recipe_ref });
+    }
+    LoweredOperand::Raw(unsafe { operand.encoded })
+}
+
+fn is_direct_call_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, crate::runtime::vm::op_call as Op)
+        || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_call_import as Op)
+        || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_return_call as Op)
+        || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_return_call_import as Op)
+}
+
+fn resolve_direct_call_operands_in_materialized(
+    instrs: &mut [Instr],
+    op_lens: &[u16],
+    recipe_slots: &[u32],
+) {
+    let mut cursor = 0usize;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        if is_direct_call_op(op) {
+            let target = unsafe { instrs[cursor + 1].operand.call_recipe_ref };
+            if let Some(recipe_slot) = recipe_slots.get(target.funcidx as usize).copied() {
+                instrs[cursor + 1] = Instr {
+                    operand: Operand {
+                        call_recipe_ref: target.with_recipe_slot(recipe_slot),
+                    },
+                };
+            }
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoweredJumpTarget {
+    pub(crate) label: usize,
+    pub(crate) block_id: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoweredBlockMap {
+    pub(crate) block_id: usize,
+    pub(crate) label: usize,
+    pub(crate) code_index: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -1283,6 +1483,7 @@ pub struct LocalsData {
     count_i64: u32,
     count_f64: u32,
     count_v128: u32,
+    param_bytes: u32,
     temp_bytes: u32,
 }
 impl LocalsData {
@@ -1301,6 +1502,7 @@ impl LocalsData {
             count_i32,
             count_i64,
             count_v128,
+            param_bytes: _,
             temp_bytes: _,
         } = self;
         (*count_i32 as usize
@@ -1310,8 +1512,11 @@ impl LocalsData {
             + (*count_i64 as usize + *count_f64 as usize) * 2
             + *count_v128 as usize * 4
     }
+    pub(crate) fn set_param_bytes(&mut self, param_bytes: u32) {
+        self.param_bytes = param_bytes;
+    }
     pub(crate) fn allocate_temp_slot(&mut self, ty: ValType) -> u32 {
-        let addr = self.base_byte_size() as u32 + self.temp_bytes;
+        let addr = self.param_bytes + self.base_byte_size() as u32 + self.temp_bytes;
         self.temp_bytes += ty.stack_size().u32();
         addr
     }

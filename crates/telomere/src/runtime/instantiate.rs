@@ -2,11 +2,11 @@ use crate::{
     common::{
         execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
         AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
-        CallRecipeRef, CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode,
-        ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
+        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
+        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
         FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
         ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
-        ModuleInstance, NativeModule, ObjectRef, Operand, StablePc, StoreInner, TableIdx, TypeIdx,
+        ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
         TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
@@ -47,41 +47,6 @@ pub(crate) fn init_global(
         }
     };
     VMResult::Success(res)
-}
-
-fn is_direct_call_op(op: unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>) -> bool {
-    std::ptr::fn_addr_eq(
-        op,
-        vm::op_call as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
-    ) || std::ptr::fn_addr_eq(
-        op,
-        vm::op_call_import as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
-    ) || std::ptr::fn_addr_eq(
-        op,
-        vm::op_return_call as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
-    ) || std::ptr::fn_addr_eq(
-        op,
-        vm::op_return_call_import as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
-    )
-}
-
-fn predecode_direct_call_operands(code: &mut [Instr], op_lens: &[u16], recipe_slots: &[u32]) {
-    let mut cursor = 0usize;
-    for len in op_lens {
-        let op = unsafe { code[cursor].op };
-        if is_direct_call_op(op) {
-            let target = unsafe { code[cursor + 1].operand.call_recipe_ref };
-            let recipe_slot = recipe_slots[target.funcidx as usize];
-            code[cursor + 1] = Instr {
-                operand: Operand {
-                    call_recipe_ref: CallRecipeRef::from_funcidx(target.funcidx)
-                        .with_recipe_slot(recipe_slot),
-                },
-            };
-        }
-        cursor += usize::from(*len);
-    }
-    debug_assert_eq!(cursor, code.len());
 }
 
 fn validate_limit(import_limit: Limits, real: u32, export_limit: Limits) -> VMResult<()> {
@@ -422,16 +387,17 @@ pub async fn instantiate(
 
             let func_addr = match func {
                 FunctionBody::Wasm(code) => {
-                    let op_lens = code.op_lens;
+                    let materialized = code.lowered.materialize();
                     let func_addr = gc.new_func(&FunctionInstanceData {
                         instance: inst_id,
                         body: RuntimeFunctionBody::Wasm {
                             locals: code.locals,
-                            code: code.expr.into(),
+                            code: materialized.instrs.into(),
+                            lowered: code.lowered.clone(),
                         },
                         funcidx,
                     });
-                    local_wasm_funcs.push((func_addr, op_lens));
+                    local_wasm_funcs.push(func_addr);
                     func_addr
                 }
                 FunctionBody::Host(fp) => gc.new_func(&FunctionInstanceData {
@@ -520,17 +486,18 @@ pub async fn instantiate(
             .iter()
             .map(|&funcaddr| gc.call_recipe_slot_for_func(funcaddr))
             .collect::<Vec<_>>();
-        for (func_addr, op_lens) in local_wasm_funcs {
-            let mut rewritten = match &gc.get_func(func_addr).body {
-                RuntimeFunctionBody::Wasm { code, .. } => code.to_vec(),
+        for func_addr in local_wasm_funcs {
+            let materialized = match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { lowered, .. } => {
+                    lowered.materialize_with_recipe_slots(&recipe_slots)
+                }
                 RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
             };
-            predecode_direct_call_operands(&mut rewritten, &op_lens, &recipe_slots);
             let func = gc.get_func_mut(func_addr);
             let RuntimeFunctionBody::Wasm { code, .. } = &mut func.body else {
-                unreachable!("rewritten local wasm function must remain wasm")
+                unreachable!("materialized local wasm function must remain wasm")
             };
-            *code = rewritten.into();
+            *code = materialized.instrs.into();
         }
         for &funcaddr in &instance.funcs {
             let recipe = gc.build_call_recipe(funcaddr);
@@ -839,6 +806,20 @@ pub fn link_async_host_function_with_export_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{IoReadBinaryReader, WasmParser};
+
+    async fn instantiate_wat_for_test(wat_src: &str) -> (Store, InstanceHandle) {
+        let bytes = wat::parse_str(wat_src).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        let module = parser.parse_module().expect("module must parse");
+        let store = Store::new();
+        let registry = Registry::new();
+        let VMResult::Success(instance) = instantiate(module, &store, &registry).await else {
+            panic!("module must instantiate");
+        };
+        (store, instance)
+    }
 
     #[test]
     fn execute_offset_const_expr_fail_closes_non_i32_const() {
@@ -858,19 +839,75 @@ mod tests {
     }
 
     #[test]
-    fn predecode_direct_call_operands_resolves_recipe_slot() {
-        let mut code = vec![
-            Instr { op: vm::op_call },
-            Instr {
-                operand: Operand {
-                    call_recipe_ref: CallRecipeRef::from_funcidx(1),
+    fn lowered_materialize_with_recipe_slots_resolves_direct_call_operands() {
+        let lowered = crate::common::LoweredFunction::from_materialized(
+            vec![
+                Instr { op: vm::op_call },
+                Instr {
+                    operand: crate::common::Operand {
+                        call_recipe_ref: crate::common::CallRecipeRef::from_funcidx(1),
+                    },
                 },
-            },
-            Instr { op: vm::op_end },
-        ];
-        predecode_direct_call_operands(&mut code, &[2, 1], &[7, 13]);
-        let target = unsafe { code[1].operand.call_recipe_ref };
+                Instr { op: vm::op_end },
+            ],
+            vec![2, 1],
+        );
+        let materialized = lowered.materialize_with_recipe_slots(&[7, 13]);
+        let target = unsafe { materialized.instrs[1].operand.call_recipe_ref };
         assert_eq!(target.funcidx, 1);
         assert_eq!(target.resolved_recipe_slot(), Some(13));
+    }
+
+    #[tokio::test]
+    async fn instantiate_rewrites_return_call_with_matching_recipe_slot() {
+        let (store, instance) = instantiate_wat_for_test(
+            r#"
+            (module
+              (func (export "run") (param i32) (result i32)
+                local.get 0
+                i32.const 0
+                call 1)
+              (func (param $n i32) (param $acc i32) (result i32)
+                local.get $n
+                i32.eqz
+                if
+                  local.get $acc
+                  return
+                end
+                local.get $n
+                i32.const 1
+                i32.sub
+                local.get $acc
+                local.get $n
+                i32.add
+                return_call 1))
+            "#,
+        )
+        .await;
+
+        let gc = store.lock_gc();
+        let object_ref = instance
+            .object_ref_for_store(&store)
+            .expect("instance must belong to store");
+        let instance_data = gc.get_instance(object_ref);
+        let funcaddr = instance_data.funcs[1];
+        let expected_slot = gc.call_recipe_slot_for_func(funcaddr);
+        let func = gc.get_func(funcaddr);
+        let crate::common::store::FunctionBody::Wasm { code, .. } = &func.body else {
+            panic!("expected wasm function");
+        };
+        let call_index = code
+            .iter()
+            .position(|instr| {
+                std::ptr::fn_addr_eq(
+                    unsafe { instr.op },
+                    vm::op_return_call
+                        as unsafe fn(*const Instr, &mut ExecuteContext) -> VMResult<()>,
+                )
+            })
+            .expect("return_call must exist");
+        let target = unsafe { code[call_index + 1].operand.call_recipe_ref };
+        assert_eq!(target.funcidx, 1);
+        assert_eq!(target.resolved_recipe_slot(), Some(expected_slot));
     }
 }

@@ -359,6 +359,7 @@ unsafe fn store_internal_indexed_shared_local_scaled_index(
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 unsafe fn load_start_shared_local_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -375,6 +376,7 @@ unsafe fn load_start_shared_local_base(
 }
 
 #[inline(always)]
+#[allow(dead_code)]
 unsafe fn load_start_indexed_shared_local_base(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -542,6 +544,7 @@ macro_rules! define_indexed_store_alias {
 macro_rules! define_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on default local memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
@@ -554,6 +557,7 @@ macro_rules! define_local_base_push_load {
 macro_rules! define_indexed_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed local memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
@@ -570,6 +574,7 @@ macro_rules! define_indexed_local_base_push_load {
 macro_rules! define_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on default local memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_base(tail_code, ctx));
@@ -583,6 +588,7 @@ macro_rules! define_local_base_scalar_load {
 macro_rules! define_indexed_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed local memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_base(tail_code, ctx));
@@ -614,6 +620,7 @@ macro_rules! define_indexed_local_base_store_alias {
 macro_rules! define_shared_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on shared default memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_base(tail_code, ctx));
@@ -630,6 +637,7 @@ macro_rules! define_shared_local_base_push_load {
 macro_rules! define_indexed_shared_local_base_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed shared memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_shared_local_base(tail_code, ctx));
@@ -646,6 +654,7 @@ macro_rules! define_indexed_shared_local_base_push_load {
 macro_rules! define_shared_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on shared default memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_base(tail_code, ctx));
@@ -661,6 +670,7 @@ macro_rules! define_shared_local_base_scalar_load {
 macro_rules! define_indexed_shared_local_base_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with local-base address on indexed shared memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_shared_local_base(tail_code, ctx));
@@ -697,6 +707,7 @@ macro_rules! define_indexed_shared_local_base_store_alias {
 macro_rules! define_local_scaled_index_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on default local memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
@@ -709,6 +720,7 @@ macro_rules! define_local_scaled_index_push_load {
 macro_rules! define_indexed_local_scaled_index_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed local memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
@@ -725,6 +737,7 @@ macro_rules! define_indexed_local_scaled_index_push_load {
 macro_rules! define_shared_local_scaled_index_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on shared default memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
@@ -741,6 +754,7 @@ macro_rules! define_shared_local_scaled_index_push_load {
 macro_rules! define_indexed_shared_local_scaled_index_push_load {
     ($name:ident, $mnemonic:literal, $bytes:expr) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed shared memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let (start, memidx) =
@@ -758,6 +772,7 @@ macro_rules! define_indexed_shared_local_scaled_index_push_load {
 macro_rules! define_local_scaled_index_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on default local memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_local_scaled_index(tail_code, ctx));
@@ -771,6 +786,7 @@ macro_rules! define_local_scaled_index_scalar_load {
 macro_rules! define_indexed_local_scaled_index_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed local memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let (start, memidx) = vm_try!(load_start_indexed_local_scaled_index(tail_code, ctx));
@@ -784,6 +800,7 @@ macro_rules! define_indexed_local_scaled_index_scalar_load {
 macro_rules! define_shared_local_scaled_index_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on shared default memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let start = vm_try!(load_start_shared_local_scaled_index(tail_code, ctx));
@@ -799,6 +816,7 @@ macro_rules! define_shared_local_scaled_index_scalar_load {
 macro_rules! define_indexed_shared_local_scaled_index_scalar_load {
     ($name:ident, $mnemonic:literal, $reader:ident, $push:ident, $convert:path) => {
         #[doc = concat!("WebAssembly `", $mnemonic, "` with scaled-index address on indexed shared memory.")]
+        #[allow(dead_code)]
         pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
             profile_memory_family(stringify!($name));
             let (start, memidx) =

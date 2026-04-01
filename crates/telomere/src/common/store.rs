@@ -133,6 +133,7 @@ pub(crate) enum FunctionBody {
     Wasm {
         locals: LocalsData,
         code: Arc<[Instr]>,
+        lowered: Arc<crate::common::LoweredFunction>,
     },
     Host(HostFunction),
     AsyncHost(AsyncHostFunction),
@@ -159,7 +160,7 @@ pub(crate) type CallDispatchCache = CallRecipe;
 impl fmt::Debug for FunctionBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Wasm { locals, code } => f
+            Self::Wasm { locals, code, .. } => f
                 .debug_struct("Wasm")
                 .field("locals", locals)
                 .field("code_len", &code.len())
@@ -620,7 +621,7 @@ impl StoreInner {
     pub(crate) fn build_call_recipe(&self, funcaddr: ObjectRef) -> CallRecipe {
         let funcinst = self.get_func(funcaddr);
         let (target, code_base, local_size) = match &funcinst.body {
-            FunctionBody::Wasm { locals, code } => (
+            FunctionBody::Wasm { locals, code, .. } => (
                 CallDispatchTarget::Wasm {
                     local_size: locals.byte_size() as u32,
                 },

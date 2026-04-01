@@ -265,6 +265,7 @@ pub(crate) fn local_get_dispatch_op(size: u32) -> Op {
 /// # Safety
 /// - `tail_code` must satisfy the same contract as [`op_local_get4`].
 /// - `ctx` must satisfy the same contract as [`op_local_get4`].
+#[allow(dead_code)]
 pub unsafe fn op_local_get4_profiled(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -285,6 +286,7 @@ pub unsafe fn op_local_get4_profiled(
 /// # Safety
 /// - `tail_code` must satisfy the same contract as [`op_local_get8`].
 /// - `ctx` must satisfy the same contract as [`op_local_get8`].
+#[allow(dead_code)]
 pub unsafe fn op_local_get8_profiled(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -305,6 +307,7 @@ pub unsafe fn op_local_get8_profiled(
 /// # Safety
 /// - `tail_code` must satisfy the same contract as [`op_local_get16`].
 /// - `ctx` must satisfy the same contract as [`op_local_get16`].
+#[allow(dead_code)]
 pub unsafe fn op_local_get16_profiled(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,

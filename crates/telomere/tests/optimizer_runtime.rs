@@ -298,6 +298,56 @@ async fn optimizer_memory_address_call_root_with_store_value_suffix_remains_corr
 }
 
 #[tokio::test]
+async fn optimizer_local_base_store_with_add_value_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "run") (param $base i32) (param $lhs i32) (param $rhs i32) (result i32)
+            local.get $base
+            i32.const 4
+            i32.add
+            local.get $lhs
+            local.get $rhs
+            i32.add
+            i32.store
+            local.get $base
+            i32.const 4
+            i32.add
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((base, lhs, rhs), expected) in [((0, 7, 3), 10), ((8, 11, 5), 16)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![
+                WasmValue::I32(base),
+                WasmValue::I32(lhs),
+                WasmValue::I32(rhs),
+            ]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!(
+                "local-base store add-value({base}, {lhs}, {rhs}) must succeed, got {other:?}"
+            ),
+        }
+    }
+}
+
+#[tokio::test]
 async fn optimizer_scaled_index_memory_families_remain_correct() {
     let store = Store::new();
     let registry = Registry::new();
@@ -341,6 +391,66 @@ async fn optimizer_scaled_index_memory_families_remain_correct() {
             other => {
                 panic!("scaled-index memory family({idx}, {value}) must succeed, got {other:?}")
             }
+        }
+    }
+}
+
+#[tokio::test]
+async fn optimizer_versioned_local_scaled_index_memory_path_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (func (export "run") (param $base i32) (param $idx i32) (param $value i32) (result i32)
+            local.get $base
+            local.get $idx
+            i32.const 2
+            i32.shl
+            i32.add
+            i32.const 16
+            i32.add
+            local.get $value
+            i32.store
+
+            block (result i32)
+              local.get $base
+              local.get $idx
+              i32.const 2
+              i32.shl
+              i32.add
+              i32.const 16
+              i32.add
+              br 0
+            end
+            i32.load))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    for ((base, idx, value), expected) in [((0, 0, 11), 11), ((8, 1, 22), 22), ((24, 3, 37), 37)] {
+        let result = run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![
+                WasmValue::I32(base),
+                WasmValue::I32(idx),
+                WasmValue::I32(value),
+            ]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I32(expected)]));
+            }
+            other => panic!(
+                "versioned local-scaled-index memory path({base}, {idx}, {value}) must succeed, got {other:?}"
+            ),
         }
     }
 }

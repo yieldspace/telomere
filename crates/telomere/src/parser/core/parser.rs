@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 use tracing::trace;
 
 use crate::common::custom_section::NameSubSection;
@@ -738,6 +738,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
         let slice = &locals[..];
         let mut locals_data = LocalsData::from(slice);
+        locals_data.set_param_bytes(functype.0.iter().map(|ty| ty.stack_size().u32()).sum());
         let local_reassign = locals_data.create_reassignment_table(&locals)?;
         validate_locals(&locals)?;
         let mut instrs = InstructionGenerator::new();
@@ -805,17 +806,19 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             fresh_result_count: 0,
         });
         jump_resolver.evaluate(&mut instrs);
-        let optimized = optimizer::optimize_function(
+        let lowered = optimizer::optimize_function(
             funcidx,
             functype,
             &mut locals_data,
             instrs.build(),
             instruction_meta,
         );
+        let preview = lowered.materialize();
         Ok(Func {
             locals: locals_data,
-            expr: optimized.instrs,
-            op_lens: optimized.op_lens,
+            expr: preview.instrs,
+            op_lens: preview.op_lens,
+            lowered: Arc::new(lowered),
         })
     }
     #[allow(clippy::too_many_arguments)]

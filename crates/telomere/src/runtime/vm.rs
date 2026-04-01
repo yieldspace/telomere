@@ -105,8 +105,8 @@ struct DispatchProfileSnapshot {
     )>,
 }
 
-#[cfg(feature = "vm-profile")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
 enum HandlerLayoutGroup {
     Locals,
     Superinstructions,
@@ -124,15 +124,15 @@ enum HandlerLayoutGroup {
     Other,
 }
 
-#[cfg(feature = "vm-profile")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 enum DispatchProfileFamilyGroup {
     LocalControl,
     Memory,
     CallSelect,
 }
 
-#[cfg(feature = "vm-profile")]
+#[allow(dead_code)]
 impl DispatchProfileFamilyGroup {
     const ORDER: [Self; 3] = [Self::LocalControl, Self::Memory, Self::CallSelect];
 
@@ -153,7 +153,7 @@ impl DispatchProfileFamilyGroup {
     }
 }
 
-#[cfg(feature = "vm-profile")]
+#[allow(dead_code)]
 impl HandlerLayoutGroup {
     const fn rank(self) -> usize {
         match self {
@@ -175,10 +175,20 @@ impl HandlerLayoutGroup {
     }
 }
 
-#[cfg(feature = "vm-profile")]
-fn handler_layout_group(label: &'static str) -> HandlerLayoutGroup {
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+struct HandlerDescriptor {
+    layout_group: HandlerLayoutGroup,
+    family_group: DispatchProfileFamilyGroup,
+}
+
+#[allow(dead_code)]
+fn handler_descriptor(label: &'static str) -> HandlerDescriptor {
     if label == "op_unreachable" {
-        return HandlerLayoutGroup::Traps;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Traps,
+            family_group: DispatchProfileFamilyGroup::LocalControl,
+        };
     }
     if label.starts_with("special_")
         || matches!(
@@ -193,7 +203,10 @@ fn handler_layout_group(label: &'static str) -> HandlerLayoutGroup {
                 | "op_if"
         )
     {
-        return HandlerLayoutGroup::Control;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Control,
+            family_group: DispatchProfileFamilyGroup::LocalControl,
+        };
     }
     if label.starts_with("op_local_get4_i32_const_add")
         || label.starts_with("op_local_get4_local_get4_i32_add")
@@ -211,57 +224,89 @@ fn handler_layout_group(label: &'static str) -> HandlerLayoutGroup {
                 | "op_local_get4_local_get4_compare_br_if"
         )
     {
-        return HandlerLayoutGroup::Superinstructions;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Superinstructions,
+            family_group: DispatchProfileFamilyGroup::LocalControl,
+        };
     }
     if label.starts_with("op_mem_") || label == "op_data_drop" {
-        return HandlerLayoutGroup::BulkMemory;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::BulkMemory,
+            family_group: DispatchProfileFamilyGroup::Memory,
+        };
     }
     if label.starts_with("op_atomic") {
-        return HandlerLayoutGroup::Atomics;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Atomics,
+            family_group: DispatchProfileFamilyGroup::Memory,
+        };
     }
     if label.starts_with("op_call") || label.starts_with("op_return_call") {
-        return HandlerLayoutGroup::Call;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Call,
+            family_group: DispatchProfileFamilyGroup::CallSelect,
+        };
     }
     if label.contains("_load") || label.contains("_store") {
-        return HandlerLayoutGroup::Memory;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Memory,
+            family_group: DispatchProfileFamilyGroup::Memory,
+        };
     }
     if label.starts_with("op_local_") || label.starts_with("op_select") || label == "op_drop" {
-        return HandlerLayoutGroup::Locals;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Locals,
+            family_group: if label.starts_with("op_select") {
+                DispatchProfileFamilyGroup::CallSelect
+            } else {
+                DispatchProfileFamilyGroup::LocalControl
+            },
+        };
     }
     if label.starts_with("op_global_") {
-        return HandlerLayoutGroup::Globals;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Globals,
+            family_group: DispatchProfileFamilyGroup::LocalControl,
+        };
     }
     if label.starts_with("op_table_") {
-        return HandlerLayoutGroup::Tables;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Tables,
+            family_group: DispatchProfileFamilyGroup::LocalControl,
+        };
     }
     if label.starts_with("op_ref_") {
-        return HandlerLayoutGroup::Refs;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Refs,
+            family_group: DispatchProfileFamilyGroup::LocalControl,
+        };
     }
     if label.starts_with("op_v128") || label.contains("x") {
-        return HandlerLayoutGroup::Simd;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Simd,
+            family_group: DispatchProfileFamilyGroup::LocalControl,
+        };
     }
     if label.starts_with("op_i") || label.starts_with("op_f") {
-        return HandlerLayoutGroup::Numeric;
+        return HandlerDescriptor {
+            layout_group: HandlerLayoutGroup::Numeric,
+            family_group: DispatchProfileFamilyGroup::LocalControl,
+        };
     }
-    HandlerLayoutGroup::Other
+    HandlerDescriptor {
+        layout_group: HandlerLayoutGroup::Other,
+        family_group: DispatchProfileFamilyGroup::LocalControl,
+    }
 }
 
-#[cfg(feature = "vm-profile")]
+#[allow(dead_code)]
+fn handler_layout_group(label: &'static str) -> HandlerLayoutGroup {
+    handler_descriptor(label).layout_group
+}
+
+#[allow(dead_code)]
 fn dispatch_profile_family_group(label: &'static str) -> DispatchProfileFamilyGroup {
-    if label.starts_with("op_call")
-        || label.starts_with("op_return_call")
-        || label.starts_with("op_select")
-    {
-        return DispatchProfileFamilyGroup::CallSelect;
-    }
-    if label.contains("_load")
-        || label.contains("_store")
-        || label.starts_with("op_mem_")
-        || label == "op_data_drop"
-    {
-        return DispatchProfileFamilyGroup::Memory;
-    }
-    DispatchProfileFamilyGroup::LocalControl
+    handler_descriptor(label).family_group
 }
 
 #[cfg(feature = "vm-profile")]
@@ -670,7 +715,6 @@ enum CallOutcome {
     Pending,
 }
 
-#[inline(always)]
 /// Telomere runtime helper `call_code`.
 ///
 /// Related spec:
@@ -686,7 +730,8 @@ enum CallOutcome {
 /// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
 pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     ctx.cont = tail_code;
-    ((*tail_code).op)(tail_code.offset(1), ctx)
+    let op = (*tail_code).op;
+    op(tail_code.offset(1), ctx)
 }
 
 #[inline(always)]
