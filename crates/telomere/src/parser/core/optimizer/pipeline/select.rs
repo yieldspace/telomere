@@ -186,6 +186,7 @@ pub(crate) fn select(func: &CanonFunc, analysis: &AnalysisResults) -> KernelFunc
         &I32StoreLocalScaledIndexSpec,
         &I32LoadLocalScaledIndexSpec,
         &I32StoreLocalBaseLocalGet4Spec,
+        &I32StoreLocalBaseSpec,
         &I32LoadLocalBaseSpec,
         &I32LoadConstBaseLocalGet4AddSet4Spec,
         &I32StoreConstBaseLocal4Spec,
@@ -1494,7 +1495,7 @@ impl FamilySpec for I32LoadLocalBaseSpec {
     fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
         match_i32_local_base_address(ctx.block, cursor)
             .and_then(|matched| ctx.block.insts.get(cursor + matched.consumed))
-            .is_some_and(|load| load.op_eq(vm::op_i32_load as Op))
+            .is_some_and(|load| i32_local_base_load_family(load.op).is_some())
     }
 
     fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
@@ -1504,21 +1505,17 @@ impl FamilySpec for I32LoadLocalBaseSpec {
     fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
         let matched = match_i32_local_base_address(ctx.block, cursor)?;
         let load = ctx.block.insts.get(cursor + matched.consumed)?;
-        if !load.op_eq(vm::op_i32_load as Op) {
-            return None;
-        }
+        let op = i32_local_base_load_family(load.op)?;
+        let mut operands = vec![matched.base_local, raw_i32_operand(matched.delta)];
+        operands.extend(load.operands.clone());
         Some(MatchResult {
             group: self.group(),
             cost: self.cost(ctx, cursor),
             consumed: matched.consumed + 1,
             ops: vec![KernelOp {
                 label: None,
-                op: vm::op_i32_load_local_base as Op,
-                operands: vec![
-                    matched.base_local,
-                    raw_i32_operand(matched.delta),
-                    load.operands.first()?.clone(),
-                ],
+                op,
+                operands,
                 family: self.name(),
             }],
         })
@@ -1927,6 +1924,20 @@ fn match_i32_const_add(block: &CanonBlock, cursor: usize) -> Option<i32> {
         return None;
     }
     raw_i32(konst.operands.first())
+}
+
+fn i32_local_base_load_family(op: Op) -> Option<Op> {
+    if std::ptr::fn_addr_eq(op, vm::op_i32_load_local as Op) {
+        Some(vm::op_i32_load_local_base as Op)
+    } else if std::ptr::fn_addr_eq(op, vm::op_i32_load_shared as Op) {
+        Some(vm::op_i32_load_shared_local_base as Op)
+    } else if std::ptr::fn_addr_eq(op, vm::op_i32_load_indexed_local as Op) {
+        Some(vm::op_i32_load_indexed_local_base as Op)
+    } else if std::ptr::fn_addr_eq(op, vm::op_i32_load_indexed_shared as Op) {
+        Some(vm::op_i32_load_indexed_shared_local_base as Op)
+    } else {
+        None
+    }
 }
 
 fn match_i32_value_expr(
