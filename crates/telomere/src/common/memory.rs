@@ -395,6 +395,25 @@ impl Memory {
     }
 
     #[inline(always)]
+    pub fn write_u32_at(&mut self, offset: usize, value: u32) -> VMResult<()> {
+        let last = vm_try!(VMResult::from_option(offset.checked_add(4), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        if last > self.data_size() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        unsafe {
+            self.region
+                .ptr
+                .as_ptr()
+                .add(offset)
+                .cast::<u32>()
+                .write_unaligned(value.to_le());
+        }
+        VMResult::Success(())
+    }
+
+    #[inline(always)]
     pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
         let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
             VMResult::MemoryIndexOutOfRange

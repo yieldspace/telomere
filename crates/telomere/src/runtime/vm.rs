@@ -15,6 +15,8 @@ pub(crate) mod simd;
 mod superinstructions;
 mod tables;
 
+#[cfg(feature = "vm-diagnostics")]
+use crate::common::Op;
 use crate::{
     common::store::{CallDispatchCache, CallDispatchTarget},
     common::{
@@ -30,6 +32,10 @@ use crate::{
 };
 #[cfg(all(test, feature = "vm-profile"))]
 use std::cell::Cell;
+#[cfg(feature = "vm-diagnostics")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "vm-diagnostics")]
+use std::sync::OnceLock as DiagnosticsOnceLock;
 #[cfg(feature = "vm-profile")]
 use std::{
     cell::RefCell,
@@ -59,6 +65,13 @@ const VM_PROFILE_TOP_K: usize = 16;
 
 #[cfg(feature = "vm-profile")]
 const HANDLER_LAYOUT_STABILITY_PHASES: usize = 2;
+
+#[cfg(feature = "vm-diagnostics")]
+struct DispatchBudget {
+    initial: u64,
+    remaining: AtomicU64,
+    log_every: u64,
+}
 
 #[cfg(feature = "vm-profile")]
 #[derive(Debug, Default, Clone, Copy)]
@@ -568,9 +581,6 @@ fn dispatch_profile_enabled() -> bool {
     if DISPATCH_PROFILE_TEST_ENABLED.with(|enabled| enabled.get()) {
         return true;
     }
-    if !cfg!(any(debug_assertions, test)) {
-        return false;
-    }
     dispatch_profile_config().enabled
 }
 
@@ -606,6 +616,225 @@ pub(crate) fn dispatch_profile_count(label: &'static str) {
 #[inline(always)]
 #[cfg(not(feature = "vm-profile"))]
 pub(crate) fn dispatch_profile_count(_label: &'static str) {}
+
+#[cfg(feature = "vm-diagnostics")]
+fn parse_nonzero_env_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0)
+}
+
+#[cfg(feature = "vm-diagnostics")]
+fn dispatch_budget() -> Option<&'static DispatchBudget> {
+    static BUDGET: DiagnosticsOnceLock<Option<DispatchBudget>> = DiagnosticsOnceLock::new();
+    BUDGET
+        .get_or_init(|| {
+            let initial = parse_nonzero_env_u64("TELOMERE_VM_INSTR_BUDGET")?;
+            let log_every = parse_nonzero_env_u64("TELOMERE_VM_INSTR_LOG_EVERY").unwrap_or(0);
+            Some(DispatchBudget {
+                initial,
+                remaining: AtomicU64::new(initial),
+                log_every,
+            })
+        })
+        .as_ref()
+}
+
+#[cfg(feature = "vm-diagnostics")]
+fn dispatch_pc_index(tail_code: *const Instr, ctx: &ExecuteContext<'_>) -> Option<usize> {
+    let code_base = ctx.current_frame.code_base;
+    if code_base.is_null() {
+        return None;
+    }
+    let instr_size = std::mem::size_of::<Instr>();
+    let base = code_base as usize;
+    let pc = tail_code as usize;
+    let delta = pc.checked_sub(base)?;
+    (delta % instr_size == 0).then_some(delta / instr_size)
+}
+
+#[cfg(feature = "vm-diagnostics")]
+fn diagnostic_op_label(op: Op) -> &'static str {
+    macro_rules! label {
+        ($handler:path, $name:literal) => {
+            if std::ptr::fn_addr_eq(op, $handler as Op) {
+                return $name;
+            }
+        };
+    }
+
+    label!(op_local_get4, "op_local_get4");
+    label!(op_local_set4, "op_local_set4");
+    label!(op_local_tee4, "op_local_tee4");
+    label!(op_local_get4_set4, "op_local_get4_set4");
+    label!(op_local_get4_tee4, "op_local_get4_tee4");
+    label!(op_local_get4_local_get4, "op_local_get4_local_get4");
+    label!(
+        op_local_get4_local_get4_local_get4,
+        "op_local_get4_local_get4_local_get4"
+    );
+    label!(op_local_get4_run, "op_local_get4_run");
+    label!(op_select4, "op_select4");
+    label!(op_select4_set4, "op_select4_set4");
+    label!(op_select4_tee4, "op_select4_tee4");
+    label!(op_br_if, "op_br_if");
+    label!(op_if, "op_if");
+    label!(op_loop, "op_loop");
+    label!(op_end, "op_end");
+    label!(op_return, "op_return");
+    label!(special_block_return, "special_block_return");
+    label!(special_function_return, "special_function_return");
+    label!(special_function_vm_end, "special_function_vm_end");
+    label!(op_call, "op_call");
+    label!(op_i32_const, "op_i32_const");
+    label!(op_i32_const_set4, "op_i32_const_set4");
+    label!(op_i32_const_tee4, "op_i32_const_tee4");
+    label!(op_i32_add, "op_i32_add");
+    label!(op_i32_sub, "op_i32_sub");
+    label!(op_i32_mul, "op_i32_mul");
+    label!(op_i32_and, "op_i32_and");
+    label!(op_i32_or, "op_i32_or");
+    label!(op_i32_xor, "op_i32_xor");
+    label!(op_i32_shl, "op_i32_shl");
+    label!(op_i32_shr_s, "op_i32_shr_s");
+    label!(op_i32_shr_u, "op_i32_shr_u");
+    label!(op_i32_eq, "op_i32_eq");
+    label!(op_i32_ne, "op_i32_ne");
+    label!(op_i32_lt_u, "op_i32_lt_u");
+    label!(op_i32_gt_s, "op_i32_gt_s");
+    label!(op_i32_gt_u, "op_i32_gt_u");
+    label!(op_i32_le_u, "op_i32_le_u");
+    label!(op_i32_ge_s, "op_i32_ge_s");
+    label!(op_local_binop32, "op_local_binop32");
+    label!(op_local_binop32_set4, "op_local_binop32_set4");
+    label!(op_local_binop32_tee4, "op_local_binop32_tee4");
+    label!(op_local_binop32_br_if, "op_local_binop32_br_if");
+    label!(
+        op_local_get4_i32_const_add_set4,
+        "op_local_get4_i32_const_add_set4"
+    );
+    label!(
+        op_local_get4_i32_const_add_tee4,
+        "op_local_get4_i32_const_add_tee4"
+    );
+    label!(
+        op_local_get4_i32_const_add_tee4_br_if,
+        "op_local_get4_i32_const_add_tee4_br_if"
+    );
+    label!(op_local_cmp32, "op_local_cmp32");
+    label!(op_local_cmp32_set4, "op_local_cmp32_set4");
+    label!(op_local_cmp32_tee4, "op_local_cmp32_tee4");
+    label!(op_local_cmp32_br_if, "op_local_cmp32_br_if");
+    label!(op_i32_const_binop, "op_i32_const_binop");
+    label!(op_i32_const_binop_set4, "op_i32_const_binop_set4");
+    label!(op_i32_const_binop_tee4, "op_i32_const_binop_tee4");
+    label!(op_i32_const_binop_br_if, "op_i32_const_binop_br_if");
+    label!(op_i32_const_cmp, "op_i32_const_cmp");
+    label!(op_i32_const_cmp_set4, "op_i32_const_cmp_set4");
+    label!(op_i32_const_cmp_tee4, "op_i32_const_cmp_tee4");
+    label!(op_i32_const_cmp_br_if, "op_i32_const_cmp_br_if");
+    label!(op_i32_load_local_base, "op_i32_load_local_base");
+    label!(op_i32_load16_s_local_base, "op_i32_load16_s_local_base");
+    label!(op_i32_load16_u_local_base, "op_i32_load16_u_local_base");
+    label!(op_i32_load8_u_local_base, "op_i32_load8_u_local_base");
+    label!(op_i32_store_local_base, "op_i32_store_local_base");
+    label!(op_i32_store16_local_base, "op_i32_store16_local_base");
+    label!(op_i32_store8_local_base, "op_i32_store8_local_base");
+    label!(op_i32_inc_local_base, "op_i32_inc_local_base");
+    label!(
+        op_i32_load16_s_mul_add_local_base_loop,
+        "op_i32_load16_s_mul_add_local_base_loop"
+    );
+    label!(
+        op_i32_load16_s_mul_add_local_base_delta_loop,
+        "op_i32_load16_s_mul_add_local_base_delta_loop"
+    );
+    label!(
+        op_i32_load_store_local_base_local_get4,
+        "op_i32_load_store_local_base_local_get4"
+    );
+    label!(
+        op_scalar_copy_local_base_run,
+        "op_scalar_copy_local_base_run"
+    );
+    label!(
+        op_i32_load_store_local_base_relink_loop,
+        "op_i32_load_store_local_base_relink_loop"
+    );
+    label!(
+        op_i32_load_local_base_local_get4_i32_load_tee4_cmp_br_if,
+        "op_i32_load_local_base_local_get4_i32_load_tee4_cmp_br_if"
+    );
+    label!(
+        op_i32_load16_s_dot4_local_base_loop,
+        "op_i32_load16_s_dot4_local_base_loop"
+    );
+    label!(
+        op_i32_load_local_base_tee4_i32_load8_u_tee4_br_if,
+        "op_i32_load_local_base_tee4_i32_load8_u_tee4_br_if"
+    );
+    "unknown"
+}
+
+#[cfg(feature = "vm-diagnostics")]
+fn log_dispatch_budget_event(
+    event: &str,
+    executed: u64,
+    tail_code: *const Instr,
+    ctx: &ExecuteContext<'_>,
+) {
+    let pc = dispatch_pc_index(tail_code, ctx)
+        .map(|pc| pc.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let op_label = diagnostic_op_label(unsafe { (*tail_code).op });
+    let funcidx = ctx
+        .gc
+        .instance(ctx.current_frame.instance)
+        .funcs
+        .iter()
+        .position(|addr| *addr == ctx.current_frame.code_addr)
+        .map(|index| index.to_string())
+        .unwrap_or_else(|| "unknown".to_owned());
+    eprintln!(
+        "[telomere-vm-diagnostics] {event} executed_instrs={executed} funcidx={funcidx} code_addr={:?} pc={pc} op={op_label} op_addr=0x{:x} task_id={}",
+        ctx.current_frame.code_addr,
+        unsafe { (*tail_code).op as usize },
+        ctx.task_id
+    );
+}
+
+#[cfg(feature = "vm-diagnostics")]
+fn check_dispatch_budget(tail_code: *const Instr, ctx: &ExecuteContext<'_>) -> VMResult<()> {
+    let Some(budget) = dispatch_budget() else {
+        return VMResult::Success(());
+    };
+    let previous = budget
+        .remaining
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_sub(1)
+        })
+        .unwrap_or(0);
+    if previous == 0 {
+        log_dispatch_budget_event(
+            "dispatch_budget_already_exhausted",
+            budget.initial,
+            tail_code,
+            ctx,
+        );
+        return VMResult::InvalidOperand;
+    }
+
+    let executed = budget.initial.saturating_sub(previous).saturating_add(1);
+    if budget.log_every != 0 && executed % budget.log_every == 0 {
+        log_dispatch_budget_event("dispatch_budget_progress", executed, tail_code, ctx);
+    }
+    if previous == 1 {
+        log_dispatch_budget_event("dispatch_budget_exhausted", executed, tail_code, ctx);
+        return VMResult::InvalidOperand;
+    }
+    VMResult::Success(())
+}
 
 #[cfg(all(test, feature = "vm-profile"))]
 struct DispatchProfileTestOverride {
@@ -702,11 +931,9 @@ impl StoreBytes {
 
 #[inline(always)]
 pub(crate) fn compute_memory_offset(memarg: MemArg, offset: u32) -> VMResult<usize> {
-    let sum = memarg.offset as u64 + offset as u64;
-    if sum <= u32::MAX as u64 {
-        VMResult::Success(sum as usize)
-    } else {
-        VMResult::MemoryIndexOutOfRange
+    match memarg.offset.checked_add(offset) {
+        Some(sum) => VMResult::Success(sum as usize),
+        None => VMResult::MemoryIndexOutOfRange,
     }
 }
 
@@ -728,7 +955,10 @@ enum CallOutcome {
 /// - `tail_code` must reference the active decoded instruction stream for the current frame.
 /// - `ctx` must reference a live execution context for the same store, frame, and validated locals/stack layout.
 /// - Callers must not preserve borrows, locks, or guards across any tail-dispatch that this helper performs.
+#[inline(always)]
 pub(crate) unsafe fn call_code(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    #[cfg(feature = "vm-diagnostics")]
+    vm_try!(check_dispatch_budget(tail_code, ctx));
     ctx.cont = tail_code;
     let op = (*tail_code).op;
     op(tail_code.offset(1), ctx)
@@ -887,7 +1117,7 @@ pub(crate) unsafe fn store_internal_local(
 ) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let operation = make_operation(ctx);
-    let offset = ctx.stack.pop_u32();
+    let offset = ctx.stack.pop_u32_fast();
     trace!("op_store: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
@@ -918,7 +1148,7 @@ pub(crate) unsafe fn store_internal_shared(
 ) -> VMResult<()> {
     let memarg = (*tail_code).operand.memarg;
     let operation = make_operation(ctx);
-    let offset = ctx.stack.pop_u32();
+    let offset = ctx.stack.pop_u32_fast();
     trace!("op_store_shared: {:?} {}", memarg, offset);
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
@@ -951,7 +1181,7 @@ pub(crate) unsafe fn store_internal_local_indexed(
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
     let operation = make_operation(ctx);
-    let offset = ctx.stack.pop_u32();
+    let offset = ctx.stack.pop_u32_fast();
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     vm_try!(ctx
@@ -983,7 +1213,7 @@ pub(crate) unsafe fn store_internal_shared_indexed(
     let memarg = (*tail_code).operand.memarg;
     let memidx = (*tail_code.add(1)).operand.u32;
     let operation = make_operation(ctx);
-    let offset = ctx.stack.pop_u32();
+    let offset = ctx.stack.pop_u32_fast();
     let bytes = operation.as_slice();
     let start = vm_try!(compute_memory_offset(memarg, offset));
     vm_try!(ctx
@@ -1271,6 +1501,22 @@ pub fn get_global(instance: &InstanceHandle, store: &Store, name: &str) -> VMRes
 #[cfg(all(test, feature = "vm-profile"))]
 mod tests {
     use super::*;
+    use crate::{IoReadBinaryReader, Registry, ResultValue, Store, WasmParser, WasmValue};
+
+    async fn instantiate_wat(
+        wat: &str,
+        store: &Store,
+        registry: &Registry,
+    ) -> crate::common::InstanceHandle {
+        let bytes = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        let module = parser.parse_module().expect("module must parse");
+        match crate::instantiate(module, store, registry).await {
+            VMResult::Success(instance) => instance,
+            other => panic!("module must instantiate, got {other:?}"),
+        }
+    }
 
     fn count_label(stats: &[(&'static str, DispatchProfileStat)], label: &'static str) -> u64 {
         stats
@@ -1386,5 +1632,52 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(call_select_labels.contains(&"op_call"));
         assert!(call_select_labels.contains(&"op_select4"));
+    }
+
+    #[tokio::test]
+    async fn local_get_handlers_contribute_dispatch_profile_labels() {
+        let store = Store::new();
+        let registry = Registry::new();
+        let instance = instantiate_wat(
+            r#"
+            (module
+              (func (export "run") (param i32 i64) (result i64)
+                local.get 0
+                drop
+                local.get 1))
+            "#,
+            &store,
+            &registry,
+        )
+        .await;
+
+        let _enabled = DispatchProfileTestOverride::enable();
+        let result = crate::run_module_function(
+            &instance,
+            &store,
+            "run",
+            &ResultValue::new(vec![WasmValue::I32(7), WasmValue::I64(11)]),
+        )
+        .await;
+
+        match result {
+            VMResult::Success(values) => {
+                assert_eq!(values, ResultValue::new(vec![WasmValue::I64(11)]));
+            }
+            other => panic!("profiled local.get module must succeed, got {other:?}"),
+        }
+
+        let snapshot =
+            take_last_dispatch_profile_snapshot_for_test().expect("profile snapshot must exist");
+        assert!(
+            count_label(&snapshot.stats, "op_local_get4") > 0,
+            "local.get i32 must appear in dispatch profile: {:?}",
+            snapshot.stats
+        );
+        assert!(
+            count_label(&snapshot.stats, "op_local_get8") > 0,
+            "local.get i64 must appear in dispatch profile: {:?}",
+            snapshot.stats
+        );
     }
 }

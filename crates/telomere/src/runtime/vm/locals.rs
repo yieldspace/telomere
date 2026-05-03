@@ -1,7 +1,4 @@
 use super::*;
-use crate::common::Op;
-#[cfg(all(feature = "vm-profile", any(debug_assertions, test)))]
-use std::sync::OnceLock;
 
 /// WebAssembly `drop`.
 ///
@@ -54,29 +51,77 @@ unsafe fn internal_op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) 
 
 #[inline(always)]
 unsafe fn internal_op_select4(ctx: &mut ExecuteContext) -> VMResult<()> {
-    let cond = ctx.stack.pop_u32_fast();
-    let a = ctx.stack.pop_u32_fast();
-    let b = ctx.stack.pop_u32_fast();
-    vm_try!(ctx.stack.push_u32_fast(if cond == 0 { a } else { b }));
+    let cond = ctx.stack.pop_u32();
+    let a = ctx.stack.pop_u8_array::<4>();
+    let b = ctx.stack.pop_u8_array::<4>();
+    let value = if cond == 0 { a } else { b };
+    vm_try!(ctx.stack.push_slice(&value));
     VMResult::Success(())
 }
 
 #[inline(always)]
 unsafe fn internal_op_select8(ctx: &mut ExecuteContext) -> VMResult<()> {
-    let cond = ctx.stack.pop_u32_fast();
-    let a = ctx.stack.pop_u64_fast();
-    let b = ctx.stack.pop_u64_fast();
-    vm_try!(ctx.stack.push_u64_fast(if cond == 0 { a } else { b }));
+    let cond = ctx.stack.pop_u32();
+    let a = ctx.stack.pop_u8_array::<8>();
+    let b = ctx.stack.pop_u8_array::<8>();
+    let value = if cond == 0 { a } else { b };
+    vm_try!(ctx.stack.push_slice(&value));
     VMResult::Success(())
 }
 
 #[inline(always)]
 unsafe fn internal_op_select16(ctx: &mut ExecuteContext) -> VMResult<()> {
-    let cond = ctx.stack.pop_u32_fast();
-    let a = ctx.stack.pop_u128_fast();
-    let b = ctx.stack.pop_u128_fast();
-    vm_try!(ctx.stack.push_u128_fast(if cond == 0 { a } else { b }));
+    let cond = ctx.stack.pop_u32();
+    let a = ctx.stack.pop_u8_array::<16>();
+    let b = ctx.stack.pop_u8_array::<16>();
+    let value = if cond == 0 { a } else { b };
+    vm_try!(ctx.stack.push_slice(&value));
     VMResult::Success(())
+}
+
+#[cfg(feature = "vm-profile")]
+#[cold]
+#[inline(never)]
+fn profile_local_get(label: &'static str) {
+    dispatch_profile_count(label);
+}
+
+#[inline(always)]
+fn maybe_profile_local_get(_label: &'static str) {
+    #[cfg(feature = "vm-profile")]
+    if dispatch_profile_enabled() {
+        profile_local_get(_label);
+    }
+}
+
+#[inline(always)]
+unsafe fn op_local_get4_impl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    vm_try!(ctx
+        .stack
+        .local_get4_from_base(ctx.local_base_ptr as *const u8, addr));
+    trace!("op_local_get4: {addr}");
+    call_next(tail_code, 1, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_local_get8_impl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    vm_try!(ctx
+        .stack
+        .local_get8_from_base(ctx.local_base_ptr as *const u8, addr));
+    trace!("op_local_get8: {addr}");
+    call_next(tail_code, 1, ctx)
+}
+
+#[inline(always)]
+unsafe fn op_local_get16_impl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let addr = (*tail_code).operand.local_addr as usize;
+    vm_try!(ctx
+        .stack
+        .local_get16_from_base(ctx.local_base_ptr as *const u8, addr));
+    trace!("op_local_get16: {addr}");
+    call_next(tail_code, 1, ctx)
 }
 
 /// WebAssembly `select`.
@@ -112,9 +157,60 @@ pub unsafe fn op_select(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VM
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
+#[unsafe(no_mangle)]
 pub unsafe fn op_select4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     vm_try!(internal_op_select4(ctx));
     call_next(tail_code, 0, ctx)
+}
+
+/// WebAssembly `select` followed by `local.set` for 4-byte values.
+///
+/// Spec:
+/// - Validation: result width must be 4 bytes and the following local must be 4 bytes wide.
+///
+/// Stack effect: `[lhs, rhs, i32] -> []`.
+/// Traps: none.
+/// Notes: Fuses the typed select and local write without materializing an intermediate stack value.
+///
+/// # Safety
+/// - `tail_code` must point to the local address operand for this fused handler.
+/// - `ctx` must reference a live execution context whose validated operand stack and local layout match this fused instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next`.
+pub unsafe fn op_select4_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let dst = (*tail_code).operand.local_addr as usize;
+    let cond = ctx.stack.pop_u32_fast();
+    let rhs = ctx.stack.pop_u32_fast();
+    let lhs = ctx.stack.pop_u32_fast();
+    let value = if cond == 0 { rhs } else { lhs };
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    call_next(tail_code, 1, ctx)
+}
+
+/// WebAssembly `select` followed by `local.tee` for 4-byte values.
+///
+/// Spec:
+/// - Validation: result width must be 4 bytes and the following local must be 4 bytes wide.
+///
+/// Stack effect: `[lhs, rhs, i32] -> [value]`.
+/// Traps: none.
+/// Notes: Fuses the typed select and local tee using typed stack operations.
+///
+/// # Safety
+/// - `tail_code` must point to the local address operand for this fused handler.
+/// - `ctx` must reference a live execution context whose validated operand stack and local layout match this fused instruction.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next`.
+pub unsafe fn op_select4_tee4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let dst = (*tail_code).operand.local_addr as usize;
+    let cond = ctx.stack.pop_u32_fast();
+    let rhs = ctx.stack.pop_u32_fast();
+    let lhs = ctx.stack.pop_u32_fast();
+    let value = if cond == 0 { rhs } else { lhs };
+    vm_try!(ctx.stack.push_u32_fast(value));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    call_next(tail_code, 1, ctx)
 }
 
 /// WebAssembly `select` typed fast path for 8-byte values.
@@ -130,6 +226,8 @@ pub unsafe fn op_select4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
+#[unsafe(no_mangle)]
 pub unsafe fn op_select8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     vm_try!(internal_op_select8(ctx));
     call_next(tail_code, 0, ctx)
@@ -148,6 +246,8 @@ pub unsafe fn op_select8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[inline(never)]
+#[unsafe(no_mangle)]
 pub unsafe fn op_select16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     vm_try!(internal_op_select16(ctx));
     call_next(tail_code, 0, ctx)
@@ -169,12 +269,8 @@ pub unsafe fn op_select16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx
-        .stack
-        .local_get4_from_base(ctx.local_base_ptr as *const u8, addr));
-    trace!("op_local_get4: {addr}");
-    call_next(tail_code, 1, ctx)
+    maybe_profile_local_get("op_local_get4");
+    op_local_get4_impl(tail_code, ctx)
 }
 
 /// WebAssembly `local.get`.
@@ -193,12 +289,8 @@ pub unsafe fn op_local_get4(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx
-        .stack
-        .local_get8_from_base(ctx.local_base_ptr as *const u8, addr));
-    trace!("op_local_get8: {addr}");
-    call_next(tail_code, 1, ctx)
+    maybe_profile_local_get("op_local_get8");
+    op_local_get8_impl(tail_code, ctx)
 }
 
 /// WebAssembly `local.get`.
@@ -217,108 +309,8 @@ pub unsafe fn op_local_get8(tail_code: *const Instr, ctx: &mut ExecuteContext) -
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_local_get16(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx
-        .stack
-        .local_get16_from_base(ctx.local_base_ptr as *const u8, addr));
-    trace!("op_local_get16: {addr}");
-    call_next(tail_code, 1, ctx)
-}
-
-#[cfg(all(feature = "vm-profile", any(debug_assertions, test)))]
-pub(crate) fn local_get_dispatch_op(size: u32) -> Op {
-    static PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
-    let profile_enabled = *PROFILE_ENABLED.get_or_init(|| {
-        std::env::var("TELOMERE_VM_PROFILE")
-            .ok()
-            .is_some_and(|value| value != "0")
-    });
-    match (size, profile_enabled) {
-        (4, true) => op_local_get4_profiled as Op,
-        (8, true) => op_local_get8_profiled as Op,
-        (16, true) => op_local_get16_profiled as Op,
-        (4, false) => op_local_get4 as Op,
-        (8, false) => op_local_get8 as Op,
-        (16, false) => op_local_get16 as Op,
-        (_, true) => op_local_get4_profiled as Op,
-        (_, false) => op_local_get4 as Op,
-    }
-}
-
-#[cfg(any(
-    not(feature = "vm-profile"),
-    all(feature = "vm-profile", not(any(debug_assertions, test)))
-))]
-pub(crate) fn local_get_dispatch_op(size: u32) -> Op {
-    match size {
-        4 => op_local_get4 as Op,
-        8 => op_local_get8 as Op,
-        16 => op_local_get16 as Op,
-        _ => op_local_get4 as Op,
-    }
-}
-
-/// WebAssembly `local.get` profiled fast path for 4-byte values.
-///
-/// Telomere runtime helper: records dispatch profile counts, then forwards to `op_local_get4`.
-///
-/// # Safety
-/// - `tail_code` must satisfy the same contract as [`op_local_get4`].
-/// - `ctx` must satisfy the same contract as [`op_local_get4`].
-#[allow(dead_code)]
-pub unsafe fn op_local_get4_profiled(
-    tail_code: *const Instr,
-    ctx: &mut ExecuteContext,
-) -> VMResult<()> {
-    dispatch_profile_count("op_local_get4");
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx
-        .stack
-        .local_get4_from_base(ctx.local_base_ptr as *const u8, addr));
-    trace!("op_local_get4: {addr}");
-    call_next(tail_code, 1, ctx)
-}
-
-/// WebAssembly `local.get` profiled fast path for 8-byte values.
-///
-/// Telomere runtime helper: records dispatch profile counts, then forwards to `op_local_get8`.
-///
-/// # Safety
-/// - `tail_code` must satisfy the same contract as [`op_local_get8`].
-/// - `ctx` must satisfy the same contract as [`op_local_get8`].
-#[allow(dead_code)]
-pub unsafe fn op_local_get8_profiled(
-    tail_code: *const Instr,
-    ctx: &mut ExecuteContext,
-) -> VMResult<()> {
-    dispatch_profile_count("op_local_get8");
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx
-        .stack
-        .local_get8_from_base(ctx.local_base_ptr as *const u8, addr));
-    trace!("op_local_get8: {addr}");
-    call_next(tail_code, 1, ctx)
-}
-
-/// WebAssembly `local.get` profiled fast path for 16-byte values.
-///
-/// Telomere runtime helper: records dispatch profile counts, then forwards to `op_local_get16`.
-///
-/// # Safety
-/// - `tail_code` must satisfy the same contract as [`op_local_get16`].
-/// - `ctx` must satisfy the same contract as [`op_local_get16`].
-#[allow(dead_code)]
-pub unsafe fn op_local_get16_profiled(
-    tail_code: *const Instr,
-    ctx: &mut ExecuteContext,
-) -> VMResult<()> {
-    dispatch_profile_count("op_local_get16");
-    let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx
-        .stack
-        .local_get16_from_base(ctx.local_base_ptr as *const u8, addr));
-    trace!("op_local_get16: {addr}");
-    call_next(tail_code, 1, ctx)
+    maybe_profile_local_get("op_local_get16");
+    op_local_get16_impl(tail_code, ctx)
 }
 
 /// WebAssembly `local.set`.

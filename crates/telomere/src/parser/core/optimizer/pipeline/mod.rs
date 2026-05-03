@@ -9,8 +9,8 @@ pub(crate) mod versioning;
 use super::{cfg::build_program, InstructionMeta};
 use crate::common::{FuncIdx, FuncType, Instr, LocalsData, LoweredFunction};
 
-const CODE_SIZE_GROWTH_BUDGET_PCT: usize = 20;
-const CODE_SIZE_GROWTH_BUDGET_ABS: usize = 16;
+const CODE_SIZE_GROWTH_BUDGET_PCT: usize = 10_000;
+const CODE_SIZE_GROWTH_BUDGET_ABS: usize = 10_000;
 
 pub(super) fn optimize_function(
     funcidx: FuncIdx,

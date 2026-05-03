@@ -298,6 +298,59 @@ fn eval_local_binop32(op: LocalBinop32Op, lhs_bits: u32, rhs_bits: u32) -> u32 {
 }
 
 #[inline(always)]
+fn is_stack_i32_const_binop(op: LocalBinop32Op) -> bool {
+    matches!(
+        op,
+        LocalBinop32Op::I32Add
+            | LocalBinop32Op::I32Sub
+            | LocalBinop32Op::I32Mul
+            | LocalBinop32Op::I32And
+            | LocalBinop32Op::I32Or
+            | LocalBinop32Op::I32Xor
+            | LocalBinop32Op::I32Shl
+            | LocalBinop32Op::I32ShrS
+            | LocalBinop32Op::I32ShrU
+            | LocalBinop32Op::I32Rotl
+            | LocalBinop32Op::I32Rotr
+    )
+}
+
+#[inline(always)]
+fn eval_stack_i32_const_binop(kind: u32, lhs_bits: u32, rhs_bits: u32) -> Option<u32> {
+    let (op, rhs_shape) = decode_local_binop32_kind(kind)?;
+    if rhs_shape != LocalFastRhsShape::Const || !is_stack_i32_const_binop(op) {
+        return None;
+    }
+    Some(eval_local_binop32(op, lhs_bits, rhs_bits))
+}
+
+#[inline(always)]
+fn is_stack_i32_const_cmp(op: LocalCmp32Op) -> bool {
+    matches!(
+        op,
+        LocalCmp32Op::I32Eq
+            | LocalCmp32Op::I32Ne
+            | LocalCmp32Op::I32LtS
+            | LocalCmp32Op::I32LtU
+            | LocalCmp32Op::I32GtS
+            | LocalCmp32Op::I32GtU
+            | LocalCmp32Op::I32LeS
+            | LocalCmp32Op::I32LeU
+            | LocalCmp32Op::I32GeS
+            | LocalCmp32Op::I32GeU
+    )
+}
+
+#[inline(always)]
+fn eval_stack_i32_const_cmp(kind: u32, lhs_bits: u32, rhs_bits: u32) -> Option<u32> {
+    let (op, rhs_shape) = decode_local_cmp32_kind(kind)?;
+    if rhs_shape != LocalFastRhsShape::Const || !is_stack_i32_const_cmp(op) {
+        return None;
+    }
+    Some(eval_local_cmp32(op, lhs_bits, rhs_bits))
+}
+
+#[inline(always)]
 fn eval_local_binop64(op: LocalBinop64Op, lhs_bits: u64, rhs_bits: u64) -> u64 {
     match op {
         LocalBinop64Op::I64Add => (lhs_bits as i64).wrapping_add(rhs_bits as i64) as u64,
@@ -431,6 +484,28 @@ unsafe fn eval_binop32_from_tail(tail_code: *const Instr, ctx: &mut ExecuteConte
 }
 
 #[inline(always)]
+unsafe fn eval_i32_const_binop_from_tail(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Option<u32> {
+    let kind = unsafe { (*tail_code).operand.u32 };
+    let rhs = unsafe { (*tail_code.add(1)).operand.i32 as u32 };
+    let lhs = ctx.stack.pop_u32();
+    eval_stack_i32_const_binop(kind, lhs, rhs)
+}
+
+#[inline(always)]
+unsafe fn eval_i32_const_cmp_from_tail(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> Option<u32> {
+    let kind = unsafe { (*tail_code).operand.u32 };
+    let rhs = unsafe { (*tail_code.add(1)).operand.i32 as u32 };
+    let lhs = ctx.stack.pop_u32();
+    eval_stack_i32_const_cmp(kind, lhs, rhs)
+}
+
+#[inline(always)]
 unsafe fn eval_binop64_from_tail(tail_code: *const Instr, ctx: &mut ExecuteContext) -> Option<u64> {
     let descriptor = LocalBinop64Descriptor::decode(unsafe { (*tail_code).operand.u32 })?;
     Some(unsafe { descriptor.eval(tail_code, ctx) })
@@ -529,6 +604,147 @@ pub unsafe fn op_local_get4_i32_const_add_tee4(
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, result as u32);
     call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_local_get4_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let src = (*tail_code).operand.local_addr as usize;
+    let dst = (*tail_code.add(1)).operand.local_addr as usize;
+    let value = local_u32_bits(ctx, src);
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_local_get4_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let src = (*tail_code).operand.local_addr as usize;
+    let dst = (*tail_code.add(1)).operand.local_addr as usize;
+    let value = local_u32_bits(ctx, src);
+    vm_try!(ctx.stack.push_u32_fast(value));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `local.get` run of two 32-bit locals.
+///
+/// Stack effect: `[] -> [i32, i32]`.
+/// Traps: follows validated local addressing and stack-capacity invariants.
+/// Notes: Generic predecoded superinstruction for consecutive `local.get` producers.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this fused local handler.
+/// - `ctx` must hold a valid frame and local base for the active function.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next`.
+pub unsafe fn op_local_get4_local_get4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    dispatch_profile_count("op_local_get4_local_get4");
+    let first = (*tail_code).operand.local_addr as usize;
+    let second = (*tail_code.add(1)).operand.local_addr as usize;
+    let first_value = local_u32_bits(ctx, first);
+    let second_value = local_u32_bits(ctx, second);
+    vm_try!(ctx.stack.push_u32_fast(first_value));
+    vm_try!(ctx.stack.push_u32_fast(second_value));
+    call_next(tail_code, 2, ctx)
+}
+
+/// WebAssembly `local.get` run of three 32-bit locals.
+///
+/// Stack effect: `[] -> [i32, i32, i32]`.
+/// Traps: follows validated local addressing and stack-capacity invariants.
+/// Notes: Generic predecoded superinstruction for consecutive `local.get` producers.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this fused local handler.
+/// - `ctx` must hold a valid frame and local base for the active function.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next`.
+pub unsafe fn op_local_get4_local_get4_local_get4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    dispatch_profile_count("op_local_get4_local_get4_local_get4");
+    let first = (*tail_code).operand.local_addr as usize;
+    let second = (*tail_code.add(1)).operand.local_addr as usize;
+    let third = (*tail_code.add(2)).operand.local_addr as usize;
+    let first_value = local_u32_bits(ctx, first);
+    let second_value = local_u32_bits(ctx, second);
+    let third_value = local_u32_bits(ctx, third);
+    vm_try!(ctx.stack.push_u32_fast(first_value));
+    vm_try!(ctx.stack.push_u32_fast(second_value));
+    vm_try!(ctx.stack.push_u32_fast(third_value));
+    call_next(tail_code, 3, ctx)
+}
+
+/// WebAssembly `local.get` run of 32-bit locals.
+///
+/// Stack effect: `[] -> [i32 x count]`.
+/// Traps: follows validated local addressing and stack-capacity invariants.
+/// Notes: Generic run-length superinstruction for longer consecutive `local.get` producers.
+///
+/// # Safety
+/// - `tail_code` must point to a count operand followed by that many local operands.
+/// - `ctx` must hold a valid frame and local base for the active function.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next`.
+pub unsafe fn op_local_get4_run(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    dispatch_profile_count("op_local_get4_run");
+    let count = (*tail_code).operand.u32 as usize;
+    debug_assert!((4..=8).contains(&count));
+    for index in 0..count {
+        let local = (*tail_code.add(1 + index)).operand.local_addr as usize;
+        let value = local_u32_bits(ctx, local);
+        vm_try!(ctx.stack.push_u32_fast(value));
+    }
+    call_next(
+        tail_code,
+        isize::try_from(1 + count).expect("local.get run width exceeds isize::MAX"),
+        ctx,
+    )
+}
+
+pub unsafe fn op_i32_const_set4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = (*tail_code).operand.i32 as u32;
+    let dst = (*tail_code.add(1)).operand.local_addr as usize;
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_i32_const_tee4(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let value = (*tail_code).operand.i32;
+    let dst = (*tail_code.add(1)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_i32_fast(value));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value as u32);
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_local_get4_set4_local_get4_i32_const_compare_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let copy_src = (*tail_code).operand.local_addr as usize;
+    let copy_dst = (*tail_code.add(1)).operand.local_addr as usize;
+    let lhs = (*tail_code.add(2)).operand.local_addr as usize;
+    let kind = (*tail_code.add(3)).operand.u32;
+    let rhs = (*tail_code.add(4)).operand.i32;
+    let value = local_u32_bits(ctx, copy_src);
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, copy_dst, value);
+    let ptr = br_if_ptr(
+        tail_code,
+        5,
+        6,
+        i32_compare(kind, local_i32(ctx, lhs), rhs) as u32,
+        ctx,
+    );
+    call_next(ptr, 0, ctx)
 }
 
 pub unsafe fn op_local_get4_local_get4_i32_add(
@@ -637,6 +853,82 @@ pub unsafe fn op_local_get4_local_get4_compare_br_if(
     call_next(ptr, 0, ctx)
 }
 
+pub unsafe fn op_local_get4_i32_const_and_tee4_i32_const_eq_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let src = (*tail_code).operand.local_addr as usize;
+    let mask = (*tail_code.add(1)).operand.i32 as u32;
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    let rhs = (*tail_code.add(3)).operand.i32 as u32;
+    let value = local_u32_bits(ctx, src) & mask;
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    let ptr = br_if_ptr(tail_code, 4, 5, (value == rhs) as u32, ctx);
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_local_get4_i32_const_and_i32_const_compare_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let src = (*tail_code).operand.local_addr as usize;
+    let mask = (*tail_code.add(1)).operand.i32 as u32;
+    let kind = (*tail_code.add(2)).operand.u32;
+    let rhs = (*tail_code.add(3)).operand.i32;
+    let value = local_u32_bits(ctx, src) & mask;
+    let ptr = br_if_ptr(
+        tail_code,
+        4,
+        5,
+        i32_compare(kind, value as i32, rhs) as u32,
+        ctx,
+    );
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_local_get4_i32_const_add_i32_const_and_i32_const_compare_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let src = (*tail_code).operand.local_addr as usize;
+    let imm = (*tail_code.add(1)).operand.i32 as u32;
+    let mask = (*tail_code.add(2)).operand.i32 as u32;
+    let kind = (*tail_code.add(3)).operand.u32;
+    let rhs = (*tail_code.add(4)).operand.i32;
+    let value = local_u32_bits(ctx, src).wrapping_add(imm) & mask;
+    let ptr = br_if_ptr(
+        tail_code,
+        5,
+        6,
+        i32_compare(kind, value as i32, rhs) as u32,
+        ctx,
+    );
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_local_get4_i32_const_and_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let src = (*tail_code).operand.local_addr as usize;
+    let mask = (*tail_code.add(1)).operand.i32;
+    let cond = (local_i32(ctx, src) & mask) as u32;
+    let ptr = br_if_ptr(tail_code, 2, 3, cond, ctx);
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_local_get4_i32_const_and_eqz_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let src = (*tail_code).operand.local_addr as usize;
+    let mask = (*tail_code.add(1)).operand.i32;
+    let cond = ((local_i32(ctx, src) & mask) == 0) as u32;
+    let ptr = br_if_ptr(tail_code, 2, 3, cond, ctx);
+    call_next(ptr, 0, ctx)
+}
+
 pub unsafe fn op_local_get4_i32_const_add_tee4_br_if(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
@@ -694,6 +986,88 @@ pub unsafe fn op_local_binop32_br_if(
     );
     let result = descriptor.eval(tail_code, ctx);
     let ptr = br_if_ptr(tail_code, 3, 4, result, ctx);
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_i32_const_binop(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_i32_const_binop_from_tail(tail_code, ctx).expect("invalid i32_const_binop");
+    vm_try!(ctx.stack.push_u32_fast(result));
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_i32_const_binop_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result =
+        eval_i32_const_binop_from_tail(tail_code, ctx).expect("invalid i32_const_binop_set4");
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_const_binop_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result =
+        eval_i32_const_binop_from_tail(tail_code, ctx).expect("invalid i32_const_binop_tee4");
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_u32_fast(result));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_const_binop_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result =
+        eval_i32_const_binop_from_tail(tail_code, ctx).expect("invalid i32_const_binop_br_if");
+    let ptr = br_if_ptr(tail_code, 2, 3, result, ctx);
+    call_next(ptr, 0, ctx)
+}
+
+pub unsafe fn op_i32_const_cmp(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    let result = eval_i32_const_cmp_from_tail(tail_code, ctx).expect("invalid i32_const_cmp");
+    vm_try!(ctx.stack.push_u32_fast(result));
+    call_next(tail_code, 2, ctx)
+}
+
+pub unsafe fn op_i32_const_cmp_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_i32_const_cmp_from_tail(tail_code, ctx).expect("invalid i32_const_cmp_set4");
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_const_cmp_tee4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_i32_const_cmp_from_tail(tail_code, ctx).expect("invalid i32_const_cmp_tee4");
+    let dst = (*tail_code.add(2)).operand.local_addr as usize;
+    vm_try!(ctx.stack.push_u32_fast(result));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, result);
+    call_next(tail_code, 3, ctx)
+}
+
+pub unsafe fn op_i32_const_cmp_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let result = eval_i32_const_cmp_from_tail(tail_code, ctx).expect("invalid i32_const_cmp_br_if");
+    let ptr = br_if_ptr(tail_code, 2, 3, result, ctx);
     call_next(ptr, 0, ctx)
 }
 

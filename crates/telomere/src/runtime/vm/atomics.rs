@@ -2531,21 +2531,21 @@ pub unsafe fn op_atomic_fence_shared(
     call_next(tail_code, 1, ctx)
 }
 
-pub(crate) use op_atomic_fence as op_atomic_fence_local;
-pub(crate) use op_i32_atomic_load as op_i32_atomic_load_local;
-pub(crate) use op_i32_atomic_load16_u as op_i32_atomic_load16_u_local;
-pub(crate) use op_i32_atomic_load8_u as op_i32_atomic_load8_u_local;
-pub(crate) use op_i32_atomic_store as op_i32_atomic_store_local;
-pub(crate) use op_i32_atomic_store16 as op_i32_atomic_store16_local;
-pub(crate) use op_i32_atomic_store8 as op_i32_atomic_store8_local;
-pub(crate) use op_i64_atomic_load as op_i64_atomic_load_local;
-pub(crate) use op_i64_atomic_load16_u as op_i64_atomic_load16_u_local;
-pub(crate) use op_i64_atomic_load32_u as op_i64_atomic_load32_u_local;
-pub(crate) use op_i64_atomic_load8_u as op_i64_atomic_load8_u_local;
-pub(crate) use op_i64_atomic_store as op_i64_atomic_store_local;
-pub(crate) use op_i64_atomic_store16 as op_i64_atomic_store16_local;
-pub(crate) use op_i64_atomic_store32 as op_i64_atomic_store32_local;
-pub(crate) use op_i64_atomic_store8 as op_i64_atomic_store8_local;
-pub(crate) use op_memory_atomic_notify as op_memory_atomic_notify_unshared;
-pub(crate) use op_memory_atomic_wait32 as op_memory_atomic_wait32_unshared;
-pub(crate) use op_memory_atomic_wait64 as op_memory_atomic_wait64_unshared;
+pub(crate) use self::op_atomic_fence as op_atomic_fence_local;
+pub(crate) use self::op_i32_atomic_load as op_i32_atomic_load_local;
+pub(crate) use self::op_i32_atomic_load16_u as op_i32_atomic_load16_u_local;
+pub(crate) use self::op_i32_atomic_load8_u as op_i32_atomic_load8_u_local;
+pub(crate) use self::op_i32_atomic_store as op_i32_atomic_store_local;
+pub(crate) use self::op_i32_atomic_store16 as op_i32_atomic_store16_local;
+pub(crate) use self::op_i32_atomic_store8 as op_i32_atomic_store8_local;
+pub(crate) use self::op_i64_atomic_load as op_i64_atomic_load_local;
+pub(crate) use self::op_i64_atomic_load16_u as op_i64_atomic_load16_u_local;
+pub(crate) use self::op_i64_atomic_load32_u as op_i64_atomic_load32_u_local;
+pub(crate) use self::op_i64_atomic_load8_u as op_i64_atomic_load8_u_local;
+pub(crate) use self::op_i64_atomic_store as op_i64_atomic_store_local;
+pub(crate) use self::op_i64_atomic_store16 as op_i64_atomic_store16_local;
+pub(crate) use self::op_i64_atomic_store32 as op_i64_atomic_store32_local;
+pub(crate) use self::op_i64_atomic_store8 as op_i64_atomic_store8_local;
+pub(crate) use self::op_memory_atomic_notify as op_memory_atomic_notify_unshared;
+pub(crate) use self::op_memory_atomic_wait32 as op_memory_atomic_wait32_unshared;
+pub(crate) use self::op_memory_atomic_wait64 as op_memory_atomic_wait64_unshared;

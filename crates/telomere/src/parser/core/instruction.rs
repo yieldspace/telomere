@@ -410,6 +410,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         {
             return fixed_stack_shape(2, 1, stack_before, stack_after);
         }
+        if std::ptr::fn_addr_eq(op, vm::op_select as Op) {
+            return fixed_stack_shape(3, 1, stack_before, stack_after);
+        }
         if std::ptr::fn_addr_eq(op, vm::op_call as Op)
             || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
         {
@@ -1207,12 +1210,17 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 );
                 let (ty, addr) = get_local_addr(&self.functype.0, self.locals, idx)?;
 
-                let op = match ty.stack_size() {
-                    ValueSize::Byte4 => vm::local_get_dispatch_op(4),
-                    ValueSize::Byte8 => vm::local_get_dispatch_op(8),
-                    ValueSize::Byte16 => vm::local_get_dispatch_op(16),
+                match ty.stack_size() {
+                    ValueSize::Byte4 => instrs.push(Instr {
+                        op: vm::op_local_get4,
+                    }),
+                    ValueSize::Byte8 => instrs.push(Instr {
+                        op: vm::op_local_get8,
+                    }),
+                    ValueSize::Byte16 => instrs.push(Instr {
+                        op: vm::op_local_get16,
+                    }),
                 };
-                instrs.push(Instr { op });
                 instrs.push(Instr {
                     operand: Operand { local_addr: addr },
                 });

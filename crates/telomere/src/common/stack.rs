@@ -590,6 +590,7 @@ impl Stack {
         self.top = new_top;
         VMResult::Success(())
     }
+
     #[inline(always)]
     pub(crate) unsafe fn local_u32_from_base(
         &self,

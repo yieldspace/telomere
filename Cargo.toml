@@ -11,6 +11,7 @@ publish.workspace = true
 default = ["full"]
 full = ["telomere/full"]
 vm-profile = ["telomere/vm-profile"]
+vm-diagnostics = ["telomere/vm-diagnostics"]
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
@@ -56,4 +57,5 @@ libc = "0.2.175"
 regex = "1.11.1"
 
 [profile.release]
-codegen-units = 16
+codegen-units = 1
+lto = "thin"

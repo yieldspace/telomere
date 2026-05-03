@@ -356,7 +356,7 @@ pub async fn instantiate(
             });
         }
 
-        for (idx, d) in (0..).zip(data.0.into_iter()) {
+        for (idx, d) in (0..).zip(data.0) {
             match &d.mode {
                 DataMode::Active(mem, offset) => {
                     let offset =
@@ -419,7 +419,7 @@ pub async fn instantiate(
         tables.append(&mut table_instances);
 
         let res = (|| {
-            for (idx, elem) in (0u32..).zip(m_elems.0.into_iter()) {
+            for (idx, elem) in (0u32..).zip(m_elems.0) {
                 match &elem.mode {
                     ElemMode::Active(idx, offset) => match &elem.init {
                         ElemInit::FuncIdx(idxs) => {

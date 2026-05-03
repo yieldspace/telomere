@@ -4,8 +4,11 @@ use super::{
     analysis::AnalysisResults,
     ir::{CanonBlock, CanonFunc, CanonInst},
     select::{
-        BlockVersion, BlockVersionKind, KernelBlock, KernelFunction, KernelOp, VersionFact,
-        VersionKey,
+        scalar_const_base_load_family, scalar_const_base_store_family,
+        scalar_local_base_load_family, scalar_local_base_store_family,
+        scalar_local_scaled_index_load_family, scalar_local_scaled_index_store_family,
+        scalar_memory_store_type, BlockVersion, BlockVersionKind, KernelBlock, KernelFunction,
+        KernelOp, VersionFact, VersionKey,
     },
 };
 use crate::{
@@ -49,6 +52,12 @@ pub(crate) fn apply(
 
     for block in &mut kernel.blocks {
         rewrite_explicit_targets(block, func, &clone_for_key);
+        fuse_search_loop_ops(block);
+        relabel_first_op(block);
+    }
+
+    for block in &mut extra_blocks {
+        fuse_search_loop_ops(block);
         relabel_first_op(block);
     }
 
@@ -467,17 +476,129 @@ fn verify_clone_budget(kernel: &KernelFunction) -> bool {
             .all(|count| *count <= MAX_SPECIALIZED_CLONES_PER_BLOCK)
 }
 
+fn fuse_search_loop_ops(block: &mut KernelBlock) {
+    let mut fused = Vec::with_capacity(block.ops.len());
+    let mut cursor = 0usize;
+    while cursor < block.ops.len() {
+        if let Some(op) = fuse_i32_load16_u_local_base_eq_search_loop(&block.ops, cursor) {
+            fused.push(op);
+            cursor += 3;
+            continue;
+        }
+        if let Some(op) = fuse_i32_load8_u_local_base_masked_search_loop(&block.ops, cursor) {
+            fused.push(op);
+            cursor += 3;
+            continue;
+        }
+        fused.push(block.ops[cursor].clone());
+        cursor += 1;
+    }
+    block.ops = fused;
+}
+
+fn fuse_i32_load16_u_local_base_eq_search_loop(
+    ops: &[KernelOp],
+    cursor: usize,
+) -> Option<KernelOp> {
+    let [compare, next, miss] = ops.get(cursor..cursor + 3)? else {
+        return None;
+    };
+    if !std::ptr::fn_addr_eq(
+        compare.op,
+        vm::op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_br_if as Op,
+    ) || !std::ptr::fn_addr_eq(next.op, vm::op_i32_load_local_base_tee4_br_if as Op)
+        || !std::ptr::fn_addr_eq(miss.op, vm::op_br as Op)
+        || op_jump_target(next).is_none()
+    {
+        return None;
+    }
+    if raw_local_addr(compare.operands.first()) != raw_local_addr(next.operands.first())
+        || raw_local_addr(compare.operands.first()) != raw_local_addr(next.operands.get(3))
+    {
+        return None;
+    }
+    let match_target = op_jump_target(compare)?;
+    let miss_target = op_jump_target(miss)?;
+    let operands = vec![
+        compare.operands.first()?.clone(),
+        compare.operands.get(1)?.clone(),
+        compare.operands.get(2)?.clone(),
+        compare.operands.get(3)?.clone(),
+        compare.operands.get(4)?.clone(),
+        compare.operands.get(5)?.clone(),
+        compare.operands.get(6)?.clone(),
+        next.operands.get(1)?.clone(),
+        next.operands.get(2)?.clone(),
+        LoweredOperand::JumpTarget(match_target),
+        LoweredOperand::JumpTarget(miss_target),
+    ];
+    Some(KernelOp {
+        label: compare.label,
+        op: vm::op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_search_loop as Op,
+        operands,
+        family: "versioned-i32_load16_u_local_base_eq_search_loop",
+    })
+}
+
+fn fuse_i32_load8_u_local_base_masked_search_loop(
+    ops: &[KernelOp],
+    cursor: usize,
+) -> Option<KernelOp> {
+    let [compare, next, miss] = ops.get(cursor..cursor + 3)? else {
+        return None;
+    };
+    if !std::ptr::fn_addr_eq(
+        compare.op,
+        vm::op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_compare_br_if as Op,
+    ) || !std::ptr::fn_addr_eq(next.op, vm::op_i32_load_local_base_tee4_br_if as Op)
+        || !std::ptr::fn_addr_eq(miss.op, vm::op_br as Op)
+        || op_jump_target(next).is_none()
+    {
+        return None;
+    }
+    if raw_local_addr(compare.operands.first()) != raw_local_addr(next.operands.first())
+        || raw_local_addr(compare.operands.first()) != raw_local_addr(next.operands.get(3))
+    {
+        return None;
+    }
+    let match_target = op_jump_target(compare)?;
+    let miss_target = op_jump_target(miss)?;
+    let operands = vec![
+        compare.operands.first()?.clone(),
+        compare.operands.get(1)?.clone(),
+        compare.operands.get(2)?.clone(),
+        compare.operands.get(3)?.clone(),
+        compare.operands.get(4)?.clone(),
+        compare.operands.get(5)?.clone(),
+        compare.operands.get(6)?.clone(),
+        compare.operands.get(7)?.clone(),
+        next.operands.get(1)?.clone(),
+        next.operands.get(2)?.clone(),
+        LoweredOperand::JumpTarget(match_target),
+        LoweredOperand::JumpTarget(miss_target),
+    ];
+    Some(KernelOp {
+        label: compare.label,
+        op: vm::op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_search_loop as Op,
+        operands,
+        family: "versioned-i32_load8_u_local_base_masked_search_loop",
+    })
+}
+
 fn versionable_const_base_prefix(ops: &[KernelOp]) -> bool {
     if let Some(first) = ops.first() {
-        if std::ptr::fn_addr_eq(first.op, vm::op_i32_load as Op) {
+        if scalar_const_base_load_family(first.op).is_some() {
             return true;
         }
     }
-    if ops.len() >= 2
-        && std::ptr::fn_addr_eq(ops[0].op, vm::op_local_get4 as Op)
-        && std::ptr::fn_addr_eq(ops[1].op, vm::op_i32_store as Op)
-    {
-        return true;
+    if let Some(store) = ops.get(1) {
+        if let Some(scalar) = scalar_memory_store_type(store.op) {
+            if scalar_const_base_store_family(store.op).is_some()
+                && raw_local_get_kernel(&ops[0], scalar.width()).is_some()
+            {
+                return true;
+            }
+        }
     }
     ops.len() >= 4
         && std::ptr::fn_addr_eq(ops[0].op, vm::op_i32_load as Op)
@@ -722,6 +843,37 @@ fn specialize_const_base_block_ops(ops: &[KernelOp], base: u32) -> Option<Vec<Ke
         return Some(out);
     }
 
+    if let Some(op) = scalar_const_base_load_family(ops[0].op) {
+        let folded = fold_const_base_memarg(base, ops[0].operands.first())?;
+        let mut out = Vec::with_capacity(ops.len());
+        out.push(KernelOp {
+            label: ops[0].label,
+            op,
+            operands: vec![folded],
+            family: "versioned-memory_const_base_load",
+        });
+        out.extend_from_slice(&ops[1..]);
+        return Some(out);
+    }
+
+    if let Some(store) = ops.get(1) {
+        if let Some(scalar) = scalar_memory_store_type(store.op) {
+            if let Some(op) = scalar_const_base_store_family(store.op) {
+                let src = raw_local_get_kernel(&ops[0], scalar.width())?;
+                let folded = fold_const_base_memarg(base, store.operands.first())?;
+                let mut out = Vec::with_capacity(ops.len() - 1);
+                out.push(KernelOp {
+                    label: ops[0].label,
+                    op,
+                    operands: vec![folded, src],
+                    family: "versioned-memory_const_base_store_local",
+                });
+                out.extend_from_slice(&ops[2..]);
+                return Some(out);
+            }
+        }
+    }
+
     if ops.len() >= 2
         && std::ptr::fn_addr_eq(ops[0].op, vm::op_local_get4 as Op)
         && std::ptr::fn_addr_eq(ops[1].op, vm::op_i32_store as Op)
@@ -749,20 +901,46 @@ fn specialize_local_base_block_ops(
     if ops.is_empty() {
         return None;
     }
-    if std::ptr::fn_addr_eq(ops[0].op, vm::op_i32_load as Op) {
+    if let Some(op) = scalar_local_base_load_family(ops[0].op) {
         let mut out = Vec::with_capacity(ops.len());
         out.push(KernelOp {
             label: ops[0].label,
-            op: vm::op_i32_load_local_base as Op,
+            op,
             operands: vec![
                 raw_local_operand(local_addr),
                 raw_i32_operand(delta),
                 ops[0].operands.first()?.clone(),
             ],
-            family: "versioned-i32_load_local_base",
+            family: "versioned-memory_local_base",
         });
         out.extend_from_slice(&ops[1..]);
         return Some(out);
+    }
+
+    if let Some(store) = ops.get(1) {
+        if let Some(scalar) = scalar_memory_store_type(store.op) {
+            let src = raw_local_get_kernel(&ops[0], scalar.width())?;
+            let op = scalar_local_base_store_family(store.op)?;
+            let mut out = Vec::with_capacity(ops.len());
+            out.push(KernelOp {
+                label: ops[0].label,
+                op: local_get_op_for_width(scalar.width()),
+                operands: vec![src],
+                family: ops[0].family,
+            });
+            out.push(KernelOp {
+                label: None,
+                op,
+                operands: {
+                    let mut operands = vec![raw_local_operand(local_addr), raw_i32_operand(delta)];
+                    operands.extend(store.operands.clone());
+                    operands
+                },
+                family: "versioned-memory_local_base",
+            });
+            out.extend_from_slice(&ops[2..]);
+            return Some(out);
+        }
     }
 
     if ops.len() >= 2
@@ -798,11 +976,11 @@ fn specialize_local_scaled_index_block_ops(
     if ops.is_empty() {
         return None;
     }
-    if std::ptr::fn_addr_eq(ops[0].op, vm::op_i32_load as Op) {
+    if let Some(op) = scalar_local_scaled_index_load_family(ops[0].op) {
         let mut out = Vec::with_capacity(ops.len());
         out.push(KernelOp {
             label: ops[0].label,
-            op: vm::op_i32_load_local_scaled_index as Op,
+            op,
             operands: vec![
                 raw_local_operand(base_local_addr),
                 raw_local_operand(index_local_addr),
@@ -810,10 +988,41 @@ fn specialize_local_scaled_index_block_ops(
                 raw_i32_operand(delta),
                 ops[0].operands.first()?.clone(),
             ],
-            family: "versioned-i32_load_local_scaled_index",
+            family: "versioned-memory_local_scaled_index",
         });
         out.extend_from_slice(&ops[1..]);
         return Some(out);
+    }
+
+    if let Some(store) = ops.get(1) {
+        if let Some(scalar) = scalar_memory_store_type(store.op) {
+            let src = raw_local_get_kernel(&ops[0], scalar.width())?;
+            let op = scalar_local_scaled_index_store_family(store.op)?;
+            let mut out = Vec::with_capacity(ops.len());
+            out.push(KernelOp {
+                label: ops[0].label,
+                op: local_get_op_for_width(scalar.width()),
+                operands: vec![src],
+                family: ops[0].family,
+            });
+            out.push(KernelOp {
+                label: None,
+                op,
+                operands: {
+                    let mut operands = vec![
+                        raw_local_operand(base_local_addr),
+                        raw_local_operand(index_local_addr),
+                        raw_u32_operand(scale_log2),
+                        raw_i32_operand(delta),
+                    ];
+                    operands.extend(store.operands.clone());
+                    operands
+                },
+                family: "versioned-memory_local_scaled_index",
+            });
+            out.extend_from_slice(&ops[2..]);
+            return Some(out);
+        }
     }
 
     if ops.len() >= 2
@@ -1034,6 +1243,22 @@ fn is_local_get_br_if(op: &KernelOp, expected_local_addr: u32) -> bool {
 fn is_local_get_op(op: &KernelOp, expected_local_addr: u32) -> bool {
     std::ptr::fn_addr_eq(op.op, vm::op_local_get4 as Op)
         && raw_local_addr(op.operands.first()) == Some(expected_local_addr)
+}
+
+fn raw_local_get_kernel(op: &KernelOp, width: u32) -> Option<LoweredOperand> {
+    if std::ptr::fn_addr_eq(op.op, local_get_op_for_width(width)) {
+        return op.operands.first().cloned();
+    }
+    None
+}
+
+fn local_get_op_for_width(width: u32) -> Op {
+    match width {
+        4 => vm::op_local_get4 as Op,
+        8 => vm::op_local_get8 as Op,
+        16 => vm::op_local_get16 as Op,
+        other => panic!("unsupported local.get width for versioning: {other}"),
+    }
 }
 
 fn is_local_get_const_add_op(op: &KernelOp, expected_local_addr: u32, expected_delta: i32) -> bool {

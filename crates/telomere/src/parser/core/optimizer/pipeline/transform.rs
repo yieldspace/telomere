@@ -3,6 +3,9 @@ use std::collections::{HashMap, HashSet};
 use super::{
     analysis::{self, AnalysisResults, PreCandidate, ValueExprKey, ValueExprSite},
     ir::CanonFunc,
+    select::{
+        is_i32_memory_load_root_op, scalar_memory_load_type, scalar_memory_store_type, ScalarType,
+    },
 };
 use crate::{
     common::{LocalsData, LoweredOperand, Op, Operand, ValType},
@@ -25,6 +28,8 @@ pub(crate) struct TransformResult {
     pub(crate) coalesced_slots: usize,
     #[allow(dead_code)]
     pub(crate) pre_hoists: usize,
+    #[allow(dead_code)]
+    pub(crate) buffered_memory_roots: usize,
 }
 
 pub(crate) fn run(
@@ -53,6 +58,10 @@ pub(crate) fn run(
     {
         coalesced_slots += coalesce_local_set_get(block, pair_cursors);
     }
+    let mut buffered_memory_roots = 0usize;
+    for block in &mut func.blocks {
+        buffered_memory_roots += buffer_same_block_memory_derived_address_roots(block, locals);
+    }
     func.locals_size = u32::try_from(locals.byte_size()).expect("locals size exceeds u32::MAX");
     normalize_after_cfg_rewrites(&mut func);
     let verified_stack = verify_block_stacks(&func);
@@ -66,6 +75,7 @@ pub(crate) fn run(
         cached_exprs,
         coalesced_slots,
         pre_hoists,
+        buffered_memory_roots,
     }
 }
 
@@ -321,6 +331,23 @@ fn make_temp_local_tee(
     }
 }
 
+fn make_temp_local_set(
+    local_addr: u32,
+    ty: ValType,
+    producer: &super::ir::CanonInst,
+) -> super::ir::CanonInst {
+    super::ir::CanonInst {
+        id: producer.id,
+        op: local_set_op_for_ty(ty),
+        operands: vec![raw_local_operand(local_addr)],
+        stack_before: producer.stack_after.clone(),
+        stack_after: producer.stack_before.clone(),
+        preserved_prefix_len: producer.stack_before.len(),
+        fresh_result_count: 0,
+        effect: producer.effect,
+    }
+}
+
 fn written_local_addr(inst: &super::ir::CanonInst) -> Option<u32> {
     if inst.op_eq(vm::op_local_set4 as Op)
         || inst.op_eq(vm::op_local_set8 as Op)
@@ -330,6 +357,196 @@ fn written_local_addr(inst: &super::ir::CanonInst) -> Option<u32> {
         || inst.op_eq(vm::op_local_tee16 as Op)
     {
         return raw_local_addr(inst.operands.first());
+    }
+    None
+}
+
+fn buffer_same_block_memory_derived_address_roots(
+    block: &mut super::ir::CanonBlock,
+    locals: &mut LocalsData,
+) -> usize {
+    let mut rewritten = Vec::with_capacity(block.insts.len());
+    let mut buffered = 0usize;
+    for (cursor, inst) in block.insts.iter().enumerate() {
+        rewritten.push(inst.clone());
+        if !is_i32_memory_load_root_op(inst.op) {
+            continue;
+        }
+        if !matches_same_block_memory_derived_address_use(&block.insts, cursor) {
+            continue;
+        }
+        let temp_addr = locals.allocate_temp_slot(ValType::I32);
+        rewritten.push(make_temp_local_set(temp_addr, ValType::I32, inst));
+        rewritten.push(make_temp_local_get(temp_addr, ValType::I32, inst, inst));
+        buffered += 1;
+    }
+    if buffered != 0 {
+        block.insts = rewritten;
+    }
+    buffered
+}
+
+fn matches_same_block_memory_derived_address_use(
+    insts: &[super::ir::CanonInst],
+    producer_cursor: usize,
+) -> bool {
+    let address_start = producer_cursor + 1;
+    for consumed in address_suffix_consumed_after_root(insts, address_start) {
+        let consumer_cursor = address_start + consumed;
+        if insts
+            .get(consumer_cursor)
+            .is_some_and(|inst| scalar_memory_load_type(inst.op).is_some())
+        {
+            return true;
+        }
+        if let Some((value_consumed, scalar)) =
+            match_scalar_store_value_expr(insts, consumer_cursor)
+        {
+            if insts
+                .get(consumer_cursor + value_consumed)
+                .is_some_and(|inst| scalar_memory_store_type(inst.op) == Some(scalar))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn address_suffix_consumed_after_root(insts: &[super::ir::CanonInst], cursor: usize) -> Vec<usize> {
+    let mut consumed = vec![0usize];
+    if match_i32_const_add_suffix(insts, cursor).is_some() {
+        consumed.push(2);
+    }
+    if raw_local_get(insts.get(cursor), 4).is_some() {
+        let mut local_consumed = 1usize;
+        if insts
+            .get(cursor + local_consumed)
+            .is_some_and(|inst| inst.op_eq(vm::op_i32_const as Op))
+            && insts
+                .get(cursor + local_consumed + 1)
+                .is_some_and(|inst| inst.op_eq(vm::op_i32_shl as Op))
+        {
+            let Some(scale) = raw_i32(
+                insts
+                    .get(cursor + local_consumed)
+                    .and_then(|inst| inst.operands.first()),
+            ) else {
+                return consumed;
+            };
+            if !(0..=3).contains(&scale) {
+                return consumed;
+            }
+            local_consumed += 2;
+        }
+        if insts
+            .get(cursor + local_consumed)
+            .is_some_and(|inst| inst.op_eq(vm::op_i32_add as Op))
+        {
+            local_consumed += 1;
+            consumed.push(local_consumed);
+            if match_i32_const_add_suffix(insts, cursor + local_consumed).is_some() {
+                consumed.push(local_consumed + 2);
+            }
+        }
+    }
+    consumed
+}
+
+fn match_scalar_store_value_expr(
+    insts: &[super::ir::CanonInst],
+    cursor: usize,
+) -> Option<(usize, ScalarType)> {
+    for scalar in [
+        ScalarType::I32,
+        ScalarType::I64,
+        ScalarType::F32,
+        ScalarType::F64,
+    ] {
+        if let Some(consumed) = match_scalar_value_expr(insts, cursor, scalar) {
+            return Some((consumed, scalar));
+        }
+    }
+    None
+}
+
+fn match_scalar_value_expr(
+    insts: &[super::ir::CanonInst],
+    cursor: usize,
+    scalar: ScalarType,
+) -> Option<usize> {
+    let lhs = match_scalar_atomic_value_expr(insts, cursor, scalar)?;
+    let rhs_cursor = cursor + lhs;
+    let Some(rhs) = match_scalar_atomic_value_expr(insts, rhs_cursor, scalar) else {
+        return Some(lhs);
+    };
+    insts
+        .get(rhs_cursor + rhs)
+        .filter(|inst| inst.op_eq(scalar_add_op(scalar)))
+        .map(|_| lhs + rhs + 1)
+        .or(Some(lhs))
+}
+
+fn match_scalar_atomic_value_expr(
+    insts: &[super::ir::CanonInst],
+    cursor: usize,
+    scalar: ScalarType,
+) -> Option<usize> {
+    let inst = insts.get(cursor)?;
+    if raw_local_get(Some(inst), scalar_width(scalar)).is_some()
+        || scalar_const_operand(inst, scalar).is_some()
+        || scalar_memory_load_type(inst.op) == Some(scalar)
+    {
+        return Some(1);
+    }
+    None
+}
+
+fn scalar_add_op(scalar: ScalarType) -> Op {
+    match scalar {
+        ScalarType::I32 => vm::op_i32_add as Op,
+        ScalarType::I64 => vm::op_i64_add as Op,
+        ScalarType::F32 => vm::op_f32_add as Op,
+        ScalarType::F64 => vm::op_f64_add as Op,
+    }
+}
+
+fn scalar_width(scalar: ScalarType) -> u32 {
+    match scalar {
+        ScalarType::I32 | ScalarType::F32 => 4,
+        ScalarType::I64 | ScalarType::F64 => 8,
+    }
+}
+
+fn scalar_const_operand(inst: &super::ir::CanonInst, scalar: ScalarType) -> Option<LoweredOperand> {
+    match scalar {
+        ScalarType::I32 if inst.op_eq(vm::op_i32_const as Op) => inst.operands.first().cloned(),
+        ScalarType::I64 if inst.op_eq(vm::op_i64_const as Op) => inst.operands.first().cloned(),
+        ScalarType::F32 if inst.op_eq(vm::op_f32_const as Op) => inst.operands.first().cloned(),
+        ScalarType::F64 if inst.op_eq(vm::op_f64_const as Op) => inst.operands.first().cloned(),
+        _ => None,
+    }
+}
+
+fn match_i32_const_add_suffix(insts: &[super::ir::CanonInst], cursor: usize) -> Option<i32> {
+    let konst = insts.get(cursor)?;
+    let add = insts.get(cursor + 1)?;
+    if !konst.op_eq(vm::op_i32_const as Op) || !add.op_eq(vm::op_i32_add as Op) {
+        return None;
+    }
+    raw_i32(konst.operands.first())
+}
+
+fn raw_local_get(inst: Option<&super::ir::CanonInst>, width: u32) -> Option<LoweredOperand> {
+    let inst = inst?;
+    if width == 4 && inst.op_eq(vm::op_local_get4 as Op) {
+        return inst.operands.first().cloned();
+    }
+    if width == 8 && inst.op_eq(vm::op_local_get8 as Op) {
+        return inst.operands.first().cloned();
+    }
+    if width == 16 && inst.op_eq(vm::op_local_get16 as Op) {
+        return inst.operands.first().cloned();
     }
     None
 }

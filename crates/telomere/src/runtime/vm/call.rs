@@ -171,8 +171,7 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
         return VMResult::Success(());
     }
     let recipe = decode_direct_call_recipe(tail_code, ctx);
-    let outcome = internal_op_call(tail_code.offset(1), recipe, ctx, false);
-    match vm_try!(outcome) {
+    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, false)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -194,7 +193,16 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    unsafe { op_call(tail_code, ctx) }
+    std::hint::spin_loop();
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, false)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 
 /// WebAssembly `return_call`.
@@ -216,8 +224,7 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
         return VMResult::Success(());
     }
     let recipe = decode_direct_call_recipe(tail_code, ctx);
-    let outcome = internal_op_call(tail_code.offset(1), recipe, ctx, true);
-    match vm_try!(outcome) {
+    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, true)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -240,7 +247,16 @@ pub unsafe fn op_return_call_import(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    unsafe { op_return_call(tail_code, ctx) }
+    std::hint::spin_loop();
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, true)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 
 #[inline(never)]
@@ -327,8 +343,7 @@ pub unsafe fn op_call_indirect(tail_code: *const Instr, ctx: &mut ExecuteContext
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    let outcome = internal_op_call_indirect(tail_code, ctx, false);
-    match vm_try!(outcome) {
+    match vm_try!(internal_op_call_indirect(tail_code, ctx, false)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -355,8 +370,7 @@ pub unsafe fn op_return_call_indirect(
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    let outcome = internal_op_call_indirect(tail_code, ctx, true);
-    match vm_try!(outcome) {
+    match vm_try!(internal_op_call_indirect(tail_code, ctx, true)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
