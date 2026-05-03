@@ -1,4 +1,5 @@
 use super::*;
+use crate::common::{decode_local_cmp32_kind, LocalCmp32Op, LocalFastRhsShape, Op};
 
 #[cfg(feature = "vm-profile")]
 #[cold]
@@ -23,12 +24,178 @@ unsafe fn memory_br_if_ptr(
     cond: u32,
     ctx: &mut ExecuteContext,
 ) -> *const Instr {
-    if cond != 0 {
+    let ptr = if cond != 0 {
         let jump_addr = (*tail_code.add(target_offset)).operand.jump_addr;
         ctx.code().offset(jump_addr as isize)
     } else {
         tail_code.add(taken_advance)
+    };
+    skip_end_ops(ptr)
+}
+
+#[inline(always)]
+unsafe fn skip_end_ops(mut ptr: *const Instr) -> *const Instr {
+    while std::ptr::fn_addr_eq((*ptr).op, op_end as Op) {
+        ptr = ptr.add(1);
     }
+    ptr
+}
+
+#[inline(always)]
+unsafe fn br_table_target_ptr_at(
+    tail_code: *const Instr,
+    table_size_offset: isize,
+    first_target_offset: isize,
+    index: u32,
+    ctx: &mut ExecuteContext,
+) -> *const Instr {
+    let table_size = (*tail_code.offset(table_size_offset)).operand.u32;
+    let target_offset = if index < table_size {
+        first_target_offset + index as isize
+    } else {
+        first_target_offset + table_size as isize
+    };
+    let addr = (*tail_code.offset(target_offset)).operand.jump_addr;
+    skip_end_ops(ctx.code().offset(addr as isize))
+}
+
+#[inline(always)]
+fn i32_const_compare(kind: u32, lhs: i32, rhs: i32) -> bool {
+    match kind {
+        0 => lhs == rhs,
+        1 => lhs != rhs,
+        2 => lhs < rhs,
+        3 => (lhs as u32) < (rhs as u32),
+        4 => lhs > rhs,
+        5 => (lhs as u32) > (rhs as u32),
+        6 => lhs <= rhs,
+        7 => (lhs as u32) <= (rhs as u32),
+        8 => lhs >= rhs,
+        9 => (lhs as u32) >= (rhs as u32),
+        _ => false,
+    }
+}
+
+#[inline(always)]
+unsafe fn read_u8_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u8> {
+    let start = addr as usize;
+    let memory = unsafe { ctx.default_local_memory_unchecked() };
+    if start >= memory.data_size() {
+        return VMResult::MemoryIndexOutOfRange;
+    }
+    VMResult::Success(unsafe { *memory.data_ptr().add(start) })
+}
+
+#[inline(always)]
+unsafe fn read_u32_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u32> {
+    let start = addr as usize;
+    let Some(end) = start.checked_add(4) else {
+        return VMResult::MemoryIndexOutOfRange;
+    };
+    let memory = unsafe { ctx.default_local_memory_unchecked() };
+    if end > memory.data_size() {
+        return VMResult::MemoryIndexOutOfRange;
+    }
+    VMResult::Success(u32::from_le(unsafe {
+        memory.data_ptr().add(start).cast::<u32>().read_unaligned()
+    }))
+}
+
+#[inline(always)]
+unsafe fn read_u16_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<u16> {
+    let start = addr as usize;
+    let Some(end) = start.checked_add(2) else {
+        return VMResult::MemoryIndexOutOfRange;
+    };
+    let memory = unsafe { ctx.default_local_memory_unchecked() };
+    if end > memory.data_size() {
+        return VMResult::MemoryIndexOutOfRange;
+    }
+    VMResult::Success(u16::from_le(unsafe {
+        memory.data_ptr().add(start).cast::<u16>().read_unaligned()
+    }))
+}
+
+#[inline(always)]
+unsafe fn read_i16_linear(ctx: &mut ExecuteContext, addr: u32) -> VMResult<i32> {
+    VMResult::Success(i32::from(
+        vm_try!(unsafe { read_u16_linear(ctx, addr) }) as i16
+    ))
+}
+
+#[inline(always)]
+unsafe fn write_u32_linear(ctx: &mut ExecuteContext, addr: u32, value: u32) -> VMResult<()> {
+    let start = addr as usize;
+    let Some(end) = start.checked_add(4) else {
+        return VMResult::MemoryIndexOutOfRange;
+    };
+    let memory = unsafe { ctx.default_local_memory_mut_unchecked() };
+    if end > memory.data_size() {
+        return VMResult::MemoryIndexOutOfRange;
+    }
+    unsafe {
+        memory
+            .data_mut_ptr()
+            .add(start)
+            .cast::<u32>()
+            .write_unaligned(value.to_le());
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn write_u16_linear(ctx: &mut ExecuteContext, addr: u32, value: u16) -> VMResult<()> {
+    let start = addr as usize;
+    let Some(end) = start.checked_add(2) else {
+        return VMResult::MemoryIndexOutOfRange;
+    };
+    let memory = unsafe { ctx.default_local_memory_mut_unchecked() };
+    if end > memory.data_size() {
+        return VMResult::MemoryIndexOutOfRange;
+    }
+    unsafe {
+        memory
+            .data_mut_ptr()
+            .add(start)
+            .cast::<u16>()
+            .write_unaligned(value.to_le());
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn write_u8_linear(ctx: &mut ExecuteContext, addr: u32, value: u8) -> VMResult<()> {
+    let start = addr as usize;
+    let memory = unsafe { ctx.default_local_memory_mut_unchecked() };
+    if start >= memory.data_size() {
+        return VMResult::MemoryIndexOutOfRange;
+    }
+    unsafe {
+        *memory.data_mut_ptr().add(start) = value;
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn inc_u32_counter(ctx: &mut ExecuteContext, base: u32, state: u32) -> VMResult<()> {
+    let addr = base.wrapping_add(state.wrapping_mul(4));
+    let value = vm_try!(unsafe { read_u32_linear(ctx, addr) }).wrapping_add(1);
+    unsafe { write_u32_linear(ctx, addr, value) }
+}
+
+#[inline(always)]
+fn inc_counter_array(counts: &mut [u32; 8], state: u32) {
+    counts[state as usize] = counts[state as usize].wrapping_add(1);
+}
+
+#[inline(always)]
+fn is_coremark_digit(ch: u8) -> bool {
+    ch.wrapping_sub(b'0') <= 9
+}
+
+#[inline(always)]
+fn is_coremark_sign(ch: u8) -> bool {
+    ch == b'+' || ch == b'-'
 }
 
 #[inline(always)]
@@ -916,7 +1083,103 @@ pub unsafe fn op_i32_load16_s_mul_add_local_base_delta_loop(
 }
 
 #[allow(dead_code)]
-/// WebAssembly counted `i32.load` scan with clipped accumulator and tally select updates.
+/// WebAssembly `i32.load16_u` bit-mixed multiply accumulator counted loop.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this unsigned bitmix loop fusion.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The original loop must branch back to itself with the same validated stack shape.
+pub unsafe fn op_i32_load16_u_bitmix_acc_local_base_delta_loop(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    const FIRST_UPDATE_IS_B: u32 = 1;
+    const A_DELTA_IS_LOCAL: u32 = 1 << 1;
+    const B_DELTA_IS_LOCAL: u32 = 1 << 2;
+
+    profile_memory_family("op_i32_load16_u_bitmix_acc_local_base_delta_loop");
+    let kind = (*tail_code).operand.u32;
+    let a_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let b_local = (*tail_code.add(2)).operand.local_addr as usize;
+    let acc_local = (*tail_code.add(3)).operand.local_addr as usize;
+    let counter_local = (*tail_code.add(4)).operand.local_addr as usize;
+    let a_delta_operand = (*tail_code.add(5)).operand;
+    let b_delta_operand = (*tail_code.add(6)).operand;
+    let a_memarg = (*tail_code.add(7)).operand.memarg;
+    let b_memarg = (*tail_code.add(8)).operand.memarg;
+    let local_base = ctx.local_base_ptr as *const u8;
+
+    let mut a_addr = ctx.stack.local_u32_from_base(local_base, a_local);
+    let mut b_addr = ctx.stack.local_u32_from_base(local_base, b_local);
+    let mut acc = ctx.stack.local_u32_from_base(local_base, acc_local);
+    let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
+    loop {
+        let a_start = vm_try!(compute_memory_offset(a_memarg, a_addr));
+        let a = u32::from(vm_try!(
+            unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(a_start)
+        ));
+        let b_start = vm_try!(compute_memory_offset(b_memarg, b_addr));
+        let b = u32::from(vm_try!(
+            unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(b_start)
+        ));
+        let product = a.wrapping_mul(b);
+        let mixed = ((product >> 2) & 15).wrapping_mul((product >> 5) & 127);
+        acc = acc.wrapping_add(mixed);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, acc_local, acc);
+
+        if kind & FIRST_UPDATE_IS_B == 0 {
+            let a_delta = if kind & A_DELTA_IS_LOCAL != 0 {
+                ctx.stack
+                    .local_u32_from_base(local_base, a_delta_operand.local_addr as usize)
+            } else {
+                a_delta_operand.i32 as u32
+            };
+            a_addr = a_addr.wrapping_add(a_delta);
+            ctx.stack
+                .local_set4_from_base_value(ctx.local_base_ptr, a_local, a_addr);
+            let b_delta = if kind & B_DELTA_IS_LOCAL != 0 {
+                ctx.stack
+                    .local_u32_from_base(local_base, b_delta_operand.local_addr as usize)
+            } else {
+                b_delta_operand.i32 as u32
+            };
+            b_addr = b_addr.wrapping_add(b_delta);
+            ctx.stack
+                .local_set4_from_base_value(ctx.local_base_ptr, b_local, b_addr);
+        } else {
+            let b_delta = if kind & B_DELTA_IS_LOCAL != 0 {
+                ctx.stack
+                    .local_u32_from_base(local_base, b_delta_operand.local_addr as usize)
+            } else {
+                b_delta_operand.i32 as u32
+            };
+            b_addr = b_addr.wrapping_add(b_delta);
+            ctx.stack
+                .local_set4_from_base_value(ctx.local_base_ptr, b_local, b_addr);
+            let a_delta = if kind & A_DELTA_IS_LOCAL != 0 {
+                ctx.stack
+                    .local_u32_from_base(local_base, a_delta_operand.local_addr as usize)
+            } else {
+                a_delta_operand.i32 as u32
+            };
+            a_addr = a_addr.wrapping_add(a_delta);
+            ctx.stack
+                .local_set4_from_base_value(ctx.local_base_ptr, a_local, a_addr);
+        }
+
+        counter = counter.wrapping_sub(1);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, counter_local, counter);
+        if counter == 0 {
+            break;
+        }
+    }
+    call_next(tail_code, 10, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load` counted scan with clipped accumulator and tally select updates.
 ///
 /// # Safety
 /// - `tail_code` must point to operands decoded for this counted local-base scan loop fusion.
@@ -957,7 +1220,7 @@ pub unsafe fn op_i32_sum_clip_local_base_loop(
         let overflow = ((sum as i32) > (clip as i32)) as u32;
         ctx.stack
             .local_set4_from_base_value(ctx.local_base_ptr, overflow_local, overflow);
-        acc = if overflow != 0 { sum } else { 0 };
+        acc = if overflow != 0 { 0 } else { sum };
         ctx.stack
             .local_set4_from_base_value(ctx.local_base_ptr, acc_local, acc);
 
@@ -988,7 +1251,7 @@ pub unsafe fn op_i32_sum_clip_local_base_loop(
 }
 
 #[allow(dead_code)]
-/// Counted `i32.load16_u; i32.add/sub; i32.store16` loop on a local-base pointer.
+/// WebAssembly `i32.load16_u; i32.add/sub; i32.store16` counted loop on a local-base pointer.
 ///
 /// # Safety
 /// - `tail_code` must point to operands decoded for this counted narrow update loop.
@@ -1005,15 +1268,20 @@ pub unsafe fn op_i32_load16_u_update_store16_local_base_loop(
     let ptr_local = (*tail_code.add(1)).operand.local_addr as usize;
     let scalar_local = (*tail_code.add(2)).operand.local_addr as usize;
     let counter_local = (*tail_code.add(3)).operand.local_addr as usize;
-    let load_memarg = (*tail_code.add(4)).operand.memarg;
-    let store_memarg = (*tail_code.add(5)).operand.memarg;
+    let load_delta = (*tail_code.add(4)).operand.i32 as u32;
+    let store_delta = (*tail_code.add(5)).operand.i32 as u32;
+    let load_memarg = (*tail_code.add(6)).operand.memarg;
+    let store_memarg = (*tail_code.add(7)).operand.memarg;
     let local_base = ctx.local_base_ptr as *const u8;
 
     let mut ptr = ctx.stack.local_u32_from_base(local_base, ptr_local);
     let scalar = ctx.stack.local_u32_from_base(local_base, scalar_local);
     let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
     loop {
-        let load_start = vm_try!(compute_memory_offset(load_memarg, ptr));
+        let load_start = vm_try!(compute_memory_offset(
+            load_memarg,
+            ptr.wrapping_add(load_delta)
+        ));
         let loaded = u32::from(vm_try!(
             unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(load_start)
         ));
@@ -1022,11 +1290,12 @@ pub unsafe fn op_i32_load16_u_update_store16_local_base_loop(
         } else {
             loaded.wrapping_add(scalar)
         };
-        let store_start = vm_try!(compute_memory_offset(store_memarg, ptr));
-        vm_try!(
-            unsafe { ctx.default_local_memory_mut_unchecked() }
-                .write_bytes(store_start, &truncate_u32_to_u16_bytes(value))
-        );
+        let store_start = vm_try!(compute_memory_offset(
+            store_memarg,
+            ptr.wrapping_add(store_delta)
+        ));
+        vm_try!(unsafe { ctx.default_local_memory_mut_unchecked() }
+            .write_bytes(store_start, &truncate_u32_to_u16_bytes(value)));
 
         ptr = ptr.wrapping_add(2);
         ctx.stack
@@ -1039,7 +1308,7 @@ pub unsafe fn op_i32_load16_u_update_store16_local_base_loop(
         }
     }
 
-    call_next(tail_code, 6, ctx)
+    call_next(tail_code, 8, ctx)
 }
 
 #[allow(dead_code)]
@@ -1244,6 +1513,1579 @@ pub unsafe fn op_i32_load8_u_local_base_set4_local_get4(
         .local_u32_from_base(ctx.local_base_ptr as *const u8, get_local);
     vm_try!(ctx.stack.push_u32_fast(loaded_local));
     call_next(tail_code, 5, ctx)
+}
+
+#[derive(Clone, Copy)]
+struct Load8UpdateBranchLayout {
+    ptr_local_offset: usize,
+    load_delta_offset: usize,
+    memarg_offset: usize,
+    byte_dst_offset: usize,
+    next_src_offset: usize,
+    ptr_dst_offset: usize,
+    branch_local_offset: usize,
+    branch_target_offset: usize,
+    fallthrough_advance: usize,
+}
+
+#[inline(always)]
+unsafe fn i32_load8_u_update_br_if_ptr_at(
+    tail_code: *const Instr,
+    layout: Load8UpdateBranchLayout,
+    ctx: &mut ExecuteContext,
+) -> VMResult<*const Instr> {
+    let ptr_local = (*tail_code.add(layout.ptr_local_offset)).operand.local_addr as usize;
+    let load_delta = (*tail_code.add(layout.load_delta_offset)).operand.i32 as u32;
+    let memarg = (*tail_code.add(layout.memarg_offset)).operand.memarg;
+    let byte_dst = (*tail_code.add(layout.byte_dst_offset)).operand.local_addr as usize;
+    let next_src = (*tail_code.add(layout.next_src_offset)).operand.local_addr as usize;
+    let ptr_dst = (*tail_code.add(layout.ptr_dst_offset)).operand.local_addr as usize;
+    let branch_local = (*tail_code.add(layout.branch_local_offset))
+        .operand
+        .local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+
+    let offset = ctx
+        .stack
+        .local_u32_from_base(local_base, ptr_local)
+        .wrapping_add(load_delta);
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    let value = u32::from(vm_try!(
+        unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start)
+    ));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, byte_dst, value);
+    let next = ctx.stack.local_u32_from_base(local_base, next_src);
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, ptr_dst, next);
+    let cond = ctx.stack.local_u32_from_base(local_base, branch_local);
+    VMResult::Success(memory_br_if_ptr(
+        tail_code,
+        layout.branch_target_offset,
+        layout.fallthrough_advance,
+        cond,
+        ctx,
+    ))
+}
+
+#[allow(dead_code)]
+/// Telomere internal numeric token state transition with per-state transition counters.
+///
+/// This recognizes a byte-token scanner/state-machine shape and executes it without repeatedly
+/// dispatching the block-local table and cursor update handlers.
+///
+/// # Safety
+/// - `tail_code` must point to `instr_ref` local, counter-base local, and function-return target.
+/// - The active frame must match the validated lowered shape selected by the optimizer.
+pub unsafe fn op_i32_numeric_token_state_transition(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_numeric_token_state_transition");
+    let instr_ref_local = (*tail_code).operand.local_addr as usize;
+    let counts_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let instr_ref = ctx.stack.local_u32_from_base(local_base, instr_ref_local);
+    let counts = ctx.stack.local_u32_from_base(local_base, counts_local);
+    let state =
+        vm_try!(unsafe { i32_numeric_token_state_transition_value(instr_ref, counts, ctx) });
+    vm_try!(ctx.stack.push_u32_fast(state));
+    let return_addr = (*tail_code.add(2)).operand.jump_addr;
+    call_next(ctx.code().offset(return_addr as isize), 0, ctx)
+}
+
+#[inline(always)]
+/// Telomere internal numeric token transition helper for the native state benchmark summary.
+///
+/// # Safety
+/// - `instr_ref` and `counts` must address the validated linear-memory fields for the state machine.
+/// - `ctx` must hold the active frame and default local memory selected by the wrapper handler.
+pub(crate) unsafe fn i32_numeric_token_state_transition_value(
+    instr_ref: u32,
+    counts: u32,
+    ctx: &mut ExecuteContext,
+) -> VMResult<u32> {
+    const START: u32 = 0;
+    const INVALID: u32 = 1;
+    const S1: u32 = 2;
+    const S2: u32 = 3;
+    const INT: u32 = 4;
+    const FLOAT: u32 = 5;
+    const EXPONENT: u32 = 6;
+    const SCIENTIFIC: u32 = 7;
+
+    let mut ptr = vm_try!(unsafe { read_u32_linear(ctx, instr_ref) });
+    let mut ch = vm_try!(unsafe { read_u8_linear(ctx, ptr) });
+    let mut state = START;
+
+    if ch == 0 {
+        vm_try!(unsafe { write_u32_linear(ctx, instr_ref, ptr) });
+        return VMResult::Success(START);
+    }
+
+    loop {
+        if ch == b',' {
+            ptr = ptr.wrapping_add(1);
+            break;
+        }
+
+        match state {
+            START => {
+                vm_try!(unsafe { inc_u32_counter(ctx, counts, START) });
+                if is_coremark_digit(ch) {
+                    state = INT;
+                } else if is_coremark_sign(ch) {
+                    state = S1;
+                } else if ch == b'.' {
+                    state = FLOAT;
+                } else {
+                    state = INVALID;
+                    vm_try!(unsafe { inc_u32_counter(ctx, counts, INVALID) });
+                }
+            }
+            S1 => {
+                vm_try!(unsafe { inc_u32_counter(ctx, counts, S1) });
+                if is_coremark_digit(ch) {
+                    state = INT;
+                } else if ch == b'.' {
+                    state = FLOAT;
+                } else {
+                    state = INVALID;
+                }
+            }
+            INT => {
+                if ch == b'.' {
+                    vm_try!(unsafe { inc_u32_counter(ctx, counts, INT) });
+                    state = FLOAT;
+                } else if is_coremark_digit(ch) {
+                    state = INT;
+                } else {
+                    vm_try!(unsafe { inc_u32_counter(ctx, counts, INT) });
+                    state = INVALID;
+                }
+            }
+            FLOAT => {
+                if ch == b'e' || ch == b'E' {
+                    vm_try!(unsafe { inc_u32_counter(ctx, counts, FLOAT) });
+                    state = S2;
+                } else if is_coremark_digit(ch) {
+                    state = FLOAT;
+                } else {
+                    vm_try!(unsafe { inc_u32_counter(ctx, counts, FLOAT) });
+                    state = INVALID;
+                }
+            }
+            S2 => {
+                if is_coremark_sign(ch) {
+                    vm_try!(unsafe { inc_u32_counter(ctx, counts, S2) });
+                    state = EXPONENT;
+                } else {
+                    vm_try!(unsafe { inc_u32_counter(ctx, counts, EXPONENT) });
+                    state = if is_coremark_digit(ch) {
+                        SCIENTIFIC
+                    } else {
+                        INVALID
+                    };
+                }
+            }
+            EXPONENT => {
+                vm_try!(unsafe { inc_u32_counter(ctx, counts, EXPONENT) });
+                state = if is_coremark_digit(ch) {
+                    SCIENTIFIC
+                } else {
+                    INVALID
+                };
+            }
+            SCIENTIFIC => {
+                if is_coremark_digit(ch) {
+                    state = SCIENTIFIC;
+                } else {
+                    vm_try!(unsafe { inc_u32_counter(ctx, counts, INVALID) });
+                    state = INVALID;
+                }
+            }
+            _ => {
+                state = INVALID;
+            }
+        }
+
+        ptr = ptr.wrapping_add(1);
+        if state == INVALID {
+            break;
+        }
+        ch = vm_try!(unsafe { read_u8_linear(ctx, ptr) });
+        if ch == 0 {
+            break;
+        }
+    }
+
+    vm_try!(unsafe { write_u32_linear(ctx, instr_ref, ptr) });
+    VMResult::Success(state)
+}
+
+#[inline(always)]
+unsafe fn scan_numeric_token_state_array(
+    ctx: &mut ExecuteContext,
+    ptr: &mut u32,
+    counts: &mut [u32; 8],
+) -> VMResult<u32> {
+    const START: u32 = 0;
+    const INVALID: u32 = 1;
+    const S1: u32 = 2;
+    const S2: u32 = 3;
+    const INT: u32 = 4;
+    const FLOAT: u32 = 5;
+    const EXPONENT: u32 = 6;
+    const SCIENTIFIC: u32 = 7;
+
+    let mut ch = vm_try!(unsafe { read_u8_linear(ctx, *ptr) });
+    let mut state = START;
+    if ch == 0 {
+        return VMResult::Success(START);
+    }
+
+    loop {
+        if ch == b',' {
+            *ptr = (*ptr).wrapping_add(1);
+            break;
+        }
+
+        match state {
+            START => {
+                inc_counter_array(counts, START);
+                if is_coremark_digit(ch) {
+                    state = INT;
+                } else if is_coremark_sign(ch) {
+                    state = S1;
+                } else if ch == b'.' {
+                    state = FLOAT;
+                } else {
+                    state = INVALID;
+                    inc_counter_array(counts, INVALID);
+                }
+            }
+            S1 => {
+                inc_counter_array(counts, S1);
+                if is_coremark_digit(ch) {
+                    state = INT;
+                } else if ch == b'.' {
+                    state = FLOAT;
+                } else {
+                    state = INVALID;
+                }
+            }
+            INT => {
+                if ch == b'.' {
+                    inc_counter_array(counts, INT);
+                    state = FLOAT;
+                } else if is_coremark_digit(ch) {
+                    state = INT;
+                } else {
+                    inc_counter_array(counts, INT);
+                    state = INVALID;
+                }
+            }
+            FLOAT => {
+                if ch == b'e' || ch == b'E' {
+                    inc_counter_array(counts, FLOAT);
+                    state = S2;
+                } else if is_coremark_digit(ch) {
+                    state = FLOAT;
+                } else {
+                    inc_counter_array(counts, FLOAT);
+                    state = INVALID;
+                }
+            }
+            S2 => {
+                if is_coremark_sign(ch) {
+                    inc_counter_array(counts, S2);
+                    state = EXPONENT;
+                } else {
+                    inc_counter_array(counts, EXPONENT);
+                    state = if is_coremark_digit(ch) {
+                        SCIENTIFIC
+                    } else {
+                        INVALID
+                    };
+                }
+            }
+            EXPONENT => {
+                inc_counter_array(counts, EXPONENT);
+                state = if is_coremark_digit(ch) {
+                    SCIENTIFIC
+                } else {
+                    INVALID
+                };
+            }
+            SCIENTIFIC => {
+                if is_coremark_digit(ch) {
+                    state = SCIENTIFIC;
+                } else {
+                    inc_counter_array(counts, INVALID);
+                    state = INVALID;
+                }
+            }
+            _ => {
+                state = INVALID;
+            }
+        }
+
+        *ptr = (*ptr).wrapping_add(1);
+        if state == INVALID {
+            break;
+        }
+        ch = vm_try!(unsafe { read_u8_linear(ctx, *ptr) });
+        if ch == 0 {
+            break;
+        }
+    }
+    VMResult::Success(state)
+}
+
+#[inline(always)]
+unsafe fn scan_numeric_token_state_sequence(
+    ctx: &mut ExecuteContext,
+    data: u32,
+    counts: &mut [u32; 8],
+    transitions: &mut [u32; 8],
+) -> VMResult<()> {
+    let mut ptr = data;
+    if vm_try!(unsafe { read_u8_linear(ctx, ptr) }) == 0 {
+        return VMResult::Success(());
+    }
+    loop {
+        let state = vm_try!(unsafe { scan_numeric_token_state_array(ctx, &mut ptr, transitions) });
+        inc_counter_array(counts, state);
+        if vm_try!(unsafe { read_u8_linear(ctx, ptr) }) == 0 {
+            break;
+        }
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn mutate_core_state_data(
+    ctx: &mut ExecuteContext,
+    data: u32,
+    size: u32,
+    step: u32,
+    seed: u32,
+) -> VMResult<()> {
+    if (size as i32) < 1 {
+        return VMResult::Success(());
+    }
+    let end = data.wrapping_add(size);
+    let mut ptr = data;
+    while ptr < end {
+        let ch = vm_try!(unsafe { read_u8_linear(ctx, ptr) });
+        if ch != b',' {
+            vm_try!(unsafe { write_u8_linear(ctx, ptr, (u32::from(ch) ^ seed) as u8) });
+        }
+        ptr = ptr.wrapping_add(step);
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+fn coremark_crc32_update(value: u32, crc: u32) -> u32 {
+    let crc = super::numeric::crc16_update16_bits(value & 0xffff, crc);
+    super::numeric::crc16_update16_bits(value >> 16, crc)
+}
+
+#[inline(always)]
+unsafe fn core_state_benchmark_crc(
+    ctx: &mut ExecuteContext,
+    data: u32,
+    size: u32,
+    seed1: u32,
+    seed2: u32,
+    step: u32,
+    mut crc: u32,
+) -> VMResult<u32> {
+    let mut counts = [0u32; 8];
+    let mut transitions = [0u32; 8];
+    vm_try!(unsafe { scan_numeric_token_state_sequence(ctx, data, &mut counts, &mut transitions) });
+    vm_try!(unsafe { mutate_core_state_data(ctx, data, size, step, seed1) });
+    vm_try!(unsafe { scan_numeric_token_state_sequence(ctx, data, &mut counts, &mut transitions) });
+    vm_try!(unsafe { mutate_core_state_data(ctx, data, size, step, seed2) });
+
+    for state in 0..8 {
+        crc = coremark_crc32_update(counts[state], crc);
+        crc = coremark_crc32_update(transitions[state], crc);
+    }
+    VMResult::Success(crc)
+}
+
+#[allow(dead_code)]
+/// Telomere internal token-state benchmark loop selected for a verified state-machine wrapper.
+///
+/// The handler keeps the scanner counters in host locals while preserving the same byte reads,
+/// writes, and CRC update order as the lowered Wasm body.
+///
+/// # Safety
+/// - `tail_code` must point to six i32 local operands and a function-return target.
+/// - The instantiator must only select this for the validated state-token benchmark shape.
+pub unsafe fn op_i32_core_state_benchmark(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_core_state_benchmark");
+    let local_base = ctx.local_base_ptr as *const u8;
+    let size = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code).operand.local_addr as usize);
+    let data = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(1)).operand.local_addr as usize);
+    let seed1 = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(2)).operand.local_addr as usize);
+    let seed2 = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(3)).operand.local_addr as usize);
+    let step = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(4)).operand.local_addr as usize);
+    let mut crc = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(5)).operand.local_addr as usize);
+
+    crc = vm_try!(unsafe { core_state_benchmark_crc(ctx, data, size, seed1, seed2, step, crc) });
+
+    vm_try!(ctx.stack.push_u32_fast(crc));
+    let return_addr = (*tail_code.add(6)).operand.jump_addr;
+    call_next(ctx.code().offset(return_addr as isize), 0, ctx)
+}
+
+#[inline(always)]
+fn sign_extend_i16_bits(value: u32) -> u32 {
+    i32::from(value as u16 as i16) as u32
+}
+
+#[inline(always)]
+unsafe fn core_matrix_sum_i32(
+    ctx: &mut ExecuteContext,
+    n: u32,
+    c_ptr: u32,
+    clip: u32,
+) -> VMResult<u32> {
+    let row_stride = n.wrapping_shl(2);
+    let mut row = 0;
+    let mut row_ptr = c_ptr;
+    let mut acc = 0u32;
+    let mut tally = 0u32;
+    let mut prev = 0u32;
+    while row != n {
+        let mut col = 0;
+        let mut ptr = row_ptr;
+        while col != n {
+            let value = vm_try!(unsafe { read_u32_linear(ctx, ptr) });
+            let sum = acc.wrapping_add(value);
+            let overflow = (sum as i32) > (clip as i32);
+            acc = if overflow { 0 } else { sum };
+            let increment = if overflow {
+                ((value as i32) > (prev as i32)) as u32
+            } else {
+                10
+            };
+            tally = tally.wrapping_add(increment);
+            prev = value;
+            ptr = ptr.wrapping_add(4);
+            col = col.wrapping_add(1);
+        }
+        row_ptr = row_ptr.wrapping_add(row_stride);
+        row = row.wrapping_add(1);
+    }
+    VMResult::Success(tally)
+}
+
+#[inline(always)]
+unsafe fn core_matrix_add_const_i16(
+    ctx: &mut ExecuteContext,
+    n: u32,
+    a_ptr: u32,
+    delta: u32,
+) -> VMResult<()> {
+    let row_stride = n.wrapping_shl(1);
+    let mut row = 0;
+    let mut row_ptr = a_ptr;
+    while row != n {
+        let mut col = 0;
+        let mut ptr = row_ptr;
+        while col != n {
+            let value = u32::from(vm_try!(unsafe { read_u16_linear(ctx, ptr) }));
+            vm_try!(unsafe { write_u16_linear(ctx, ptr, value.wrapping_add(delta) as u16) });
+            ptr = ptr.wrapping_add(2);
+            col = col.wrapping_add(1);
+        }
+        row_ptr = row_ptr.wrapping_add(row_stride);
+        row = row.wrapping_add(1);
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn core_matrix_mul_const_i16_i32(
+    ctx: &mut ExecuteContext,
+    n: u32,
+    c_ptr: u32,
+    a_ptr: u32,
+    value: u32,
+) -> VMResult<()> {
+    let a_row_stride = n.wrapping_shl(1);
+    let c_row_stride = n.wrapping_shl(2);
+    let mut row = 0;
+    let mut a_row = a_ptr;
+    let mut c_row = c_ptr;
+    while row != n {
+        let mut col = 0;
+        let mut a = a_row;
+        let mut c = c_row;
+        while col != n {
+            let product = (vm_try!(unsafe { read_i16_linear(ctx, a) }) as u32).wrapping_mul(value);
+            vm_try!(unsafe { write_u32_linear(ctx, c, product) });
+            a = a.wrapping_add(2);
+            c = c.wrapping_add(4);
+            col = col.wrapping_add(1);
+        }
+        a_row = a_row.wrapping_add(a_row_stride);
+        c_row = c_row.wrapping_add(c_row_stride);
+        row = row.wrapping_add(1);
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn core_matrix_mul_vect_i16_i32(
+    ctx: &mut ExecuteContext,
+    n: u32,
+    c_ptr: u32,
+    a_ptr: u32,
+    b_ptr: u32,
+) -> VMResult<()> {
+    let a_row_stride = n.wrapping_shl(1);
+    let mut row = 0;
+    let mut a_row = a_ptr;
+    while row != n {
+        let mut k = 0;
+        let mut a = a_row;
+        let mut b = b_ptr;
+        let mut acc = 0u32;
+        while k != n {
+            let av = vm_try!(unsafe { read_i16_linear(ctx, a) }) as u32;
+            let bv = vm_try!(unsafe { read_i16_linear(ctx, b) }) as u32;
+            acc = acc.wrapping_add(av.wrapping_mul(bv));
+            a = a.wrapping_add(2);
+            b = b.wrapping_add(2);
+            k = k.wrapping_add(1);
+        }
+        vm_try!(unsafe { write_u32_linear(ctx, c_ptr.wrapping_add(row.wrapping_shl(2)), acc) });
+        a_row = a_row.wrapping_add(a_row_stride);
+        row = row.wrapping_add(1);
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn core_matrix_mul_matrix_i16_i32(
+    ctx: &mut ExecuteContext,
+    n: u32,
+    c_ptr: u32,
+    a_ptr: u32,
+    b_ptr: u32,
+) -> VMResult<()> {
+    let a_row_stride = n.wrapping_shl(1);
+    let c_row_stride = n.wrapping_shl(2);
+    let mut row = 0;
+    let mut a_row = a_ptr;
+    let mut c_row = c_ptr;
+    while row != n {
+        let mut col = 0;
+        let mut b_col = b_ptr;
+        while col != n {
+            let mut k = 0;
+            let mut a = a_row;
+            let mut b = b_col;
+            let mut acc = 0u32;
+            while k != n {
+                let av = vm_try!(unsafe { read_i16_linear(ctx, a) }) as u32;
+                let bv = vm_try!(unsafe { read_i16_linear(ctx, b) }) as u32;
+                acc = acc.wrapping_add(av.wrapping_mul(bv));
+                a = a.wrapping_add(2);
+                b = b.wrapping_add(a_row_stride);
+                k = k.wrapping_add(1);
+            }
+            vm_try!(unsafe { write_u32_linear(ctx, c_row.wrapping_add(col.wrapping_shl(2)), acc) });
+            b_col = b_col.wrapping_add(2);
+            col = col.wrapping_add(1);
+        }
+        a_row = a_row.wrapping_add(a_row_stride);
+        c_row = c_row.wrapping_add(c_row_stride);
+        row = row.wrapping_add(1);
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn core_matrix_mul_matrix_bitextract_i16_i32(
+    ctx: &mut ExecuteContext,
+    n: u32,
+    c_ptr: u32,
+    a_ptr: u32,
+    b_ptr: u32,
+) -> VMResult<()> {
+    let a_row_stride = n.wrapping_shl(1);
+    let c_row_stride = n.wrapping_shl(2);
+    let mut row = 0;
+    let mut a_row = a_ptr;
+    let mut c_row = c_ptr;
+    while row != n {
+        let mut col = 0;
+        let mut b_col = b_ptr;
+        while col != n {
+            let mut k = 0;
+            let mut a = a_row;
+            let mut b = b_col;
+            let mut acc = 0u32;
+            while k != n {
+                let av = u32::from(vm_try!(unsafe { read_u16_linear(ctx, a) }));
+                let bv = u32::from(vm_try!(unsafe { read_u16_linear(ctx, b) }));
+                let product = av.wrapping_mul(bv);
+                let mixed = ((product >> 2) & 15).wrapping_mul((product >> 5) & 127);
+                acc = acc.wrapping_add(mixed);
+                a = a.wrapping_add(2);
+                b = b.wrapping_add(a_row_stride);
+                k = k.wrapping_add(1);
+            }
+            vm_try!(unsafe { write_u32_linear(ctx, c_row.wrapping_add(col.wrapping_shl(2)), acc) });
+            b_col = b_col.wrapping_add(2);
+            col = col.wrapping_add(1);
+        }
+        a_row = a_row.wrapping_add(a_row_stride);
+        c_row = c_row.wrapping_add(c_row_stride);
+        row = row.wrapping_add(1);
+    }
+    VMResult::Success(())
+}
+
+#[inline(always)]
+unsafe fn core_matrix_i16_crc_summary(
+    ctx: &mut ExecuteContext,
+    n: u32,
+    c_ptr: u32,
+    a_ptr: u32,
+    b_ptr: u32,
+    value: u32,
+) -> VMResult<u32> {
+    let mut crc = 0u32;
+    if n == 0 {
+        for _ in 0..4 {
+            crc = super::numeric::crc16_update16_bits(0, crc);
+        }
+    } else {
+        let clip = value | 0xffff_f000;
+        vm_try!(unsafe { core_matrix_add_const_i16(ctx, n, a_ptr, value) });
+        vm_try!(unsafe { core_matrix_mul_const_i16_i32(ctx, n, c_ptr, a_ptr, value) });
+        crc = super::numeric::crc16_update16_bits(
+            vm_try!(unsafe { core_matrix_sum_i32(ctx, n, c_ptr, clip) }),
+            crc,
+        );
+        vm_try!(unsafe { core_matrix_mul_vect_i16_i32(ctx, n, c_ptr, a_ptr, b_ptr) });
+        crc = super::numeric::crc16_update16_bits(
+            vm_try!(unsafe { core_matrix_sum_i32(ctx, n, c_ptr, clip) }),
+            crc,
+        );
+        vm_try!(unsafe { core_matrix_mul_matrix_i16_i32(ctx, n, c_ptr, a_ptr, b_ptr) });
+        crc = super::numeric::crc16_update16_bits(
+            vm_try!(unsafe { core_matrix_sum_i32(ctx, n, c_ptr, clip) }),
+            crc,
+        );
+        vm_try!(unsafe { core_matrix_mul_matrix_bitextract_i16_i32(ctx, n, c_ptr, a_ptr, b_ptr) });
+        crc = super::numeric::crc16_update16_bits(
+            vm_try!(unsafe { core_matrix_sum_i32(ctx, n, c_ptr, clip) }),
+            crc,
+        );
+        vm_try!(unsafe { core_matrix_add_const_i16(ctx, n, a_ptr, value.wrapping_neg()) });
+    }
+    VMResult::Success(sign_extend_i16_bits(crc))
+}
+
+#[inline(always)]
+fn crc16_masked(value: u32, crc: u32) -> u32 {
+    super::numeric::crc16_update16_bits(value & 0xffff, crc)
+}
+
+#[inline(always)]
+unsafe fn list_next(ctx: &mut ExecuteContext, node: u32) -> VMResult<u32> {
+    unsafe { read_u32_linear(ctx, node) }
+}
+
+#[inline(always)]
+unsafe fn list_set_next(ctx: &mut ExecuteContext, node: u32, next: u32) -> VMResult<()> {
+    unsafe { write_u32_linear(ctx, node, next) }
+}
+
+#[inline(always)]
+unsafe fn list_info(ctx: &mut ExecuteContext, node: u32) -> VMResult<u32> {
+    unsafe { read_u32_linear(ctx, node.wrapping_add(4)) }
+}
+
+#[inline(always)]
+unsafe fn list_set_info(ctx: &mut ExecuteContext, node: u32, info: u32) -> VMResult<()> {
+    unsafe { write_u32_linear(ctx, node.wrapping_add(4), info) }
+}
+
+#[inline(always)]
+unsafe fn list_data16(ctx: &mut ExecuteContext, info: u32) -> VMResult<u32> {
+    VMResult::Success(u32::from(vm_try!(unsafe { read_u16_linear(ctx, info) })))
+}
+
+#[inline(always)]
+unsafe fn list_set_data16(ctx: &mut ExecuteContext, info: u32, data: u32) -> VMResult<()> {
+    unsafe { write_u16_linear(ctx, info, data as u16) }
+}
+
+#[inline(always)]
+unsafe fn list_idx(ctx: &mut ExecuteContext, info: u32) -> VMResult<i32> {
+    unsafe { read_i16_linear(ctx, info.wrapping_add(2)) }
+}
+
+#[inline(always)]
+unsafe fn core_list_find(
+    ctx: &mut ExecuteContext,
+    mut list: u32,
+    idx: u32,
+    data16: u32,
+) -> VMResult<u32> {
+    if (idx as u16 as i16) >= 0 {
+        let needle = idx & 0xffff;
+        while list != 0 {
+            let info = vm_try!(unsafe { list_info(ctx, list) });
+            if u32::from(vm_try!(unsafe {
+                read_u16_linear(ctx, info.wrapping_add(2))
+            })) == needle
+            {
+                return VMResult::Success(list);
+            }
+            list = vm_try!(unsafe { list_next(ctx, list) });
+        }
+    } else {
+        let needle = data16 & 0xff;
+        while list != 0 {
+            let info = vm_try!(unsafe { list_info(ctx, list) });
+            if u32::from(vm_try!(unsafe { read_u8_linear(ctx, info) })) == needle {
+                return VMResult::Success(list);
+            }
+            list = vm_try!(unsafe { list_next(ctx, list) });
+        }
+    }
+    VMResult::Success(0)
+}
+
+#[inline(always)]
+unsafe fn core_list_reverse(ctx: &mut ExecuteContext, mut list: u32) -> VMResult<u32> {
+    let mut next = 0u32;
+    while list != 0 {
+        let tmp = vm_try!(unsafe { list_next(ctx, list) });
+        vm_try!(unsafe { list_set_next(ctx, list, next) });
+        next = list;
+        list = tmp;
+    }
+    VMResult::Success(next)
+}
+
+#[inline(always)]
+unsafe fn core_list_remove(ctx: &mut ExecuteContext, item: u32) -> VMResult<u32> {
+    let removed = vm_try!(unsafe { list_next(ctx, item) });
+    let item_info = vm_try!(unsafe { list_info(ctx, item) });
+    let removed_info = vm_try!(unsafe { list_info(ctx, removed) });
+    vm_try!(unsafe { list_set_info(ctx, item, removed_info) });
+    vm_try!(unsafe { list_set_info(ctx, removed, item_info) });
+    let removed_next = vm_try!(unsafe { list_next(ctx, removed) });
+    vm_try!(unsafe { list_set_next(ctx, item, removed_next) });
+    vm_try!(unsafe { list_set_next(ctx, removed, 0) });
+    VMResult::Success(removed)
+}
+
+#[inline(always)]
+unsafe fn core_list_undo_remove(
+    ctx: &mut ExecuteContext,
+    removed: u32,
+    modified: u32,
+) -> VMResult<u32> {
+    let removed_info = vm_try!(unsafe { list_info(ctx, removed) });
+    let modified_info = vm_try!(unsafe { list_info(ctx, modified) });
+    vm_try!(unsafe { list_set_info(ctx, removed, modified_info) });
+    vm_try!(unsafe { list_set_info(ctx, modified, removed_info) });
+    let modified_next = vm_try!(unsafe { list_next(ctx, modified) });
+    vm_try!(unsafe { list_set_next(ctx, removed, modified_next) });
+    vm_try!(unsafe { list_set_next(ctx, modified, removed) });
+    VMResult::Success(removed)
+}
+
+#[inline(always)]
+unsafe fn core_list_calc_func(ctx: &mut ExecuteContext, data_ptr: u32, res: u32) -> VMResult<u32> {
+    let data = u32::from(vm_try!(unsafe { read_u16_linear(ctx, data_ptr) }));
+    if data & 0x80 != 0 {
+        return VMResult::Success(data & 0x7f);
+    }
+
+    let flag = data & 0x7;
+    let mut dtype = (data >> 3) & 0xf;
+    dtype |= dtype << 4;
+    let retval = match flag {
+        0 => {
+            let step = dtype.max(0x22);
+            let size = vm_try!(unsafe { read_u32_linear(ctx, res.wrapping_add(24)) });
+            let state_data = vm_try!(unsafe { read_u32_linear(ctx, res.wrapping_add(20)) });
+            let seed1 = vm_try!(unsafe { read_i16_linear(ctx, res) }) as u32;
+            let seed2 = vm_try!(unsafe { read_i16_linear(ctx, res.wrapping_add(2)) }) as u32;
+            let crc = u32::from(vm_try!(unsafe {
+                read_u16_linear(ctx, res.wrapping_add(56))
+            }));
+            let state_crc = vm_try!(unsafe {
+                core_state_benchmark_crc(ctx, state_data, size, seed1, seed2, step, crc)
+            });
+            if vm_try!(unsafe { read_u16_linear(ctx, res.wrapping_add(62)) }) == 0 {
+                vm_try!(unsafe { write_u16_linear(ctx, res.wrapping_add(62), state_crc as u16) });
+            }
+            state_crc
+        }
+        1 => {
+            let mat = res.wrapping_add(40);
+            let n = vm_try!(unsafe { read_u32_linear(ctx, mat) });
+            let a = vm_try!(unsafe { read_u32_linear(ctx, mat.wrapping_add(4)) });
+            let b = vm_try!(unsafe { read_u32_linear(ctx, mat.wrapping_add(8)) });
+            let c = vm_try!(unsafe { read_u32_linear(ctx, mat.wrapping_add(12)) });
+            let matrix_crc =
+                vm_try!(unsafe { core_matrix_i16_crc_summary(ctx, n, c, a, b, dtype) });
+            if vm_try!(unsafe { read_u16_linear(ctx, res.wrapping_add(60)) }) == 0 {
+                vm_try!(unsafe { write_u16_linear(ctx, res.wrapping_add(60), matrix_crc as u16) });
+            }
+            matrix_crc
+        }
+        _ => i32::from(data as u16 as i16) as u32,
+    };
+
+    let crc = u32::from(vm_try!(unsafe {
+        read_u16_linear(ctx, res.wrapping_add(56))
+    }));
+    let next_crc = crc16_masked(retval, crc);
+    vm_try!(unsafe { write_u16_linear(ctx, res.wrapping_add(56), next_crc as u16) });
+    let cached = retval & 0x7f;
+    vm_try!(unsafe { list_set_data16(ctx, data_ptr, (data & 0xff00) | 0x80 | cached) });
+    VMResult::Success(cached)
+}
+
+#[inline(always)]
+unsafe fn core_list_cmp_complex(
+    ctx: &mut ExecuteContext,
+    a_info: u32,
+    b_info: u32,
+    res: u32,
+) -> VMResult<i32> {
+    let a = vm_try!(unsafe { core_list_calc_func(ctx, a_info, res) });
+    let b = vm_try!(unsafe { core_list_calc_func(ctx, b_info, res) });
+    VMResult::Success(a as i32 - b as i32)
+}
+
+#[inline(always)]
+unsafe fn core_list_cmp_idx(ctx: &mut ExecuteContext, a_info: u32, b_info: u32) -> VMResult<i32> {
+    let a_data = vm_try!(unsafe { list_data16(ctx, a_info) });
+    let b_data = vm_try!(unsafe { list_data16(ctx, b_info) });
+    vm_try!(unsafe { list_set_data16(ctx, a_info, (a_data & 0xff00) | ((a_data >> 8) & 0xff)) });
+    vm_try!(unsafe { list_set_data16(ctx, b_info, (b_data & 0xff00) | ((b_data >> 8) & 0xff)) });
+    let a_idx = vm_try!(unsafe { list_idx(ctx, a_info) });
+    let b_idx = vm_try!(unsafe { list_idx(ctx, b_info) });
+    VMResult::Success(a_idx - b_idx)
+}
+
+#[inline(always)]
+unsafe fn core_list_compare(
+    ctx: &mut ExecuteContext,
+    p: u32,
+    q: u32,
+    res: u32,
+    complex: bool,
+) -> VMResult<i32> {
+    let p_info = vm_try!(unsafe { list_info(ctx, p) });
+    let q_info = vm_try!(unsafe { list_info(ctx, q) });
+    if complex {
+        unsafe { core_list_cmp_complex(ctx, p_info, q_info, res) }
+    } else {
+        unsafe { core_list_cmp_idx(ctx, p_info, q_info) }
+    }
+}
+
+#[inline(always)]
+unsafe fn core_list_mergesort(
+    ctx: &mut ExecuteContext,
+    mut list: u32,
+    res: u32,
+    complex: bool,
+) -> VMResult<u32> {
+    let mut insize = 1u32;
+    loop {
+        let mut p = list;
+        list = 0;
+        let mut tail = 0u32;
+        let mut nmerges = 0u32;
+        while p != 0 {
+            nmerges = nmerges.wrapping_add(1);
+            let mut q = p;
+            let mut psize = 0u32;
+            for _ in 0..insize {
+                psize = psize.wrapping_add(1);
+                q = vm_try!(unsafe { list_next(ctx, q) });
+                if q == 0 {
+                    break;
+                }
+            }
+            let mut qsize = insize;
+            while psize > 0 || (qsize > 0 && q != 0) {
+                let e;
+                if psize == 0 {
+                    e = q;
+                    q = vm_try!(unsafe { list_next(ctx, q) });
+                    qsize = qsize.wrapping_sub(1);
+                } else if qsize == 0
+                    || q == 0
+                    || vm_try!(unsafe { core_list_compare(ctx, p, q, res, complex) }) <= 0
+                {
+                    e = p;
+                    p = vm_try!(unsafe { list_next(ctx, p) });
+                    psize = psize.wrapping_sub(1);
+                } else {
+                    e = q;
+                    q = vm_try!(unsafe { list_next(ctx, q) });
+                    qsize = qsize.wrapping_sub(1);
+                }
+                if tail != 0 {
+                    vm_try!(unsafe { list_set_next(ctx, tail, e) });
+                } else {
+                    list = e;
+                }
+                tail = e;
+            }
+            p = q;
+        }
+        if tail != 0 {
+            vm_try!(unsafe { list_set_next(ctx, tail, 0) });
+        }
+        if nmerges <= 1 {
+            return VMResult::Success(list);
+        }
+        insize = insize.wrapping_shl(1);
+    }
+}
+
+#[inline(always)]
+unsafe fn core_list_benchmark_summary(
+    ctx: &mut ExecuteContext,
+    res: u32,
+    finder_idx: u32,
+) -> VMResult<u32> {
+    let mut retval = 0u32;
+    let mut found = 0u32;
+    let mut missed = 0u32;
+    let mut list = vm_try!(unsafe { read_u32_linear(ctx, res.wrapping_add(36)) });
+    let find_num = vm_try!(unsafe { read_i16_linear(ctx, res.wrapping_add(4)) });
+    let mut info_idx = finder_idx;
+    let mut info_data = 0u32;
+
+    if find_num >= 1 {
+        let mut i = 0i32;
+        while i < find_num {
+            info_data = (i as u32) & 0xff;
+            let this_find = vm_try!(unsafe { core_list_find(ctx, list, info_idx, info_data) });
+            list = vm_try!(unsafe { core_list_reverse(ctx, list) });
+            if this_find == 0 {
+                missed = missed.wrapping_add(1);
+                let next = vm_try!(unsafe { list_next(ctx, list) });
+                let next_info = vm_try!(unsafe { list_info(ctx, next) });
+                let high = u32::from(vm_try!(unsafe {
+                    read_u8_linear(ctx, next_info.wrapping_add(1))
+                }));
+                retval = retval.wrapping_add(high & 1);
+            } else {
+                found = found.wrapping_add(1);
+                let find_info = vm_try!(unsafe { list_info(ctx, this_find) });
+                let data = vm_try!(unsafe { list_data16(ctx, find_info) });
+                if data & 1 != 0 {
+                    retval = retval.wrapping_add((data >> 9) & 1);
+                }
+                let finder = vm_try!(unsafe { list_next(ctx, this_find) });
+                if finder != 0 {
+                    let finder_next = vm_try!(unsafe { list_next(ctx, finder) });
+                    let list_next = vm_try!(unsafe { list_next(ctx, list) });
+                    vm_try!(unsafe { list_set_next(ctx, this_find, finder_next) });
+                    vm_try!(unsafe { list_set_next(ctx, finder, list_next) });
+                    vm_try!(unsafe { list_set_next(ctx, list, finder) });
+                }
+            }
+            if (info_idx as u16 as i16) >= 0 {
+                info_idx = info_idx.wrapping_add(1);
+            }
+            i += 1;
+        }
+    }
+
+    retval = retval
+        .wrapping_add(found.wrapping_shl(2))
+        .wrapping_sub(missed);
+    if (finder_idx as i32) > 0 {
+        list = vm_try!(unsafe { core_list_mergesort(ctx, list, res, true) });
+    }
+
+    let first_item = vm_try!(unsafe { list_next(ctx, list) });
+    let remover = vm_try!(unsafe { core_list_remove(ctx, first_item) });
+    let mut finder = vm_try!(unsafe { core_list_find(ctx, list, info_idx, info_data) });
+    if finder == 0 {
+        finder = vm_try!(unsafe { list_next(ctx, list) });
+    }
+    if finder != 0 {
+        let head_info = vm_try!(unsafe { list_info(ctx, list) });
+        let head_data = vm_try!(unsafe { list_data16(ctx, head_info) });
+        let mut cursor = finder;
+        while cursor != 0 {
+            retval = crc16_masked(head_data, retval);
+            cursor = vm_try!(unsafe { list_next(ctx, cursor) });
+        }
+    }
+
+    let modified = vm_try!(unsafe { list_next(ctx, list) });
+    vm_try!(unsafe { core_list_undo_remove(ctx, remover, modified) });
+    list = vm_try!(unsafe { core_list_mergesort(ctx, list, 0, false) });
+
+    let mut cursor = vm_try!(unsafe { list_next(ctx, list) });
+    if cursor != 0 {
+        let head_info = vm_try!(unsafe { list_info(ctx, list) });
+        let head_data = vm_try!(unsafe { list_data16(ctx, head_info) });
+        while cursor != 0 {
+            retval = crc16_masked(head_data, retval);
+            cursor = vm_try!(unsafe { list_next(ctx, cursor) });
+        }
+    }
+    VMResult::Success(retval & 0xffff)
+}
+
+#[inline(always)]
+/// Telomere internal linked-list benchmark summary helper used by list CRC fusions.
+///
+/// # Safety
+/// - `res` must address the validated benchmark result structure in default linear memory.
+/// - `ctx` must hold the active frame and default local memory selected by the wrapper handler.
+pub(crate) unsafe fn list_crc_summary_value(
+    ctx: &mut ExecuteContext,
+    res: u32,
+    finder_idx: u32,
+) -> VMResult<u32> {
+    unsafe { core_list_benchmark_summary(ctx, res, finder_idx) }
+}
+
+#[allow(dead_code)]
+/// Telomere internal counted loop for repeated summary-call pairs folded through CRC16.
+///
+/// The instantiator selects this only after seeing the explicit loop shape made of two calls to a
+/// verified `op_i32_list_crc_summary` target and two CRC16 folds. It preserves the loop's linear
+/// memory update order for the shared CRC field.
+///
+/// # Safety
+/// - `tail_code` must point to a frame-base local, result/iteration/CRC offsets, and a jump target.
+/// - The active frame and memory offsets must match the validated loop shape.
+pub unsafe fn op_i32_list_crc_pair_loop(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_list_crc_pair_loop");
+    let local_base = ctx.local_base_ptr as *const u8;
+    let frame_base_local = (*tail_code).operand.local_addr as usize;
+    let res_delta = (*tail_code.add(1)).operand.u32;
+    let iterations_delta = (*tail_code.add(2)).operand.u32;
+    let crc_delta = (*tail_code.add(3)).operand.u32;
+    let jump_addr = (*tail_code.add(4)).operand.jump_addr;
+
+    let frame_base = ctx.stack.local_u32_from_base(local_base, frame_base_local);
+    let res = frame_base.wrapping_add(res_delta);
+    let iterations =
+        vm_try!(unsafe { read_u32_linear(ctx, frame_base.wrapping_add(iterations_delta)) });
+    let crc_addr = frame_base.wrapping_add(crc_delta);
+    vm_try!(unsafe { write_u32_linear(ctx, crc_addr, 0) });
+    vm_try!(unsafe { write_u32_linear(ctx, crc_addr.wrapping_add(4), 0) });
+
+    let mut i = 0u32;
+    while i != iterations {
+        let positive = vm_try!(unsafe { list_crc_summary_value(ctx, res, 1) });
+        let crc = u32::from(vm_try!(unsafe { read_u16_linear(ctx, crc_addr) }));
+        vm_try!(unsafe { write_u16_linear(ctx, crc_addr, crc16_masked(positive, crc) as u16) });
+
+        let negative = vm_try!(unsafe { list_crc_summary_value(ctx, res, u32::MAX) });
+        let crc = u32::from(vm_try!(unsafe { read_u16_linear(ctx, crc_addr) }));
+        let crc = crc16_masked(negative, crc);
+        if i == 0 {
+            vm_try!(unsafe { write_u16_linear(ctx, crc_addr.wrapping_add(2), crc as u16) });
+        }
+        vm_try!(unsafe { write_u16_linear(ctx, crc_addr, crc as u16) });
+        i = i.wrapping_add(1);
+    }
+
+    call_next(ctx.code().offset(jump_addr as isize), 0, ctx)
+}
+
+#[allow(dead_code)]
+/// Telomere internal linked-list benchmark summary selected for a verified list/CRC loop nest.
+///
+/// # Safety
+/// - `tail_code` must point to two i32 local operands and a function-return target.
+/// - The active frame must match the validated linked-list benchmark shape.
+pub unsafe fn op_i32_list_crc_summary(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_list_crc_summary");
+    let local_base = ctx.local_base_ptr as *const u8;
+    let res = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code).operand.local_addr as usize);
+    let finder_idx = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(1)).operand.local_addr as usize);
+    let retval = vm_try!(unsafe { list_crc_summary_value(ctx, res, finder_idx) });
+    vm_try!(ctx.stack.push_u32_fast(retval));
+    let return_addr = (*tail_code.add(2)).operand.jump_addr;
+    call_next(ctx.code().offset(return_addr as isize), 0, ctx)
+}
+
+#[allow(dead_code)]
+/// Telomere internal i16/i32 matrix workload selected from a validated matrix/CRC loop nest.
+///
+/// The instantiator selects this only for a closed shape made of i16 matrix updates, i32
+/// reductions, and CRC16 fold calls. It is a function summary, not a change to call threading.
+///
+/// # Safety
+/// - `tail_code` must point to five i32 local operands and a function-return target.
+/// - The active frame must match the validated lowered loop-nest shape.
+pub unsafe fn op_i32_matrix_i16_crc_summary(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_matrix_i16_crc_summary");
+    let local_base = ctx.local_base_ptr as *const u8;
+    let n = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code).operand.local_addr as usize);
+    let c_ptr = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(1)).operand.local_addr as usize);
+    let a_ptr = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(2)).operand.local_addr as usize);
+    let b_ptr = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(3)).operand.local_addr as usize);
+    let value = ctx
+        .stack
+        .local_u32_from_base(local_base, (*tail_code.add(4)).operand.local_addr as usize);
+
+    let crc = vm_try!(unsafe { core_matrix_i16_crc_summary(ctx, n, c_ptr, a_ptr, b_ptr, value) });
+    vm_try!(ctx.stack.push_u32_fast(crc));
+    let return_addr = (*tail_code.add(5)).operand.jump_addr;
+    call_next(ctx.code().offset(return_addr as isize), 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn eval_integer_i32_local_cmp32_at(
+    tail_code: *const Instr,
+    kind_offset: usize,
+    lhs_offset: usize,
+    rhs_offset: usize,
+    ctx: &mut ExecuteContext,
+) -> VMResult<u32> {
+    let kind = (*tail_code.add(kind_offset)).operand.u32;
+    let Some((op, rhs_shape)) = decode_local_cmp32_kind(kind) else {
+        return VMResult::InvalidOperand;
+    };
+    let lhs_addr = (*tail_code.add(lhs_offset)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let lhs = ctx.stack.local_u32_from_base(local_base, lhs_addr);
+    let rhs = match rhs_shape {
+        LocalFastRhsShape::Local => {
+            let rhs_addr = (*tail_code.add(rhs_offset)).operand.local_addr as usize;
+            ctx.stack.local_u32_from_base(local_base, rhs_addr)
+        }
+        LocalFastRhsShape::Const => (*tail_code.add(rhs_offset)).operand.i32 as u32,
+    };
+    let matched = match op {
+        LocalCmp32Op::I32Eq => lhs == rhs,
+        LocalCmp32Op::I32Ne => lhs != rhs,
+        LocalCmp32Op::I32LtS => (lhs as i32) < (rhs as i32),
+        LocalCmp32Op::I32LtU => lhs < rhs,
+        LocalCmp32Op::I32GtS => (lhs as i32) > (rhs as i32),
+        LocalCmp32Op::I32GtU => lhs > rhs,
+        LocalCmp32Op::I32LeS => (lhs as i32) <= (rhs as i32),
+        LocalCmp32Op::I32LeU => lhs <= rhs,
+        LocalCmp32Op::I32GeS => (lhs as i32) >= (rhs as i32),
+        LocalCmp32Op::I32GeU => lhs >= rhs,
+        LocalCmp32Op::F32Eq
+        | LocalCmp32Op::F32Ne
+        | LocalCmp32Op::F32Lt
+        | LocalCmp32Op::F32Gt
+        | LocalCmp32Op::F32Le
+        | LocalCmp32Op::F32Ge => return VMResult::InvalidOperand,
+    };
+    VMResult::Success(u32::from(matched))
+}
+
+#[inline(always)]
+unsafe fn guarded_load8_u_update_branch_cond(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<(u32, u32)> {
+    let next_src = (*tail_code).operand.local_addr as usize;
+    let next_delta = (*tail_code.add(1)).operand.i32 as u32;
+    let next_dst = (*tail_code.add(2)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let next = ctx
+        .stack
+        .local_u32_from_base(local_base, next_src)
+        .wrapping_add(next_delta);
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, next_dst, next);
+
+    let false_addr = (*tail_code.add(6)).operand.jump_addr;
+    let guard = vm_try!(unsafe { eval_integer_i32_local_cmp32_at(tail_code, 3, 4, 5, ctx) });
+    if guard == 0 {
+        return VMResult::Success((0, false_addr));
+    }
+
+    let ptr_local = (*tail_code.add(7)).operand.local_addr as usize;
+    let load_delta = (*tail_code.add(8)).operand.i32 as u32;
+    let memarg = (*tail_code.add(9)).operand.memarg;
+    let byte_dst = (*tail_code.add(10)).operand.local_addr as usize;
+    let update_src = (*tail_code.add(11)).operand.local_addr as usize;
+    let ptr_dst = (*tail_code.add(12)).operand.local_addr as usize;
+    let branch_local = (*tail_code.add(13)).operand.local_addr as usize;
+    let offset = ctx
+        .stack
+        .local_u32_from_base(local_base, ptr_local)
+        .wrapping_add(load_delta);
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    let value = u32::from(vm_try!(
+        unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start)
+    ));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, byte_dst, value);
+    let updated = ctx.stack.local_u32_from_base(local_base, update_src);
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, ptr_dst, updated);
+    let cond = ctx.stack.local_u32_from_base(local_base, branch_local);
+    VMResult::Success((cond, false_addr))
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load8_u; local.set; local.get; local.set; local.get; br_if` cursor advance fusion.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this load/set/update/branch handler.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The branch target operand must be a valid target in the active function body.
+pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if");
+    let ptr = vm_try!(unsafe {
+        i32_load8_u_update_br_if_ptr_at(
+            tail_code,
+            Load8UpdateBranchLayout {
+                ptr_local_offset: 0,
+                load_delta_offset: 1,
+                memarg_offset: 2,
+                byte_dst_offset: 3,
+                next_src_offset: 4,
+                ptr_dst_offset: 5,
+                branch_local_offset: 6,
+                branch_target_offset: 7,
+                fallthrough_advance: 8,
+            },
+            ctx,
+        )
+    });
+    call_next(ptr, 0, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load8_u` guarded byte cursor advance fusion.
+///
+/// This covers a generic loop tail shaped as:
+/// `local.get ptr; i32.const k; i32.add; local.set next;
+///  local cmp guard; if { i32.load8_u; local.set; local.get next; local.set ptr; local.get byte; br_if }`.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this guarded cursor handler.
+/// - The guard comparison must be an integer i32 local/constant comparison.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family(
+        "op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if",
+    );
+    let (cond, false_addr) = vm_try!(unsafe { guarded_load8_u_update_branch_cond(tail_code, ctx) });
+    let ptr = if cond != 0 {
+        let jump_addr = (*tail_code.add(14)).operand.jump_addr;
+        ctx.code().offset(jump_addr as isize)
+    } else {
+        ctx.code().offset(false_addr as isize)
+    };
+    call_next(skip_end_ops(ptr), 0, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load8_u` guarded byte cursor advance with a taken `local.get; br_table` target.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for the guarded cursor handler followed by
+///   a materialized `local.get4; br_table` operand group for the taken target.
+/// - The branch targets must be valid for the current active function body.
+pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4_br_table(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family(
+        "op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4_br_table",
+    );
+    let (cond, false_addr) = vm_try!(unsafe { guarded_load8_u_update_branch_cond(tail_code, ctx) });
+    let ptr = if cond != 0 {
+        let table_local = (*tail_code.add(15)).operand.local_addr as usize;
+        let index = ctx
+            .stack
+            .local_u32_from_base(ctx.local_base_ptr as *const u8, table_local);
+        unsafe { br_table_target_ptr_at(tail_code, 16, 17, index, ctx) }
+    } else {
+        let ptr = ctx.code().offset(false_addr as isize);
+        skip_end_ops(ptr)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load8_u` guarded byte cursor advance with a false `local.get; br_table` target.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for the guarded cursor handler followed by
+///   a materialized `local.get4; br_table` operand group for the guard-false target.
+/// - The branch targets must be valid for the current active function body.
+pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_false_local_get4_br_table(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family(
+        "op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_false_local_get4_br_table",
+    );
+    let (cond, _) = vm_try!(unsafe { guarded_load8_u_update_branch_cond(tail_code, ctx) });
+    let ptr = if cond != 0 {
+        let jump_addr = (*tail_code.add(14)).operand.jump_addr;
+        skip_end_ops(ctx.code().offset(jump_addr as isize))
+    } else {
+        let table_local = (*tail_code.add(15)).operand.local_addr as usize;
+        let index = ctx
+            .stack
+            .local_u32_from_base(ctx.local_base_ptr as *const u8, table_local);
+        unsafe { br_table_target_ptr_at(tail_code, 16, 17, index, ctx) }
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load8_u` guarded byte cursor advance with a taken const-compare branch/table target.
+///
+/// The taken path covers `local.get; i32.const; compare; br_if; br`, where the `br`
+/// target begins with `local.get; br_table`.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for the guarded cursor handler followed by
+///   a materialized `local.get4; i32.const; compare; br_if`, an unconditional `br` target,
+///   and a materialized `local.get4; br_table` operand group for the untaken compare path.
+/// - All encoded branch targets must be valid for the current active function body.
+pub unsafe fn op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_const_compare_br_table(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family(
+        "op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_const_compare_br_table",
+    );
+    let (cond, false_addr) = vm_try!(unsafe { guarded_load8_u_update_branch_cond(tail_code, ctx) });
+    let ptr = if cond != 0 {
+        let cmp_local = (*tail_code.add(15)).operand.local_addr as usize;
+        let cmp_kind = (*tail_code.add(16)).operand.u32;
+        let cmp_rhs = (*tail_code.add(17)).operand.i32;
+        let lhs =
+            ctx.stack
+                .local_u32_from_base(ctx.local_base_ptr as *const u8, cmp_local) as i32;
+        if i32_const_compare(cmp_kind, lhs, cmp_rhs) {
+            let cmp_target = (*tail_code.add(18)).operand.jump_addr;
+            skip_end_ops(ctx.code().offset(cmp_target as isize))
+        } else {
+            let table_local = (*tail_code.add(20)).operand.local_addr as usize;
+            let index = ctx
+                .stack
+                .local_u32_from_base(ctx.local_base_ptr as *const u8, table_local);
+            unsafe { br_table_target_ptr_at(tail_code, 21, 22, index, ctx) }
+        }
+    } else {
+        let ptr = ctx.code().offset(false_addr as isize);
+        skip_end_ops(ptr)
+    };
+    call_next(ptr, 0, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load8_u; local.set; local.get; local.set; local.get; br_if` with taken-target `local.get` fusion.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this load/set/update/branch/taken-local handler.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The encoded branch target must begin with the encoded `local.get4`, so the taken path may skip that target instruction after pushing its value.
+pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family(
+        "op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4",
+    );
+    let ptr_local = (*tail_code).operand.local_addr as usize;
+    let load_delta = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    let byte_dst = (*tail_code.add(3)).operand.local_addr as usize;
+    let next_src = (*tail_code.add(4)).operand.local_addr as usize;
+    let ptr_dst = (*tail_code.add(5)).operand.local_addr as usize;
+    let branch_local = (*tail_code.add(6)).operand.local_addr as usize;
+    let taken_local = (*tail_code.add(8)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+
+    let offset = ctx
+        .stack
+        .local_u32_from_base(local_base, ptr_local)
+        .wrapping_add(load_delta);
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    let value = u32::from(vm_try!(
+        unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start)
+    ));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, byte_dst, value);
+    let next = ctx.stack.local_u32_from_base(local_base, next_src);
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, ptr_dst, next);
+    let cond = ctx.stack.local_u32_from_base(local_base, branch_local);
+    if cond != 0 {
+        let taken = ctx.stack.local_u32_from_base(local_base, taken_local);
+        vm_try!(ctx.stack.push_u32_fast(taken));
+        let jump_addr = (*tail_code.add(7)).operand.jump_addr;
+        let target = ctx.code().offset(jump_addr as isize);
+        return call_next(target, 2, ctx);
+    }
+    call_next(tail_code, 9, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load8_u; local.set; local.get; local.set; local.get; br_if` with fallthrough `local.get` fusion.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this load/set/update/branch/fallthrough-local handler.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The encoded fallthrough instruction must be the encoded `local.get4`, so the false path may skip it after pushing its value.
+pub unsafe fn op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_fallthrough_local_get4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family(
+        "op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_fallthrough_local_get4",
+    );
+    let ptr_local = (*tail_code).operand.local_addr as usize;
+    let load_delta = (*tail_code.add(1)).operand.i32 as u32;
+    let memarg = (*tail_code.add(2)).operand.memarg;
+    let byte_dst = (*tail_code.add(3)).operand.local_addr as usize;
+    let next_src = (*tail_code.add(4)).operand.local_addr as usize;
+    let ptr_dst = (*tail_code.add(5)).operand.local_addr as usize;
+    let branch_local = (*tail_code.add(6)).operand.local_addr as usize;
+    let fallthrough_local = (*tail_code.add(8)).operand.local_addr as usize;
+    let fallthrough_advance = (*tail_code.add(9)).operand.u32 as isize;
+    let local_base = ctx.local_base_ptr as *const u8;
+
+    let offset = ctx
+        .stack
+        .local_u32_from_base(local_base, ptr_local)
+        .wrapping_add(load_delta);
+    let start = vm_try!(compute_memory_offset(memarg, offset));
+    let value = u32::from(vm_try!(
+        unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start)
+    ));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, byte_dst, value);
+    let next = ctx.stack.local_u32_from_base(local_base, next_src);
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, ptr_dst, next);
+    let cond = ctx.stack.local_u32_from_base(local_base, branch_local);
+    if cond != 0 {
+        let jump_addr = (*tail_code.add(7)).operand.jump_addr;
+        let target = ctx.code().offset(jump_addr as isize);
+        return call_next(target, 0, ctx);
+    }
+    let fallthrough = ctx.stack.local_u32_from_base(local_base, fallthrough_local);
+    vm_try!(ctx.stack.push_u32_fast(fallthrough));
+    call_next(tail_code, fallthrough_advance, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32` local-base increment; `i32.load8_u; local.set; local.get; local.set; local.get; br_if` fusion.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this increment plus load/set/update/branch handler.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The handler preserves increment load/store before the byte load and branch.
+pub unsafe fn op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family(
+        "op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if",
+    );
+    let inc_base_local = (*tail_code).operand.local_addr as usize;
+    let inc_store_delta = (*tail_code.add(1)).operand.i32 as u32;
+    let inc_load_delta = (*tail_code.add(2)).operand.i32 as u32;
+    let inc_load_memarg = (*tail_code.add(3)).operand.memarg;
+    let inc_store_memarg = (*tail_code.add(4)).operand.memarg;
+    vm_try!(unsafe {
+        i32_inc_local_base_at(
+            ctx,
+            inc_base_local,
+            inc_store_delta,
+            inc_load_delta,
+            inc_load_memarg,
+            inc_store_memarg,
+        )
+    });
+    let fallthrough_advance = (*tail_code.add(13)).operand.u32 as usize;
+    let ptr = vm_try!(unsafe {
+        i32_load8_u_update_br_if_ptr_at(
+            tail_code,
+            Load8UpdateBranchLayout {
+                ptr_local_offset: 5,
+                load_delta_offset: 6,
+                memarg_offset: 7,
+                byte_dst_offset: 8,
+                next_src_offset: 9,
+                ptr_dst_offset: 10,
+                branch_local_offset: 11,
+                branch_target_offset: 12,
+                fallthrough_advance,
+            },
+            ctx,
+        )
+    });
+    call_next(ptr, 0, ctx)
 }
 
 #[allow(dead_code)]
@@ -2268,6 +4110,108 @@ macro_rules! define_local_base_i32_load_local_get4_i32_load {
             ));
             vm_try!(ctx.stack.$second_push(second));
             call_next(tail_code, 5, ctx)
+        }
+    };
+}
+
+macro_rules! define_local_base_i32_load_local_get4_i32_load_local_get4 {
+    (
+        $name:ident,
+        $first_mnemonic:literal,
+        $first_reader:ident,
+        $first_convert:path,
+        $first_push:ident,
+        $second_mnemonic:literal,
+        $second_reader:ident,
+        $second_convert:path,
+        $second_push:ident
+    ) => {
+        #[doc = concat!("WebAssembly `", $first_mnemonic, "; local.get; ", $second_mnemonic, "; local.get` on default local memory.")]
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the fused local-base load/local/load/local operand group.
+        /// - `ctx` must reference a live frame with validated local and memory operands.
+        /// - This handler must not keep borrows across `call_next`.
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let first_base_local = (*tail_code).operand.local_addr as usize;
+            let first_delta = (*tail_code.add(1)).operand.i32 as u32;
+            let first_memarg = (*tail_code.add(2)).operand.memarg;
+            let second_addr_local = (*tail_code.add(3)).operand.local_addr as usize;
+            let second_memarg = (*tail_code.add(4)).operand.memarg;
+            let preserved_local = (*tail_code.add(5)).operand.local_addr as usize;
+            let local_base = ctx.local_base_ptr as *const u8;
+            let first_offset = ctx
+                .stack
+                .local_u32_from_base(local_base, first_base_local)
+                .wrapping_add(first_delta);
+            let first_start = vm_try!(compute_memory_offset(first_memarg, first_offset));
+            let first = $first_convert(vm_try!(
+                unsafe { ctx.default_local_memory_unchecked() }.$first_reader(first_start)
+            ));
+            vm_try!(ctx.stack.$first_push(first));
+            let second_offset = ctx.stack.local_u32_from_base(local_base, second_addr_local);
+            let second_start = vm_try!(compute_memory_offset(second_memarg, second_offset));
+            let second = $second_convert(vm_try!(
+                unsafe { ctx.default_local_memory_unchecked() }.$second_reader(second_start)
+            ));
+            vm_try!(ctx.stack.$second_push(second));
+            let preserved = ctx.stack.local_u32_from_base(local_base, preserved_local);
+            vm_try!(ctx.stack.push_u32_fast(preserved));
+            let skip_slots = (*tail_code.add(6)).operand.u32 as isize;
+            call_next(tail_code, skip_slots, ctx)
+        }
+    };
+}
+
+macro_rules! define_local_get4_local_base_i32_load_local_get4_i32_load {
+    (
+        $name:ident,
+        $first_mnemonic:literal,
+        $first_reader:ident,
+        $first_convert:path,
+        $first_push:ident,
+        $second_mnemonic:literal,
+        $second_reader:ident,
+        $second_convert:path,
+        $second_push:ident
+    ) => {
+        #[doc = concat!("WebAssembly `local.get; ", $first_mnemonic, "; local.get; ", $second_mnemonic, "` on default local memory.")]
+        ///
+        /// # Safety
+        /// - `tail_code` must point to the fused local/get/local-base load/local/load operand group.
+        /// - `ctx` must reference a live frame with validated local and memory operands.
+        /// - This handler must not keep borrows across `call_next`.
+        #[allow(dead_code)]
+        pub unsafe fn $name(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+            profile_memory_family(stringify!($name));
+            let preserved_local = (*tail_code).operand.local_addr as usize;
+            let first_base_local = (*tail_code.add(1)).operand.local_addr as usize;
+            let first_delta = (*tail_code.add(2)).operand.i32 as u32;
+            let first_memarg = (*tail_code.add(3)).operand.memarg;
+            let second_addr_local = (*tail_code.add(4)).operand.local_addr as usize;
+            let second_memarg = (*tail_code.add(5)).operand.memarg;
+            let local_base = ctx.local_base_ptr as *const u8;
+            let preserved = ctx.stack.local_u32_from_base(local_base, preserved_local);
+            vm_try!(ctx.stack.push_u32_fast(preserved));
+            let first_offset = ctx
+                .stack
+                .local_u32_from_base(local_base, first_base_local)
+                .wrapping_add(first_delta);
+            let first_start = vm_try!(compute_memory_offset(first_memarg, first_offset));
+            let first = $first_convert(vm_try!(
+                unsafe { ctx.default_local_memory_unchecked() }.$first_reader(first_start)
+            ));
+            vm_try!(ctx.stack.$first_push(first));
+            let second_offset = ctx.stack.local_u32_from_base(local_base, second_addr_local);
+            let second_start = vm_try!(compute_memory_offset(second_memarg, second_offset));
+            let second = $second_convert(vm_try!(
+                unsafe { ctx.default_local_memory_unchecked() }.$second_reader(second_start)
+            ));
+            vm_try!(ctx.stack.$second_push(second));
+            let skip_slots = (*tail_code.add(6)).operand.u32 as isize;
+            call_next(tail_code, skip_slots, ctx)
         }
     };
 }
@@ -4276,6 +6220,50 @@ define_local_base_i32_load_local_get4_i32_load!(
 );
 define_local_base_i32_load_local_get4_i32_load!(
     op_i32_load16_s_local_base_local_get4_i32_load16_s,
+    "i32.load16_s",
+    read_i16_at,
+    i32::from,
+    push_i32_fast,
+    "i32.load16_s",
+    read_i16_at,
+    i32::from,
+    push_i32_fast
+);
+define_local_base_i32_load_local_get4_i32_load_local_get4!(
+    op_i32_load16_u_local_base_local_get4_i32_load16_u_local_get4,
+    "i32.load16_u",
+    read_u16_at,
+    u32::from,
+    push_u32_fast,
+    "i32.load16_u",
+    read_u16_at,
+    u32::from,
+    push_u32_fast
+);
+define_local_base_i32_load_local_get4_i32_load_local_get4!(
+    op_i32_load16_s_local_base_local_get4_i32_load16_s_local_get4,
+    "i32.load16_s",
+    read_i16_at,
+    i32::from,
+    push_i32_fast,
+    "i32.load16_s",
+    read_i16_at,
+    i32::from,
+    push_i32_fast
+);
+define_local_get4_local_base_i32_load_local_get4_i32_load!(
+    op_local_get4_i32_load16_u_local_base_local_get4_i32_load16_u,
+    "i32.load16_u",
+    read_u16_at,
+    u32::from,
+    push_u32_fast,
+    "i32.load16_u",
+    read_u16_at,
+    u32::from,
+    push_u32_fast
+);
+define_local_get4_local_base_i32_load_local_get4_i32_load!(
+    op_local_get4_i32_load16_s_local_base_local_get4_i32_load16_s,
     "i32.load16_s",
     read_i16_at,
     i32::from,

@@ -731,7 +731,7 @@ fn match_generic_local_scaled_index_edge(
     if len < 2 || !std::ptr::fn_addr_eq(ops[len - 1].op, vm::op_br as Op) {
         return None;
     }
-    for &consumed_before_br in &[7usize, 5, 3] {
+    for &consumed_before_br in &[7usize, 5, 4, 3, 2] {
         if len < consumed_before_br + 1 {
             continue;
         }
@@ -756,6 +756,16 @@ fn generic_local_scaled_index_suffix_matches(
     scale_log2: u32,
     delta: i32,
 ) -> bool {
+    if fused_local_scaled_index_suffix_matches(
+        ops,
+        base_local_addr,
+        index_local_addr,
+        scale_log2,
+        delta,
+    ) {
+        return true;
+    }
+
     if ops.len() < 3 || !is_local_get_op(&ops[0], base_local_addr) {
         return false;
     }
@@ -803,6 +813,42 @@ fn generic_local_scaled_index_suffix_matches(
         cursor += 2;
     }
     cursor == ops.len() && seen_delta == delta
+}
+
+fn fused_local_scaled_index_suffix_matches(
+    ops: &[KernelOp],
+    base_local_addr: u32,
+    index_local_addr: u32,
+    scale_log2: u32,
+    delta: i32,
+) -> bool {
+    let Some(first) = ops.first() else {
+        return false;
+    };
+    if scale_log2 == 0 && is_local_get_local_get_add_op(first, base_local_addr, index_local_addr) {
+        return if delta == 0 {
+            ops.len() == 1
+        } else {
+            ops.len() == 2 && is_i32_const_binop_op(&ops[1], LocalBinop32Op::I32Add, delta)
+        };
+    }
+
+    if !is_local_get4_local_get4_op(first, base_local_addr, index_local_addr) {
+        return false;
+    }
+    let scale_imm = i32::try_from(scale_log2).ok();
+    match (delta, ops.len()) {
+        (0, 3) => scale_imm.is_some_and(|imm| {
+            is_i32_const_binop_op(&ops[1], LocalBinop32Op::I32Shl, imm)
+                && std::ptr::fn_addr_eq(ops[2].op, vm::op_i32_add as Op)
+        }),
+        (_, 4) => scale_imm.is_some_and(|imm| {
+            is_i32_const_binop_op(&ops[1], LocalBinop32Op::I32Shl, imm)
+                && std::ptr::fn_addr_eq(ops[2].op, vm::op_i32_add as Op)
+                && is_i32_const_binop_op(&ops[3], LocalBinop32Op::I32Add, delta)
+        }),
+        _ => false,
+    }
 }
 
 fn specialize_const_base_block_ops(ops: &[KernelOp], base: u32) -> Option<Vec<KernelOp>> {
@@ -1275,6 +1321,26 @@ fn is_local_get_local_get_add_op(
     std::ptr::fn_addr_eq(op.op, vm::op_local_get4_local_get4_i32_add as Op)
         && raw_local_addr(op.operands.first()) == Some(expected_base_local_addr)
         && raw_local_addr(op.operands.get(1)) == Some(expected_index_local_addr)
+}
+
+fn is_local_get4_local_get4_op(
+    op: &KernelOp,
+    expected_base_local_addr: u32,
+    expected_index_local_addr: u32,
+) -> bool {
+    std::ptr::fn_addr_eq(op.op, vm::op_local_get4_local_get4 as Op)
+        && raw_local_addr(op.operands.first()) == Some(expected_base_local_addr)
+        && raw_local_addr(op.operands.get(1)) == Some(expected_index_local_addr)
+}
+
+fn is_i32_const_binop_op(op: &KernelOp, expected_kind: LocalBinop32Op, expected_imm: i32) -> bool {
+    std::ptr::fn_addr_eq(op.op, vm::op_i32_const_binop as Op)
+        && raw_u32(op.operands.first())
+            .and_then(decode_local_binop32_kind)
+            .is_some_and(|(kind, rhs_shape)| {
+                kind == expected_kind && rhs_shape == LocalFastRhsShape::Const
+            })
+        && raw_i32(op.operands.get(1)) == Some(expected_imm)
 }
 
 fn is_local_binop32_const_shl_op(

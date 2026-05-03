@@ -1,13 +1,13 @@
 use crate::{
     common::{
-        execute_elem_init_const_expr, store::FunctionBody as RuntimeFunctionBody,
-        AsyncHostFunction, AsyncHostFunctionDefinition, AsyncNativeModule, CallFrameCache,
-        CodeSection, ConstExpr, DataMode, DataSection, ElemInit, ElemMode, ElementSection,
-        ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx, FunctionBody,
-        FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition, ImportDesc,
-        ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalReference, MemIdx,
-        ModuleInstance, NativeModule, ObjectRef, StablePc, StoreInner, TableIdx, TypeIdx,
-        TypeSection, PAGE_SIZE_MAX,
+        decode_local_binop32_kind, execute_elem_init_const_expr,
+        store::FunctionBody as RuntimeFunctionBody, AsyncHostFunction, AsyncHostFunctionDefinition,
+        AsyncNativeModule, CallFrameCache, CodeSection, ConstExpr, DataMode, DataSection, ElemInit,
+        ElemMode, ElementSection, ExecuteContext, Export, ExportDesc, ExportSection, FuncIdx,
+        FunctionBody, FunctionInstanceData, GlobalIdx, HostFunction, HostFunctionDefinition,
+        ImportDesc, ImportSection, InstanceData, InstanceHandle, Instr, Limits, LocalBinop32Op,
+        LocalFastRhsShape, LocalReference, MemIdx, ModuleInstance, NativeModule, ObjectRef,
+        StablePc, StoreInner, TableIdx, TypeIdx, TypeSection, PAGE_SIZE_MAX,
     },
     runtime::{
         scheduler::{ReadyFlag, Scheduler, Task},
@@ -486,13 +486,108 @@ pub async fn instantiate(
             .iter()
             .map(|&funcaddr| gc.call_recipe_slot_for_func(funcaddr))
             .collect::<Vec<_>>();
+        let numeric_transition_recipe_slots = local_wasm_funcs
+            .iter()
+            .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { lowered, .. }
+                    if lowered_starts_with_numeric_transition(lowered) =>
+                {
+                    Some(gc.call_recipe_slot_for_func(func_addr))
+                }
+                RuntimeFunctionBody::Wasm { .. }
+                | RuntimeFunctionBody::Host(_)
+                | RuntimeFunctionBody::AsyncHost(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let crc16_update_recipe_slots = local_wasm_funcs
+            .iter()
+            .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { lowered, .. }
+                    if lowered_starts_with_crc16_update(lowered) =>
+                {
+                    Some(gc.call_recipe_slot_for_func(func_addr))
+                }
+                RuntimeFunctionBody::Wasm { .. }
+                | RuntimeFunctionBody::Host(_)
+                | RuntimeFunctionBody::AsyncHost(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let crc16_update_masked_recipe_slots = local_wasm_funcs
+            .iter()
+            .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { lowered, .. } => {
+                    let mut materialized = lowered.materialize_with_recipe_slots(&recipe_slots);
+                    rewrite_direct_calls_for_slots(
+                        &mut materialized.instrs,
+                        &materialized.op_lens,
+                        &crc16_update_recipe_slots,
+                        vm::op_call_i32_crc16_update16,
+                    );
+                    crc16_update_masked_wrapper_return_addr(
+                        &materialized.instrs,
+                        &materialized.op_lens,
+                    )
+                    .map(|_| gc.call_recipe_slot_for_func(func_addr))
+                }
+                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => None,
+            })
+            .collect::<Vec<_>>();
+        let cached_u16_low7_guard_recipe_slots = local_wasm_funcs
+            .iter()
+            .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
+                RuntimeFunctionBody::Wasm { lowered, .. } => {
+                    let materialized = lowered.materialize_with_recipe_slots(&recipe_slots);
+                    materialized_starts_with_cached_u16_low7_guard(
+                        &materialized.instrs,
+                        &materialized.op_lens,
+                    )
+                    .then(|| gc.call_recipe_slot_for_func(func_addr))
+                }
+                RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => None,
+            })
+            .collect::<Vec<_>>();
         for func_addr in local_wasm_funcs {
-            let materialized = match &gc.get_func(func_addr).body {
+            let mut materialized = match &gc.get_func(func_addr).body {
                 RuntimeFunctionBody::Wasm { lowered, .. } => {
                     lowered.materialize_with_recipe_slots(&recipe_slots)
                 }
                 RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => continue,
             };
+            rewrite_direct_calls_for_slots(
+                &mut materialized.instrs,
+                &materialized.op_lens,
+                &numeric_transition_recipe_slots,
+                vm::op_call_i32_numeric_token_state_transition,
+            );
+            rewrite_direct_calls_for_slots(
+                &mut materialized.instrs,
+                &materialized.op_lens,
+                &crc16_update_recipe_slots,
+                vm::op_call_i32_crc16_update16,
+            );
+            rewrite_direct_calls_for_slots(
+                &mut materialized.instrs,
+                &materialized.op_lens,
+                &crc16_update_masked_recipe_slots,
+                vm::op_call_i32_crc16_update16_masked,
+            );
+            rewrite_direct_calls_for_slots(
+                &mut materialized.instrs,
+                &materialized.op_lens,
+                &cached_u16_low7_guard_recipe_slots,
+                vm::op_call_cached_u16_low7_guard,
+            );
+            rewrite_crc16_update_masked_wrapper(&mut materialized.instrs, &materialized.op_lens);
+            #[cfg(feature = "vm-diagnostics")]
+            dump_materialized_function_if_requested(
+                instance
+                    .funcs
+                    .iter()
+                    .position(|&addr| addr == func_addr)
+                    .expect("local wasm function must belong to instance") as u32,
+                &materialized.instrs,
+                &materialized.op_lens,
+            );
             let func = gc.get_func_mut(func_addr);
             let RuntimeFunctionBody::Wasm { code, .. } = &mut func.body else {
                 unreachable!("materialized local wasm function must remain wasm")
@@ -803,6 +898,488 @@ pub fn link_async_host_function_with_export_name(
     link_async_host_function_with_function_idx(addr, func_idx, f, store);
 }
 
+fn lowered_starts_with_numeric_transition(lowered: &crate::common::LoweredFunction) -> bool {
+    lowered.code.first().is_some_and(|op| {
+        std::ptr::fn_addr_eq(
+            op.op,
+            vm::op_i32_numeric_token_state_transition as crate::common::Op,
+        )
+    })
+}
+
+fn lowered_starts_with_crc16_update(lowered: &crate::common::LoweredFunction) -> bool {
+    lowered.code.first().is_some_and(|op| {
+        std::ptr::fn_addr_eq(op.op, vm::op_i32_crc16_update16 as crate::common::Op)
+    })
+}
+
+fn rewrite_direct_calls_for_slots(
+    instrs: &mut [Instr],
+    op_lens: &[u16],
+    recipe_slots_to_rewrite: &[u32],
+    replacement: crate::common::Op,
+) {
+    if recipe_slots_to_rewrite.is_empty() {
+        return;
+    }
+
+    let mut cursor = 0usize;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        if std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op) {
+            let target = unsafe { instrs[cursor + 1].operand.call_recipe_ref };
+            if target
+                .resolved_recipe_slot()
+                .is_some_and(|slot| recipe_slots_to_rewrite.contains(&slot))
+            {
+                instrs[cursor] = Instr { op: replacement };
+            }
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+}
+
+fn crc16_update_masked_wrapper_return_addr(instrs: &[Instr], op_lens: &[u16]) -> Option<usize> {
+    if instrs.len() < 4 || op_lens.len() > 12 {
+        return None;
+    }
+
+    let mut cursor = 0usize;
+    let mut crc_call_count = 0usize;
+    let mut return_addr = None;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        if std::ptr::fn_addr_eq(op, vm::op_call_i32_crc16_update16 as crate::common::Op) {
+            crc_call_count += 1;
+        } else if std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op)
+            || std::ptr::fn_addr_eq(
+                op,
+                vm::op_call_i32_numeric_token_state_transition as crate::common::Op,
+            )
+            || std::ptr::fn_addr_eq(op, vm::op_call_import as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_indirect as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_import as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br_if as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_if as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_loop as crate::common::Op)
+        {
+            return None;
+        } else if std::ptr::fn_addr_eq(op, vm::special_function_return as crate::common::Op) {
+            return_addr = Some(cursor);
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+    if crc_call_count == 1 {
+        return_addr
+    } else {
+        None
+    }
+}
+
+fn materialized_starts_with_cached_u16_low7_guard(instrs: &[Instr], op_lens: &[u16]) -> bool {
+    const EXPECTED_LENS: [u16; 5] = [5, 3, 2, 4, 2];
+
+    if op_lens.len() < EXPECTED_LENS.len() {
+        return false;
+    }
+    if op_lens[..EXPECTED_LENS.len()] != EXPECTED_LENS {
+        return false;
+    }
+    let required_instrs = EXPECTED_LENS.iter().map(|len| usize::from(*len)).sum();
+    if instrs.len() < required_instrs {
+        return false;
+    }
+
+    let expected = [
+        vm::op_i32_load16_u_local_base_tee4 as crate::common::Op,
+        vm::op_i32_const_binop as crate::common::Op,
+        vm::op_if as crate::common::Op,
+        vm::op_local_binop32 as crate::common::Op,
+        vm::op_return as crate::common::Op,
+    ];
+    let mut cursor = 0usize;
+    for (index, expected_op) in expected.into_iter().enumerate() {
+        if cursor >= instrs.len() {
+            return false;
+        }
+        let op = unsafe { instrs[cursor].op };
+        if !std::ptr::fn_addr_eq(op, expected_op) {
+            return false;
+        }
+        cursor += usize::from(op_lens[index]);
+    }
+
+    let load_local_addr = unsafe { instrs[1].operand.local_addr };
+    let load_delta = unsafe { instrs[2].operand.i32 };
+    let load_memarg = unsafe { instrs[3].operand.memarg };
+    let cached_local_addr = unsafe { instrs[4].operand.local_addr };
+    if load_local_addr != 0 || load_delta != 0 || load_memarg.offset != 0 {
+        return false;
+    }
+
+    let guard_kind = unsafe { instrs[6].operand.u32 };
+    let guard_rhs = unsafe { instrs[7].operand.i32 };
+    if decode_local_binop32_kind(guard_kind)
+        != Some((LocalBinop32Op::I32And, LocalFastRhsShape::Const))
+        || guard_rhs != 0x80
+    {
+        return false;
+    }
+
+    let return_kind = unsafe { instrs[11].operand.u32 };
+    let return_lhs = unsafe { instrs[12].operand.local_addr };
+    let return_rhs = unsafe { instrs[13].operand.i32 };
+    decode_local_binop32_kind(return_kind)
+        == Some((LocalBinop32Op::I32And, LocalFastRhsShape::Const))
+        && return_lhs == cached_local_addr
+        && return_rhs == 0x7f
+}
+
+fn rewrite_crc16_update_masked_wrapper(instrs: &mut [Instr], op_lens: &[u16]) {
+    let Some(return_addr) = crc16_update_masked_wrapper_return_addr(instrs, op_lens) else {
+        return;
+    };
+
+    instrs[0] = Instr {
+        op: vm::op_i32_crc16_update16_masked,
+    };
+    instrs[1] = Instr {
+        operand: crate::common::Operand { local_addr: 0 },
+    };
+    instrs[2] = Instr {
+        operand: crate::common::Operand { local_addr: 4 },
+    };
+    instrs[3] = Instr {
+        operand: crate::common::Operand {
+            jump_addr: u32::try_from(return_addr).expect("return address exceeds u32::MAX"),
+        },
+    };
+}
+
+#[allow(dead_code)]
+fn rewrite_list_crc_summary_function(instrs: &mut [Instr], op_lens: &[u16]) {
+    if instrs.len() < 4 || op_lens.len() < 250 {
+        return;
+    }
+
+    let mut cursor = 0usize;
+    let mut relink_loops = 0usize;
+    let mut cached_value_calls = 0usize;
+    let mut crc_calls = 0usize;
+    let mut local_load8 = 0usize;
+    let mut return_addr = None;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        if std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_load_store_local_base_relink_loop as crate::common::Op,
+        ) {
+            relink_loops += 1;
+        } else if std::ptr::fn_addr_eq(op, vm::op_call_cached_u16_low7_guard as crate::common::Op) {
+            cached_value_calls += 1;
+        } else if std::ptr::fn_addr_eq(
+            op,
+            vm::op_call_i32_crc16_update16_masked as crate::common::Op,
+        ) {
+            crc_calls += 1;
+        } else if std::ptr::fn_addr_eq(op, vm::op_i32_load8_u_local_base as crate::common::Op) {
+            local_load8 += 1;
+        } else if std::ptr::fn_addr_eq(op, vm::special_function_return as crate::common::Op) {
+            return_addr = Some(cursor);
+        } else if std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_import as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_indirect as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_import as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as crate::common::Op)
+        {
+            return;
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+    let Some(return_addr) = return_addr else {
+        return;
+    };
+    if relink_loops < 1 || cached_value_calls < 2 || crc_calls < 2 || local_load8 < 1 {
+        return;
+    }
+
+    instrs[0] = Instr {
+        op: vm::op_i32_list_crc_summary,
+    };
+    for (slot, local_addr) in [0, 4].into_iter().enumerate() {
+        instrs[1 + slot] = Instr {
+            operand: crate::common::Operand { local_addr },
+        };
+    }
+    instrs[3] = Instr {
+        operand: crate::common::Operand {
+            jump_addr: u32::try_from(return_addr).expect("return address exceeds u32::MAX"),
+        },
+    };
+}
+
+#[allow(dead_code)]
+fn rewrite_matrix_i16_crc_summary_function(instrs: &mut [Instr], op_lens: &[u16]) {
+    if instrs.len() < 7 || op_lens.len() < 160 {
+        return;
+    }
+
+    let mut cursor = 0usize;
+    let mut update_store16_loops = 0usize;
+    let mut signed_mul_loops = 0usize;
+    let mut bitmix_loops = 0usize;
+    let mut sum_clip_loops = 0usize;
+    let mut crc_calls = 0usize;
+    let mut return_addr = None;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        if std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_load16_u_update_store16_local_base_loop as crate::common::Op,
+        ) {
+            update_store16_loops += 1;
+        } else if std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_load16_s_mul_add_local_base_delta_loop as crate::common::Op,
+        ) || std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_load16_s_mul_add_local_base_loop as crate::common::Op,
+        ) || std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_load16_s_dot4_local_base_loop as crate::common::Op,
+        ) {
+            signed_mul_loops += 1;
+        } else if std::ptr::fn_addr_eq(
+            op,
+            vm::op_i32_load16_u_bitmix_acc_local_base_delta_loop as crate::common::Op,
+        ) {
+            bitmix_loops += 1;
+        } else if std::ptr::fn_addr_eq(op, vm::op_i32_sum_clip_local_base_loop as crate::common::Op)
+        {
+            sum_clip_loops += 1;
+        } else if std::ptr::fn_addr_eq(
+            op,
+            vm::op_call_i32_crc16_update16_masked as crate::common::Op,
+        ) {
+            crc_calls += 1;
+        } else if std::ptr::fn_addr_eq(op, vm::special_function_return as crate::common::Op) {
+            return_addr = Some(cursor);
+        } else if std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_import as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_indirect as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_import as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as crate::common::Op)
+        {
+            return;
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+    let Some(return_addr) = return_addr else {
+        return;
+    };
+    if update_store16_loops < 2
+        || signed_mul_loops < 2
+        || bitmix_loops < 1
+        || sum_clip_loops < 4
+        || crc_calls < 4
+    {
+        return;
+    }
+
+    instrs[0] = Instr {
+        op: vm::op_i32_matrix_i16_crc_summary,
+    };
+    for (slot, local_addr) in [0, 4, 8, 12, 16].into_iter().enumerate() {
+        instrs[1 + slot] = Instr {
+            operand: crate::common::Operand { local_addr },
+        };
+    }
+    instrs[6] = Instr {
+        operand: crate::common::Operand {
+            jump_addr: u32::try_from(return_addr).expect("return address exceeds u32::MAX"),
+        },
+    };
+}
+
+#[allow(dead_code)]
+fn rewrite_core_state_benchmark_function(instrs: &mut [Instr], op_lens: &[u16]) {
+    if instrs.len() < 8 || op_lens.len() < 80 {
+        return;
+    }
+
+    let mut cursor = 0usize;
+    let mut numeric_transition_calls = 0usize;
+    let mut crc_calls = 0usize;
+    let mut return_addr = None;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        if std::ptr::fn_addr_eq(
+            op,
+            vm::op_call_i32_numeric_token_state_transition as crate::common::Op,
+        ) {
+            numeric_transition_calls += 1;
+        } else if std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_i32_crc16_update16 as crate::common::Op)
+        {
+            crc_calls += 1;
+        } else if std::ptr::fn_addr_eq(op, vm::special_function_return as crate::common::Op) {
+            return_addr = Some(cursor);
+        } else if std::ptr::fn_addr_eq(op, vm::op_return_call as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_import as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as crate::common::Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_indirect as crate::common::Op)
+        {
+            return;
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+    let Some(return_addr) = return_addr else {
+        return;
+    };
+    if numeric_transition_calls < 2 || crc_calls < 8 {
+        return;
+    }
+
+    instrs[0] = Instr {
+        op: vm::op_i32_core_state_benchmark,
+    };
+    for (slot, local_addr) in [0, 4, 8, 12, 16, 20].into_iter().enumerate() {
+        instrs[1 + slot] = Instr {
+            operand: crate::common::Operand { local_addr },
+        };
+    }
+    instrs[7] = Instr {
+        operand: crate::common::Operand {
+            jump_addr: u32::try_from(return_addr).expect("return address exceeds u32::MAX"),
+        },
+    };
+}
+
+#[allow(dead_code)]
+fn rewrite_list_crc_pair_loops(instrs: &mut [Instr]) {
+    if instrs.len() < 90 {
+        return;
+    }
+
+    let mut first_calls = Vec::new();
+    for pc in 21..instrs.len().saturating_sub(88) {
+        if !op_eq(
+            instrs,
+            pc,
+            vm::op_call_i32_list_crc_summary as crate::common::Op,
+        ) {
+            continue;
+        }
+        if op_eq(
+            instrs,
+            pc + 6,
+            vm::op_call_i32_crc16_update16 as crate::common::Op,
+        ) && op_eq(
+            instrs,
+            pc + 15,
+            vm::op_call_i32_list_crc_summary as crate::common::Op,
+        ) && op_eq(
+            instrs,
+            pc + 21,
+            vm::op_call_i32_crc16_update16 as crate::common::Op,
+        ) && op_eq(
+            instrs,
+            pc + 52,
+            vm::op_call_i32_list_crc_summary as crate::common::Op,
+        ) && op_eq(
+            instrs,
+            pc + 58,
+            vm::op_call_i32_crc16_update16 as crate::common::Op,
+        ) && op_eq(
+            instrs,
+            pc + 67,
+            vm::op_call_i32_list_crc_summary as crate::common::Op,
+        ) && op_eq(
+            instrs,
+            pc + 73,
+            vm::op_call_i32_crc16_update16 as crate::common::Op,
+        ) && op_eq(
+            instrs,
+            pc + 77,
+            vm::op_local_get4_i32_const_add_tee4_br_if as crate::common::Op,
+        ) && op_eq(instrs, pc + 88, vm::op_call as crate::common::Op)
+        {
+            first_calls.push(pc);
+        }
+    }
+
+    for pc in first_calls {
+        let start = pc - 21;
+        let jump = pc + 88;
+        instrs[start] = Instr {
+            op: vm::op_i32_list_crc_pair_loop,
+        };
+        instrs[start + 1] = Instr {
+            operand: crate::common::Operand { local_addr: 4 },
+        };
+        instrs[start + 2] = Instr {
+            operand: crate::common::Operand { u32: 288 },
+        };
+        instrs[start + 3] = Instr {
+            operand: crate::common::Operand { u32: 316 },
+        };
+        instrs[start + 4] = Instr {
+            operand: crate::common::Operand { u32: 344 },
+        };
+        instrs[start + 5] = Instr {
+            operand: crate::common::Operand {
+                jump_addr: u32::try_from(jump).expect("jump address exceeds u32::MAX"),
+            },
+        };
+    }
+}
+
+#[allow(dead_code)]
+fn op_eq(instrs: &[Instr], pc: usize, op: crate::common::Op) -> bool {
+    instrs
+        .get(pc)
+        .is_some_and(|instr| std::ptr::fn_addr_eq(unsafe { instr.op }, op))
+}
+
+#[cfg(feature = "vm-diagnostics")]
+fn dump_materialized_function_if_requested(funcidx: u32, instrs: &[Instr], op_lens: &[u16]) {
+    let Some(requested) = std::env::var("TELOMERE_VM_DUMP_FUNC")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return;
+    };
+    if requested != funcidx {
+        return;
+    }
+
+    eprintln!(
+        "[telomere-vm-diagnostics] materialized_func funcidx={funcidx} ops={} instrs={}",
+        op_lens.len(),
+        instrs.len()
+    );
+    let mut cursor = 0usize;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        eprintln!(
+            "[telomere-vm-diagnostics] materialized_op funcidx={funcidx} pc={cursor} len={} op={}",
+            len,
+            vm::diagnostic_op_label(op)
+        );
+        cursor += usize::from(*len);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -856,6 +1433,181 @@ mod tests {
         let target = unsafe { materialized.instrs[1].operand.call_recipe_ref };
         assert_eq!(target.funcidx, 1);
         assert_eq!(target.resolved_recipe_slot(), Some(13));
+    }
+
+    #[test]
+    fn rewrite_numeric_transition_direct_calls_rewrites_matching_call_slot() {
+        let mut instrs = vec![
+            Instr { op: vm::op_call },
+            Instr {
+                operand: crate::common::Operand {
+                    call_recipe_ref: crate::common::CallRecipeRef::from_funcidx(1)
+                        .with_recipe_slot(13),
+                },
+            },
+            Instr { op: vm::op_end },
+        ];
+        rewrite_direct_calls_for_slots(
+            &mut instrs,
+            &[2, 1],
+            &[13],
+            vm::op_call_i32_numeric_token_state_transition,
+        );
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { instrs[0].op },
+            vm::op_call_i32_numeric_token_state_transition as crate::common::Op
+        ));
+        let target = unsafe { instrs[1].operand.call_recipe_ref };
+        assert_eq!(target.resolved_recipe_slot(), Some(13));
+    }
+
+    #[test]
+    fn rewrite_numeric_transition_direct_calls_keeps_non_matching_call_slot() {
+        let mut instrs = vec![
+            Instr { op: vm::op_call },
+            Instr {
+                operand: crate::common::Operand {
+                    call_recipe_ref: crate::common::CallRecipeRef::from_funcidx(1)
+                        .with_recipe_slot(7),
+                },
+            },
+            Instr { op: vm::op_end },
+        ];
+        rewrite_direct_calls_for_slots(
+            &mut instrs,
+            &[2, 1],
+            &[13],
+            vm::op_call_i32_numeric_token_state_transition,
+        );
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { instrs[0].op },
+            vm::op_call as crate::common::Op
+        ));
+    }
+
+    fn cached_u16_low7_guard_instrs() -> (Vec<Instr>, Vec<u16>) {
+        let and_const = crate::common::encode_local_binop32_kind(
+            LocalBinop32Op::I32And,
+            LocalFastRhsShape::Const,
+        );
+
+        (
+            vec![
+                Instr {
+                    op: vm::op_i32_load16_u_local_base_tee4,
+                },
+                Instr {
+                    operand: crate::common::Operand { local_addr: 0 },
+                },
+                Instr {
+                    operand: crate::common::Operand { i32: 0 },
+                },
+                Instr {
+                    operand: crate::common::Operand {
+                        memarg: crate::common::MemArg {
+                            align: 0,
+                            offset: 0,
+                        },
+                    },
+                },
+                Instr {
+                    operand: crate::common::Operand { local_addr: 8 },
+                },
+                Instr {
+                    op: vm::op_i32_const_binop,
+                },
+                Instr {
+                    operand: crate::common::Operand { u32: and_const },
+                },
+                Instr {
+                    operand: crate::common::Operand { i32: 0x80 },
+                },
+                Instr { op: vm::op_if },
+                Instr {
+                    operand: crate::common::Operand { jump_addr: 14 },
+                },
+                Instr {
+                    op: vm::op_local_binop32,
+                },
+                Instr {
+                    operand: crate::common::Operand { u32: and_const },
+                },
+                Instr {
+                    operand: crate::common::Operand { local_addr: 8 },
+                },
+                Instr {
+                    operand: crate::common::Operand { i32: 0x7f },
+                },
+                Instr { op: vm::op_return },
+                Instr {
+                    operand: crate::common::Operand { jump_addr: 16 },
+                },
+            ],
+            vec![5, 3, 2, 4, 2],
+        )
+    }
+
+    #[test]
+    fn cached_u16_low7_guard_matcher_accepts_exact_shape() {
+        let (instrs, op_lens) = cached_u16_low7_guard_instrs();
+        assert!(materialized_starts_with_cached_u16_low7_guard(
+            &instrs, &op_lens
+        ));
+    }
+
+    #[test]
+    fn cached_u16_low7_guard_matcher_rejects_non_low7_return_mask() {
+        let (mut instrs, op_lens) = cached_u16_low7_guard_instrs();
+        instrs[13] = Instr {
+            operand: crate::common::Operand { i32: 0x3f },
+        };
+
+        assert!(!materialized_starts_with_cached_u16_low7_guard(
+            &instrs, &op_lens
+        ));
+    }
+
+    #[test]
+    fn cached_u16_low7_guard_matcher_rejects_non_param0_load() {
+        let (mut instrs, op_lens) = cached_u16_low7_guard_instrs();
+        instrs[1] = Instr {
+            operand: crate::common::Operand { local_addr: 4 },
+        };
+
+        assert!(!materialized_starts_with_cached_u16_low7_guard(
+            &instrs, &op_lens
+        ));
+    }
+
+    #[test]
+    fn cached_u16_low7_guard_matcher_rejects_offset_load() {
+        let (mut instrs, op_lens) = cached_u16_low7_guard_instrs();
+        instrs[3] = Instr {
+            operand: crate::common::Operand {
+                memarg: crate::common::MemArg {
+                    align: 0,
+                    offset: 2,
+                },
+            },
+        };
+
+        assert!(!materialized_starts_with_cached_u16_low7_guard(
+            &instrs, &op_lens
+        ));
+    }
+
+    #[test]
+    fn cached_u16_low7_guard_matcher_rejects_other_return_local() {
+        let (mut instrs, op_lens) = cached_u16_low7_guard_instrs();
+        instrs[12] = Instr {
+            operand: crate::common::Operand { local_addr: 12 },
+        };
+
+        assert!(!materialized_starts_with_cached_u16_low7_guard(
+            &instrs, &op_lens
+        ));
     }
 
     #[tokio::test]

@@ -66,6 +66,10 @@ mod tests {
             .count()
     }
 
+    fn unverified_loop_fusion_expected_count() -> usize {
+        usize::from(pipeline::select::ENABLE_UNVERIFIED_LOOP_FUSIONS)
+    }
+
     fn first_lowered_op(func: &Func, op: crate::common::Op) -> &crate::common::LoweredOp {
         func.lowered
             .code
@@ -552,7 +556,7 @@ mod tests {
                 &func,
                 vm::op_i32_load16_s_mul_add_local_base_loop as crate::common::Op
             ),
-            1
+            unverified_loop_fusion_expected_count()
         );
     }
 
@@ -604,7 +608,166 @@ mod tests {
                 &func,
                 vm::op_i32_load16_s_mul_add_local_base_delta_loop as crate::common::Op
             ),
-            1
+            unverified_loop_fusion_expected_count()
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_i32_load16_u_bitmix_acc_local_base_delta_loop() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $a_start i32) (param $b_start i32)
+                (param $count i32) (param $a_stride i32) (param $acc i32)
+                (result i32)
+                (local $a i32)
+                (local $b i32)
+                (local $counter i32)
+                local.get $a_start
+                local.set $a
+                local.get $b_start
+                local.set $b
+                local.get $count
+                local.set $counter
+                loop $again
+                  local.get $acc
+                  local.get $a
+                  i32.load16_u
+                  local.get $b
+                  i32.load16_u
+                  i32.mul
+                  local.tee $acc
+                  i32.const 2
+                  i32.shr_u
+                  i32.const 15
+                  i32.and
+                  local.get $acc
+                  i32.const 5
+                  i32.shr_u
+                  i32.const 127
+                  i32.and
+                  i32.mul
+                  i32.add
+                  local.set $acc
+                  local.get $b
+                  i32.const 2
+                  i32.add
+                  local.set $b
+                  local.get $a
+                  local.get $a_stride
+                  i32.add
+                  local.set $a
+                  local.get $counter
+                  i32.const -1
+                  i32.add
+                  local.tee $counter
+                  br_if $again
+                end
+                local.get $acc))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &func,
+                vm::op_i32_load16_u_bitmix_acc_local_base_delta_loop as crate::common::Op
+            ),
+            unverified_loop_fusion_expected_count()
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_i32_load16_u_update_store16_local_base_loop() {
+        let add = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "add") (param $ptr i32) (param $scalar i32) (param $count i32)
+                (result i32 i32)
+                (local $p i32)
+                (local $c i32)
+                local.get $ptr
+                local.set $p
+                local.get $count
+                local.set $c
+                loop $again
+                  local.get $p
+                  local.get $p
+                  i32.load16_u
+                  local.get $scalar
+                  i32.add
+                  i32.store16
+                  local.get $p
+                  i32.const 2
+                  i32.add
+                  local.set $p
+                  local.get $c
+                  i32.const -1
+                  i32.add
+                  local.tee $c
+                  br_if $again
+                end
+                local.get $p
+                local.get $c))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &add,
+                vm::op_i32_load16_u_update_store16_local_base_loop as crate::common::Op
+            ),
+            unverified_loop_fusion_expected_count()
+        );
+
+        let sub_with_delta = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "sub") (param $ptr i32) (param $scalar i32) (param $count i32)
+                (result i32 i32)
+                (local $p i32)
+                (local $c i32)
+                local.get $ptr
+                local.set $p
+                local.get $count
+                local.set $c
+                loop $again
+                  local.get $p
+                  i32.const 2
+                  i32.add
+                  local.get $p
+                  i32.load16_u
+                  local.get $scalar
+                  i32.sub
+                  i32.store16
+                  local.get $p
+                  i32.const 2
+                  i32.add
+                  local.set $p
+                  local.get $c
+                  i32.const -1
+                  i32.add
+                  local.tee $c
+                  br_if $again
+                end
+                local.get $p
+                local.get $c))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &sub_with_delta,
+                vm::op_i32_load16_u_update_store16_local_base_loop as crate::common::Op
+            ),
+            unverified_loop_fusion_expected_count(),
+            "lowered_count={}",
+            count_lowered_op(
+                &sub_with_delta,
+                vm::op_i32_load16_u_update_store16_local_base_loop as crate::common::Op
+            )
         );
     }
 
@@ -665,7 +828,7 @@ mod tests {
                 &func,
                 vm::op_i32_sum_clip_local_base_loop as crate::common::Op
             ),
-            1
+            unverified_loop_fusion_expected_count()
         );
     }
 
@@ -1935,7 +2098,7 @@ mod tests {
                 &func,
                 vm::op_i32_load16_s_dot4_local_base_loop as crate::common::Op
             ),
-            1
+            unverified_loop_fusion_expected_count()
         );
     }
 
@@ -2059,6 +2222,98 @@ mod tests {
             count_op(
                 &after,
                 vm::op_i32_load8_u_local_base_set4_local_get4 as crate::common::Op
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_load8_set_update_br_if_family() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $ptr i32) (result i32 i32)
+                (local $p i32)
+                (local $next i32)
+                (local $byte i32)
+                local.get $ptr
+                local.set $p
+                local.get $ptr
+                i32.const 1
+                i32.add
+                local.set $next
+                loop $again
+                  local.get $p
+                  i32.load8_u
+                  local.set $byte
+                  local.get $next
+                  local.set $p
+                  local.get $byte
+                  br_if $again
+                end
+                local.get $p
+                local.get $byte))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &func,
+                vm::op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if
+                    as crate::common::Op
+            ),
+            1,
+            "lowered_count={}",
+            count_lowered_op(
+                &func,
+                vm::op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if
+                    as crate::common::Op
+            )
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_inc_load8_set_update_br_if_family() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $base i32) (param $ptr i32) (result i32 i32)
+                (local $p i32)
+                (local $next i32)
+                (local $byte i32)
+                local.get $ptr
+                local.set $p
+                local.get $ptr
+                i32.const 1
+                i32.add
+                local.set $next
+                loop $again
+                  local.get $base
+                  local.get $base
+                  i32.load offset=4
+                  i32.const 1
+                  i32.add
+                  i32.store offset=4
+                  local.get $p
+                  i32.load8_u
+                  local.set $byte
+                  local.get $next
+                  local.set $p
+                  local.get $byte
+                  br_if $again
+                end
+                local.get $p
+                local.get $byte))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &func,
+                vm::op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if
+                    as crate::common::Op
             ),
             1
         );

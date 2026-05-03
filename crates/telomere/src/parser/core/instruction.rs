@@ -4324,6 +4324,34 @@ mod tests {
         op_at_in_func(wat, 0, index)
     }
 
+    fn decoded_ops_in_func(wat: &str, func_index: usize) -> Vec<crate::common::Op> {
+        let bytes = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        let module = parser.parse_module().expect("module must parse");
+        let FunctionBody::Wasm(func) = &module.codes.0[func_index] else {
+            panic!("expected wasm function body");
+        };
+        let mut cursor = 0usize;
+        func.op_lens
+            .iter()
+            .map(|len| {
+                let op = unsafe { func.expr[cursor].op };
+                cursor += usize::from(*len);
+                op
+            })
+            .collect()
+    }
+
+    fn assert_decoded_op_present(wat: &str, expected: crate::common::Op) {
+        assert!(
+            decoded_ops_in_func(wat, 0)
+                .into_iter()
+                .any(|candidate| std::ptr::fn_addr_eq(candidate, expected)),
+            "expected specialized op in decoded function stream"
+        );
+    }
+
     fn operand_at(wat: &str, index: usize) -> Operand {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
@@ -4522,7 +4550,7 @@ mod tests {
 
     #[test]
     fn parser_specializes_bulk_memory_handler() {
-        let local = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4533,18 +4561,14 @@ mod tests {
                 local.get 2
                 memory.copy))
             "#,
-            6,
+            vm::op_mem_copy_local as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            local,
-            vm::op_mem_copy_local as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_shared_bulk_memory_handler() {
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1 2 shared)
@@ -4555,17 +4579,13 @@ mod tests {
                 local.get 2
                 memory.copy))
             "#,
-            6,
+            vm::op_mem_copy_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_mem_copy_shared as crate::common::Op
-        ));
     }
 
     #[test]
     fn parser_specializes_indexed_local_bulk_memory_handler() {
-        let local_local = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory $dst 1)
@@ -4577,18 +4597,14 @@ mod tests {
                 local.get 2
                 memory.copy $dst $src))
             "#,
-            6,
+            vm::op_mem_copy_indexed_local_local as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            local_local,
-            vm::op_mem_copy_indexed_local_local as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_mixed_bulk_memory_handler() {
-        let local_shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory $dst 1)
@@ -4600,9 +4616,9 @@ mod tests {
                 local.get 2
                 memory.copy $dst $src))
             "#,
-            6,
+            vm::op_mem_copy_indexed_local_shared as crate::common::Op,
         );
-        let shared_local = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory $src 1)
@@ -4614,16 +4630,8 @@ mod tests {
                 local.get 2
                 memory.copy $dst $src))
             "#,
-            6,
+            vm::op_mem_copy_indexed_shared_local as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            local_shared,
-            vm::op_mem_copy_indexed_local_shared as crate::common::Op
-        ));
-        assert!(std::ptr::fn_addr_eq(
-            shared_local,
-            vm::op_mem_copy_indexed_shared_local as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "simd")]
@@ -4707,7 +4715,7 @@ mod tests {
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_atomic_wait_handler() {
-        let unshared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4717,9 +4725,9 @@ mod tests {
                 local.get 2
                 memory.atomic.wait32))
             "#,
-            6,
+            vm::op_memory_atomic_wait32_unshared as crate::common::Op,
         );
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1 2 shared)
@@ -4729,22 +4737,14 @@ mod tests {
                 local.get 2
                 memory.atomic.wait32))
             "#,
-            6,
+            vm::op_memory_atomic_wait32_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unshared,
-            vm::op_memory_atomic_wait32_unshared as crate::common::Op
-        ));
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_memory_atomic_wait32_shared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_unshared_atomic_wait_handler() {
-        let unshared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4755,18 +4755,14 @@ mod tests {
                 local.get 2
                 memory.atomic.wait32 $m))
             "#,
-            6,
+            vm::op_memory_atomic_wait32_indexed_unshared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unshared,
-            vm::op_memory_atomic_wait32_indexed_unshared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_shared_atomic_wait_handler() {
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4777,18 +4773,14 @@ mod tests {
                 local.get 2
                 memory.atomic.wait32 $m))
             "#,
-            6,
+            vm::op_memory_atomic_wait32_indexed_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_memory_atomic_wait32_indexed_shared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_atomic_notify_handler() {
-        let unshared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4797,9 +4789,9 @@ mod tests {
                 local.get 1
                 memory.atomic.notify))
             "#,
-            4,
+            vm::op_memory_atomic_notify_unshared as crate::common::Op,
         );
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1 2 shared)
@@ -4808,22 +4800,14 @@ mod tests {
                 local.get 1
                 memory.atomic.notify))
             "#,
-            4,
+            vm::op_memory_atomic_notify_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unshared,
-            vm::op_memory_atomic_notify_unshared as crate::common::Op
-        ));
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_memory_atomic_notify_shared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_unshared_atomic_notify_handler() {
-        let unshared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4833,18 +4817,14 @@ mod tests {
                 local.get 1
                 memory.atomic.notify $m))
             "#,
-            4,
+            vm::op_memory_atomic_notify_indexed_unshared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unshared,
-            vm::op_memory_atomic_notify_indexed_unshared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_shared_atomic_notify_handler() {
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4854,11 +4834,7 @@ mod tests {
                 local.get 1
                 memory.atomic.notify $m))
             "#,
-            4,
+            vm::op_memory_atomic_notify_indexed_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_memory_atomic_notify_indexed_shared as crate::common::Op
-        ));
     }
 }

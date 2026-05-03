@@ -158,6 +158,8 @@ pub(crate) fn select(func: &CanonFunc, analysis: &AnalysisResults) -> KernelFunc
         &LocalGetConstAddTeeBrIfSpec,
         &LocalGet4I32IncLocalBaseI32Load8ULocalBaseSet4Spec,
         &LocalGet4I32IncLocalBaseSpec,
+        &I32IncLocalBaseI32Load8UUpdateBrIfSpec,
+        &I32Load8ULocalBaseSet4LocalGet4Set4LocalGet4BrIfSpec,
         &LocalGet4I32Load8ULocalBaseSet4Spec,
         &I32Load8ULocalBaseSet4LocalGet4Spec,
         &LocalGet4RunSpec::EIGHT,
@@ -220,6 +222,7 @@ pub(crate) fn select(func: &CanonFunc, analysis: &AnalysisResults) -> KernelFunc
         &Select4ConsumerSpec::SET,
         &Select4ConsumerSpec::TEE,
         &I32SumClipLocalBaseLoopSpec,
+        &I32Load16UUpdateStore16LocalBaseLoopSpec,
         &I32Load16SDot4LocalBaseLoopSpec,
         &I32LoadStoreLocalBaseRelinkLoopSpec,
         &ScalarCopyLocalBaseRunSpec,
@@ -234,6 +237,7 @@ pub(crate) fn select(func: &CanonFunc, analysis: &AnalysisResults) -> KernelFunc
         &I32LoadLocalBaseLocalGet4ScalarLoadTee4CmpBrIfSpec,
         &I32LoadStoreLocalBaseLocalGet4Spec,
         &LocalGet4I32LoadLocalBaseAddSet4Spec,
+        &I32Load16UBitmixAccLocalBaseDeltaLoopSpec,
         &I32Load16SMulAddLocalBaseDeltaLoopSpec,
         &I32Load16SMulAddLocalBaseLoopSpec,
         &LocalGet4ScalarLoadLocalBaseSpec,
@@ -361,8 +365,10 @@ struct LocalGet4Set4LocalGetConstCompareBrIfSpec;
 struct LocalGetConstAddTeeBrIfSpec;
 struct LocalGet4I32IncLocalBaseSpec;
 struct LocalGet4I32IncLocalBaseI32Load8ULocalBaseSet4Spec;
+struct I32IncLocalBaseI32Load8UUpdateBrIfSpec;
 struct LocalGet4I32Load8ULocalBaseSet4Spec;
 struct I32Load8ULocalBaseSet4LocalGet4Spec;
+struct I32Load8ULocalBaseSet4LocalGet4Set4LocalGet4BrIfSpec;
 struct LocalGet4RunSpec {
     width: usize,
     op: Op,
@@ -453,6 +459,33 @@ impl FamilySpec for LocalGet4I32IncLocalBaseI32Load8ULocalBaseSet4Spec {
     }
 }
 
+impl FamilySpec for I32IncLocalBaseI32Load8UUpdateBrIfSpec {
+    fn group(&self) -> FamilyGroup {
+        FamilyGroup::Memory
+    }
+
+    fn name(&self) -> &'static str {
+        "op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if"
+    }
+
+    fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
+        emit_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+            ctx, cursor,
+        )
+        .is_some()
+    }
+
+    fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
+        264 + loop_bonus(ctx)
+    }
+
+    fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
+        emit_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+            ctx, cursor,
+        )
+    }
+}
+
 impl FamilySpec for LocalGet4I32Load8ULocalBaseSet4Spec {
     fn group(&self) -> FamilyGroup {
         FamilyGroup::Memory
@@ -494,6 +527,28 @@ impl FamilySpec for I32Load8ULocalBaseSet4LocalGet4Spec {
 
     fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
         emit_i32_load8_u_local_base_set4_local_get4(ctx, cursor)
+    }
+}
+
+impl FamilySpec for I32Load8ULocalBaseSet4LocalGet4Set4LocalGet4BrIfSpec {
+    fn group(&self) -> FamilyGroup {
+        FamilyGroup::Memory
+    }
+
+    fn name(&self) -> &'static str {
+        "op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if"
+    }
+
+    fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
+        emit_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(ctx, cursor).is_some()
+    }
+
+    fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
+        184 + loop_bonus(ctx)
+    }
+
+    fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
+        emit_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(ctx, cursor)
     }
 }
 
@@ -3353,9 +3408,13 @@ struct ScalarStoreConstBaseSpec;
 struct I32LoadStoreLocalBaseReverseLoopSpec;
 struct I32LoadStoreLocalBaseRelinkLoopSpec;
 struct I32SumClipLocalBaseLoopSpec;
+struct I32Load16UUpdateStore16LocalBaseLoopSpec;
 struct I32Load16SDot4LocalBaseLoopSpec;
+struct I32Load16UBitmixAccLocalBaseDeltaLoopSpec;
 struct I32Load16SMulAddLocalBaseDeltaLoopSpec;
 struct I32Load16SMulAddLocalBaseLoopSpec;
+
+pub(crate) const ENABLE_UNVERIFIED_LOOP_FUSIONS: bool = false;
 struct ScalarCopyLocalBaseRunSpec;
 struct I32IncLocalBaseSpec;
 struct I32LoadConstBaseLocalGet4AddSet4Spec;
@@ -3435,7 +3494,7 @@ impl FamilySpec for I32SumClipLocalBaseLoopSpec {
     }
 
     fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
-        emit_i32_sum_clip_local_base_loop(ctx, cursor).is_some()
+        ENABLE_UNVERIFIED_LOOP_FUSIONS && emit_i32_sum_clip_local_base_loop(ctx, cursor).is_some()
     }
 
     fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
@@ -3443,7 +3502,34 @@ impl FamilySpec for I32SumClipLocalBaseLoopSpec {
     }
 
     fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
-        emit_i32_sum_clip_local_base_loop(ctx, cursor)
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            .then(|| emit_i32_sum_clip_local_base_loop(ctx, cursor))
+            .flatten()
+    }
+}
+
+impl FamilySpec for I32Load16UUpdateStore16LocalBaseLoopSpec {
+    fn group(&self) -> FamilyGroup {
+        FamilyGroup::Memory
+    }
+
+    fn name(&self) -> &'static str {
+        "op_i32_load16_u_update_store16_local_base_loop"
+    }
+
+    fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            && emit_i32_load16_u_update_store16_local_base_loop(ctx, cursor).is_some()
+    }
+
+    fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
+        260 + loop_bonus(ctx)
+    }
+
+    fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            .then(|| emit_i32_load16_u_update_store16_local_base_loop(ctx, cursor))
+            .flatten()
     }
 }
 
@@ -3481,7 +3567,8 @@ impl FamilySpec for I32Load16SDot4LocalBaseLoopSpec {
     }
 
     fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
-        emit_i32_load16_s_dot4_local_base_loop(ctx, cursor).is_some()
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            && emit_i32_load16_s_dot4_local_base_loop(ctx, cursor).is_some()
     }
 
     fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
@@ -3489,7 +3576,9 @@ impl FamilySpec for I32Load16SDot4LocalBaseLoopSpec {
     }
 
     fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
-        emit_i32_load16_s_dot4_local_base_loop(ctx, cursor)
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            .then(|| emit_i32_load16_s_dot4_local_base_loop(ctx, cursor))
+            .flatten()
     }
 }
 
@@ -3503,7 +3592,8 @@ impl FamilySpec for I32Load16SMulAddLocalBaseLoopSpec {
     }
 
     fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
-        emit_i32_load16_s_mul_add_local_base_loop(ctx, cursor).is_some()
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            && emit_i32_load16_s_mul_add_local_base_loop(ctx, cursor).is_some()
     }
 
     fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
@@ -3511,7 +3601,34 @@ impl FamilySpec for I32Load16SMulAddLocalBaseLoopSpec {
     }
 
     fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
-        emit_i32_load16_s_mul_add_local_base_loop(ctx, cursor)
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            .then(|| emit_i32_load16_s_mul_add_local_base_loop(ctx, cursor))
+            .flatten()
+    }
+}
+
+impl FamilySpec for I32Load16UBitmixAccLocalBaseDeltaLoopSpec {
+    fn group(&self) -> FamilyGroup {
+        FamilyGroup::Memory
+    }
+
+    fn name(&self) -> &'static str {
+        "op_i32_load16_u_bitmix_acc_local_base_delta_loop"
+    }
+
+    fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            && emit_i32_load16_u_bitmix_acc_local_base_delta_loop(ctx, cursor).is_some()
+    }
+
+    fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
+        260 + loop_bonus(ctx)
+    }
+
+    fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            .then(|| emit_i32_load16_u_bitmix_acc_local_base_delta_loop(ctx, cursor))
+            .flatten()
     }
 }
 
@@ -3525,7 +3642,8 @@ impl FamilySpec for I32Load16SMulAddLocalBaseDeltaLoopSpec {
     }
 
     fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
-        emit_i32_load16_s_mul_add_local_base_delta_loop(ctx, cursor).is_some()
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            && emit_i32_load16_s_mul_add_local_base_delta_loop(ctx, cursor).is_some()
     }
 
     fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
@@ -3533,7 +3651,9 @@ impl FamilySpec for I32Load16SMulAddLocalBaseDeltaLoopSpec {
     }
 
     fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
-        emit_i32_load16_s_mul_add_local_base_delta_loop(ctx, cursor)
+        ENABLE_UNVERIFIED_LOOP_FUSIONS
+            .then(|| emit_i32_load16_s_mul_add_local_base_delta_loop(ctx, cursor))
+            .flatten()
     }
 }
 
@@ -4168,6 +4288,50 @@ fn match_i32_local_base_address(
     })
 }
 
+fn match_i32_update_store_load_address(
+    block: &CanonBlock,
+    cursor: usize,
+) -> Option<UpdateStoreLoadAddressMatch> {
+    let store_addr = match_i32_local_base_address(block, cursor)?;
+    let load_cursor = cursor + store_addr.consumed;
+    if let Some(cached_next_ptr) = raw_local_tee(block.insts.get(load_cursor)?, 4) {
+        if let Some(load_addr) = match_i32_local_base_address(block, load_cursor + 1) {
+            if same_raw_operand(&store_addr.base_local, &load_addr.base_local) {
+                return Some(UpdateStoreLoadAddressMatch {
+                    base_local: store_addr.base_local,
+                    store_delta: store_addr.delta,
+                    load_delta: load_addr.delta,
+                    cached_next_ptr: Some(cached_next_ptr),
+                    consumed: store_addr.consumed + 1 + load_addr.consumed,
+                });
+            }
+        }
+        let cached_get = raw_local_get(block.insts.get(load_cursor + 1)?, 4)?;
+        if store_addr.consumed > 1 && same_raw_operand(&cached_next_ptr, &cached_get) {
+            return Some(UpdateStoreLoadAddressMatch {
+                base_local: store_addr.base_local,
+                store_delta: store_addr.delta,
+                load_delta: store_addr.delta,
+                cached_next_ptr: Some(cached_next_ptr),
+                consumed: store_addr.consumed + 2,
+            });
+        }
+    }
+    if let Some(load_addr) = match_i32_local_base_address(block, load_cursor) {
+        if same_raw_operand(&store_addr.base_local, &load_addr.base_local) {
+            return Some(UpdateStoreLoadAddressMatch {
+                base_local: store_addr.base_local,
+                store_delta: store_addr.delta,
+                load_delta: load_addr.delta,
+                cached_next_ptr: None,
+                consumed: store_addr.consumed + load_addr.consumed,
+            });
+        }
+    }
+
+    None
+}
+
 fn match_i32_local_scaled_index_address(
     block: &CanonBlock,
     cursor: usize,
@@ -4226,6 +4390,15 @@ fn match_i32_const_add(block: &CanonBlock, cursor: usize) -> Option<i32> {
 struct LocalBaseAddressMatch {
     base_local: LoweredOperand,
     delta: i32,
+    consumed: usize,
+}
+
+#[derive(Debug, Clone)]
+struct UpdateStoreLoadAddressMatch {
+    base_local: LoweredOperand,
+    store_delta: i32,
+    load_delta: i32,
+    cached_next_ptr: Option<LoweredOperand>,
     consumed: usize,
 }
 
@@ -4336,6 +4509,97 @@ fn emit_i32_load_store_local_base_relink_loop(
                 store.operands.first()?.clone(),
             ],
             family: "op_i32_load_store_local_base_relink_loop",
+        }],
+    })
+}
+
+fn emit_i32_load16_u_update_store16_local_base_loop(
+    ctx: &SelectionContext<'_>,
+    cursor: usize,
+) -> Option<MatchResult> {
+    const SUBTRACT: u32 = 1;
+
+    let addr = match_i32_update_store_load_address(ctx.block, cursor)?;
+    let mut at = cursor + addr.consumed;
+    let load = ctx.block.insts.get(at)?;
+    if !load.op_eq(vm::op_i32_load16_u as Op) {
+        return None;
+    }
+    at += 1;
+    let scalar = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    let op = ctx.block.insts.get(at)?;
+    let kind = if op.op_eq(vm::op_i32_add as Op) {
+        0
+    } else if op.op_eq(vm::op_i32_sub as Op) {
+        SUBTRACT
+    } else {
+        return None;
+    };
+    at += 1;
+    let store = ctx.block.insts.get(at)?;
+    if !store.op_eq(vm::op_i32_store16 as Op) {
+        return None;
+    }
+    at += 1;
+    let ptr_update_consumed = if let Some(cached_next_ptr) = &addr.cached_next_ptr {
+        let cached_get = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+        let ptr_set = raw_local_set(ctx.block.insts.get(at + 1)?, 4)?;
+        if same_raw_operand(cached_next_ptr, &cached_get)
+            && same_raw_operand(&addr.base_local, &ptr_set)
+            && addr.store_delta == 2
+        {
+            2
+        } else {
+            let ptr_update = match_i32_local_add_update(ctx, at)?;
+            if !same_raw_operand(&addr.base_local, &ptr_update.target)
+                || !matches!(ptr_update.delta, LoopDelta::Const(2))
+            {
+                return None;
+            }
+            4
+        }
+    } else {
+        let ptr_update = match_i32_local_add_update(ctx, at)?;
+        if !same_raw_operand(&addr.base_local, &ptr_update.target)
+            || !matches!(ptr_update.delta, LoopDelta::Const(2))
+        {
+            return None;
+        }
+        4
+    };
+    at += ptr_update_consumed;
+    let counter_update = match_i32_local_add_tee_update(ctx.block, at)?;
+    at += 4;
+    let branch = ctx.block.insts.get(at)?;
+    if !branch.op_eq(vm::op_br_if as Op)
+        || branch_target(branch)? != ctx.block.id
+        || !matches!(counter_update.delta, LoopDelta::Const(-1))
+        || same_raw_operand(&addr.base_local, &scalar)
+        || same_raw_operand(&addr.base_local, &counter_update.target)
+        || same_raw_operand(&scalar, &counter_update.target)
+    {
+        return None;
+    }
+
+    Some(MatchResult {
+        group: FamilyGroup::Memory,
+        cost: 260 + loop_bonus(ctx),
+        consumed: at + 1 - cursor,
+        ops: vec![KernelOp {
+            label: None,
+            op: vm::op_i32_load16_u_update_store16_local_base_loop as Op,
+            operands: vec![
+                raw_u32_operand(kind),
+                addr.base_local,
+                scalar,
+                counter_update.target,
+                raw_i32_operand(addr.load_delta),
+                raw_i32_operand(addr.store_delta),
+                load.operands.first()?.clone(),
+                store.operands.first()?.clone(),
+            ],
+            family: "op_i32_load16_u_update_store16_local_base_loop",
         }],
     })
 }
@@ -4939,6 +5203,126 @@ fn emit_i32_load16_s_mul_add_local_base_loop(
     })
 }
 
+fn emit_i32_load16_u_bitmix_acc_local_base_delta_loop(
+    ctx: &SelectionContext<'_>,
+    cursor: usize,
+) -> Option<MatchResult> {
+    const FIRST_UPDATE_IS_B: u32 = 1;
+    const A_DELTA_IS_LOCAL: u32 = 1 << 1;
+    const B_DELTA_IS_LOCAL: u32 = 1 << 2;
+
+    let inst = |offset: usize| ctx.block.insts.get(cursor + offset);
+    let acc = raw_local_get(inst(0)?, 4)?;
+    let a = raw_local_get(inst(1)?, 4)?;
+    let a_load = inst(2)?;
+    let b = raw_local_get(inst(3)?, 4)?;
+    let b_load = inst(4)?;
+    let product_tee = raw_local_tee(inst(6)?, 4)?;
+    if same_raw_operand(&a, &b)
+        || same_raw_operand(&acc, &a)
+        || same_raw_operand(&acc, &b)
+        || !a_load.op_eq(vm::op_i32_load16_u as Op)
+        || !b_load.op_eq(vm::op_i32_load16_u as Op)
+        || !inst(5)?.op_eq(vm::op_i32_mul as Op)
+        || !same_raw_operand(&acc, &product_tee)
+    {
+        return None;
+    }
+
+    if i32_const_value(inst(7)?)? != 2
+        || !inst(8)?.op_eq(vm::op_i32_shr_u as Op)
+        || i32_const_value(inst(9)?)? != 15
+        || !inst(10)?.op_eq(vm::op_i32_and as Op)
+    {
+        return None;
+    }
+    let product_get = raw_local_get(inst(11)?, 4)?;
+    if !same_raw_operand(&acc, &product_get)
+        || i32_const_value(inst(12)?)? != 5
+        || !inst(13)?.op_eq(vm::op_i32_shr_u as Op)
+        || i32_const_value(inst(14)?)? != 127
+        || !inst(15)?.op_eq(vm::op_i32_and as Op)
+        || !inst(16)?.op_eq(vm::op_i32_mul as Op)
+        || !inst(17)?.op_eq(vm::op_i32_add as Op)
+    {
+        return None;
+    }
+    let acc_set = raw_local_set(inst(18)?, 4)?;
+    if !same_raw_operand(&acc, &acc_set) {
+        return None;
+    }
+
+    let first_update = match_i32_local_add_update(ctx, cursor + 19)?;
+    let second_update = match_i32_local_add_update(ctx, cursor + 23)?;
+    let first_update_is_b = if same_raw_operand(&first_update.target, &a)
+        && same_raw_operand(&second_update.target, &b)
+    {
+        false
+    } else if same_raw_operand(&first_update.target, &b)
+        && same_raw_operand(&second_update.target, &a)
+    {
+        true
+    } else {
+        return None;
+    };
+
+    let (a_delta, b_delta) = if first_update_is_b {
+        (&second_update.delta, &first_update.delta)
+    } else {
+        (&first_update.delta, &second_update.delta)
+    };
+    let counter = raw_local_get(inst(27)?, 4)?;
+    if same_raw_operand(&acc, &counter)
+        || i32_const_value(inst(28)?)? != -1
+        || !inst(29)?.op_eq(vm::op_i32_add as Op)
+    {
+        return None;
+    }
+    let counter_tee = raw_local_tee(inst(30)?, 4)?;
+    let branch = inst(31)?;
+    if !same_raw_operand(&counter, &counter_tee)
+        || !branch.op_eq(vm::op_br_if as Op)
+        || branch_target(branch)? != ctx.block.id
+    {
+        return None;
+    }
+
+    let mut kind = if first_update_is_b {
+        FIRST_UPDATE_IS_B
+    } else {
+        0
+    };
+    if a_delta.is_local() {
+        kind |= A_DELTA_IS_LOCAL;
+    }
+    if b_delta.is_local() {
+        kind |= B_DELTA_IS_LOCAL;
+    }
+
+    Some(MatchResult {
+        group: FamilyGroup::Memory,
+        cost: 260 + loop_bonus(ctx),
+        consumed: 32,
+        ops: vec![KernelOp {
+            label: None,
+            op: vm::op_i32_load16_u_bitmix_acc_local_base_delta_loop as Op,
+            operands: vec![
+                raw_u32_operand(kind),
+                a,
+                b,
+                acc,
+                counter,
+                a_delta.operand(),
+                b_delta.operand(),
+                a_load.operands.first()?.clone(),
+                b_load.operands.first()?.clone(),
+                LoweredOperand::JumpTarget(branch_target(branch)?),
+            ],
+            family: "op_i32_load16_u_bitmix_acc_local_base_delta_loop",
+        }],
+    })
+}
+
 enum LoopDelta {
     Const(i32),
     Local(LoweredOperand),
@@ -5120,6 +5504,19 @@ struct I32Load8ULocalBaseSet4Match {
     consumed: usize,
 }
 
+#[derive(Debug, Clone)]
+struct I32Load8UUpdateBrIfMatch {
+    base_local: LoweredOperand,
+    delta: i32,
+    memarg: LoweredOperand,
+    byte_dst: LoweredOperand,
+    next_src: LoweredOperand,
+    ptr_dst: LoweredOperand,
+    branch_local: LoweredOperand,
+    branch_target: usize,
+    consumed: usize,
+}
+
 fn emit_i32_inc_local_base(ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
     let matched = match_i32_inc_local_base(ctx.block, cursor)?;
     Some(MatchResult {
@@ -5249,6 +5646,44 @@ fn emit_i32_load8_u_local_base_set4_local_get4(
     })
 }
 
+fn emit_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+    ctx: &SelectionContext<'_>,
+    cursor: usize,
+) -> Option<MatchResult> {
+    let inc = match_i32_inc_local_base(ctx.block, cursor)?;
+    let branch = match_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+        ctx.block,
+        cursor + inc.consumed,
+    )?;
+    Some(MatchResult {
+        group: FamilyGroup::Memory,
+        cost: 264 + loop_bonus(ctx),
+        consumed: inc.consumed + branch.consumed,
+        ops: vec![KernelOp {
+            label: None,
+            op: vm::op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if
+                as Op,
+            operands: vec![
+                inc.base_local,
+                raw_i32_operand(inc.store_delta),
+                raw_i32_operand(inc.load_delta),
+                inc.load_memarg,
+                inc.store_memarg,
+                branch.base_local,
+                raw_i32_operand(branch.delta),
+                branch.memarg,
+                branch.byte_dst,
+                branch.next_src,
+                branch.ptr_dst,
+                branch.branch_local,
+                LoweredOperand::JumpTarget(branch.branch_target),
+                raw_u32_operand(14),
+            ],
+            family: "op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if",
+        }],
+    })
+}
+
 fn match_i32_inc_local_base(block: &CanonBlock, cursor: usize) -> Option<I32IncLocalBaseMatch> {
     if let Some(inst) = block.insts.get(cursor) {
         if inst.op_eq(vm::op_i32_inc_local_base as Op) {
@@ -5292,6 +5727,65 @@ fn match_i32_inc_local_base(block: &CanonBlock, cursor: usize) -> Option<I32IncL
         load_memarg: load.operands.first()?.clone(),
         store_memarg: store.operands.first()?.clone(),
         consumed: load_cursor + 4 - cursor,
+    })
+}
+
+fn emit_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+    ctx: &SelectionContext<'_>,
+    cursor: usize,
+) -> Option<MatchResult> {
+    let matched =
+        match_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(ctx.block, cursor)?;
+
+    Some(MatchResult {
+        group: FamilyGroup::Memory,
+        cost: 184 + loop_bonus(ctx),
+        consumed: matched.consumed,
+        ops: vec![KernelOp {
+            label: None,
+            op: vm::op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if as Op,
+            operands: vec![
+                matched.base_local,
+                raw_i32_operand(matched.delta),
+                matched.memarg,
+                matched.byte_dst,
+                matched.next_src,
+                matched.ptr_dst,
+                matched.branch_local,
+                LoweredOperand::JumpTarget(matched.branch_target),
+            ],
+            family: "op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if",
+        }],
+    })
+}
+
+fn match_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if(
+    block: &CanonBlock,
+    cursor: usize,
+) -> Option<I32Load8UUpdateBrIfMatch> {
+    let load_addr = match_i32_local_base_address(block, cursor)?;
+    let load = block.insts.get(cursor + load_addr.consumed)?;
+    if !load.op_eq(vm::op_i32_load8_u as Op) {
+        return None;
+    }
+    let byte_dst = raw_local_set(block.insts.get(cursor + load_addr.consumed + 1)?, 4)?;
+    let next_src = raw_local_get(block.insts.get(cursor + load_addr.consumed + 2)?, 4)?;
+    let ptr_dst = raw_local_set(block.insts.get(cursor + load_addr.consumed + 3)?, 4)?;
+    let branch_local = raw_local_get(block.insts.get(cursor + load_addr.consumed + 4)?, 4)?;
+    let branch = block.insts.get(cursor + load_addr.consumed + 5)?;
+    if !branch.op_eq(vm::op_br_if as Op) {
+        return None;
+    }
+    Some(I32Load8UUpdateBrIfMatch {
+        base_local: load_addr.base_local,
+        delta: load_addr.delta,
+        memarg: load.operands.first()?.clone(),
+        byte_dst,
+        next_src,
+        ptr_dst,
+        branch_local,
+        branch_target: branch_target(branch)?,
+        consumed: load_addr.consumed + 6,
     })
 }
 
@@ -6586,11 +7080,8 @@ fn match_i32_select_bit_step4_xor_condition(
         return None;
     }
     let poly = const_operand_for_kind(poly, LocalFastConstKind::I32)?;
-    let Some((source_local, source_shift, prev_local, condition_consumed)) =
-        match_i32_xor_lsb_condition(block, cursor + 3)
-    else {
-        return None;
-    };
+    let (source_local, source_shift, prev_local, condition_consumed) =
+        match_i32_xor_lsb_condition(block, cursor + 3)?;
     let select = block.insts.get(cursor + 3 + condition_consumed)?;
     if !is_select4_raw(select) {
         return None;

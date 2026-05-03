@@ -364,6 +364,16 @@ impl Memory {
         self.current_pages as usize * PAGE_SIZE
     }
 
+    #[inline(always)]
+    pub(crate) fn data_ptr(&self) -> *const u8 {
+        self.base_ptr()
+    }
+
+    #[inline(always)]
+    pub(crate) fn data_mut_ptr(&mut self) -> *mut u8 {
+        self.region.ptr.as_ptr()
+    }
+
     fn slice(&self) -> &[u8] {
         self.region.as_slice(self.data_size())
     }

@@ -858,6 +858,11 @@ fn lower_materialized_operand(op: Op, offset: usize, operand: Operand) -> Lowere
 
 fn is_direct_call_op(op: Op) -> bool {
     std::ptr::fn_addr_eq(op, crate::runtime::vm::op_call as Op)
+        || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_call_i32_crc16_update16 as Op)
+        || std::ptr::fn_addr_eq(
+            op,
+            crate::runtime::vm::op_call_i32_numeric_token_state_transition as Op,
+        )
         || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_call_import as Op)
         || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_return_call as Op)
         || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_return_call_import as Op)

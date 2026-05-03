@@ -20,6 +20,69 @@ fn profile_numeric_family(_label: &'static str) {
     }
 }
 
+#[inline(always)]
+pub(crate) fn crc16_update16_bits(data: u32, mut crc: u32) -> u32 {
+    for bit in 0..16 {
+        let shifted = (crc >> 1) & 0x7fff;
+        crc = if ((crc ^ (data >> bit)) & 1) != 0 {
+            shifted ^ 0xa001
+        } else {
+            shifted
+        };
+    }
+    crc
+}
+
+/// Telomere internal inlined 16-bit CRC bit-step update recognized from a pure select-bit-step function.
+///
+/// Stack effect: `[] -> [i32]`.
+/// Traps: none.
+/// Notes: The optimizer selects this only for a verified local-only bit-step function body and
+/// tail-dispatches to the materialized function return.
+///
+/// # Safety
+/// - `tail_code` must point to the data local, crc local, and function-return target operands.
+/// - The active frame must match the validated lowered shape selected by the optimizer.
+pub unsafe fn op_i32_crc16_update16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_numeric_family("op_i32_crc16_update16");
+    let data_local = (*tail_code).operand.local_addr as usize;
+    let crc_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let data = ctx.stack.local_u32_from_base(local_base, data_local);
+    let crc = ctx.stack.local_u32_from_base(local_base, crc_local);
+    vm_try!(ctx.stack.push_u32_fast(crc16_update16_bits(data, crc)));
+    let return_addr = (*tail_code.add(2)).operand.jump_addr;
+    call_next(ctx.code().offset(return_addr as isize), 0, ctx)
+}
+
+/// Telomere internal inlined 16-bit CRC update wrapper that masks the data argument before updating.
+///
+/// Stack effect: `[] -> [i32]`.
+/// Traps: none.
+/// Notes: Selected for a materialized wrapper that only masks its first local and tail-calls the
+/// CRC update native entry.
+///
+/// # Safety
+/// - `tail_code` must point to the data local, crc local, and function-return target operands.
+/// - The active frame must match the wrapper shape selected by the instantiator.
+pub unsafe fn op_i32_crc16_update16_masked(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_numeric_family("op_i32_crc16_update16_masked");
+    let data_local = (*tail_code).operand.local_addr as usize;
+    let crc_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let data = ctx.stack.local_u32_from_base(local_base, data_local) & 0xffff;
+    let crc = ctx.stack.local_u32_from_base(local_base, crc_local);
+    vm_try!(ctx.stack.push_u32_fast(crc16_update16_bits(data, crc)));
+    let return_addr = (*tail_code.add(2)).operand.jump_addr;
+    call_next(ctx.code().offset(return_addr as isize), 0, ctx)
+}
+
 /// WebAssembly `i32.const`.
 ///
 /// Spec:
@@ -2340,7 +2403,7 @@ pub unsafe fn op_i32_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
     call_next(tail_code, 0, ctx)
 }
 
-/// Fused i32 bit-update step ending in a typed `select`.
+/// Telomere internal fused i32 bit-update step ending in a typed `select`.
 ///
 /// This covers stack shapes such as
 /// `i32.const 1; i32.shr_u; i32.const 32767; i32.and; local.tee; ...; select`
@@ -2366,7 +2429,7 @@ pub unsafe fn op_i32_select_bit_step4(
     call_next(tail_code, 7, ctx)
 }
 
-/// Fused run of consecutive i32 bit-update select steps.
+/// Telomere internal fused run of consecutive i32 bit-update select steps.
 ///
 /// Stack effect: `[state] -> [selected]`.
 /// Traps: none.

@@ -101,6 +101,52 @@ async fn optimizer_direct_call_with_mixed_local_const_args_remains_correct() {
 }
 
 #[tokio::test]
+async fn optimizer_direct_call_cached_u16_guard_rejects_wrong_return_mask() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 0) "\c0\00")
+          (func $almost_cached_u16_low7_guard
+            (param $data i32)
+            (param $ctx i32)
+            (result i32)
+            (local $cached i32)
+            local.get $data
+            i32.load16_u
+            local.tee $cached
+            i32.const 128
+            i32.and
+            if
+              local.get $cached
+              i32.const 63
+              i32.and
+              return
+            end
+            i32.const 7)
+          (func (export "run") (result i32)
+            i32.const 0
+            i32.const 0
+            call $almost_cached_u16_low7_guard))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(&instance, &store, "run", &ResultValue::new(vec![])).await;
+
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(values, ResultValue::new(vec![WasmValue::I32(0)]));
+        }
+        other => panic!("almost cached-u16 guard call must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn optimizer_small_memory_loop_remains_correct() {
     let store = Store::new();
     let registry = Registry::new();
@@ -1317,6 +1363,370 @@ async fn optimizer_i32_load16_s_mul_add_local_base_delta_loop_remains_correct() 
 }
 
 #[tokio::test]
+async fn optimizer_i32_load16_u_bitmix_acc_local_base_delta_loop_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 8) "\0a\00\0c\00\0e\00")
+          (data (i32.const 32) "\09\00\0b\00\0d\00")
+          (func (export "bitmix")
+            (param $a_start i32)
+            (param $b_start i32)
+            (param $count i32)
+            (param $a_stride i32)
+            (param $acc i32)
+            (result i32 i32 i32 i32)
+            (local $a i32)
+            (local $b i32)
+            (local $counter i32)
+            local.get $a_start
+            local.set $a
+            local.get $b_start
+            local.set $b
+            local.get $count
+            local.set $counter
+            loop $again
+              local.get $acc
+              local.get $a
+              i32.load16_u
+              local.get $b
+              i32.load16_u
+              i32.mul
+              local.tee $acc
+              i32.const 2
+              i32.shr_u
+              i32.const 15
+              i32.and
+              local.get $acc
+              i32.const 5
+              i32.shr_u
+              i32.const 127
+              i32.and
+              i32.mul
+              i32.add
+              local.set $acc
+              local.get $b
+              i32.const 2
+              i32.add
+              local.set $b
+              local.get $a
+              local.get $a_stride
+              i32.add
+              local.set $a
+              local.get $counter
+              i32.const -1
+              i32.add
+              local.tee $counter
+              br_if $again
+            end
+            local.get $acc
+            local.get $a
+            local.get $b
+            local.get $counter))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "bitmix",
+        &ResultValue::new(vec![
+            WasmValue::I32(8),
+            WasmValue::I32(32),
+            WasmValue::I32(3),
+            WasmValue::I32(2),
+            WasmValue::I32(1),
+        ]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(
+                values,
+                ResultValue::new(vec![
+                    WasmValue::I32(82),
+                    WasmValue::I32(14),
+                    WasmValue::I32(38),
+                    WasmValue::I32(0)
+                ])
+            );
+        }
+        other => panic!("load16_u bitmix loop must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_i32_load16_u_update_store16_local_base_loop_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 8) "\01\00\02\00\ff\ff")
+          (data (i32.const 32) "\0a\00\14\00\1e\00\00\00")
+          (func (export "add_loop") (param $ptr i32) (param $scalar i32) (param $count i32)
+            (result i32 i32 i32 i32 i32)
+            (local $p i32)
+            (local $c i32)
+            local.get $ptr
+            local.set $p
+            local.get $count
+            local.set $c
+            loop $again
+              local.get $p
+              local.get $p
+              i32.load16_u
+              local.get $scalar
+              i32.add
+              i32.store16
+              local.get $p
+              i32.const 2
+              i32.add
+              local.set $p
+              local.get $c
+              i32.const -1
+              i32.add
+              local.tee $c
+              br_if $again
+            end
+            local.get $p
+            local.get $c
+            i32.const 8
+            i32.load16_u
+            i32.const 10
+            i32.load16_u
+            i32.const 12
+            i32.load16_u)
+          (func (export "sub_loop") (param $ptr i32) (param $scalar i32) (param $count i32)
+            (result i32 i32 i32 i32 i32 i32)
+            (local $p i32)
+            (local $c i32)
+            local.get $ptr
+            local.set $p
+            local.get $count
+            local.set $c
+            loop $again
+              local.get $p
+              i32.const 2
+              i32.add
+              local.get $p
+              i32.load16_u
+              local.get $scalar
+              i32.sub
+              i32.store16
+              local.get $p
+              i32.const 2
+              i32.add
+              local.set $p
+              local.get $c
+              i32.const -1
+              i32.add
+              local.tee $c
+              br_if $again
+            end
+            local.get $p
+            local.get $c
+            i32.const 32
+            i32.load16_u
+            i32.const 34
+            i32.load16_u
+            i32.const 36
+            i32.load16_u
+            i32.const 38
+            i32.load16_u))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let add = run_module_function(
+        &instance,
+        &store,
+        "add_loop",
+        &ResultValue::new(vec![
+            WasmValue::I32(8),
+            WasmValue::I32(3),
+            WasmValue::I32(3),
+        ]),
+    )
+    .await;
+    match add {
+        VMResult::Success(values) => {
+            assert_eq!(
+                values,
+                ResultValue::new(vec![
+                    WasmValue::I32(14),
+                    WasmValue::I32(0),
+                    WasmValue::I32(4),
+                    WasmValue::I32(5),
+                    WasmValue::I32(2)
+                ])
+            );
+        }
+        other => panic!("load16_u update store16 add loop must succeed, got {other:?}"),
+    }
+
+    let sub = run_module_function(
+        &instance,
+        &store,
+        "sub_loop",
+        &ResultValue::new(vec![
+            WasmValue::I32(32),
+            WasmValue::I32(4),
+            WasmValue::I32(3),
+        ]),
+    )
+    .await;
+    match sub {
+        VMResult::Success(values) => {
+            assert_eq!(
+                values,
+                ResultValue::new(vec![
+                    WasmValue::I32(38),
+                    WasmValue::I32(0),
+                    WasmValue::I32(10),
+                    WasmValue::I32(6),
+                    WasmValue::I32(2),
+                    WasmValue::I32(65534)
+                ])
+            );
+        }
+        other => panic!("load16_u update store16 sub loop must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_load8_set_update_br_if_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 8) "\03\00")
+          (func (export "scan") (param $ptr i32) (result i32 i32)
+            (local $p i32)
+            (local $next i32)
+            (local $byte i32)
+            local.get $ptr
+            local.set $p
+            local.get $ptr
+            i32.const 1
+            i32.add
+            local.set $next
+            loop $again
+              local.get $p
+              i32.load8_u
+              local.set $byte
+              local.get $next
+              local.set $p
+              local.get $byte
+              br_if $again
+            end
+            local.get $p
+            local.get $byte))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "scan",
+        &ResultValue::new(vec![WasmValue::I32(8)]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(
+                values,
+                ResultValue::new(vec![WasmValue::I32(9), WasmValue::I32(0)])
+            );
+        }
+        other => panic!("load8 update br_if fusion must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_inc_load8_set_update_br_if_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 8) "\01\00")
+          (func (export "scan") (param $base i32) (param $ptr i32) (result i32 i32 i32)
+            (local $p i32)
+            (local $next i32)
+            (local $byte i32)
+            local.get $base
+            i32.const 0
+            i32.store offset=4
+            local.get $ptr
+            local.set $p
+            local.get $ptr
+            i32.const 1
+            i32.add
+            local.set $next
+            loop $again
+              local.get $base
+              local.get $base
+              i32.load offset=4
+              i32.const 1
+              i32.add
+              i32.store offset=4
+              local.get $p
+              i32.load8_u
+              local.set $byte
+              local.get $next
+              local.set $p
+              local.get $byte
+              br_if $again
+            end
+            local.get $base
+            i32.load offset=4
+            local.get $p
+            local.get $byte))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "scan",
+        &ResultValue::new(vec![WasmValue::I32(0), WasmValue::I32(8)]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(
+                values,
+                ResultValue::new(vec![
+                    WasmValue::I32(2),
+                    WasmValue::I32(9),
+                    WasmValue::I32(0)
+                ])
+            );
+        }
+        other => panic!("inc load8 update br_if fusion must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn optimizer_i32_sum_clip_local_base_loop_remains_correct() {
     let store = Store::new();
     let registry = Registry::new();
@@ -1398,9 +1808,9 @@ async fn optimizer_i32_sum_clip_local_base_loop_remains_correct() {
                     WasmValue::I32(16),
                     WasmValue::I32(0),
                     WasmValue::I32(3),
-                    WasmValue::I32(103),
-                    WasmValue::I32(1),
-                    WasmValue::I32(21)
+                    WasmValue::I32(3),
+                    WasmValue::I32(0),
+                    WasmValue::I32(12)
                 ])
             );
         }

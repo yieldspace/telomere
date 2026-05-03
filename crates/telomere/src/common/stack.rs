@@ -357,6 +357,19 @@ impl Stack {
     }
 
     #[inline(always)]
+    pub(crate) fn peek_u32_fast_from_top(&self, byte_depth: usize) -> u32 {
+        debug_assert!(self.top >= byte_depth + 4);
+        let offset = self.top - byte_depth - 4;
+        u32::from_le(unsafe {
+            self.memory
+                .as_ptr()
+                .add(offset)
+                .cast::<u32>()
+                .read_unaligned()
+        })
+    }
+
+    #[inline(always)]
     pub fn reduce_top_i32_add(&mut self) -> i32 {
         debug_assert!(self.top >= 8);
         let rhs_offset = self.top - 4;

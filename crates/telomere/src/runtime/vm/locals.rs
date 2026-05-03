@@ -97,9 +97,10 @@ fn maybe_profile_local_get(_label: &'static str) {
 #[inline(always)]
 unsafe fn op_local_get4_impl(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let addr = (*tail_code).operand.local_addr as usize;
-    vm_try!(ctx
+    let value = ctx
         .stack
-        .local_get4_from_base(ctx.local_base_ptr as *const u8, addr));
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, addr);
+    vm_try!(ctx.stack.push_u32_fast(value));
     trace!("op_local_get4: {addr}");
     call_next(tail_code, 1, ctx)
 }

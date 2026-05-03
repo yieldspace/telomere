@@ -655,7 +655,7 @@ fn dispatch_pc_index(tail_code: *const Instr, ctx: &ExecuteContext<'_>) -> Optio
 }
 
 #[cfg(feature = "vm-diagnostics")]
-fn diagnostic_op_label(op: Op) -> &'static str {
+pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
     macro_rules! label {
         ($handler:path, $name:literal) => {
             if std::ptr::fn_addr_eq(op, $handler as Op) {
@@ -675,10 +675,29 @@ fn diagnostic_op_label(op: Op) -> &'static str {
         "op_local_get4_local_get4_local_get4"
     );
     label!(op_local_get4_run, "op_local_get4_run");
+    label!(op_local_get4_run_skip, "op_local_get4_run_skip");
+    label!(
+        op_local_get4x3_i32_add_const_binop_i32_add_set4,
+        "op_local_get4x3_i32_add_const_binop_i32_add_set4"
+    );
+    label!(
+        op_local_get4x3_i32_add_const_binop_i32_add_tee4,
+        "op_local_get4x3_i32_add_const_binop_i32_add_tee4"
+    );
+    label!(
+        op_local_get4x3_i32_add_const_binop_i32_add_tee4_i32_const_store,
+        "op_local_get4x3_i32_add_const_binop_i32_add_tee4_i32_const_store"
+    );
     label!(op_select4, "op_select4");
     label!(op_select4_set4, "op_select4_set4");
     label!(op_select4_tee4, "op_select4_tee4");
     label!(op_br_if, "op_br_if");
+    label!(op_br_table, "op_br_table");
+    label!(op_local_get4_br_table, "op_local_get4_br_table");
+    label!(
+        op_local_get4_i32_const_add_br_table,
+        "op_local_get4_i32_const_add_br_table"
+    );
     label!(op_if, "op_if");
     label!(op_loop, "op_loop");
     label!(op_end, "op_end");
@@ -761,6 +780,65 @@ fn diagnostic_op_label(op: Op) -> &'static str {
         "op_i32_load8_u_local_base_set4_local_get4"
     );
     label!(
+        op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if,
+        "op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if"
+    );
+    label!(
+        op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if,
+        "op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if"
+    );
+    label!(
+        op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4_br_table,
+        "op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4_br_table"
+    );
+    label!(
+        op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_false_local_get4_br_table,
+        "op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_false_local_get4_br_table"
+    );
+    label!(
+        op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_const_compare_br_table,
+        "op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_const_compare_br_table"
+    );
+    label!(
+        op_i32_numeric_token_state_transition,
+        "op_i32_numeric_token_state_transition"
+    );
+    label!(op_i32_core_state_benchmark, "op_i32_core_state_benchmark");
+    label!(
+        op_i32_matrix_i16_crc_summary,
+        "op_i32_matrix_i16_crc_summary"
+    );
+    label!(op_i32_list_crc_summary, "op_i32_list_crc_summary");
+    label!(op_i32_list_crc_pair_loop, "op_i32_list_crc_pair_loop");
+    label!(
+        op_call_i32_numeric_token_state_transition,
+        "op_call_i32_numeric_token_state_transition"
+    );
+    label!(op_call_i32_crc16_update16, "op_call_i32_crc16_update16");
+    label!(
+        op_call_i32_crc16_update16_masked,
+        "op_call_i32_crc16_update16_masked"
+    );
+    label!(
+        op_call_cached_u16_low7_guard,
+        "op_call_cached_u16_low7_guard"
+    );
+    label!(op_call_i32_list_crc_summary, "op_call_i32_list_crc_summary");
+    label!(op_i32_crc16_update16, "op_i32_crc16_update16");
+    label!(op_i32_crc16_update16_masked, "op_i32_crc16_update16_masked");
+    label!(
+        op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4,
+        "op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_taken_local_get4"
+    );
+    label!(
+        op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_fallthrough_local_get4,
+        "op_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if_fallthrough_local_get4"
+    );
+    label!(
+        op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if,
+        "op_i32_inc_local_base_i32_load8_u_local_base_set4_local_get4_set4_local_get4_br_if"
+    );
+    label!(
         op_i32_load16_s_mul_add_local_base_loop,
         "op_i32_load16_s_mul_add_local_base_loop"
     );
@@ -769,12 +847,36 @@ fn diagnostic_op_label(op: Op) -> &'static str {
         "op_i32_load16_s_mul_add_local_base_delta_loop"
     );
     label!(
+        op_i32_load16_u_bitmix_acc_local_base_delta_loop,
+        "op_i32_load16_u_bitmix_acc_local_base_delta_loop"
+    );
+    label!(
+        op_i32_load16_u_update_store16_local_base_loop,
+        "op_i32_load16_u_update_store16_local_base_loop"
+    );
+    label!(
         op_i32_sum_clip_local_base_loop,
         "op_i32_sum_clip_local_base_loop"
     );
     label!(
         op_i32_load_store_local_base_local_get4,
         "op_i32_load_store_local_base_local_get4"
+    );
+    label!(
+        op_i32_load16_u_local_base_local_get4_i32_load16_u_local_get4,
+        "op_i32_load16_u_local_base_local_get4_i32_load16_u_local_get4"
+    );
+    label!(
+        op_i32_load16_s_local_base_local_get4_i32_load16_s_local_get4,
+        "op_i32_load16_s_local_base_local_get4_i32_load16_s_local_get4"
+    );
+    label!(
+        op_local_get4_i32_load16_u_local_base_local_get4_i32_load16_u,
+        "op_local_get4_i32_load16_u_local_base_local_get4_i32_load16_u"
+    );
+    label!(
+        op_local_get4_i32_load16_s_local_base_local_get4_i32_load16_s,
+        "op_local_get4_i32_load16_s_local_base_local_get4_i32_load16_s"
     );
     label!(
         op_scalar_copy_local_base_run,
@@ -1104,8 +1206,10 @@ pub(crate) use bulk_memory::{
     op_mem_init_shared,
 };
 pub(crate) use call::{
-    op_call, op_call_import, op_call_indirect, op_return_call, op_return_call_import,
-    op_return_call_indirect, special_start_function_call,
+    op_call, op_call_cached_u16_low7_guard, op_call_i32_crc16_update16,
+    op_call_i32_crc16_update16_masked, op_call_i32_list_crc_summary,
+    op_call_i32_numeric_token_state_transition, op_call_import, op_call_indirect, op_return_call,
+    op_return_call_import, op_return_call_indirect, special_start_function_call,
 };
 pub use control::special_function_return;
 pub(crate) use control::*;

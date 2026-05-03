@@ -177,6 +177,325 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     }
 }
 
+enum NumericTransitionCallOutcome {
+    Inlined,
+    Fallback,
+    Pending,
+}
+
+#[inline(always)]
+unsafe fn call_target_starts_with_numeric_transition(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::memory::op_i32_numeric_token_state_transition as crate::common::Op,
+    )
+}
+
+#[inline(always)]
+unsafe fn call_target_starts_with_crc16_update16(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::numeric::op_i32_crc16_update16 as crate::common::Op,
+    )
+}
+
+#[inline(always)]
+unsafe fn call_target_starts_with_crc16_update16_masked(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::numeric::op_i32_crc16_update16_masked as crate::common::Op,
+    )
+}
+
+#[inline(always)]
+unsafe fn call_target_starts_with_cached_u16_low7_guard(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::memory::op_i32_load16_u_local_base_tee4 as crate::common::Op,
+    )
+}
+
+#[allow(dead_code)]
+#[inline(always)]
+unsafe fn call_target_starts_with_list_crc_summary(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::memory::op_i32_list_crc_summary as crate::common::Op,
+    )
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_i32_numeric_token_state_transition(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_i32_numeric_token_state_transition");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_numeric_transition(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let counts = ctx.stack.pop_u32_fast();
+    let instr_ref = ctx.stack.pop_u32_fast();
+    let state = vm_try!(unsafe {
+        super::memory::i32_numeric_token_state_transition_value(instr_ref, counts, ctx)
+    });
+    vm_try!(ctx.stack.push_u32_fast(state));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for an optimizer-generated numeric state-transition callee.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, i32] -> [i32]` when the target still matches the native transition entry.
+/// Traps: propagates memory traps from the inlined callee or falls back to the generic call path.
+/// Notes: Keeps the direct call recipe operand live so host relinking can safely fall back to `op_call`.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The optimizer/instantiator must only select this handler for a direct call whose target was
+///   observed to start with `op_i32_numeric_token_state_transition`.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_i32_numeric_token_state_transition(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_i32_numeric_token_state_transition(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_i32_crc16_update16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_i32_crc16_update16");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_crc16_update16(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let crc = ctx.stack.pop_u32_fast();
+    let data = ctx.stack.pop_u32_fast();
+    vm_try!(ctx
+        .stack
+        .push_u32_fast(super::numeric::crc16_update16_bits(data, crc)));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for an optimizer-generated CRC16 update callee.
+///
+/// Stack effect: `[i32, i32] -> [i32]` when the target still matches the native CRC entry.
+/// Traps: falls back to the generic call path if the target has been relinked.
+/// Notes: Keeps the direct call recipe operand live so host relinking remains valid.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The instantiator must only select this handler for a direct call whose target was observed to
+///   start with `op_i32_crc16_update16`.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_i32_crc16_update16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_i32_crc16_update16(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_i32_crc16_update16_masked(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_i32_crc16_update16_masked");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_crc16_update16_masked(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let crc = ctx.stack.pop_u32_fast();
+    let data = ctx.stack.pop_u32_fast() & 0xffff;
+    vm_try!(ctx
+        .stack
+        .push_u32_fast(super::numeric::crc16_update16_bits(data, crc)));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for an optimizer-generated masked CRC16 wrapper callee.
+///
+/// Stack effect: `[i32, i32] -> [i32]` when the target still matches the native wrapper entry.
+/// Traps: falls back to the generic call path if the target has been relinked.
+/// Notes: This is the same relink-safe direct-call shape as `op_call_i32_crc16_update16`,
+/// with the wrapper's `data & 0xffff` operation folded into the call site.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The instantiator must only select this handler for a direct call whose target was observed to
+///   materialize as `op_i32_crc16_update16_masked`.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_i32_crc16_update16_masked(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_i32_crc16_update16_masked(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_cached_u16_low7_guard(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_cached_u16_low7_guard");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_cached_u16_low7_guard(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let data_ptr = ctx.stack.peek_u32_fast_from_top(4);
+    let cached =
+        vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(data_ptr as usize));
+    if cached & 0x80 == 0 {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let _context = ctx.stack.pop_u32_fast();
+    let _data = ctx.stack.pop_u32_fast();
+    vm_try!(ctx.stack.push_u32_fast(u32::from(cached & 0x7f)));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for a memoized `u16` low-bit guard.
+///
+/// Stack effect: `[i32, i32] -> [i32]` only when the callee's first load observes the cached bit.
+/// Traps: preserves the callee's first memory load trap; falls back to generic call when uncached.
+/// Notes: This is a guarded partial inlining of a common memoized-field function entry, not a full
+/// function replacement. If the guard does not match at runtime, the normal call path runs.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The instantiator must only select this handler for a direct call whose target starts with the
+///   validated cached-u16 guard shape.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_cached_u16_low7_guard(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_cached_u16_low7_guard(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[allow(dead_code)]
+#[inline(never)]
+unsafe fn internal_op_call_i32_list_crc_summary(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_i32_list_crc_summary");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_list_crc_summary(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let finder_idx = ctx.stack.pop_u32_fast();
+    let res = ctx.stack.pop_u32_fast();
+    let retval = vm_try!(unsafe { super::memory::list_crc_summary_value(ctx, res, finder_idx) });
+    vm_try!(ctx.stack.push_u32_fast(retval));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for a function already lowered to a verified list/CRC summary.
+///
+/// Stack effect: `[i32, i32] -> [i32]` when the target still starts with
+/// `op_i32_list_crc_summary`.
+/// Traps: propagates the same memory traps as the summary body or falls back to generic call after
+/// relinking.
+/// Notes: This removes only the direct-call frame around an already selected summary; it does not
+/// alter tail-call threading or `call_code` identity.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The instantiator must only select this for call targets whose body was verified and rewritten
+///   to `op_i32_list_crc_summary`.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[allow(dead_code)]
+pub unsafe fn op_call_i32_list_crc_summary(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_i32_list_crc_summary(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
 /// WebAssembly `call` for imported or otherwise generic direct callees.
 ///
 /// Spec:

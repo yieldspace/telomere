@@ -27,7 +27,6 @@ const ERRNO_BADF: u32 = 8;
 const ERRNO_FAULT: u32 = 21;
 const ERRNO_INVAL: u32 = 28;
 const ERRNO_IO: u32 = 29;
-const ERRNO_NOTSUP: u32 = 58;
 const ERRNO_SPIPE: u32 = 70;
 const EXIT_CODE_UNSET: u32 = u32::MAX;
 const CLOCKID_REALTIME: u32 = 0;
@@ -211,8 +210,9 @@ impl CoreWasiPreview1State {
                     .unwrap_or(self.wall_clock_origin);
                 Ok(system_time_to_ns(now))
             }
-            CLOCKID_MONOTONIC => Ok(duration_to_ns(self.monotonic_origin.elapsed())),
-            CLOCKID_PROCESS_CPUTIME_ID | CLOCKID_THREAD_CPUTIME_ID => Err(ERRNO_NOTSUP),
+            CLOCKID_MONOTONIC | CLOCKID_PROCESS_CPUTIME_ID | CLOCKID_THREAD_CPUTIME_ID => {
+                Ok(duration_to_ns(self.monotonic_origin.elapsed()))
+            }
             _ => Err(ERRNO_INVAL),
         }
     }
@@ -955,34 +955,52 @@ mod tests {
                   i32.const 4
                   return
                 end
+                i32.const 16
+                i64.const -1
+                i64.store
                 i32.const 2
                 i64.const 0
                 i32.const 16
                 call $clock_time_get
-                i32.const 58
-                i32.ne
                 if
                   i32.const 5
                   return
                 end
-                i32.const 3
-                i64.const 0
                 i32.const 16
-                call $clock_time_get
-                i32.const 58
-                i32.ne
+                i64.load
+                i64.const -1
+                i64.eq
                 if
                   i32.const 6
                   return
                 end
+                i32.const 24
+                i64.const -1
+                i64.store
+                i32.const 3
+                i64.const 0
+                i32.const 24
+                call $clock_time_get
+                if
+                  i32.const 7
+                  return
+                end
+                i32.const 24
+                i64.load
+                i64.const -1
+                i64.eq
+                if
+                  i32.const 8
+                  return
+                end
                 i32.const 9
                 i64.const 0
-                i32.const 16
+                i32.const 32
                 call $clock_time_get
                 i32.const 28
                 i32.ne
                 if
-                  i32.const 7
+                  i32.const 9
                   return
                 end
                 i32.const 0))
