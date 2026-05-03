@@ -1202,6 +1202,98 @@ async fn optimizer_i32_load16_s_mul_add_local_base_delta_loop_remains_correct() 
 }
 
 #[tokio::test]
+async fn optimizer_i32_sum_clip_local_base_loop_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 0) "\01\00\00\00\02\00\00\00\64\00\00\00\03\00\00\00")
+          (func (export "sum") (param $ptr i32) (param $clip i32) (param $counter i32)
+            (result i32 i32 i32 i32 i32 i32)
+            (local $value i32)
+            (local $acc i32)
+            (local $overflow i32)
+            (local $tally i32)
+            (local $prev i32)
+            loop $again
+              i32.const 0
+              local.get $ptr
+              i32.load
+              local.tee $value
+              local.get $acc
+              i32.add
+              local.tee $acc
+              local.get $acc
+              local.get $clip
+              i32.gt_s
+              local.tee $overflow
+              select
+              local.set $acc
+              i32.const 10
+              local.get $value
+              local.get $prev
+              i32.gt_s
+              local.get $overflow
+              select
+              local.get $tally
+              i32.add
+              local.set $tally
+              local.get $ptr
+              i32.const 4
+              i32.add
+              local.set $ptr
+              local.get $value
+              local.set $prev
+              local.get $counter
+              i32.const -1
+              i32.add
+              local.tee $counter
+              br_if $again
+            end
+            local.get $ptr
+            local.get $counter
+            local.get $value
+            local.get $acc
+            local.get $overflow
+            local.get $tally))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "sum",
+        &ResultValue::new(vec![
+            WasmValue::I32(0),
+            WasmValue::I32(5),
+            WasmValue::I32(4),
+        ]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(
+                values,
+                ResultValue::new(vec![
+                    WasmValue::I32(16),
+                    WasmValue::I32(0),
+                    WasmValue::I32(3),
+                    WasmValue::I32(103),
+                    WasmValue::I32(1),
+                    WasmValue::I32(21)
+                ])
+            );
+        }
+        other => panic!("i32 sum clip local-base loop must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn optimizer_i32_load_store_local_base_relink_loop_remains_correct() {
     let store = Store::new();
     let registry = Registry::new();
@@ -1365,6 +1457,64 @@ async fn optimizer_i32_inc_local_base_remains_correct() {
             assert_eq!(values, ResultValue::new(vec![WasmValue::I32(42)]));
         }
         other => panic!("i32 inc local-base must succeed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn optimizer_local_get4_i32_inc_local_base_load8_set4_remains_correct() {
+    let store = Store::new();
+    let registry = Registry::new();
+    let instance = instantiate_wat(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 8) "\00\00\00\00\29\00\00\00")
+          (data (i32.const 20) "\07")
+          (func (export "run") (param $preserved i32) (param $inc_base i32) (param $load_base i32)
+            (result i32 i32 i32)
+            (local $dst i32)
+            local.get $preserved
+            local.get $inc_base
+            local.get $inc_base
+            i32.load offset=4
+            i32.const 1
+            i32.add
+            i32.store offset=4
+            local.get $load_base
+            i32.load8_u
+            local.set $dst
+            local.get $dst
+            local.get $inc_base
+            i32.load offset=4))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![
+            WasmValue::I32(99),
+            WasmValue::I32(8),
+            WasmValue::I32(20),
+        ]),
+    )
+    .await;
+    match result {
+        VMResult::Success(values) => {
+            assert_eq!(
+                values,
+                ResultValue::new(vec![
+                    WasmValue::I32(99),
+                    WasmValue::I32(7),
+                    WasmValue::I32(42)
+                ])
+            );
+        }
+        other => panic!("local-get inc load8-set fusion must succeed, got {other:?}"),
     }
 }
 

@@ -795,32 +795,33 @@ pub unsafe fn op_i32_load16_s_mul_add_local_base_loop(
     let b_delta = (*tail_code.add(5)).operand.i32 as u32;
     let a_memarg = (*tail_code.add(6)).operand.memarg;
     let b_memarg = (*tail_code.add(7)).operand.memarg;
-    let loop_addr = (*tail_code.add(8)).operand.jump_addr;
     let local_base = ctx.local_base_ptr as *const u8;
 
-    let a_addr = ctx.stack.local_u32_from_base(local_base, a_local);
-    let b_addr = ctx.stack.local_u32_from_base(local_base, b_local);
-    let a = vm_try!(read_i32_load16_s_default(ctx, a_memarg, a_addr));
-    let b = vm_try!(read_i32_load16_s_default(ctx, b_memarg, b_addr));
-    let product = a.wrapping_mul(b) as u32;
-    let acc = ctx.stack.local_u32_from_base(local_base, acc_local);
-    ctx.stack
-        .local_set4_from_base_value(ctx.local_base_ptr, acc_local, acc.wrapping_add(product));
+    let mut a_addr = ctx.stack.local_u32_from_base(local_base, a_local);
+    let mut b_addr = ctx.stack.local_u32_from_base(local_base, b_local);
+    let mut acc = ctx.stack.local_u32_from_base(local_base, acc_local);
+    let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
+    loop {
+        let a = vm_try!(read_i32_load16_s_default(ctx, a_memarg, a_addr));
+        let b = vm_try!(read_i32_load16_s_default(ctx, b_memarg, b_addr));
+        let product = a.wrapping_mul(b) as u32;
+        acc = acc.wrapping_add(product);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, acc_local, acc);
 
-    ctx.stack
-        .local_set4_from_base_value(ctx.local_base_ptr, a_local, a_addr.wrapping_add(a_delta));
-    ctx.stack
-        .local_set4_from_base_value(ctx.local_base_ptr, b_local, b_addr.wrapping_add(b_delta));
+        a_addr = a_addr.wrapping_add(a_delta);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, a_local, a_addr);
+        b_addr = b_addr.wrapping_add(b_delta);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, b_local, b_addr);
 
-    let next_counter = ctx
-        .stack
-        .local_u32_from_base(local_base, counter_local)
-        .wrapping_sub(1);
-    ctx.stack
-        .local_set4_from_base_value(ctx.local_base_ptr, counter_local, next_counter);
-    if next_counter != 0 {
-        let ptr = ctx.code().offset(loop_addr as isize);
-        return call_next(ptr, 0, ctx);
+        counter = counter.wrapping_sub(1);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, counter_local, counter);
+        if counter == 0 {
+            break;
+        }
     }
     call_next(tail_code, 9, ctx)
 }
@@ -850,76 +851,139 @@ pub unsafe fn op_i32_load16_s_mul_add_local_base_delta_loop(
     let b_delta_operand = (*tail_code.add(6)).operand;
     let a_memarg = (*tail_code.add(7)).operand.memarg;
     let b_memarg = (*tail_code.add(8)).operand.memarg;
-    let loop_addr = (*tail_code.add(9)).operand.jump_addr;
     let local_base = ctx.local_base_ptr as *const u8;
 
-    let a_addr = ctx.stack.local_u32_from_base(local_base, a_local);
-    let b_addr = ctx.stack.local_u32_from_base(local_base, b_local);
-    let a = vm_try!(read_i32_load16_s_default(ctx, a_memarg, a_addr));
-    let b = vm_try!(read_i32_load16_s_default(ctx, b_memarg, b_addr));
-    let product = a.wrapping_mul(b) as u32;
-    let acc = ctx.stack.local_u32_from_base(local_base, acc_local);
-    ctx.stack
-        .local_set4_from_base_value(ctx.local_base_ptr, acc_local, acc.wrapping_add(product));
+    let mut a_addr = ctx.stack.local_u32_from_base(local_base, a_local);
+    let mut b_addr = ctx.stack.local_u32_from_base(local_base, b_local);
+    let mut acc = ctx.stack.local_u32_from_base(local_base, acc_local);
+    let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
+    loop {
+        let a = vm_try!(read_i32_load16_s_default(ctx, a_memarg, a_addr));
+        let b = vm_try!(read_i32_load16_s_default(ctx, b_memarg, b_addr));
+        let product = a.wrapping_mul(b) as u32;
+        acc = acc.wrapping_add(product);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, acc_local, acc);
 
-    if kind & FIRST_UPDATE_IS_B == 0 {
-        let a_delta = if kind & A_DELTA_IS_LOCAL != 0 {
+        if kind & FIRST_UPDATE_IS_B == 0 {
+            let a_delta = if kind & A_DELTA_IS_LOCAL != 0 {
+                ctx.stack
+                    .local_u32_from_base(local_base, a_delta_operand.local_addr as usize)
+            } else {
+                a_delta_operand.i32 as u32
+            };
+            a_addr = a_addr.wrapping_add(a_delta);
             ctx.stack
-                .local_u32_from_base(local_base, a_delta_operand.local_addr as usize)
-        } else {
-            a_delta_operand.i32 as u32
-        };
-        ctx.stack.local_set4_from_base_value(
-            ctx.local_base_ptr,
-            a_local,
-            a_addr.wrapping_add(a_delta),
-        );
-        let b_delta = if kind & B_DELTA_IS_LOCAL != 0 {
+                .local_set4_from_base_value(ctx.local_base_ptr, a_local, a_addr);
+            let b_delta = if kind & B_DELTA_IS_LOCAL != 0 {
+                ctx.stack
+                    .local_u32_from_base(local_base, b_delta_operand.local_addr as usize)
+            } else {
+                b_delta_operand.i32 as u32
+            };
+            b_addr = b_addr.wrapping_add(b_delta);
             ctx.stack
-                .local_u32_from_base(local_base, b_delta_operand.local_addr as usize)
+                .local_set4_from_base_value(ctx.local_base_ptr, b_local, b_addr);
         } else {
-            b_delta_operand.i32 as u32
-        };
-        ctx.stack.local_set4_from_base_value(
-            ctx.local_base_ptr,
-            b_local,
-            b_addr.wrapping_add(b_delta),
-        );
-    } else {
-        let b_delta = if kind & B_DELTA_IS_LOCAL != 0 {
+            let b_delta = if kind & B_DELTA_IS_LOCAL != 0 {
+                ctx.stack
+                    .local_u32_from_base(local_base, b_delta_operand.local_addr as usize)
+            } else {
+                b_delta_operand.i32 as u32
+            };
+            b_addr = b_addr.wrapping_add(b_delta);
             ctx.stack
-                .local_u32_from_base(local_base, b_delta_operand.local_addr as usize)
-        } else {
-            b_delta_operand.i32 as u32
-        };
-        ctx.stack.local_set4_from_base_value(
-            ctx.local_base_ptr,
-            b_local,
-            b_addr.wrapping_add(b_delta),
-        );
-        let a_delta = if kind & A_DELTA_IS_LOCAL != 0 {
+                .local_set4_from_base_value(ctx.local_base_ptr, b_local, b_addr);
+            let a_delta = if kind & A_DELTA_IS_LOCAL != 0 {
+                ctx.stack
+                    .local_u32_from_base(local_base, a_delta_operand.local_addr as usize)
+            } else {
+                a_delta_operand.i32 as u32
+            };
+            a_addr = a_addr.wrapping_add(a_delta);
             ctx.stack
-                .local_u32_from_base(local_base, a_delta_operand.local_addr as usize)
+                .local_set4_from_base_value(ctx.local_base_ptr, a_local, a_addr);
+        }
+
+        counter = counter.wrapping_sub(1);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, counter_local, counter);
+        if counter == 0 {
+            break;
+        }
+    }
+    call_next(tail_code, 10, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly counted `i32.load` scan with clipped accumulator and tally select updates.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this counted local-base scan loop fusion.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The handler preserves per-iteration load trap order and local write order.
+pub unsafe fn op_i32_sum_clip_local_base_loop(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_sum_clip_local_base_loop");
+    let ptr_local = (*tail_code).operand.local_addr as usize;
+    let load_delta = (*tail_code.add(1)).operand.i32 as u32;
+    let value_local = (*tail_code.add(2)).operand.local_addr as usize;
+    let acc_local = (*tail_code.add(3)).operand.local_addr as usize;
+    let overflow_local = (*tail_code.add(4)).operand.local_addr as usize;
+    let clip_local = (*tail_code.add(5)).operand.local_addr as usize;
+    let tally_local = (*tail_code.add(6)).operand.local_addr as usize;
+    let prev_local = (*tail_code.add(7)).operand.local_addr as usize;
+    let counter_local = (*tail_code.add(8)).operand.local_addr as usize;
+    let memarg = (*tail_code.add(9)).operand.memarg;
+    let local_base = ctx.local_base_ptr as *const u8;
+
+    let mut ptr = ctx.stack.local_u32_from_base(local_base, ptr_local);
+    let mut acc = ctx.stack.local_u32_from_base(local_base, acc_local);
+    let mut tally = ctx.stack.local_u32_from_base(local_base, tally_local);
+    let mut prev = ctx.stack.local_u32_from_base(local_base, prev_local);
+    let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
+    let clip = ctx.stack.local_u32_from_base(local_base, clip_local);
+    loop {
+        let start = vm_try!(compute_memory_offset(memarg, ptr.wrapping_add(load_delta)));
+        let value = vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u32_at(start));
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, value_local, value);
+
+        let sum = acc.wrapping_add(value);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, acc_local, sum);
+        let overflow = ((sum as i32) > (clip as i32)) as u32;
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, overflow_local, overflow);
+        acc = if overflow != 0 { sum } else { 0 };
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, acc_local, acc);
+
+        let increment = if overflow != 0 {
+            ((value as i32) > (prev as i32)) as u32
         } else {
-            a_delta_operand.i32 as u32
+            10
         };
-        ctx.stack.local_set4_from_base_value(
-            ctx.local_base_ptr,
-            a_local,
-            a_addr.wrapping_add(a_delta),
-        );
+        tally = tally.wrapping_add(increment);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, tally_local, tally);
+
+        ptr = ptr.wrapping_add(4);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, ptr_local, ptr);
+        prev = value;
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, prev_local, prev);
+        counter = counter.wrapping_sub(1);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, counter_local, counter);
+        if counter == 0 {
+            break;
+        }
     }
 
-    let next_counter = ctx
-        .stack
-        .local_u32_from_base(local_base, counter_local)
-        .wrapping_sub(1);
-    ctx.stack
-        .local_set4_from_base_value(ctx.local_base_ptr, counter_local, next_counter);
-    if next_counter != 0 {
-        let ptr = ctx.code().offset(loop_addr as isize);
-        return call_next(ptr, 0, ctx);
-    }
     call_next(tail_code, 10, ctx)
 }
 
@@ -939,6 +1003,28 @@ pub unsafe fn op_i32_inc_local_base(
     let load_delta = (*tail_code.add(2)).operand.i32 as u32;
     let load_memarg = (*tail_code.add(3)).operand.memarg;
     let store_memarg = (*tail_code.add(4)).operand.memarg;
+    vm_try!(unsafe {
+        i32_inc_local_base_at(
+            ctx,
+            base_local,
+            store_delta,
+            load_delta,
+            load_memarg,
+            store_memarg,
+        )
+    });
+    call_next(tail_code, 5, ctx)
+}
+
+#[inline(always)]
+unsafe fn i32_inc_local_base_at(
+    ctx: &mut ExecuteContext,
+    base_local: usize,
+    store_delta: u32,
+    load_delta: u32,
+    load_memarg: MemArg,
+    store_memarg: MemArg,
+) -> VMResult<()> {
     let local_base = ctx.local_base_ptr as *const u8;
     let base = ctx.stack.local_u32_from_base(local_base, base_local);
     let load_start = vm_try!(compute_memory_offset(
@@ -951,8 +1037,90 @@ pub unsafe fn op_i32_inc_local_base(
         store_memarg,
         base.wrapping_add(store_delta)
     ));
-    vm_try!(unsafe { ctx.default_local_memory_mut_unchecked() }.write_u32_at(store_start, value));
-    call_next(tail_code, 5, ctx)
+    unsafe { ctx.default_local_memory_mut_unchecked() }.write_u32_at(store_start, value)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `local.get; i32.load; i32.const 1; i32.add; i32.store` local-base increment fusion.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this local-get plus local-base increment handler.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The handler preserves the `local.get` push before the increment load/store trap order.
+pub unsafe fn op_local_get4_i32_inc_local_base(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_local_get4_i32_inc_local_base");
+    let preserved_local = (*tail_code).operand.local_addr as usize;
+    let base_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let store_delta = (*tail_code.add(2)).operand.i32 as u32;
+    let load_delta = (*tail_code.add(3)).operand.i32 as u32;
+    let load_memarg = (*tail_code.add(4)).operand.memarg;
+    let store_memarg = (*tail_code.add(5)).operand.memarg;
+    let preserved = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, preserved_local);
+    vm_try!(ctx.stack.push_u32_fast(preserved));
+    vm_try!(unsafe {
+        i32_inc_local_base_at(
+            ctx,
+            base_local,
+            store_delta,
+            load_delta,
+            load_memarg,
+            store_memarg,
+        )
+    });
+    call_next(tail_code, 6, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `local.get; i32` local-base increment; `i32.load8_u; local.set` fusion.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this local-get, increment, and load-set handler.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The handler preserves the original local push, increment load/store, then load8/set order.
+pub unsafe fn op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4");
+    let preserved_local = (*tail_code).operand.local_addr as usize;
+    let inc_base_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let inc_store_delta = (*tail_code.add(2)).operand.i32 as u32;
+    let inc_load_delta = (*tail_code.add(3)).operand.i32 as u32;
+    let inc_load_memarg = (*tail_code.add(4)).operand.memarg;
+    let inc_store_memarg = (*tail_code.add(5)).operand.memarg;
+    let load_base_local = (*tail_code.add(6)).operand.local_addr as usize;
+    let load_delta = (*tail_code.add(7)).operand.i32 as u32;
+    let load_memarg = (*tail_code.add(8)).operand.memarg;
+    let dst = (*tail_code.add(9)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let preserved = ctx.stack.local_u32_from_base(local_base, preserved_local);
+    vm_try!(ctx.stack.push_u32_fast(preserved));
+    vm_try!(unsafe {
+        i32_inc_local_base_at(
+            ctx,
+            inc_base_local,
+            inc_store_delta,
+            inc_load_delta,
+            inc_load_memarg,
+            inc_store_memarg,
+        )
+    });
+    let offset = ctx
+        .stack
+        .local_u32_from_base(local_base, load_base_local)
+        .wrapping_add(load_delta);
+    let start = vm_try!(compute_memory_offset(load_memarg, offset));
+    let value = u32::from(vm_try!(
+        unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start)
+    ));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    call_next(tail_code, 10, ctx)
 }
 
 #[allow(dead_code)]

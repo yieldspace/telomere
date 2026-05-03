@@ -743,12 +743,24 @@ fn diagnostic_op_label(op: Op) -> &'static str {
     label!(op_i32_store8_local_base, "op_i32_store8_local_base");
     label!(op_i32_inc_local_base, "op_i32_inc_local_base");
     label!(
+        op_local_get4_i32_inc_local_base,
+        "op_local_get4_i32_inc_local_base"
+    );
+    label!(
+        op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4,
+        "op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4"
+    );
+    label!(
         op_i32_load16_s_mul_add_local_base_loop,
         "op_i32_load16_s_mul_add_local_base_loop"
     );
     label!(
         op_i32_load16_s_mul_add_local_base_delta_loop,
         "op_i32_load16_s_mul_add_local_base_delta_loop"
+    );
+    label!(
+        op_i32_sum_clip_local_base_loop,
+        "op_i32_sum_clip_local_base_loop"
     );
     label!(
         op_i32_load_store_local_base_local_get4,

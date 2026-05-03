@@ -513,6 +513,67 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_selects_i32_sum_clip_local_base_loop() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $ptr i32) (param $clip i32) (param $counter i32)
+                (result i32)
+                (local $value i32)
+                (local $acc i32)
+                (local $overflow i32)
+                (local $tally i32)
+                (local $prev i32)
+                loop $again
+                  i32.const 0
+                  local.get $ptr
+                  i32.load
+                  local.tee $value
+                  local.get $acc
+                  i32.add
+                  local.tee $acc
+                  local.get $acc
+                  local.get $clip
+                  i32.gt_s
+                  local.tee $overflow
+                  select
+                  local.set $acc
+                  i32.const 10
+                  local.get $value
+                  local.get $prev
+                  i32.gt_s
+                  local.get $overflow
+                  select
+                  local.get $tally
+                  i32.add
+                  local.set $tally
+                  local.get $ptr
+                  i32.const 4
+                  i32.add
+                  local.set $ptr
+                  local.get $value
+                  local.set $prev
+                  local.get $counter
+                  i32.const -1
+                  i32.add
+                  local.tee $counter
+                  br_if $again
+                end
+                local.get $tally))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &func,
+                vm::op_i32_sum_clip_local_base_loop as crate::common::Op
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn optimizer_selects_i32_load_store_local_base_local_get4() {
         let func = function_at(
             r#"
@@ -1800,6 +1861,63 @@ mod tests {
         );
         assert_eq!(
             count_op(&func, vm::op_i32_inc_local_base as crate::common::Op),
+            1
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_local_get4_i32_inc_local_base_family() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $preserved i32) (param $base i32) (result i32)
+                local.get $preserved
+                local.get $base
+                local.get $base
+                i32.load offset=4
+                i32.const 1
+                i32.add
+                i32.store offset=4))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &func,
+                vm::op_local_get4_i32_inc_local_base as crate::common::Op
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_local_get4_i32_inc_local_base_load8_set4_family() {
+        let func = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $preserved i32) (param $inc_base i32) (param $load_base i32) (result i32)
+                (local $dst i32)
+                local.get $preserved
+                local.get $inc_base
+                local.get $inc_base
+                i32.load offset=4
+                i32.const 1
+                i32.add
+                i32.store offset=4
+                local.get $load_base
+                i32.load8_u
+                local.set $dst))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &func,
+                vm::op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4
+                    as crate::common::Op
+            ),
             1
         );
     }

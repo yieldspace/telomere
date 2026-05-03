@@ -152,6 +152,8 @@ pub(crate) fn select(func: &CanonFunc, analysis: &AnalysisResults) -> KernelFunc
         &LocalGetLocalCompareBrIfSpec,
         &LocalGet4Set4LocalGetConstCompareBrIfSpec,
         &LocalGetConstAddTeeBrIfSpec,
+        &LocalGet4I32IncLocalBaseI32Load8ULocalBaseSet4Spec,
+        &LocalGet4I32IncLocalBaseSpec,
         &LocalGet4RunSpec::EIGHT,
         &LocalGet4RunSpec::SEVEN,
         &LocalGet4RunSpec::SIX,
@@ -208,6 +210,7 @@ pub(crate) fn select(func: &CanonFunc, analysis: &AnalysisResults) -> KernelFunc
         &SelectWidthSpec::SIXTEEN,
         &Select4ConsumerSpec::SET,
         &Select4ConsumerSpec::TEE,
+        &I32SumClipLocalBaseLoopSpec,
         &I32Load16SDot4LocalBaseLoopSpec,
         &I32LoadStoreLocalBaseRelinkLoopSpec,
         &ScalarCopyLocalBaseRunSpec,
@@ -347,6 +350,8 @@ struct LocalGetConstCompareBrIfSpec;
 struct LocalGetLocalCompareBrIfSpec;
 struct LocalGet4Set4LocalGetConstCompareBrIfSpec;
 struct LocalGetConstAddTeeBrIfSpec;
+struct LocalGet4I32IncLocalBaseSpec;
+struct LocalGet4I32IncLocalBaseI32Load8ULocalBaseSet4Spec;
 struct LocalGet4RunSpec {
     width: usize,
     op: Op,
@@ -391,6 +396,50 @@ impl LocalGet4RunSpec {
         op: vm::op_local_get4_run as Op,
         label: "op_local_get4_run",
     };
+}
+
+impl FamilySpec for LocalGet4I32IncLocalBaseSpec {
+    fn group(&self) -> FamilyGroup {
+        FamilyGroup::Memory
+    }
+
+    fn name(&self) -> &'static str {
+        "op_local_get4_i32_inc_local_base"
+    }
+
+    fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
+        emit_local_get4_i32_inc_local_base(ctx, cursor).is_some()
+    }
+
+    fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
+        112 + loop_bonus(ctx)
+    }
+
+    fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
+        emit_local_get4_i32_inc_local_base(ctx, cursor)
+    }
+}
+
+impl FamilySpec for LocalGet4I32IncLocalBaseI32Load8ULocalBaseSet4Spec {
+    fn group(&self) -> FamilyGroup {
+        FamilyGroup::Memory
+    }
+
+    fn name(&self) -> &'static str {
+        "op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4"
+    }
+
+    fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
+        emit_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4(ctx, cursor).is_some()
+    }
+
+    fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
+        176 + loop_bonus(ctx)
+    }
+
+    fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
+        emit_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4(ctx, cursor)
+    }
 }
 
 impl FamilySpec for LocalGet4RunSpec {
@@ -3133,6 +3182,7 @@ struct ScalarLoadConstBaseSpec;
 struct ScalarStoreConstBaseSpec;
 struct I32LoadStoreLocalBaseReverseLoopSpec;
 struct I32LoadStoreLocalBaseRelinkLoopSpec;
+struct I32SumClipLocalBaseLoopSpec;
 struct I32Load16SDot4LocalBaseLoopSpec;
 struct I32Load16SMulAddLocalBaseDeltaLoopSpec;
 struct I32Load16SMulAddLocalBaseLoopSpec;
@@ -3202,6 +3252,28 @@ impl FamilySpec for I32LoadStoreLocalBaseRelinkLoopSpec {
 
     fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
         emit_i32_load_store_local_base_relink_loop(ctx, cursor)
+    }
+}
+
+impl FamilySpec for I32SumClipLocalBaseLoopSpec {
+    fn group(&self) -> FamilyGroup {
+        FamilyGroup::Memory
+    }
+
+    fn name(&self) -> &'static str {
+        "op_i32_sum_clip_local_base_loop"
+    }
+
+    fn matches(&self, ctx: &SelectionContext<'_>, cursor: usize) -> bool {
+        emit_i32_sum_clip_local_base_loop(ctx, cursor).is_some()
+    }
+
+    fn cost(&self, ctx: &SelectionContext<'_>, _cursor: usize) -> i32 {
+        240 + loop_bonus(ctx)
+    }
+
+    fn emit(&self, ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
+        emit_i32_sum_clip_local_base_loop(ctx, cursor)
     }
 }
 
@@ -4256,6 +4328,166 @@ fn scalar_copy_store_width(op: Op) -> Option<u32> {
     }
 }
 
+fn emit_i32_sum_clip_local_base_loop(
+    ctx: &SelectionContext<'_>,
+    cursor: usize,
+) -> Option<MatchResult> {
+    let zero = ctx.block.insts.get(cursor)?;
+    if raw_i32(Some(&const_operand_for_kind(
+        zero,
+        LocalFastConstKind::I32,
+    )?))?
+        != 0
+    {
+        return None;
+    }
+
+    let load_addr = match_i32_local_base_address(ctx.block, cursor + 1)?;
+    let mut at = cursor + 1 + load_addr.consumed;
+    let load = ctx.block.insts.get(at)?;
+    if !load.op_eq(vm::op_i32_load as Op) {
+        return None;
+    }
+    at += 1;
+    let value = raw_local_tee(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    let acc_get = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    if !ctx.block.insts.get(at)?.op_eq(vm::op_i32_add as Op) {
+        return None;
+    }
+    at += 1;
+    let acc_tee = raw_local_tee(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    let acc_cmp_get = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    let clip = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    if !ctx.block.insts.get(at)?.op_eq(vm::op_i32_gt_s as Op) {
+        return None;
+    }
+    at += 1;
+    let overflow = raw_local_tee(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    if !is_select4_inst(ctx.block.insts.get(at)?) {
+        return None;
+    }
+    at += 1;
+    let acc_set = raw_local_set(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    if raw_i32(Some(&const_operand_for_kind(
+        ctx.block.insts.get(at)?,
+        LocalFastConstKind::I32,
+    )?))?
+        != 10
+    {
+        return None;
+    }
+    at += 1;
+    let value_get = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    let prev = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    if !ctx.block.insts.get(at)?.op_eq(vm::op_i32_gt_s as Op) {
+        return None;
+    }
+    at += 1;
+    let overflow_get = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    if !is_select4_inst(ctx.block.insts.get(at)?) {
+        return None;
+    }
+    at += 1;
+    let tally_get = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    if !ctx.block.insts.get(at)?.op_eq(vm::op_i32_add as Op) {
+        return None;
+    }
+    at += 1;
+    let tally_set = raw_local_set(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    let ptr_update = match_i32_local_add_update(ctx, at)?;
+    at += 4;
+    let value_get_for_prev = raw_local_get(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    let prev_set = raw_local_set(ctx.block.insts.get(at)?, 4)?;
+    at += 1;
+    let counter_update = match_i32_local_add_tee_update(ctx.block, at)?;
+    at += 4;
+    let branch = ctx.block.insts.get(at)?;
+    if !branch.op_eq(vm::op_br_if as Op)
+        || branch_target(branch)? != ctx.block.id
+        || !same_raw_operand(&load_addr.base_local, &ptr_update.target)
+        || !matches!(ptr_update.delta, LoopDelta::Const(4))
+        || !matches!(counter_update.delta, LoopDelta::Const(-1))
+        || !same_raw_operand(&acc_get, &acc_tee)
+        || !same_raw_operand(&acc_get, &acc_cmp_get)
+        || !same_raw_operand(&acc_get, &acc_set)
+        || !same_raw_operand(&value, &value_get)
+        || !same_raw_operand(&value, &value_get_for_prev)
+        || !same_raw_operand(&prev, &prev_set)
+        || !same_raw_operand(&overflow, &overflow_get)
+        || !same_raw_operand(&tally_get, &tally_set)
+    {
+        return None;
+    }
+
+    Some(MatchResult {
+        group: FamilyGroup::Memory,
+        cost: 240 + loop_bonus(ctx),
+        consumed: at + 1 - cursor,
+        ops: vec![KernelOp {
+            label: None,
+            op: vm::op_i32_sum_clip_local_base_loop as Op,
+            operands: vec![
+                load_addr.base_local,
+                raw_i32_operand(load_addr.delta),
+                value,
+                acc_get,
+                overflow,
+                clip,
+                tally_get,
+                prev,
+                counter_update.target,
+                load.operands.first()?.clone(),
+            ],
+            family: "op_i32_sum_clip_local_base_loop",
+        }],
+    })
+}
+
+fn match_i32_local_add_tee_update(block: &CanonBlock, cursor: usize) -> Option<LoopLocalUpdate> {
+    let lhs = block.insts.get(cursor)?;
+    let rhs = block.insts.get(cursor + 1)?;
+    if !block.insts.get(cursor + 2)?.op_eq(vm::op_i32_add as Op) {
+        return None;
+    }
+    let target = raw_local_tee(block.insts.get(cursor + 3)?, 4)?;
+
+    if let Some(lhs_local) = raw_local_get(lhs, 4) {
+        if same_raw_operand(&lhs_local, &target) {
+            return Some(LoopLocalUpdate {
+                target,
+                delta: match_loop_delta_operand(rhs)?,
+            });
+        }
+    }
+    if let Some(rhs_local) = raw_local_get(rhs, 4) {
+        if same_raw_operand(&rhs_local, &target) {
+            return Some(LoopLocalUpdate {
+                target,
+                delta: match_loop_delta_operand(lhs)?,
+            });
+        }
+    }
+    None
+}
+
+fn is_select4_inst(inst: &CanonInst) -> bool {
+    inst.op_eq(vm::op_select4 as Op)
+        || (inst.op_eq(vm::op_select as Op) && raw_select(inst.operands.first()) == Some(4))
+}
+
 fn emit_i32_load16_s_dot4_local_base_loop(
     ctx: &SelectionContext<'_>,
     cursor: usize,
@@ -4699,18 +4931,116 @@ fn match_loop_delta_operand(inst: &CanonInst) -> Option<LoopDelta> {
     raw_local_get(inst, 4).map(LoopDelta::Local)
 }
 
+#[derive(Debug, Clone)]
+struct I32IncLocalBaseMatch {
+    base_local: LoweredOperand,
+    store_delta: i32,
+    load_delta: i32,
+    load_memarg: LoweredOperand,
+    store_memarg: LoweredOperand,
+    consumed: usize,
+}
+
+#[derive(Debug, Clone)]
+struct I32Load8ULocalBaseSet4Match {
+    base_local: LoweredOperand,
+    delta: i32,
+    memarg: LoweredOperand,
+    dst: LoweredOperand,
+    consumed: usize,
+}
+
 fn emit_i32_inc_local_base(ctx: &SelectionContext<'_>, cursor: usize) -> Option<MatchResult> {
-    let store_addr = match_i32_local_base_address(ctx.block, cursor)?;
+    let matched = match_i32_inc_local_base(ctx.block, cursor)?;
+    Some(MatchResult {
+        group: FamilyGroup::Memory,
+        cost: 82 + loop_bonus(ctx),
+        consumed: matched.consumed,
+        ops: vec![KernelOp {
+            label: None,
+            op: vm::op_i32_inc_local_base as Op,
+            operands: vec![
+                matched.base_local,
+                raw_i32_operand(matched.store_delta),
+                raw_i32_operand(matched.load_delta),
+                matched.load_memarg,
+                matched.store_memarg,
+            ],
+            family: "op_i32_inc_local_base",
+        }],
+    })
+}
+
+fn emit_local_get4_i32_inc_local_base(
+    ctx: &SelectionContext<'_>,
+    cursor: usize,
+) -> Option<MatchResult> {
+    let preserved = raw_local_get(ctx.block.insts.get(cursor)?, 4)?;
+    let inc = match_i32_inc_local_base(ctx.block, cursor + 1)?;
+    Some(MatchResult {
+        group: FamilyGroup::Memory,
+        cost: 112 + loop_bonus(ctx),
+        consumed: 1 + inc.consumed,
+        ops: vec![KernelOp {
+            label: None,
+            op: vm::op_local_get4_i32_inc_local_base as Op,
+            operands: vec![
+                preserved,
+                inc.base_local,
+                raw_i32_operand(inc.store_delta),
+                raw_i32_operand(inc.load_delta),
+                inc.load_memarg,
+                inc.store_memarg,
+            ],
+            family: "op_local_get4_i32_inc_local_base",
+        }],
+    })
+}
+
+fn emit_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4(
+    ctx: &SelectionContext<'_>,
+    cursor: usize,
+) -> Option<MatchResult> {
+    let preserved = raw_local_get(ctx.block.insts.get(cursor)?, 4)?;
+    let inc = match_i32_inc_local_base(ctx.block, cursor + 1)?;
+    let load_set_cursor = cursor + 1 + inc.consumed;
+    let load_set = match_i32_load8_u_local_base_set4(ctx.block, load_set_cursor)?;
+    Some(MatchResult {
+        group: FamilyGroup::Memory,
+        cost: 176 + loop_bonus(ctx),
+        consumed: 1 + inc.consumed + load_set.consumed,
+        ops: vec![KernelOp {
+            label: None,
+            op: vm::op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4 as Op,
+            operands: vec![
+                preserved,
+                inc.base_local,
+                raw_i32_operand(inc.store_delta),
+                raw_i32_operand(inc.load_delta),
+                inc.load_memarg,
+                inc.store_memarg,
+                load_set.base_local,
+                raw_i32_operand(load_set.delta),
+                load_set.memarg,
+                load_set.dst,
+            ],
+            family: "op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4",
+        }],
+    })
+}
+
+fn match_i32_inc_local_base(block: &CanonBlock, cursor: usize) -> Option<I32IncLocalBaseMatch> {
+    let store_addr = match_i32_local_base_address(block, cursor)?;
     let load_addr_cursor = cursor + store_addr.consumed;
-    let load_addr = match_i32_local_base_address(ctx.block, load_addr_cursor)?;
+    let load_addr = match_i32_local_base_address(block, load_addr_cursor)?;
     if !same_raw_operand(&store_addr.base_local, &load_addr.base_local) {
         return None;
     }
     let load_cursor = load_addr_cursor + load_addr.consumed;
-    let load = ctx.block.insts.get(load_cursor)?;
-    let konst = ctx.block.insts.get(load_cursor + 1)?;
-    let add = ctx.block.insts.get(load_cursor + 2)?;
-    let store = ctx.block.insts.get(load_cursor + 3)?;
+    let load = block.insts.get(load_cursor)?;
+    let konst = block.insts.get(load_cursor + 1)?;
+    let add = block.insts.get(load_cursor + 2)?;
+    let store = block.insts.get(load_cursor + 3)?;
     if !load.op_eq(vm::op_i32_load as Op)
         || raw_i32(Some(&const_operand_for_kind(
             konst,
@@ -4722,22 +5052,33 @@ fn emit_i32_inc_local_base(ctx: &SelectionContext<'_>, cursor: usize) -> Option<
     {
         return None;
     }
-    Some(MatchResult {
-        group: FamilyGroup::Memory,
-        cost: 82 + loop_bonus(ctx),
+    Some(I32IncLocalBaseMatch {
+        base_local: store_addr.base_local,
+        store_delta: store_addr.delta,
+        load_delta: load_addr.delta,
+        load_memarg: load.operands.first()?.clone(),
+        store_memarg: store.operands.first()?.clone(),
         consumed: load_cursor + 4 - cursor,
-        ops: vec![KernelOp {
-            label: None,
-            op: vm::op_i32_inc_local_base as Op,
-            operands: vec![
-                store_addr.base_local,
-                raw_i32_operand(store_addr.delta),
-                raw_i32_operand(load_addr.delta),
-                load.operands.first()?.clone(),
-                store.operands.first()?.clone(),
-            ],
-            family: "op_i32_inc_local_base",
-        }],
+    })
+}
+
+fn match_i32_load8_u_local_base_set4(
+    block: &CanonBlock,
+    cursor: usize,
+) -> Option<I32Load8ULocalBaseSet4Match> {
+    let matched = match_i32_local_base_address(block, cursor)?;
+    let load_cursor = cursor + matched.consumed;
+    let load = block.insts.get(load_cursor)?;
+    let consumer = block.insts.get(load_cursor + 1)?;
+    if !load.op_eq(vm::op_i32_load8_u as Op) {
+        return None;
+    }
+    Some(I32Load8ULocalBaseSet4Match {
+        base_local: matched.base_local,
+        delta: matched.delta,
+        memarg: load.operands.first()?.clone(),
+        dst: raw_local_set(consumer, 4)?,
+        consumed: matched.consumed + 2,
     })
 }
 
