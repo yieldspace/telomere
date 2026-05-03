@@ -376,6 +376,102 @@ mod tests {
     }
 
     #[test]
+    fn optimizer_selects_i32_select_bit_step4_family() {
+        let func = function_at(
+            r#"
+            (module
+              (func (export "run") (param $data i32) (param $crc i32) (result i32)
+                (local $tmp i32) (local $dst i32)
+                local.get $crc
+                i32.const 1
+                i32.shr_u
+                local.tee $tmp
+                i32.const -24575
+                i32.xor
+                local.get $tmp
+                local.get $data
+                local.get $crc
+                i32.xor
+                i32.const 1
+                i32.and
+                select
+                drop
+
+                local.get $crc
+                i32.const 1
+                i32.shr_u
+                i32.const 32767
+                i32.and
+                local.tee $tmp
+                local.get $tmp
+                i32.const 40961
+                i32.xor
+                local.get $crc
+                i32.const 1
+                i32.and
+                local.get $data
+                i32.const 15
+                i32.shr_u
+                i32.eq
+                select
+                local.tee $dst))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(&func, vm::op_i32_select_bit_step4 as crate::common::Op),
+            2
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_i32_select_bit_step4_run_family() {
+        let func = function_at(
+            r#"
+            (module
+              (func (export "run") (param $data i32) (param $crc i32) (result i32)
+                (local $tmp i32)
+                local.get $crc
+                i32.const 1
+                i32.shr_u
+                local.tee $tmp
+                i32.const -24575
+                i32.xor
+                local.get $tmp
+                local.get $data
+                local.get $crc
+                i32.xor
+                i32.const 1
+                i32.and
+                select
+                local.tee $crc
+
+                i32.const 1
+                i32.shr_u
+                i32.const 32767
+                i32.and
+                local.tee $tmp
+                i32.const -24575
+                i32.xor
+                local.get $tmp
+                local.get $data
+                i32.const 1
+                i32.shr_u
+                local.get $crc
+                i32.xor
+                i32.const 1
+                i32.and
+                select))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(&func, vm::op_i32_select_bit_step4_run as crate::common::Op),
+            1
+        );
+    }
+
+    #[test]
     fn optimizer_selects_select4_local_consumer_families() {
         let tee = function_at(
             r#"
@@ -1917,6 +2013,52 @@ mod tests {
                 &func,
                 vm::op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4
                     as crate::common::Op
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn optimizer_selects_local_get4_load8_set4_neighbor_families() {
+        let before = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $ptr i32) (param $keep i32)
+                (local $dst i32)
+                local.get $keep
+                local.get $ptr
+                i32.load8_u
+                local.set $dst
+                drop))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &before,
+                vm::op_local_get4_i32_load8_u_local_base_set4 as crate::common::Op
+            ),
+            1
+        );
+
+        let after = function_at(
+            r#"
+            (module
+              (memory 1)
+              (func (export "run") (param $ptr i32) (param $keep i32) (result i32)
+                (local $dst i32)
+                local.get $ptr
+                i32.load8_u
+                local.set $dst
+                local.get $keep))
+            "#,
+            0,
+        );
+        assert_eq!(
+            count_op(
+                &after,
+                vm::op_i32_load8_u_local_base_set4_local_get4 as crate::common::Op
             ),
             1
         );

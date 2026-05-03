@@ -12,6 +12,10 @@ use crate::{
     runtime::vm,
 };
 
+const I32_SELECT_BIT_STEP_MASK_SHIFTED: u32 = 1 << 0;
+const I32_SELECT_BIT_STEP_EQ_CONDITION: u32 = 1 << 1;
+const I32_SELECT_BIT_STEP_TEE_DST: u32 = 1 << 2;
+
 #[derive(Debug, Clone)]
 pub(crate) struct TransformResult {
     pub(crate) func: CanonFunc,
@@ -35,7 +39,7 @@ pub(crate) struct TransformResult {
 pub(crate) fn run(
     mut func: CanonFunc,
     locals: &mut LocalsData,
-    analysis: &AnalysisResults,
+    _analysis: &AnalysisResults,
 ) -> TransformResult {
     let mut canonicalized_branches = 0usize;
     let mut folded_consts = 0usize;
@@ -45,9 +49,11 @@ pub(crate) fn run(
     for block in &mut func.blocks {
         folded_consts += fold_const_ops(block);
         canonicalized_branches += fold_const_branches(block);
+        fuse_i32_select_bit_steps(block);
     }
     normalize_after_cfg_rewrites(&mut func);
     pre_hoists += hoist_pre_candidates(&mut func, locals);
+    let analysis = analysis::analyze(&func);
     for (block, sites) in func.blocks.iter_mut().zip(&analysis.gvn_sites) {
         cached_exprs += cache_redundant_local_exprs(block, locals, sites);
     }
@@ -718,6 +724,236 @@ fn fold_i64_const_window(
         folded_const_inst(&binary[0], &binary[2], folded.0, folded.1),
         3,
     ))
+}
+
+fn fuse_i32_select_bit_steps(block: &mut super::ir::CanonBlock) -> usize {
+    let mut rewritten = Vec::with_capacity(block.insts.len());
+    let mut cursor = 0usize;
+    let mut fused = 0usize;
+    while cursor < block.insts.len() {
+        if raw_local_get(block.insts.get(cursor), 4).is_some() {
+            if let Some((step, consumed)) =
+                match_i32_select_bit_step_window(&block.insts, cursor + 1)
+            {
+                rewritten.push(block.insts[cursor].clone());
+                rewritten.push(step);
+                cursor += consumed + 1;
+                fused += 1;
+                continue;
+            }
+        }
+        if let Some((step, consumed)) = match_i32_select_bit_step_window(&block.insts, cursor) {
+            rewritten.push(step);
+            cursor += consumed;
+            fused += 1;
+            continue;
+        }
+        rewritten.push(block.insts[cursor].clone());
+        cursor += 1;
+    }
+    if fused != 0 {
+        block.insts = rewritten;
+    }
+    fused
+}
+
+fn match_i32_select_bit_step_window(
+    insts: &[super::ir::CanonInst],
+    cursor: usize,
+) -> Option<(super::ir::CanonInst, usize)> {
+    let shift_one = insts.get(cursor)?;
+    let shr = insts.get(cursor + 1)?;
+    if raw_i32(shift_one.operands.first())? != 1 || !shr.op_eq(vm::op_i32_shr_u as Op) {
+        return None;
+    }
+
+    let mut flags = 0;
+    let mut at = cursor + 2;
+    if insts
+        .get(at)
+        .and_then(|inst| raw_i32(inst.operands.first()))
+        .is_some_and(|value| value == 0x7fff)
+        && insts
+            .get(at + 1)
+            .is_some_and(|inst| inst.op_eq(vm::op_i32_and as Op))
+    {
+        flags |= I32_SELECT_BIT_STEP_MASK_SHIFTED;
+        at += 2;
+    }
+
+    let tmp_local = raw_local_tee(insts.get(at), 4)?;
+    at += 1;
+
+    match_i32_select_bit_step_xor_condition(insts, cursor, at, tmp_local.clone(), flags)
+        .or_else(|| match_i32_select_bit_step_eq_condition(insts, cursor, at, tmp_local, flags))
+}
+
+fn match_i32_select_bit_step_xor_condition(
+    insts: &[super::ir::CanonInst],
+    start: usize,
+    cursor: usize,
+    tmp_local: LoweredOperand,
+    flags: u32,
+) -> Option<(super::ir::CanonInst, usize)> {
+    let poly = insts.get(cursor)?;
+    let xor = insts.get(cursor + 1)?;
+    let tmp_get = raw_local_get(insts.get(cursor + 2), 4)?;
+    if !xor.op_eq(vm::op_i32_xor as Op) || !same_raw_operand(&tmp_get, &tmp_local) {
+        return None;
+    }
+    let (source_local, source_shift, prev_local, condition_consumed) =
+        match_i32_xor_lsb_condition(insts, cursor + 3)?;
+    let select_cursor = cursor + 3 + condition_consumed;
+    let select = insts.get(select_cursor)?;
+    if !is_i32_select_inst(select) {
+        return None;
+    }
+    let (dst_local, flags, last_cursor) =
+        match_i32_select_bit_step_consumer(insts, select_cursor + 1, flags);
+    let operands = vec![
+        tmp_local,
+        poly.operands.first()?.clone(),
+        source_local,
+        raw_u32_operand(source_shift),
+        prev_local,
+        raw_u32_operand(flags),
+        dst_local,
+    ];
+    Some((
+        make_i32_select_bit_step_inst(&insts[start], &insts[last_cursor], operands),
+        last_cursor + 1 - start,
+    ))
+}
+
+fn match_i32_select_bit_step_eq_condition(
+    insts: &[super::ir::CanonInst],
+    start: usize,
+    cursor: usize,
+    tmp_local: LoweredOperand,
+    flags: u32,
+) -> Option<(super::ir::CanonInst, usize)> {
+    let tmp_get = raw_local_get(insts.get(cursor), 4)?;
+    let poly = insts.get(cursor + 1)?;
+    let xor = insts.get(cursor + 2)?;
+    let prev = raw_local_get(insts.get(cursor + 3), 4)?;
+    let one = insts.get(cursor + 4)?;
+    let and = insts.get(cursor + 5)?;
+    let source = raw_local_get(insts.get(cursor + 6), 4)?;
+    let shift = insts.get(cursor + 7)?;
+    let shr = insts.get(cursor + 8)?;
+    let eq = insts.get(cursor + 9)?;
+    let select = insts.get(cursor + 10)?;
+    if !same_raw_operand(&tmp_get, &tmp_local)
+        || !xor.op_eq(vm::op_i32_xor as Op)
+        || raw_i32(one.operands.first())? != 1
+        || !and.op_eq(vm::op_i32_and as Op)
+        || !shr.op_eq(vm::op_i32_shr_u as Op)
+        || !eq.op_eq(vm::op_i32_eq as Op)
+        || !is_i32_select_inst(select)
+    {
+        return None;
+    }
+    let (dst_local, flags, last_cursor) = match_i32_select_bit_step_consumer(
+        insts,
+        cursor + 11,
+        flags | I32_SELECT_BIT_STEP_EQ_CONDITION,
+    );
+    let operands = vec![
+        tmp_local,
+        poly.operands.first()?.clone(),
+        source,
+        raw_u32_operand(raw_i32(shift.operands.first())? as u32),
+        prev,
+        raw_u32_operand(flags),
+        dst_local,
+    ];
+    Some((
+        make_i32_select_bit_step_inst(&insts[start], &insts[last_cursor], operands),
+        last_cursor + 1 - start,
+    ))
+}
+
+fn match_i32_xor_lsb_condition(
+    insts: &[super::ir::CanonInst],
+    cursor: usize,
+) -> Option<(LoweredOperand, u32, LoweredOperand, usize)> {
+    let source = raw_local_get(insts.get(cursor), 4)?;
+    let mut source_shift = 0;
+    let mut at = cursor + 1;
+    if let (Some(shift), Some(shr)) = (insts.get(at), insts.get(at + 1)) {
+        if shift.op_eq(vm::op_i32_const as Op) && shr.op_eq(vm::op_i32_shr_u as Op) {
+            source_shift = raw_i32(shift.operands.first())? as u32;
+            at += 2;
+        }
+    }
+    let prev = raw_local_get(insts.get(at), 4)?;
+    let xor = insts.get(at + 1)?;
+    let one = insts.get(at + 2)?;
+    let and = insts.get(at + 3)?;
+    if !xor.op_eq(vm::op_i32_xor as Op)
+        || raw_i32(one.operands.first())? != 1
+        || !and.op_eq(vm::op_i32_and as Op)
+    {
+        return None;
+    }
+    Some((source, source_shift, prev, at + 4 - cursor))
+}
+
+fn match_i32_select_bit_step_consumer(
+    insts: &[super::ir::CanonInst],
+    cursor: usize,
+    flags: u32,
+) -> (LoweredOperand, u32, usize) {
+    if let Some(dst) = raw_local_tee(insts.get(cursor), 4) {
+        return (dst, flags | I32_SELECT_BIT_STEP_TEE_DST, cursor);
+    }
+    (raw_u32_operand(u32::MAX), flags, cursor - 1)
+}
+
+fn make_i32_select_bit_step_inst(
+    first: &super::ir::CanonInst,
+    last: &super::ir::CanonInst,
+    operands: Vec<LoweredOperand>,
+) -> super::ir::CanonInst {
+    super::ir::CanonInst {
+        id: first.id,
+        op: vm::op_i32_select_bit_step4 as Op,
+        operands,
+        stack_before: first.stack_before.clone(),
+        stack_after: last.stack_after.clone(),
+        preserved_prefix_len: first.preserved_prefix_len,
+        fresh_result_count: last.fresh_result_count,
+        effect: last.effect,
+    }
+}
+
+fn raw_local_tee(inst: Option<&super::ir::CanonInst>, width: u32) -> Option<LoweredOperand> {
+    let inst = inst?;
+    if width == 4 && inst.op_eq(vm::op_local_tee4 as Op) {
+        return inst.operands.first().cloned();
+    }
+    if width == 8 && inst.op_eq(vm::op_local_tee8 as Op) {
+        return inst.operands.first().cloned();
+    }
+    if width == 16 && inst.op_eq(vm::op_local_tee16 as Op) {
+        return inst.operands.first().cloned();
+    }
+    None
+}
+
+fn is_i32_select_inst(inst: &super::ir::CanonInst) -> bool {
+    inst.op_eq(vm::op_select as Op) || inst.op_eq(vm::op_select4 as Op)
+}
+
+fn same_raw_operand(lhs: &LoweredOperand, rhs: &LoweredOperand) -> bool {
+    match (lhs, rhs) {
+        (LoweredOperand::Raw(lhs), LoweredOperand::Raw(rhs)) => lhs == rhs,
+        _ => false,
+    }
+}
+
+fn raw_u32_operand(value: u32) -> LoweredOperand {
+    LoweredOperand::Raw(unsafe { Operand { u32: value }.encoded })
 }
 
 fn coalesce_local_set_get(block: &mut super::ir::CanonBlock, pair_cursors: &[usize]) -> usize {

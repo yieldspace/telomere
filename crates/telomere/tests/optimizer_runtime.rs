@@ -360,6 +360,121 @@ async fn optimizer_stack_const_binop_and_select_tee_remain_correct() {
 }
 
 #[tokio::test]
+async fn optimizer_i32_select_bit_step4_remains_correct() {
+    run_wast(
+        r#"
+        (module
+          (func (export "xor_step") (param $data i32) (param $crc i32) (result i32)
+            (local $tmp i32)
+            local.get $crc
+            i32.const 1
+            i32.shr_u
+            local.tee $tmp
+            i32.const -24575
+            i32.xor
+            local.get $tmp
+            local.get $data
+            local.get $crc
+            i32.xor
+            i32.const 1
+            i32.and
+            select)
+
+          (func (export "eq_step") (param $data i32) (param $crc i32) (result i32)
+            (local $tmp i32) (local $dst i32)
+            local.get $crc
+            i32.const 1
+            i32.shr_u
+            i32.const 32767
+            i32.and
+            local.tee $tmp
+            local.get $tmp
+            i32.const 40961
+            i32.xor
+            local.get $crc
+            i32.const 1
+            i32.and
+            local.get $data
+            i32.const 15
+            i32.shr_u
+            i32.eq
+            select
+            local.tee $dst)
+
+          (func (export "run2") (param $data i32) (param $crc i32) (result i32)
+            (local $tmp i32)
+            local.get $crc
+            i32.const 1
+            i32.shr_u
+            local.tee $tmp
+            i32.const -24575
+            i32.xor
+            local.get $tmp
+            local.get $data
+            local.get $crc
+            i32.xor
+            i32.const 1
+            i32.and
+            select
+            local.tee $crc
+            i32.const 1
+            i32.shr_u
+            i32.const 32767
+            i32.and
+            local.tee $tmp
+            i32.const -24575
+            i32.xor
+            local.get $tmp
+            local.get $data
+            i32.const 1
+            i32.shr_u
+            local.get $crc
+            i32.xor
+            i32.const 1
+            i32.and
+            select))
+
+        (assert_return (invoke "xor_step" (i32.const 1) (i32.const 0)) (i32.const -24575))
+        (assert_return (invoke "xor_step" (i32.const 0) (i32.const 2)) (i32.const 1))
+        (assert_return (invoke "eq_step" (i32.const 32768) (i32.const 1)) (i32.const 0))
+        (assert_return (invoke "eq_step" (i32.const 0) (i32.const 1)) (i32.const 40961))
+        (assert_return (invoke "run2" (i32.const 1) (i32.const 0)) (i32.const -4095))
+        "#,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn optimizer_load8_set4_local_get_neighbors_remain_correct() {
+    run_wast(
+        r#"
+        (module
+          (memory 1)
+          (data (i32.const 0) "\7f")
+          (func (export "before") (param $ptr i32) (result i32 i32)
+            (local $dst i32)
+            i32.const 9
+            local.set $dst
+            local.get $dst
+            local.get $ptr
+            i32.load8_u
+            local.set $dst
+            local.get $dst)
+          (func (export "after") (param $ptr i32) (result i32)
+            (local $dst i32)
+            local.get $ptr
+            i32.load8_u
+            local.set $dst
+            local.get $dst))
+
+        (assert_return (invoke "before" (i32.const 0)) (i32.const 9) (i32.const 127))
+        (assert_return (invoke "after" (i32.const 0)) (i32.const 127))
+        "#,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn optimizer_select_fast_path_preserves_global_set_i64_in_wast_flow() {
     run_wast(
         r#"

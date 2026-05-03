@@ -988,6 +988,61 @@ pub unsafe fn op_i32_sum_clip_local_base_loop(
 }
 
 #[allow(dead_code)]
+/// Counted `i32.load16_u; i32.add/sub; i32.store16` loop on a local-base pointer.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this counted narrow update loop.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The original loop must branch back to itself with the same validated stack shape.
+pub unsafe fn op_i32_load16_u_update_store16_local_base_loop(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    const SUBTRACT: u32 = 1;
+
+    profile_memory_family("op_i32_load16_u_update_store16_local_base_loop");
+    let kind = (*tail_code).operand.u32;
+    let ptr_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let scalar_local = (*tail_code.add(2)).operand.local_addr as usize;
+    let counter_local = (*tail_code.add(3)).operand.local_addr as usize;
+    let load_memarg = (*tail_code.add(4)).operand.memarg;
+    let store_memarg = (*tail_code.add(5)).operand.memarg;
+    let local_base = ctx.local_base_ptr as *const u8;
+
+    let mut ptr = ctx.stack.local_u32_from_base(local_base, ptr_local);
+    let scalar = ctx.stack.local_u32_from_base(local_base, scalar_local);
+    let mut counter = ctx.stack.local_u32_from_base(local_base, counter_local);
+    loop {
+        let load_start = vm_try!(compute_memory_offset(load_memarg, ptr));
+        let loaded = u32::from(vm_try!(
+            unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(load_start)
+        ));
+        let value = if kind & SUBTRACT != 0 {
+            loaded.wrapping_sub(scalar)
+        } else {
+            loaded.wrapping_add(scalar)
+        };
+        let store_start = vm_try!(compute_memory_offset(store_memarg, ptr));
+        vm_try!(
+            unsafe { ctx.default_local_memory_mut_unchecked() }
+                .write_bytes(store_start, &truncate_u32_to_u16_bytes(value))
+        );
+
+        ptr = ptr.wrapping_add(2);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, ptr_local, ptr);
+        counter = counter.wrapping_sub(1);
+        ctx.stack
+            .local_set4_from_base_value(ctx.local_base_ptr, counter_local, counter);
+        if counter == 0 {
+            break;
+        }
+    }
+
+    call_next(tail_code, 6, ctx)
+}
+
+#[allow(dead_code)]
 /// WebAssembly `i32.load; i32.const 1; i32.add; i32.store` local-base increment fusion.
 ///
 /// # Safety
@@ -1121,6 +1176,74 @@ pub unsafe fn op_local_get4_i32_inc_local_base_i32_load8_u_local_base_set4(
     ctx.stack
         .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
     call_next(tail_code, 10, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `local.get; i32.load8_u local-base; local.set` fusion.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this fused local-get and load/set handler.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The handler preserves the local push before the memory load trap point.
+pub unsafe fn op_local_get4_i32_load8_u_local_base_set4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_local_get4_i32_load8_u_local_base_set4");
+    let preserved_local = (*tail_code).operand.local_addr as usize;
+    let load_base_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let load_delta = (*tail_code.add(2)).operand.i32 as u32;
+    let load_memarg = (*tail_code.add(3)).operand.memarg;
+    let dst = (*tail_code.add(4)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let preserved = ctx.stack.local_u32_from_base(local_base, preserved_local);
+    vm_try!(ctx.stack.push_u32_fast(preserved));
+    let offset = ctx
+        .stack
+        .local_u32_from_base(local_base, load_base_local)
+        .wrapping_add(load_delta);
+    let start = vm_try!(compute_memory_offset(load_memarg, offset));
+    let value = u32::from(vm_try!(
+        unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start)
+    ));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    call_next(tail_code, 5, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `i32.load8_u local-base; local.set; local.get` fusion.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this fused load/set and local-get handler.
+/// - `ctx` must hold a valid frame, local base, and default memory for the active module.
+/// - The handler preserves the memory load and local write before the following local read.
+pub unsafe fn op_i32_load8_u_local_base_set4_local_get4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_memory_family("op_i32_load8_u_local_base_set4_local_get4");
+    let load_base_local = (*tail_code).operand.local_addr as usize;
+    let load_delta = (*tail_code.add(1)).operand.i32 as u32;
+    let load_memarg = (*tail_code.add(2)).operand.memarg;
+    let dst = (*tail_code.add(3)).operand.local_addr as usize;
+    let get_local = (*tail_code.add(4)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let offset = ctx
+        .stack
+        .local_u32_from_base(local_base, load_base_local)
+        .wrapping_add(load_delta);
+    let start = vm_try!(compute_memory_offset(load_memarg, offset));
+    let value = u32::from(vm_try!(
+        unsafe { ctx.default_local_memory_unchecked() }.read_u8_at(start)
+    ));
+    ctx.stack
+        .local_set4_from_base_value(ctx.local_base_ptr, dst, value);
+    let loaded_local = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, get_local);
+    vm_try!(ctx.stack.push_u32_fast(loaded_local));
+    call_next(tail_code, 5, ctx)
 }
 
 #[allow(dead_code)]
