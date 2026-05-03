@@ -51,24 +51,6 @@ pub fn trusted_copy_within(dst: &mut [u8], src_start: usize, src_end: usize, dst
 }
 
 #[inline(always)]
-pub fn trusted_read_u16(src: &[u8]) -> u16 {
-    debug_assert_eq!(src.len(), 2);
-    unsafe { u16::from_le(src.as_ptr().cast::<u16>().read_unaligned()) }
-}
-
-#[inline(always)]
-pub fn trusted_read_u32(src: &[u8]) -> u32 {
-    debug_assert_eq!(src.len(), 4);
-    unsafe { u32::from_le(src.as_ptr().cast::<u32>().read_unaligned()) }
-}
-
-#[inline(always)]
-pub fn trusted_read_u64(src: &[u8]) -> u64 {
-    debug_assert_eq!(src.len(), 8);
-    unsafe { u64::from_le(src.as_ptr().cast::<u64>().read_unaligned()) }
-}
-
-#[inline(always)]
 pub fn trusted_read_u128(src: &[u8]) -> u128 {
     debug_assert_eq!(src.len(), 16);
     unsafe { u128::from_le(src.as_ptr().cast::<u128>().read_unaligned()) }
@@ -341,6 +323,11 @@ impl fmt::Debug for Memory {
 }
 
 impl Memory {
+    #[inline(always)]
+    fn base_ptr(&self) -> *const u8 {
+        self.region.ptr.as_ptr()
+    }
+
     pub fn new(page_count: u32, max_page_size: u32) -> Result<Self, MemoryInitError> {
         Self::new_with_mapping(page_count, max_page_size, false)
     }
@@ -377,6 +364,16 @@ impl Memory {
         self.current_pages as usize * PAGE_SIZE
     }
 
+    #[inline(always)]
+    pub(crate) fn data_ptr(&self) -> *const u8 {
+        self.base_ptr()
+    }
+
+    #[inline(always)]
+    pub(crate) fn data_mut_ptr(&mut self) -> *mut u8 {
+        self.region.ptr.as_ptr()
+    }
+
     fn slice(&self) -> &[u8] {
         self.region.as_slice(self.data_size())
     }
@@ -408,15 +405,33 @@ impl Memory {
     }
 
     #[inline(always)]
+    pub fn write_u32_at(&mut self, offset: usize, value: u32) -> VMResult<()> {
+        let last = vm_try!(VMResult::from_option(offset.checked_add(4), || {
+            VMResult::MemoryIndexOutOfRange
+        }));
+        if last > self.data_size() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        unsafe {
+            self.region
+                .ptr
+                .as_ptr()
+                .add(offset)
+                .cast::<u32>()
+                .write_unaligned(value.to_le());
+        }
+        VMResult::Success(())
+    }
+
+    #[inline(always)]
     pub fn push_to_stack<const N: usize>(&self, stack: &mut Stack, offset: usize) -> VMResult<()> {
         let last = vm_try!(VMResult::from_option(offset.checked_add(N), || {
             VMResult::MemoryIndexOutOfRange
         }));
-        let bytes = vm_try!(VMResult::from_option(
-            self.slice().get(offset..last),
-            || { VMResult::MemoryIndexOutOfRange }
-        ));
-        stack.push_slice(bytes)
+        if last > self.data_size() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        unsafe { stack.push_copy_from_ptr::<N>(self.base_ptr().add(offset)) }
     }
 
     pub fn read_u8_array<const N: usize>(&self, offset: usize) -> VMResult<[u8; N]> {
@@ -436,10 +451,10 @@ impl Memory {
 
     #[inline(always)]
     pub fn read_u8_at(&self, offset: usize) -> VMResult<u8> {
-        VMResult::Success(*vm_try!(VMResult::from_option(
-            self.slice().get(offset),
-            || VMResult::MemoryIndexOutOfRange
-        )))
+        if offset >= self.data_size() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        VMResult::Success(unsafe { *self.base_ptr().add(offset) })
     }
 
     #[inline(always)]
@@ -452,11 +467,12 @@ impl Memory {
         let last = vm_try!(VMResult::from_option(offset.checked_add(2), || {
             VMResult::MemoryIndexOutOfRange
         }));
-        let bytes = vm_try!(VMResult::from_option(
-            self.slice().get(offset..last),
-            || { VMResult::MemoryIndexOutOfRange }
-        ));
-        VMResult::Success(trusted_read_u16(bytes))
+        if last > self.data_size() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        VMResult::Success(u16::from_le(unsafe {
+            self.base_ptr().add(offset).cast::<u16>().read_unaligned()
+        }))
     }
 
     #[inline(always)]
@@ -469,11 +485,12 @@ impl Memory {
         let last = vm_try!(VMResult::from_option(offset.checked_add(4), || {
             VMResult::MemoryIndexOutOfRange
         }));
-        let bytes = vm_try!(VMResult::from_option(
-            self.slice().get(offset..last),
-            || { VMResult::MemoryIndexOutOfRange }
-        ));
-        VMResult::Success(trusted_read_u32(bytes))
+        if last > self.data_size() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        VMResult::Success(u32::from_le(unsafe {
+            self.base_ptr().add(offset).cast::<u32>().read_unaligned()
+        }))
     }
 
     #[inline(always)]
@@ -486,11 +503,12 @@ impl Memory {
         let last = vm_try!(VMResult::from_option(offset.checked_add(8), || {
             VMResult::MemoryIndexOutOfRange
         }));
-        let bytes = vm_try!(VMResult::from_option(
-            self.slice().get(offset..last),
-            || { VMResult::MemoryIndexOutOfRange }
-        ));
-        VMResult::Success(trusted_read_u64(bytes))
+        if last > self.data_size() {
+            return VMResult::MemoryIndexOutOfRange;
+        }
+        VMResult::Success(u64::from_le(unsafe {
+            self.base_ptr().add(offset).cast::<u64>().read_unaligned()
+        }))
     }
 
     #[inline(always)]

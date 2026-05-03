@@ -2,7 +2,10 @@ use super::memory_effect::{
     Completion, CompletionPayload, HostCallPending, MemoryWaitPending, PendingOp,
 };
 use crate::{
-    common::{CallFrameCache, ExecuteContext, LocalReference, StablePc, StoreInner},
+    common::{
+        stack::CachedMemoryKind, CallFrameCache, ExecuteContext, LocalReference, StablePc,
+        StoreInner,
+    },
     Stack, Store, VMResult,
 };
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -306,7 +309,6 @@ impl<'a> Scheduler<'a> {
                 ..
             } = task;
             let fp = pc.resolve(gc, &stack, local_reference);
-
             let (res, cont, local_reference) = {
                 let current_frame = if local_reference.local_size as usize
                     >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
@@ -315,9 +317,23 @@ impl<'a> Scheduler<'a> {
                 } else {
                     CallFrameCache::dummy()
                 };
+                let local_base_ptr = unsafe { stack.local_area_mut_ptr(&local_reference) };
+                let default_local_memory_ptr = match current_frame.memory0_kind {
+                    CachedMemoryKind::Local => {
+                        gc.local_memory_mut(unsafe {
+                            crate::common::store::LocalMemoryId::from_raw_unchecked(
+                                current_frame.memory0_raw,
+                            )
+                        })
+                        .memory_mut() as *mut crate::common::Memory
+                    }
+                    CachedMemoryKind::None | CachedMemoryKind::Shared => std::ptr::null_mut(),
+                };
                 let mut ec = ExecuteContext {
                     gc,
                     local_reference,
+                    local_base_ptr,
+                    default_local_memory_ptr,
                     current_frame,
                     stack: &mut stack,
                     store: self.store,

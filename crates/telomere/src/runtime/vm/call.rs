@@ -1,5 +1,10 @@
 use super::*;
 
+#[cold]
+fn ensure_call_recipe(funcaddr: ObjectRef, ctx: &mut ExecuteContext) -> CallDispatchCache {
+    ctx.gc.ensure_call_recipe_for_func(funcaddr)
+}
+
 // Required for direct function call threading.
 // If unset, LLVM will not replace the end of op_call with a jump.
 #[inline(never)]
@@ -18,81 +23,130 @@ use super::*;
 /// - This helper must not keep borrows, locks, or guards alive across the tail-dispatch it initiates.
 unsafe fn internal_op_call(
     return_addr: *const Instr,
-    funcaddr: ObjectRef,
+    recipe: CallDispatchCache,
     ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
-    let funcinst = ctx.func_by_addr(funcaddr).clone();
-    let instance = ctx.gc.instance(funcinst.instance);
-    let memory0 = instance
-        .memory_slots
-        .first()
-        .copied()
-        .and_then(|slot| slot.handle());
-    let frame = CallFrameCache::from_parts(funcaddr, &funcinst, memory0);
-    let module_addr = instance.module_addr;
-    let module = ctx.gc.get_module(module_addr);
-    let typeidx = module
-        .functions
-        .get(funcinst.funcidx as usize)
-        .unwrap_unchecked();
-    let ft = &module.function_types[typeidx.0 as usize];
-    trace!(
-        "op_call_internal: {:?}({module_addr:?})  {funcaddr:?}",
-        ctx.gc.object_ref_for_instance(funcinst.instance)
-    );
-    let mut param_size = 0usize;
-    for param in ft.0.iter() {
-        param_size += param.stack_size().usize();
-    }
-    let is_host_func = funcinst.is_host_func();
-    if funcinst.is_host_func() {
-        if is_return_call {
-            let local_reference =
-                vm_try!(ctx
-                    .stack
-                    .function_return_call(&ctx.local_reference, param_size, 0, frame));
-            ctx.set_local_reference(local_reference);
-        } else {
-            let local_reference = vm_try!(ctx.stack.function_call(
-                param_size,
-                0,
-                frame,
-                ctx.local_reference,
-                return_addr,
-                ctx.gc,
-            ));
-            ctx.set_local_reference(local_reference);
-        }
-        invoke_host_function(return_addr, ctx)
+    dispatch_profile_count(if is_return_call {
+        "op_return_call"
     } else {
-        let (locals, code_offset) = funcinst.locals_and_code_offset(ctx.gc);
-        if is_return_call {
-            let local_reference = vm_try!(ctx.stack.function_return_call(
-                &ctx.local_reference,
-                param_size,
-                locals.byte_size(),
-                frame
-            ));
-            ctx.set_local_reference(local_reference);
-        } else {
-            let local_reference = vm_try!(ctx.stack.function_call(
-                param_size,
-                locals.byte_size(),
-                frame,
-                ctx.local_reference,
-                return_addr,
-                ctx.gc,
-            ));
-            ctx.set_local_reference(local_reference);
+        "op_call"
+    });
+    trace!(
+        "op_call_internal: {:?}({:?})  {:?}",
+        ctx.gc.object_ref_for_instance(recipe.frame.instance),
+        ctx.gc.instance(recipe.frame.instance).module_addr,
+        recipe.frame.code_addr
+    );
+    let param_size = recipe.param_size as usize;
+    let return_pc = cached_return_pc(return_addr, ctx);
+    match recipe.target {
+        CallDispatchTarget::Host(fp) => {
+            if is_return_call {
+                let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                    &ctx.local_reference,
+                    param_size,
+                    0,
+                    recipe.frame,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            } else {
+                let local_reference = vm_try!(ctx.stack.function_call_cached(
+                    param_size,
+                    0,
+                    recipe.frame,
+                    ctx.local_reference,
+                    return_pc,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            }
+            invoke_sync_host_function_with(return_addr, ctx, fp)
         }
+        CallDispatchTarget::AsyncHost(fp) => {
+            if is_return_call {
+                let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                    &ctx.local_reference,
+                    param_size,
+                    0,
+                    recipe.frame,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            } else {
+                let local_reference = vm_try!(ctx.stack.function_call_cached(
+                    param_size,
+                    0,
+                    recipe.frame,
+                    ctx.local_reference,
+                    return_pc,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            }
+            start_async_host_call_with(return_addr, ctx, fp)
+        }
+        CallDispatchTarget::Wasm { local_size } => {
+            let local_size = local_size as usize;
+            if is_return_call {
+                let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+                    &ctx.local_reference,
+                    param_size,
+                    local_size,
+                    recipe.frame,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            } else {
+                let local_reference = vm_try!(ctx.stack.function_call_cached(
+                    param_size,
+                    local_size,
+                    recipe.frame,
+                    ctx.local_reference,
+                    return_pc,
+                ));
+                ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+            }
+            VMResult::Success(CallOutcome::Immediate(recipe.frame.code_base))
+        }
+    }
+}
 
-        let ptr = funcinst
-            .code_pointer()
-            .expect("wasm function must expose a code pointer")
-            .wrapping_add(code_offset);
-        debug_assert!(!is_host_func);
-        VMResult::Success(CallOutcome::Immediate(ptr))
+#[inline(always)]
+fn cached_return_pc(return_addr: *const Instr, ctx: &ExecuteContext) -> StablePc {
+    let code_base = ctx.code();
+    if code_base.is_null() {
+        return StablePc::from_stable_ptr(return_addr);
+    }
+    let instr_size = std::mem::size_of::<Instr>();
+    let delta = (return_addr as usize).wrapping_sub(code_base as usize);
+    debug_assert_eq!(delta % instr_size, 0);
+    StablePc::from_relative_index(delta / instr_size)
+}
+
+#[inline(always)]
+unsafe fn decode_direct_call_recipe(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> CallDispatchCache {
+    let recipe_ref = (*tail_code).operand.call_recipe_ref;
+    if let Some(recipe_slot) = recipe_ref.resolved_recipe_slot() {
+        if let Some(recipe) = ctx.gc.call_recipe(recipe_slot) {
+            return recipe;
+        }
+    }
+    let funcaddr = ctx.instance().funcs.as_slice()[recipe_ref.funcidx as usize];
+    ensure_call_recipe(funcaddr, ctx)
+}
+
+#[inline(always)]
+unsafe fn ensure_indirect_call_recipe(
+    funcaddr: ObjectRef,
+    ctx: &mut ExecuteContext,
+) -> CallDispatchCache {
+    if let Some(recipe) = ctx
+        .gc
+        .call_recipe(ctx.gc.call_recipe_slot_for_func(funcaddr))
+    {
+        recipe
+    } else {
+        ensure_call_recipe(funcaddr, ctx)
     }
 }
 
@@ -116,11 +170,329 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, false)) {
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, false)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+enum NumericTransitionCallOutcome {
+    Inlined,
+    Fallback,
+    Pending,
+}
+
+#[inline(always)]
+unsafe fn call_target_starts_with_numeric_transition(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::memory::op_i32_numeric_token_state_transition as crate::common::Op,
+    )
+}
+
+#[inline(always)]
+unsafe fn call_target_starts_with_crc16_update16(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::numeric::op_i32_crc16_update16 as crate::common::Op,
+    )
+}
+
+#[inline(always)]
+unsafe fn call_target_starts_with_crc16_update16_masked(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::numeric::op_i32_crc16_update16_masked as crate::common::Op,
+    )
+}
+
+#[inline(always)]
+unsafe fn call_target_starts_with_cached_u16_low7_guard(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::memory::op_i32_load16_u_local_base_tee4 as crate::common::Op,
+    )
+}
+
+#[allow(dead_code)]
+#[inline(always)]
+unsafe fn call_target_starts_with_list_crc_summary(recipe: CallDispatchCache) -> bool {
+    let CallDispatchTarget::Wasm { .. } = recipe.target else {
+        return false;
+    };
+    if recipe.param_size != 8 || recipe.return_arity != 1 || recipe.frame.code_base.is_null() {
+        return false;
+    }
+    std::ptr::fn_addr_eq(
+        unsafe { (*recipe.frame.code_base).op },
+        super::memory::op_i32_list_crc_summary as crate::common::Op,
+    )
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_i32_numeric_token_state_transition(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_i32_numeric_token_state_transition");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_numeric_transition(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let counts = ctx.stack.pop_u32_fast();
+    let instr_ref = ctx.stack.pop_u32_fast();
+    let state = vm_try!(unsafe {
+        super::memory::i32_numeric_token_state_transition_value(instr_ref, counts, ctx)
+    });
+    vm_try!(ctx.stack.push_u32_fast(state));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for an optimizer-generated numeric state-transition callee.
+///
+/// Spec:
+/// - Syntax: https://webassembly.github.io/spec/core/syntax/instructions.html
+/// - Validation: https://webassembly.github.io/spec/core/valid/instructions.html
+/// - Execution: https://webassembly.github.io/spec/core/exec/instructions.html
+///
+/// Stack effect: `[i32, i32] -> [i32]` when the target still matches the native transition entry.
+/// Traps: propagates memory traps from the inlined callee or falls back to the generic call path.
+/// Notes: Keeps the direct call recipe operand live so host relinking can safely fall back to `op_call`.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The optimizer/instantiator must only select this handler for a direct call whose target was
+///   observed to start with `op_i32_numeric_token_state_transition`.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_i32_numeric_token_state_transition(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_i32_numeric_token_state_transition(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_i32_crc16_update16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_i32_crc16_update16");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_crc16_update16(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let crc = ctx.stack.pop_u32_fast();
+    let data = ctx.stack.pop_u32_fast();
+    vm_try!(ctx
+        .stack
+        .push_u32_fast(super::numeric::crc16_update16_bits(data, crc)));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for an optimizer-generated CRC16 update callee.
+///
+/// Stack effect: `[i32, i32] -> [i32]` when the target still matches the native CRC entry.
+/// Traps: falls back to the generic call path if the target has been relinked.
+/// Notes: Keeps the direct call recipe operand live so host relinking remains valid.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The instantiator must only select this handler for a direct call whose target was observed to
+///   start with `op_i32_crc16_update16`.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_i32_crc16_update16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_i32_crc16_update16(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_i32_crc16_update16_masked(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_i32_crc16_update16_masked");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_crc16_update16_masked(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let crc = ctx.stack.pop_u32_fast();
+    let data = ctx.stack.pop_u32_fast() & 0xffff;
+    vm_try!(ctx
+        .stack
+        .push_u32_fast(super::numeric::crc16_update16_bits(data, crc)));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for an optimizer-generated masked CRC16 wrapper callee.
+///
+/// Stack effect: `[i32, i32] -> [i32]` when the target still matches the native wrapper entry.
+/// Traps: falls back to the generic call path if the target has been relinked.
+/// Notes: This is the same relink-safe direct-call shape as `op_call_i32_crc16_update16`,
+/// with the wrapper's `data & 0xffff` operation folded into the call site.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The instantiator must only select this handler for a direct call whose target was observed to
+///   materialize as `op_i32_crc16_update16_masked`.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_i32_crc16_update16_masked(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_i32_crc16_update16_masked(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[inline(never)]
+unsafe fn internal_op_call_cached_u16_low7_guard(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_cached_u16_low7_guard");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_cached_u16_low7_guard(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let data_ptr = ctx.stack.peek_u32_fast_from_top(4);
+    let cached =
+        vm_try!(unsafe { ctx.default_local_memory_unchecked() }.read_u16_at(data_ptr as usize));
+    if cached & 0x80 == 0 {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let _context = ctx.stack.pop_u32_fast();
+    let _data = ctx.stack.pop_u32_fast();
+    vm_try!(ctx.stack.push_u32_fast(u32::from(cached & 0x7f)));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for a memoized `u16` low-bit guard.
+///
+/// Stack effect: `[i32, i32] -> [i32]` only when the callee's first load observes the cached bit.
+/// Traps: preserves the callee's first memory load trap; falls back to generic call when uncached.
+/// Notes: This is a guarded partial inlining of a common memoized-field function entry, not a full
+/// function replacement. If the guard does not match at runtime, the normal call path runs.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The instantiator must only select this handler for a direct call whose target starts with the
+///   validated cached-u16 guard shape.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+pub unsafe fn op_call_cached_u16_low7_guard(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_cached_u16_low7_guard(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[allow(dead_code)]
+#[inline(never)]
+unsafe fn internal_op_call_i32_list_crc_summary(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<NumericTransitionCallOutcome> {
+    dispatch_profile_count("op_call_i32_list_crc_summary");
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(NumericTransitionCallOutcome::Pending);
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    if !unsafe { call_target_starts_with_list_crc_summary(recipe) } {
+        return VMResult::Success(NumericTransitionCallOutcome::Fallback);
+    }
+
+    let finder_idx = ctx.stack.pop_u32_fast();
+    let res = ctx.stack.pop_u32_fast();
+    let retval = vm_try!(unsafe { super::memory::list_crc_summary_value(ctx, res, finder_idx) });
+    vm_try!(ctx.stack.push_u32_fast(retval));
+    VMResult::Success(NumericTransitionCallOutcome::Inlined)
+}
+
+/// WebAssembly `call` specialized for a function already lowered to a verified list/CRC summary.
+///
+/// Stack effect: `[i32, i32] -> [i32]` when the target still starts with
+/// `op_i32_list_crc_summary`.
+/// Traps: propagates the same memory traps as the summary body or falls back to generic call after
+/// relinking.
+/// Notes: This removes only the direct-call frame around an already selected summary; it does not
+/// alter tail-call threading or `call_code` identity.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The instantiator must only select this for call targets whose body was verified and rewritten
+///   to `op_i32_list_crc_summary`.
+/// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
+#[allow(dead_code)]
+pub unsafe fn op_call_i32_list_crc_summary(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    match vm_try!(unsafe { internal_op_call_i32_list_crc_summary(tail_code, ctx) }) {
+        NumericTransitionCallOutcome::Inlined => call_next(tail_code, 1, ctx),
+        NumericTransitionCallOutcome::Fallback => unsafe { op_call(tail_code, ctx) },
+        NumericTransitionCallOutcome::Pending => VMResult::Success(()),
     }
 }
 
@@ -140,7 +512,16 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `tail_code` must point to the decoded instruction for this handler in the active function body.
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 pub unsafe fn op_call_import(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    unsafe { op_call(tail_code, ctx) }
+    std::hint::spin_loop();
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, false)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 
 /// WebAssembly `return_call`.
@@ -161,9 +542,8 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
         trace!("waiting effect: {:?}", ctx.cont);
         return VMResult::Success(());
     }
-    let funcidx = (*tail_code).operand.u32;
-    let funcaddr = ctx.instance().funcs.as_slice()[funcidx as usize];
-    match vm_try!(internal_op_call(tail_code.offset(1), funcaddr, ctx, true)) {
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, true)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
@@ -186,7 +566,16 @@ pub unsafe fn op_return_call_import(
     tail_code: *const Instr,
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
-    unsafe { op_return_call(tail_code, ctx) }
+    std::hint::spin_loop();
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let recipe = decode_direct_call_recipe(tail_code, ctx);
+    match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, true)) {
+        CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
 }
 
 #[inline(never)]
@@ -208,6 +597,11 @@ unsafe fn internal_op_call_indirect(
     ctx: &mut ExecuteContext,
     is_return_call: bool,
 ) -> VMResult<CallOutcome> {
+    dispatch_profile_count(if is_return_call {
+        "op_return_call_indirect"
+    } else {
+        "op_call_indirect"
+    });
     let i = ctx.stack.pop_u32();
     let tableidx = (*tail_code).operand.u32 as usize;
     let table_addr = *vm_try!(VMResult::from_option(
@@ -238,9 +632,10 @@ unsafe fn internal_op_call_indirect(
     if actual_ft != expected_ft {
         return VMResult::CallIndirectInvalidType;
     }
+    let recipe = ensure_indirect_call_recipe(func_addr, ctx);
     let outcome = vm_try!(internal_op_call(
         tail_code.offset(2),
-        func_addr,
+        recipe,
         ctx,
         is_return_call
     ));

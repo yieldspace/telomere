@@ -239,4 +239,118 @@ mod tests {
 
         let _ = fs::remove_file(path);
     }
+
+    #[tokio::test]
+    async fn core_wasi_preview1_call_indirect_stdout_survives_optimizer() {
+        let path = write_wasm(
+            "preview1-indirect-stdout",
+            r#"
+            (module
+              (type $fdwrite (func (param i32 i32 i32 i32) (result i32)))
+              (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (type $fdwrite)))
+              (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+              (table 1 funcref)
+              (elem (i32.const 0) $write_via_import)
+              (memory 1)
+              (data (i32.const 0) "\08\00\00\00\0f\00\00\00")
+              (data (i32.const 8) "hello indirect\n")
+              (func $write_via_import (type $fdwrite)
+                local.get 0
+                local.get 1
+                local.get 2
+                local.get 3
+                call $fd_write)
+              (func (export "_start")
+                i32.const 1
+                i32.const 0
+                i32.const 1
+                i32.const 32
+                i32.const 0
+                call_indirect (type $fdwrite)
+                drop
+                i32.const 0
+                call $proc_exit))
+            "#,
+        );
+        let command = CoreCommand {
+            name: path.clone(),
+            tail_args: vec![],
+            args_after_separator: false,
+        };
+        let captured = core_wasi_preview1::CapturedStdio::default();
+
+        let exit = run_core_module_with_stdio(
+            command,
+            core_wasi_preview1::StdioMode::Capture(captured.clone()),
+        )
+        .await
+        .expect("preview1 indirect stdout path should succeed");
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(captured.stdout(), b"hello indirect\n");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn core_wasi_preview1_call_indirect_index_loaded_from_memory_survives_optimizer() {
+        let path = write_wasm(
+            "preview1-indirect-memory-index",
+            r#"
+            (module
+              (type $fdwrite (func (param i32 i32 i32 i32) (result i32)))
+              (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (type $fdwrite)))
+              (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+              (table 1 funcref)
+              (elem (i32.const 0) $write_via_import)
+              (memory 1)
+              (data (i32.const 0) "\08\00\00\00\0f\00\00\00")
+              (data (i32.const 8) "hello indirect\n")
+              (func $write_via_import (type $fdwrite)
+                local.get 0
+                local.get 1
+                local.get 2
+                local.get 3
+                call $fd_write)
+              (func (export "_start")
+                i32.const 64
+                i32.const 0
+                i32.store
+                i32.const 64
+                i32.const 1
+                i32.store
+                i32.const 64
+                i32.const 0
+                i32.store
+                i32.const 1
+                i32.const 0
+                i32.const 1
+                i32.const 32
+                i32.const 64
+                i32.load
+                call_indirect (type $fdwrite)
+                drop
+                i32.const 0
+                call $proc_exit))
+            "#,
+        );
+        let command = CoreCommand {
+            name: path.clone(),
+            tail_args: vec![],
+            args_after_separator: false,
+        };
+        let captured = core_wasi_preview1::CapturedStdio::default();
+
+        let exit = run_core_module_with_stdio(
+            command,
+            core_wasi_preview1::StdioMode::Capture(captured.clone()),
+        )
+        .await
+        .expect("preview1 indirect memory index path should succeed");
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(captured.stdout(), b"hello indirect\n");
+
+        let _ = fs::remove_file(path);
+    }
 }

@@ -1,6 +1,7 @@
 use super::base::WasmBaseParser;
 use super::instruction_generator::InstructionGenerator;
 use super::jump_resolver::JumpResolver;
+use super::optimizer::InstructionMeta;
 use super::type_checker::TypeChecker;
 use super::validate::*;
 use super::values;
@@ -20,7 +21,7 @@ use crate::parser::core::type_checker::MaybeUnreachable;
 use crate::runtime::vm;
 use crate::{
     common::{
-        BlockType, ConstExpr, DataCountVerifier, Elem, FuncIdx, FuncType, Instr,
+        BlockType, CallRecipeRef, ConstExpr, DataCountVerifier, Elem, FuncIdx, FuncType, Instr,
         LocalReassignTable, MemType, Op, Operand, TableType, TypeIdx, TypeSection, ValType,
         ValueSize,
     },
@@ -123,6 +124,66 @@ fn assert_data_idx(idx: u32, dcv: &mut DataCountVerifier) -> Result<()> {
 #[inline(always)]
 fn default_memory_is_shared(mems: &[MemType]) -> bool {
     mems.first().map(|mem| mem.shared).unwrap_or(false)
+}
+
+fn infer_generic_stack_shape(
+    stack_before: &crate::parser::core::type_checker::StackSnapshot,
+    stack_after: &crate::parser::core::type_checker::StackSnapshot,
+) -> (usize, usize) {
+    let preserved_prefix_len = stack_before
+        .types
+        .iter()
+        .zip(stack_after.types.iter())
+        .take_while(|(before, after)| before == after)
+        .count();
+    (
+        preserved_prefix_len,
+        stack_after.types.len().saturating_sub(preserved_prefix_len),
+    )
+}
+
+fn fixed_stack_shape(
+    input_count: usize,
+    result_count: usize,
+    stack_before: &crate::parser::core::type_checker::StackSnapshot,
+    stack_after: &crate::parser::core::type_checker::StackSnapshot,
+) -> (usize, usize) {
+    let preserved_prefix_len = stack_before.types.len().saturating_sub(input_count);
+    debug_assert_eq!(
+        preserved_prefix_len + result_count,
+        stack_after.types.len(),
+        "stack transition mismatch for fixed-shape instruction",
+    );
+    (preserved_prefix_len, result_count)
+}
+
+fn is_simd_replace_lane_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::simd::i8x16_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i16x8_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i32x4_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i64x2_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::f32x4_replace_lane as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::f64x2_replace_lane as Op)
+}
+
+fn is_simd_binary_v128_to_v128_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::simd::i8x16_swizzle as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i8x16_shuffle as Op)
+}
+
+fn is_simd_shift_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::simd::i8x16_shl as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i8x16_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::u8x16_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i16x8_shl as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i16x8_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::u16x8_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i32x4_shl as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i32x4_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::u32x4_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i64x2_shl as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::i64x2_shr as Op)
+        || std::ptr::fn_addr_eq(op, vm::simd::u64x2_shr as Op)
 }
 
 #[derive(Debug)]
@@ -313,11 +374,119 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
     fn parse_atomic_memarg(&mut self, natural_align_log2: u32) -> Result<(usize, u32, MemArg)> {
         values::parse_memarg_exact(self.reader, natural_align_log2)
     }
+
+    fn push_instruction_meta(
+        &self,
+        instrs: &InstructionGenerator,
+        meta: &mut Vec<InstructionMeta>,
+        start: usize,
+        end: usize,
+        stack_before: crate::parser::core::type_checker::StackSnapshot,
+        stack_after: crate::parser::core::type_checker::StackSnapshot,
+    ) {
+        if end > start {
+            let (preserved_prefix_len, fresh_result_count) =
+                self.infer_instruction_meta_shape(instrs, start, &stack_before, &stack_after);
+            meta.push(InstructionMeta {
+                start,
+                len: end - start,
+                stack_before,
+                stack_after,
+                preserved_prefix_len,
+                fresh_result_count,
+            });
+        }
+    }
+
+    fn infer_instruction_meta_shape(
+        &self,
+        instrs: &InstructionGenerator,
+        start: usize,
+        stack_before: &crate::parser::core::type_checker::StackSnapshot,
+        stack_after: &crate::parser::core::type_checker::StackSnapshot,
+    ) -> (usize, usize) {
+        let op = unsafe { instrs[start].op };
+        if is_simd_replace_lane_op(op) || is_simd_shift_op(op) || is_simd_binary_v128_to_v128_op(op)
+        {
+            return fixed_stack_shape(2, 1, stack_before, stack_after);
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_select as Op) {
+            return fixed_stack_shape(3, 1, stack_before, stack_after);
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_call as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_call_import as Op)
+        {
+            let funcidx = unsafe { instrs[start + 1].operand.u32 };
+            return self.direct_call_stack_shape(funcidx, 0, stack_before, stack_after);
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_call_indirect as Op) {
+            let typeidx = unsafe { instrs[start + 2].operand.u32 };
+            return self.typeidx_call_stack_shape(typeidx, 1, stack_before, stack_after);
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_return_call as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_import as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br_table as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_return as Op)
+            || std::ptr::fn_addr_eq(op, vm::special_function_return as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_unreachable as Op)
+        {
+            return (0, 0);
+        }
+        if std::ptr::fn_addr_eq(op, vm::op_if as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_br_if as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_else as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_loop as Op)
+            || std::ptr::fn_addr_eq(op, vm::op_end as Op)
+            || std::ptr::fn_addr_eq(op, vm::special_block_return as Op)
+        {
+            return (stack_after.types.len(), 0);
+        }
+        infer_generic_stack_shape(stack_before, stack_after)
+    }
+
+    fn direct_call_stack_shape(
+        &self,
+        funcidx: u32,
+        extra_inputs: usize,
+        stack_before: &crate::parser::core::type_checker::StackSnapshot,
+        stack_after: &crate::parser::core::type_checker::StackSnapshot,
+    ) -> (usize, usize) {
+        let Some(typeidx) = self.functions.get(funcidx as usize) else {
+            return infer_generic_stack_shape(stack_before, stack_after);
+        };
+        self.typeidx_call_stack_shape(typeidx.0, extra_inputs, stack_before, stack_after)
+    }
+
+    fn typeidx_call_stack_shape(
+        &self,
+        typeidx: u32,
+        extra_inputs: usize,
+        stack_before: &crate::parser::core::type_checker::StackSnapshot,
+        stack_after: &crate::parser::core::type_checker::StackSnapshot,
+    ) -> (usize, usize) {
+        let Some(ty) = self.types.get(TypeIdx(typeidx)) else {
+            return infer_generic_stack_shape(stack_before, stack_after);
+        };
+        let input_count = ty.0.iter().count() + extra_inputs;
+        let result_count = ty.1.iter().count();
+        let preserved_prefix_len = stack_before.types.len().saturating_sub(input_count);
+        debug_assert_eq!(
+            preserved_prefix_len + result_count,
+            stack_after.types.len(),
+            "stack transition mismatch for call-like instruction",
+        );
+        (preserved_prefix_len, result_count)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn parse_inst(
         &mut self,
         data_count_section: &mut DataCountVerifier,
         instrs: &mut InstructionGenerator,
+        meta: &mut Vec<InstructionMeta>,
+        record_meta: &mut bool,
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
@@ -338,6 +507,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
             }
             0x01 => (1, false),
             0x02 => {
+                *record_meta = false;
                 let (len, blocktype) = self.parse_block_type()?;
                 trace!("parse_op_block: {blocktype:?}");
 
@@ -357,6 +527,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
+                    meta,
                     checker,
                     jump_resolver,
                     else_addr,
@@ -364,6 +535,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
+                    let stack_snapshot = checker.snapshot_stack();
+                    let meta_start = instrs.len();
 
                     instrs.push(Instr {
                         op: vm::special_block_return,
@@ -378,6 +551,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             },
                         },
                     });
+                    self.push_instruction_meta(
+                        instrs,
+                        meta,
+                        meta_start,
+                        instrs.len(),
+                        stack_snapshot.clone(),
+                        stack_snapshot,
+                    );
                 }
 
                 trace!("parse_op_block(2): {checker:?}");
@@ -407,6 +588,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1 + len + len2, false)
             }
             0x03 => {
+                *record_meta = false;
                 let (len, blocktype) = self.parse_block_type()?;
                 trace!("parse_op_loop: {blocktype:?}");
 
@@ -423,6 +605,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 }
                 jump_resolver.push(JumpResolverDSL::EnterBackwardJumpBlock(instrs.len() as u32));
 
+                let loop_snapshot = checker.snapshot_stack();
+                let loop_meta_start = instrs.len();
                 instrs.push(Instr { op: vm::op_loop });
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
@@ -437,11 +621,20 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                         },
                     });
                 }
+                self.push_instruction_meta(
+                    instrs,
+                    meta,
+                    loop_meta_start,
+                    instrs.len(),
+                    loop_snapshot.clone(),
+                    loop_snapshot,
+                );
 
                 instrs.enter_block();
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
+                    meta,
                     checker,
                     jump_resolver,
                     else_addr,
@@ -449,6 +642,8 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 instrs.leave_block();
                 if !instrs.is_unreachable() {
                     let block_base_stack_size = checker.block_base_stack_size()?;
+                    let stack_snapshot = checker.snapshot_stack();
+                    let meta_start = instrs.len();
 
                     instrs.push(Instr {
                         op: vm::special_block_return,
@@ -463,6 +658,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                             },
                         },
                     });
+                    self.push_instruction_meta(
+                        instrs,
+                        meta,
+                        meta_start,
+                        instrs.len(),
+                        stack_snapshot.clone(),
+                        stack_snapshot,
+                    );
                 }
 
                 match blocktype {
@@ -489,9 +692,12 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 (1 + len + len2, false)
             }
             0x04 => {
+                *record_meta = false;
                 trace!("parse_op_if");
                 let (len, blocktype) = self.parse_block_type()?;
                 let is_unreachable_if_block = instrs.is_unreachable();
+                let if_stack_before = checker.snapshot_stack();
+                let if_meta_start = instrs.len();
                 instrs.push(Instr { op: vm::op_if });
                 instrs.push(Instr {
                     operand: Operand {
@@ -512,6 +718,14 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 } else {
                     checker.enter_block(BlockKind::If, blocktype);
                 }
+                self.push_instruction_meta(
+                    instrs,
+                    meta,
+                    if_meta_start,
+                    instrs.len(),
+                    if_stack_before,
+                    checker.snapshot_stack(),
+                );
                 jump_resolver.push(JumpResolverDSL::EnterForwardJumpBlock);
 
                 let index = instrs.len() - 1;
@@ -520,6 +734,7 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                 let len2 = self.parse_instrs(
                     data_count_section,
                     instrs,
+                    meta,
                     checker,
                     jump_resolver,
                     &mut else_addr,
@@ -814,7 +1029,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     },
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: idx },
+                    operand: Operand {
+                        call_recipe_ref: CallRecipeRef::from_funcidx(idx),
+                    },
                 });
 
                 (1 + len, false)
@@ -870,7 +1087,9 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
                     },
                 });
                 instrs.push(Instr {
-                    operand: Operand { u32: idx },
+                    operand: Operand {
+                        call_recipe_ref: CallRecipeRef::from_funcidx(idx),
+                    },
                 });
 
                 (1 + len, false)
@@ -4013,21 +4232,40 @@ impl<'a, R: BinaryReader> InstructionParser<'a, R> {
         &mut self,
         data_count_section: &mut DataCountVerifier,
         instrs: &mut InstructionGenerator,
+        meta: &mut Vec<InstructionMeta>,
         checker: &mut TypeChecker,
         jump_resolver: &mut JumpResolver,
         else_addr: &mut Option<u32>,
     ) -> Result<usize> {
         let mut read_bytes = 0;
         loop {
+            let start = instrs.len();
+            let stack_before = checker.snapshot_stack();
+            let mut record_meta = true;
             let (len, end) = self.parse_inst(
                 data_count_section,
                 instrs,
+                meta,
+                &mut record_meta,
                 checker,
                 jump_resolver,
                 else_addr,
             )?;
             trace!("{checker:?}");
             read_bytes += len;
+            if record_meta && instrs.len() > start {
+                let stack_after = checker.snapshot_stack();
+                let (preserved_prefix_len, fresh_result_count) =
+                    self.infer_instruction_meta_shape(instrs, start, &stack_before, &stack_after);
+                meta.push(InstructionMeta {
+                    start,
+                    len: instrs.len() - start,
+                    stack_before,
+                    stack_after,
+                    preserved_prefix_len,
+                    fresh_result_count,
+                });
+            }
             if end {
                 return Ok(read_bytes);
             }
@@ -4086,6 +4324,34 @@ mod tests {
         op_at_in_func(wat, 0, index)
     }
 
+    fn decoded_ops_in_func(wat: &str, func_index: usize) -> Vec<crate::common::Op> {
+        let bytes = wat::parse_str(wat).expect("wat must parse");
+        let mut reader = IoReadBinaryReader::from(bytes.as_slice());
+        let mut parser = WasmParser::new(&mut reader);
+        let module = parser.parse_module().expect("module must parse");
+        let FunctionBody::Wasm(func) = &module.codes.0[func_index] else {
+            panic!("expected wasm function body");
+        };
+        let mut cursor = 0usize;
+        func.op_lens
+            .iter()
+            .map(|len| {
+                let op = unsafe { func.expr[cursor].op };
+                cursor += usize::from(*len);
+                op
+            })
+            .collect()
+    }
+
+    fn assert_decoded_op_present(wat: &str, expected: crate::common::Op) {
+        assert!(
+            decoded_ops_in_func(wat, 0)
+                .into_iter()
+                .any(|candidate| std::ptr::fn_addr_eq(candidate, expected)),
+            "expected specialized op in decoded function stream"
+        );
+    }
+
     fn operand_at(wat: &str, index: usize) -> Operand {
         let bytes = wat::parse_str(wat).expect("wat must parse");
         let mut reader = IoReadBinaryReader::from(bytes.as_slice());
@@ -4101,11 +4367,11 @@ mod tests {
     fn parser_specializes_default_memory_load_handler() {
         let local = op_at(
             r#"(module (memory 1) (func (export "f") (param i32) (result i32) local.get 0 i32.load))"#,
-            2,
+            0,
         );
         assert!(std::ptr::fn_addr_eq(
             local,
-            vm::op_i32_load_local as crate::common::Op
+            vm::op_i32_load_local_base as crate::common::Op
         ));
     }
 
@@ -4114,11 +4380,11 @@ mod tests {
     fn parser_specializes_shared_default_memory_load_handler() {
         let shared = op_at(
             r#"(module (memory 1 2 shared) (func (export "f") (param i32) (result i32) local.get 0 i32.load))"#,
-            2,
+            0,
         );
         assert!(std::ptr::fn_addr_eq(
             shared,
-            vm::op_i32_load_shared as crate::common::Op
+            vm::op_i32_load_shared_local_base as crate::common::Op
         ));
     }
 
@@ -4133,11 +4399,11 @@ mod tests {
                 local.get 0
                 i32.load $m))
             "#,
-            2,
+            0,
         );
         assert!(std::ptr::fn_addr_eq(
             local,
-            vm::op_i32_load_indexed_local as crate::common::Op
+            vm::op_i32_load_indexed_local_base as crate::common::Op
         ));
     }
 
@@ -4274,17 +4540,17 @@ mod tests {
                 local.get 0
                 i32.load $m))
             "#,
-            2,
+            0,
         );
         assert!(std::ptr::fn_addr_eq(
             shared,
-            vm::op_i32_load_indexed_shared as crate::common::Op
+            vm::op_i32_load_indexed_shared_local_base as crate::common::Op
         ));
     }
 
     #[test]
     fn parser_specializes_bulk_memory_handler() {
-        let local = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4295,18 +4561,14 @@ mod tests {
                 local.get 2
                 memory.copy))
             "#,
-            6,
+            vm::op_mem_copy_local as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            local,
-            vm::op_mem_copy_local as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_shared_bulk_memory_handler() {
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1 2 shared)
@@ -4317,17 +4579,13 @@ mod tests {
                 local.get 2
                 memory.copy))
             "#,
-            6,
+            vm::op_mem_copy_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_mem_copy_shared as crate::common::Op
-        ));
     }
 
     #[test]
     fn parser_specializes_indexed_local_bulk_memory_handler() {
-        let local_local = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory $dst 1)
@@ -4339,18 +4597,14 @@ mod tests {
                 local.get 2
                 memory.copy $dst $src))
             "#,
-            6,
+            vm::op_mem_copy_indexed_local_local as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            local_local,
-            vm::op_mem_copy_indexed_local_local as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_mixed_bulk_memory_handler() {
-        let local_shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory $dst 1)
@@ -4362,9 +4616,9 @@ mod tests {
                 local.get 2
                 memory.copy $dst $src))
             "#,
-            6,
+            vm::op_mem_copy_indexed_local_shared as crate::common::Op,
         );
-        let shared_local = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory $src 1)
@@ -4376,16 +4630,8 @@ mod tests {
                 local.get 2
                 memory.copy $dst $src))
             "#,
-            6,
+            vm::op_mem_copy_indexed_shared_local as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            local_shared,
-            vm::op_mem_copy_indexed_local_shared as crate::common::Op
-        ));
-        assert!(std::ptr::fn_addr_eq(
-            shared_local,
-            vm::op_mem_copy_indexed_shared_local as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "simd")]
@@ -4469,7 +4715,7 @@ mod tests {
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_atomic_wait_handler() {
-        let unshared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4479,9 +4725,9 @@ mod tests {
                 local.get 2
                 memory.atomic.wait32))
             "#,
-            6,
+            vm::op_memory_atomic_wait32_unshared as crate::common::Op,
         );
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1 2 shared)
@@ -4491,22 +4737,14 @@ mod tests {
                 local.get 2
                 memory.atomic.wait32))
             "#,
-            6,
+            vm::op_memory_atomic_wait32_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unshared,
-            vm::op_memory_atomic_wait32_unshared as crate::common::Op
-        ));
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_memory_atomic_wait32_shared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_unshared_atomic_wait_handler() {
-        let unshared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4517,18 +4755,14 @@ mod tests {
                 local.get 2
                 memory.atomic.wait32 $m))
             "#,
-            6,
+            vm::op_memory_atomic_wait32_indexed_unshared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unshared,
-            vm::op_memory_atomic_wait32_indexed_unshared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_shared_atomic_wait_handler() {
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4539,18 +4773,14 @@ mod tests {
                 local.get 2
                 memory.atomic.wait32 $m))
             "#,
-            6,
+            vm::op_memory_atomic_wait32_indexed_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_memory_atomic_wait32_indexed_shared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_atomic_notify_handler() {
-        let unshared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4559,9 +4789,9 @@ mod tests {
                 local.get 1
                 memory.atomic.notify))
             "#,
-            4,
+            vm::op_memory_atomic_notify_unshared as crate::common::Op,
         );
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1 2 shared)
@@ -4570,22 +4800,14 @@ mod tests {
                 local.get 1
                 memory.atomic.notify))
             "#,
-            4,
+            vm::op_memory_atomic_notify_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unshared,
-            vm::op_memory_atomic_notify_unshared as crate::common::Op
-        ));
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_memory_atomic_notify_shared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_unshared_atomic_notify_handler() {
-        let unshared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4595,18 +4817,14 @@ mod tests {
                 local.get 1
                 memory.atomic.notify $m))
             "#,
-            4,
+            vm::op_memory_atomic_notify_indexed_unshared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            unshared,
-            vm::op_memory_atomic_notify_indexed_unshared as crate::common::Op
-        ));
     }
 
     #[cfg(feature = "threads")]
     #[test]
     fn parser_specializes_indexed_shared_atomic_notify_handler() {
-        let shared = op_at(
+        assert_decoded_op_present(
             r#"
             (module
               (memory 1)
@@ -4616,11 +4834,7 @@ mod tests {
                 local.get 1
                 memory.atomic.notify $m))
             "#,
-            4,
+            vm::op_memory_atomic_notify_indexed_shared as crate::common::Op,
         );
-        assert!(std::ptr::fn_addr_eq(
-            shared,
-            vm::op_memory_atomic_notify_indexed_shared as crate::common::Op
-        ));
     }
 }

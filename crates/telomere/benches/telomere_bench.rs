@@ -136,6 +136,58 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    group.bench_function("tail_recursive_accumulate", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param i32) (result i32)
+                    local.get 0
+                    i32.const 0
+                    call 1)
+                  (func (param $n i32) (param $acc i32) (result i32)
+                    local.get $n
+                    i32.eqz
+                    if
+                      local.get $acc
+                      return
+                    end
+                    local.get $n
+                    i32.const 1
+                    i32.sub
+                    local.get $acc
+                    local.get $n
+                    i32.add
+                    return_call 1))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(524800)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
     group.bench_function("sync_host_roundtrip_i32", |b| {
         b.to_async(&rt).iter_custom(|iters| async move {
             let store = Store::new();
@@ -214,6 +266,61 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                         i32.const 0
                         i32.load
                         local.get $acc
+                        i32.add
+                        local.set $acc
+                        local.get $i
+                        i32.const 1
+                        i32.add
+                        local.set $i
+                        br $loop
+                      end
+                    end
+                    local.get $acc))
+                "#,
+                &store,
+                &registry,
+            )
+            .await;
+            let mut duration = Duration::new(0, 0);
+            for _ in 0..iters {
+                let start = Instant::now();
+                assert_eq!(
+                    black_box(
+                        telomere::run_module_function(
+                            &handle,
+                            &store,
+                            "run",
+                            &ResultValue::new(vec![WasmValue::I32(1024)]),
+                        )
+                        .await
+                    )
+                    .unwrap(),
+                    ResultValue::new(vec![WasmValue::I32(523776)])
+                );
+                duration += start.elapsed();
+            }
+            duration
+        })
+    });
+
+    group.bench_function("scalar_local_loop", |b| {
+        b.to_async(&rt).iter_custom(|iters| async move {
+            let store = Store::new();
+            let registry = Registry::new();
+            let handle = instantiate_wat(
+                r#"
+                (module
+                  (func (export "run") (param $n i32) (result i32)
+                    (local $i i32)
+                    (local $acc i32)
+                    block $exit
+                      loop $loop
+                        local.get $i
+                        local.get $n
+                        i32.ge_u
+                        br_if $exit
+                        local.get $acc
+                        local.get $i
                         i32.add
                         local.set $acc
                         local.get $i

@@ -212,7 +212,8 @@ impl CoreWasiPreview1State {
                 Ok(system_time_to_ns(now))
             }
             CLOCKID_MONOTONIC => Ok(duration_to_ns(self.monotonic_origin.elapsed())),
-            CLOCKID_PROCESS_CPUTIME_ID | CLOCKID_THREAD_CPUTIME_ID => Err(ERRNO_NOTSUP),
+            CLOCKID_PROCESS_CPUTIME_ID => process_cpu_time_ns(),
+            CLOCKID_THREAD_CPUTIME_ID => thread_cpu_time_ns(),
             _ => Err(ERRNO_INVAL),
         }
     }
@@ -513,6 +514,75 @@ fn duration_to_ns(duration: std::time::Duration) -> u64 {
 
 fn system_time_to_ns(time: SystemTime) -> u64 {
     duration_to_ns(time.duration_since(UNIX_EPOCH).unwrap_or_default())
+}
+
+#[cfg(unix)]
+fn process_cpu_time_ns() -> Result<u64, u32> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if result != 0 {
+        return Err(ERRNO_IO);
+    }
+
+    let usage = unsafe { usage.assume_init() };
+    Ok(timeval_to_ns(usage.ru_utime).saturating_add(timeval_to_ns(usage.ru_stime)))
+}
+
+#[cfg(not(unix))]
+fn process_cpu_time_ns() -> Result<u64, u32> {
+    Err(ERRNO_NOTSUP)
+}
+
+#[cfg(unix)]
+fn timeval_to_ns(time: libc::timeval) -> u64 {
+    let secs = u64::try_from(time.tv_sec).unwrap_or_default();
+    let micros = u64::try_from(time.tv_usec).unwrap_or_default();
+    secs.saturating_mul(1_000_000_000)
+        .saturating_add(micros.saturating_mul(1_000))
+}
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+fn thread_cpu_time_ns() -> Result<u64, u32> {
+    let mut time = std::mem::MaybeUninit::<libc::timespec>::zeroed();
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) };
+    if result != 0 {
+        return Err(ERRNO_NOTSUP);
+    }
+
+    Ok(timespec_to_ns(unsafe { time.assume_init() }))
+}
+
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
+fn thread_cpu_time_ns() -> Result<u64, u32> {
+    Err(ERRNO_NOTSUP)
+}
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+fn timespec_to_ns(time: libc::timespec) -> u64 {
+    let secs = u64::try_from(time.tv_sec).unwrap_or_default();
+    let nanos = u64::try_from(time.tv_nsec).unwrap_or_default();
+    secs.saturating_mul(1_000_000_000).saturating_add(nanos)
 }
 
 fn write_guest_fdstat(memory: &mut Memory, ptr: u32, rights_base: u64) -> Result<(), u32> {
@@ -917,6 +987,7 @@ mod tests {
               (import "wasi_snapshot_preview1" "clock_time_get" (func $clock_time_get (param i32 i64 i32) (result i32)))
               (memory (export "memory") 1)
               (func (export "check") (result i32)
+                (local $errno i32)
                 i32.const 0
                 i64.const -1
                 i64.store
@@ -955,32 +1026,94 @@ mod tests {
                   i32.const 4
                   return
                 end
+                i32.const 16
+                i64.const -1
+                i64.store
                 i32.const 2
                 i64.const 0
                 i32.const 16
                 call $clock_time_get
-                i32.const 58
-                i32.ne
+                local.set $errno
+                local.get $errno
                 if
                   i32.const 5
                   return
                 end
-                i32.const 3
-                i64.const 0
                 i32.const 16
-                call $clock_time_get
-                i32.const 58
-                i32.ne
+                i64.load
+                i64.const -1
+                i64.eq
                 if
                   i32.const 6
                   return
                 end
+                i32.const 24
+                i64.const -1
+                i64.store
+                i32.const 3
+                i64.const 0
+                i32.const 24
+                call $clock_time_get
+                local.set $errno
+                local.get $errno
+                i32.const 58
+                i32.eq
+                if
+                  i32.const 24
+                  i64.load
+                  i64.const -1
+                  i64.ne
+                  if
+                    i32.const 8
+                    return
+                  end
+                else
+                  local.get $errno
+                  if
+                    i32.const 7
+                    return
+                  end
+                  i32.const 24
+                  i64.load
+                  i64.const -1
+                  i64.eq
+                  if
+                    i32.const 8
+                    return
+                  end
+                end
                 i32.const 9
                 i64.const 0
-                i32.const 16
+                i32.const 32
                 call $clock_time_get
                 i32.const 28
                 i32.ne
+                if
+                  i32.const 9
+                  return
+                end
+                i32.const 0))
+            "#,
+        );
+        let result = invoke_export(module, "check", &[]).await;
+        assert_eq!(expect_single_i32(&result), 0);
+    }
+
+    #[tokio::test]
+    async fn preview1_process_cpu_clock_reports_success_for_coremark_style_timer() {
+        let module = parse_module(
+            r#"
+            (module
+              (import "wasi_snapshot_preview1" "clock_time_get" (func $clock_time_get (param i32 i64 i32) (result i32)))
+              (memory (export "memory") 1)
+              (func (export "check") (result i32)
+                i32.const 0
+                i64.const 0
+                i64.store
+                i32.const 2
+                i64.const 0
+                i32.const 0
+                call $clock_time_get
                 if
                   i32.const 7
                   return

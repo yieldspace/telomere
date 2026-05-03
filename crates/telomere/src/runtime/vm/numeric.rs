@@ -1,6 +1,88 @@
 use super::*;
 use std::ops::BitXor;
 
+const I32_SELECT_BIT_STEP_MASK_SHIFTED: u32 = 1 << 0;
+const I32_SELECT_BIT_STEP_EQ_CONDITION: u32 = 1 << 1;
+const I32_SELECT_BIT_STEP_TEE_DST: u32 = 1 << 2;
+
+#[cfg(feature = "vm-profile")]
+#[cold]
+#[inline(never)]
+fn profile_numeric_family_enabled(label: &'static str) {
+    dispatch_profile_count(label);
+}
+
+#[inline(always)]
+fn profile_numeric_family(_label: &'static str) {
+    #[cfg(feature = "vm-profile")]
+    if dispatch_profile_enabled() {
+        profile_numeric_family_enabled(_label);
+    }
+}
+
+#[inline(always)]
+pub(crate) fn crc16_update16_bits(data: u32, mut crc: u32) -> u32 {
+    for bit in 0..16 {
+        let shifted = (crc >> 1) & 0x7fff;
+        crc = if ((crc ^ (data >> bit)) & 1) != 0 {
+            shifted ^ 0xa001
+        } else {
+            shifted
+        };
+    }
+    crc
+}
+
+/// Telomere internal inlined 16-bit CRC bit-step update recognized from a pure select-bit-step function.
+///
+/// Stack effect: `[] -> [i32]`.
+/// Traps: none.
+/// Notes: The optimizer selects this only for a verified local-only bit-step function body and
+/// tail-dispatches to the materialized function return.
+///
+/// # Safety
+/// - `tail_code` must point to the data local, crc local, and function-return target operands.
+/// - The active frame must match the validated lowered shape selected by the optimizer.
+pub unsafe fn op_i32_crc16_update16(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_numeric_family("op_i32_crc16_update16");
+    let data_local = (*tail_code).operand.local_addr as usize;
+    let crc_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let data = ctx.stack.local_u32_from_base(local_base, data_local);
+    let crc = ctx.stack.local_u32_from_base(local_base, crc_local);
+    vm_try!(ctx.stack.push_u32_fast(crc16_update16_bits(data, crc)));
+    let return_addr = (*tail_code.add(2)).operand.jump_addr;
+    call_next(ctx.code().offset(return_addr as isize), 0, ctx)
+}
+
+/// Telomere internal inlined 16-bit CRC update wrapper that masks the data argument before updating.
+///
+/// Stack effect: `[] -> [i32]`.
+/// Traps: none.
+/// Notes: Selected for a materialized wrapper that only masks its first local and tail-calls the
+/// CRC update native entry.
+///
+/// # Safety
+/// - `tail_code` must point to the data local, crc local, and function-return target operands.
+/// - The active frame must match the wrapper shape selected by the instantiator.
+pub unsafe fn op_i32_crc16_update16_masked(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_numeric_family("op_i32_crc16_update16_masked");
+    let data_local = (*tail_code).operand.local_addr as usize;
+    let crc_local = (*tail_code.add(1)).operand.local_addr as usize;
+    let local_base = ctx.local_base_ptr as *const u8;
+    let data = ctx.stack.local_u32_from_base(local_base, data_local) & 0xffff;
+    let crc = ctx.stack.local_u32_from_base(local_base, crc_local);
+    vm_try!(ctx.stack.push_u32_fast(crc16_update16_bits(data, crc)));
+    let return_addr = (*tail_code.add(2)).operand.jump_addr;
+    call_next(ctx.code().offset(return_addr as isize), 0, ctx)
+}
+
 /// WebAssembly `i32.const`.
 ///
 /// Spec:
@@ -19,7 +101,7 @@ use std::ops::BitXor;
 pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
     let v = (*tail_code).operand.i32;
     trace!("op_i32_const: {v}");
-    vm_try!(ctx.stack.push_i32(v));
+    vm_try!(ctx.stack.push_i32_fast(v));
     call_next(tail_code, 1, ctx)
 }
 
@@ -39,11 +121,8 @@ pub unsafe fn op_i32_const(tail_code: *const Instr, ctx: &mut ExecuteContext) ->
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let b = ctx.stack.pop_i32();
-    let a = ctx.stack.pop_i32();
-    let r = a.wrapping_add(b);
-    trace!("op_i32_add: {a} + {b} => {r}");
-    vm_try!(ctx.stack.push_i32(r));
+    let _ = ctx.stack.reduce_top_i32_add();
+    trace!("op_i32_add");
     call_next(tail_code, 0, ctx)
 }
 
@@ -63,11 +142,8 @@ pub unsafe fn op_i32_add(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_i32_sub(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let a = ctx.stack.pop_i32();
-    let b = ctx.stack.pop_i32();
-    let r = b.wrapping_sub(a);
-    vm_try!(ctx.stack.push_i32(r));
-    trace!("op_i32_sub: {a} {b} {r}");
+    let _ = ctx.stack.reduce_top_i32_sub();
+    trace!("op_i32_sub");
     call_next(tail_code, 0, ctx)
 }
 
@@ -2325,6 +2401,107 @@ pub unsafe fn op_i32_xor(tail_code: *const Instr, ctx: &mut ExecuteContext) -> V
     let a = ctx.stack.pop_u32();
     vm_try!(ctx.stack.push_u32(a.bitxor(b)));
     call_next(tail_code, 0, ctx)
+}
+
+/// Telomere internal fused i32 bit-update step ending in a typed `select`.
+///
+/// This covers stack shapes such as
+/// `i32.const 1; i32.shr_u; i32.const 32767; i32.and; local.tee; ...; select`
+/// where the selected value is either the shifted state or that state XORed with
+/// a polynomial/bitmask constant. It is intentionally expressed as a generic
+/// select-step family rather than as a benchmark-specific CRC replacement.
+///
+/// Stack effect: `[state] -> [selected]`.
+/// Traps: none.
+///
+/// # Safety
+/// - `tail_code` must point to operands decoded for this fused bit-step handler.
+/// - `ctx` must hold a valid frame and local base for the active module.
+/// - The decoded operands must describe locals validated as 4-byte values.
+/// - This handler must not keep borrows, locks, or guards alive across
+///   `call_next`.
+pub unsafe fn op_i32_select_bit_step4(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_numeric_family("op_i32_select_bit_step4");
+    vm_try!(i32_select_bit_step4_at(tail_code, ctx));
+    call_next(tail_code, 7, ctx)
+}
+
+/// Telomere internal fused run of consecutive i32 bit-update select steps.
+///
+/// Stack effect: `[state] -> [selected]`.
+/// Traps: none.
+///
+/// # Safety
+/// - `tail_code` must point to a run count followed by consecutive encoded
+///   `op_i32_select_bit_step4` operand groups.
+/// - `ctx` must hold a valid frame and local base for the active module.
+/// - Each encoded step must satisfy `op_i32_select_bit_step4`'s safety
+///   requirements.
+/// - This handler must not keep borrows, locks, or guards alive across
+///   `call_next`.
+pub unsafe fn op_i32_select_bit_step4_run(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    profile_numeric_family("op_i32_select_bit_step4_run");
+    let count = (*tail_code).operand.u32 as usize;
+    let mut cursor = tail_code.add(1);
+    for _ in 0..count {
+        vm_try!(i32_select_bit_step4_at(cursor, ctx));
+        cursor = cursor.add(7);
+    }
+    call_next(tail_code, (1 + count * 7) as isize, ctx)
+}
+
+#[inline(always)]
+unsafe fn i32_select_bit_step4_at(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    let tmp_local = (*tail_code).operand.local_addr as usize;
+    let poly = (*tail_code.add(1)).operand.i32 as u32;
+    let source_local = (*tail_code.add(2)).operand.local_addr as usize;
+    let source_shift = (*tail_code.add(3)).operand.u32;
+    let prev_local = (*tail_code.add(4)).operand.local_addr as usize;
+    let flags = (*tail_code.add(5)).operand.u32;
+    let dst_local = (*tail_code.add(6)).operand.local_addr as usize;
+
+    let local_base = ctx.local_base_ptr as *const u8;
+    let local_base_mut = ctx.local_base_ptr;
+    let mut shifted = ctx.stack.pop_u32_fast().wrapping_shr(1);
+    if flags & I32_SELECT_BIT_STEP_MASK_SHIFTED != 0 {
+        shifted &= 0x7fff;
+    }
+    ctx.stack
+        .local_set4_from_base_value(local_base_mut, tmp_local, shifted);
+
+    let source = ctx
+        .stack
+        .local_u32_from_base(local_base, source_local)
+        .wrapping_shr(source_shift);
+    let prev = ctx.stack.local_u32_from_base(local_base, prev_local);
+    let xored = shifted ^ poly;
+    let selected = if flags & I32_SELECT_BIT_STEP_EQ_CONDITION != 0 {
+        if (prev & 1) == source {
+            shifted
+        } else {
+            xored
+        }
+    } else if ((source ^ prev) & 1) != 0 {
+        xored
+    } else {
+        shifted
+    };
+
+    vm_try!(ctx.stack.push_u32_fast(selected));
+    if flags & I32_SELECT_BIT_STEP_TEE_DST != 0 {
+        ctx.stack
+            .local_set4_from_base_value(local_base_mut, dst_local, selected);
+    }
+    VMResult::Success(())
 }
 
 /// WebAssembly `i32.shl`.

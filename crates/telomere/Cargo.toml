@@ -9,7 +9,7 @@ keywords.workspace = true
 [dependencies]
 wide = { version = "0.7.32", optional = true }
 thiserror = "2.0.11"
-tracing = { version = "0.1.41" }
+tracing = { version = "0.1.41", features = ["release_max_level_off"] }
 num-derive = "0.4.2"
 num-traits = "0.2.19"
 regex.workspace = true
@@ -46,6 +46,8 @@ default = [
 ]
 simd = ["wide"]
 threads = []
+vm-profile = []
+vm-diagnostics = []
 full = [
     "simd",
     "threads",

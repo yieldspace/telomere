@@ -1,10 +1,11 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 use tracing::trace;
 
 use crate::common::custom_section::NameSubSection;
 use crate::common::{ConstExpr, ElemInit, Func, FunctionBody, Instr, Locals, LocalsData, Operand};
 use crate::parser::core::instruction_generator::InstructionGenerator;
 use crate::parser::core::jump_resolver::{JumpResolver, JumpResolverDSL};
+use crate::parser::core::optimizer;
 use crate::parser::core::type_checker::TypeChecker;
 use crate::parser::core::validate::validate_locals;
 use crate::parser::core::InstructionParser;
@@ -736,10 +737,12 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
     ) -> Result<Func> {
         let (len, locals) = self.parse_vec(&Self::parse_locals)?;
         let slice = &locals[..];
-        let locals_data = LocalsData::from(slice);
+        let mut locals_data = LocalsData::from(slice);
+        locals_data.set_param_bytes(functype.0.iter().map(|ty| ty.stack_size().u32()).sum());
         let local_reassign = locals_data.create_reassignment_table(&locals)?;
         validate_locals(&locals)?;
         let mut instrs = InstructionGenerator::new();
+        let mut instruction_meta = Vec::new();
         let mut checker = TypeChecker::new(typeidx);
         let mut jump_resolver = JumpResolver::new();
         let mut else_addr = None;
@@ -761,6 +764,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
         let len2 = parser.parse_instrs(
             data_count_section,
             &mut instrs,
+            &mut instruction_meta,
             &mut checker,
             &mut jump_resolver,
             &mut else_addr,
@@ -778,6 +782,7 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
             ))?
         }
         instrs.leave_block();
+        let function_return_start = instrs.len();
         instrs.push(Instr {
             op: vm::special_function_return,
         });
@@ -786,10 +791,34 @@ impl<'a, R: BinaryReader> WasmParser<'a, R> {
                 drop_size: functype.1.iter().map(|v| v.stack_size().u32()).sum(),
             },
         });
+        instruction_meta.push(optimizer::InstructionMeta {
+            start: function_return_start,
+            len: instrs.len() - function_return_start,
+            stack_before: crate::parser::core::type_checker::StackSnapshot {
+                reachable: true,
+                types: functype.1 .0.clone(),
+            },
+            stack_after: crate::parser::core::type_checker::StackSnapshot {
+                reachable: true,
+                types: Vec::new(),
+            },
+            preserved_prefix_len: 0,
+            fresh_result_count: 0,
+        });
         jump_resolver.evaluate(&mut instrs);
+        let lowered = optimizer::optimize_function(
+            funcidx,
+            functype,
+            &mut locals_data,
+            instrs.build(),
+            instruction_meta,
+        );
+        let preview = lowered.materialize();
         Ok(Func {
             locals: locals_data,
-            expr: instrs.build(),
+            expr: preview.instrs,
+            op_lens: preview.op_lens,
+            lowered: Arc::new(lowered),
         })
     }
     #[allow(clippy::too_many_arguments)]

@@ -1,4 +1,5 @@
 use super::*;
+use crate::common::Op;
 
 /// WebAssembly `return`.
 ///
@@ -105,7 +106,7 @@ pub unsafe fn op_else(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
 /// - `ctx` must reference a live execution context whose validated operand stack, locals, and default memory/table state satisfy this instruction.
 /// - This handler must not keep borrows, locks, or guards alive across `call_next` or `call_code`.
 pub unsafe fn op_br_if(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
-    let cond = ctx.stack.pop_u32();
+    let cond = ctx.stack.pop_u32_fast();
     trace!("op_br_if: {cond}");
 
     let ptr = if cond != 0 {
@@ -151,6 +152,72 @@ pub unsafe fn op_br_table(tail_code: *const Instr, ctx: &mut ExecuteContext) -> 
     );
     let tail_code = ctx.code().offset(addr as isize);
     call_next(tail_code, 0, ctx)
+}
+
+#[inline(always)]
+unsafe fn br_table_target_ptr(
+    tail_code: *const Instr,
+    table_size_offset: isize,
+    first_target_offset: isize,
+    index: u32,
+    ctx: &mut ExecuteContext,
+) -> *const Instr {
+    let table_size = (*tail_code.offset(table_size_offset)).operand.u32;
+    let target_offset = if index < table_size {
+        first_target_offset + index as isize
+    } else {
+        first_target_offset + table_size as isize
+    };
+    let addr = (*tail_code.offset(target_offset)).operand.jump_addr;
+    unsafe { skip_end_ops(ctx.code().offset(addr as isize)) }
+}
+
+#[inline(always)]
+unsafe fn skip_end_ops(mut ptr: *const Instr) -> *const Instr {
+    while std::ptr::fn_addr_eq((*ptr).op, op_end as Op) {
+        ptr = ptr.add(1);
+    }
+    ptr
+}
+
+#[allow(dead_code)]
+/// WebAssembly `local.get; br_table` fusion for 4-byte locals.
+///
+/// # Safety
+/// - `tail_code` must point to a local address followed by a materialized br_table operand group.
+/// - The branch targets must be valid for the current active function body.
+pub unsafe fn op_local_get4_br_table(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    dispatch_profile_count("op_local_get4_br_table");
+    let local = (*tail_code).operand.local_addr as usize;
+    let index = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, local);
+    let ptr = unsafe { br_table_target_ptr(tail_code, 1, 2, index, ctx) };
+    call_next(ptr, 0, ctx)
+}
+
+#[allow(dead_code)]
+/// WebAssembly `local.get; i32.const; i32.add; br_table` fusion for 4-byte locals.
+///
+/// # Safety
+/// - `tail_code` must point to local/constant operands followed by a materialized br_table operand group.
+/// - The branch targets must be valid for the current active function body.
+pub unsafe fn op_local_get4_i32_const_add_br_table(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    dispatch_profile_count("op_local_get4_i32_const_add_br_table");
+    let local = (*tail_code).operand.local_addr as usize;
+    let rhs = (*tail_code.add(1)).operand.i32 as u32;
+    let index = ctx
+        .stack
+        .local_u32_from_base(ctx.local_base_ptr as *const u8, local)
+        .wrapping_add(rhs);
+    let ptr = unsafe { br_table_target_ptr(tail_code, 2, 3, index, ctx) };
+    call_next(ptr, 0, ctx)
 }
 
 /// WebAssembly `loop`.

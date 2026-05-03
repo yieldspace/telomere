@@ -2,7 +2,7 @@
 
 #[macro_use]
 mod vm_result;
-use std::{fmt::Display, future::Future, pin::Pin};
+use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 
 use custom_section::NameSubSection;
 
@@ -329,6 +329,8 @@ pub struct Global(pub GlobalType, pub Vec<ConstExpr>);
 pub struct Func {
     pub locals: LocalsData,
     pub expr: Vec<Instr>,
+    pub op_lens: Vec<u16>,
+    pub(crate) lowered: Arc<LoweredFunction>,
 }
 impl Func {
     pub fn local_size(&self) -> usize {
@@ -387,6 +389,287 @@ pub struct BlockReturn {
     pub stack_top: u32,
     pub return_size: u32,
 }
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectCallTarget {
+    pub funcidx: u32,
+    pub funcaddr: u32,
+}
+impl DirectCallTarget {
+    pub const fn from_funcidx(funcidx: u32) -> Self {
+        Self {
+            funcidx,
+            funcaddr: 0,
+        }
+    }
+
+    pub const fn with_funcaddr(self, funcaddr: ObjectRef) -> Self {
+        Self {
+            funcidx: self.funcidx,
+            funcaddr: funcaddr.0,
+        }
+    }
+
+    pub const fn resolved_funcaddr(self) -> Option<ObjectRef> {
+        if self.funcaddr == 0 {
+            None
+        } else {
+            Some(ObjectRef(self.funcaddr))
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallRecipeRef {
+    pub funcidx: u32,
+    recipe_slot_plus_one: u32,
+}
+
+impl CallRecipeRef {
+    pub const fn from_funcidx(funcidx: u32) -> Self {
+        Self {
+            funcidx,
+            recipe_slot_plus_one: 0,
+        }
+    }
+
+    pub const fn with_recipe_slot(self, recipe_slot: u32) -> Self {
+        Self {
+            funcidx: self.funcidx,
+            recipe_slot_plus_one: match recipe_slot.checked_add(1) {
+                Some(value) => value,
+                None => panic!("call recipe slot overflow"),
+            },
+        }
+    }
+
+    pub const fn resolved_recipe_slot(self) -> Option<u32> {
+        if self.recipe_slot_plus_one == 0 {
+            None
+        } else {
+            Some(self.recipe_slot_plus_one - 1)
+        }
+    }
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalFastRhsShape {
+    Local = 0,
+    Const = 1,
+}
+
+impl LocalFastRhsShape {
+    const fn from_encoded(encoded: u32) -> Option<Self> {
+        match encoded & 1 {
+            0 => Some(Self::Local),
+            1 => Some(Self::Const),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalFastConstKind {
+    I32,
+    I64,
+    F32,
+    F64,
+}
+
+macro_rules! define_local_fast_kind {
+    ($name:ident { $($variant:ident => $const_kind:ident),+ $(,)? }) => {
+        #[repr(u32)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum $name {
+            $($variant,)+
+        }
+
+        impl $name {
+            #[allow(dead_code)]
+            pub(crate) const fn const_kind(self) -> LocalFastConstKind {
+                match self {
+                    $(Self::$variant => LocalFastConstKind::$const_kind,)+
+                }
+            }
+
+            const fn from_index(index: u32) -> Option<Self> {
+                match index {
+                    $(x if x == Self::$variant as u32 => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+define_local_fast_kind!(LocalBinop32Op {
+    I32Add => I32,
+    I32Sub => I32,
+    I32Mul => I32,
+    I32And => I32,
+    I32Or => I32,
+    I32Xor => I32,
+    I32Shl => I32,
+    I32ShrS => I32,
+    I32ShrU => I32,
+    I32Rotl => I32,
+    I32Rotr => I32,
+    F32Add => F32,
+    F32Sub => F32,
+    F32Mul => F32,
+    F32Div => F32,
+});
+
+define_local_fast_kind!(LocalBinop64Op {
+    I64Add => I64,
+    I64Sub => I64,
+    I64Mul => I64,
+    I64And => I64,
+    I64Or => I64,
+    I64Xor => I64,
+    I64Shl => I64,
+    I64ShrS => I64,
+    I64ShrU => I64,
+    I64Rotl => I64,
+    I64Rotr => I64,
+    F64Add => F64,
+    F64Sub => F64,
+    F64Mul => F64,
+    F64Div => F64,
+});
+
+define_local_fast_kind!(LocalCmp32Op {
+    I32Eq => I32,
+    I32Ne => I32,
+    I32LtS => I32,
+    I32LtU => I32,
+    I32GtS => I32,
+    I32GtU => I32,
+    I32LeS => I32,
+    I32LeU => I32,
+    I32GeS => I32,
+    I32GeU => I32,
+    F32Eq => F32,
+    F32Ne => F32,
+    F32Lt => F32,
+    F32Gt => F32,
+    F32Le => F32,
+    F32Ge => F32,
+});
+
+define_local_fast_kind!(LocalCmp64Op {
+    I64Eq => I64,
+    I64Ne => I64,
+    I64LtS => I64,
+    I64LtU => I64,
+    I64GtS => I64,
+    I64GtU => I64,
+    I64LeS => I64,
+    I64LeU => I64,
+    I64GeS => I64,
+    I64GeU => I64,
+    F64Eq => F64,
+    F64Ne => F64,
+    F64Lt => F64,
+    F64Gt => F64,
+    F64Le => F64,
+    F64Ge => F64,
+});
+
+define_local_fast_kind!(LocalUnary32Op {
+    I32Clz => I32,
+    I32Ctz => I32,
+    I32Popcnt => I32,
+    F32Abs => F32,
+    F32Neg => F32,
+    F32Sqrt => F32,
+    F32Ceil => F32,
+    F32Floor => F32,
+    F32Trunc => F32,
+    F32Nearest => F32,
+});
+
+define_local_fast_kind!(LocalUnary64Op {
+    I64Clz => I64,
+    I64Ctz => I64,
+    I64Popcnt => I64,
+    F64Abs => F64,
+    F64Neg => F64,
+    F64Sqrt => F64,
+    F64Ceil => F64,
+    F64Floor => F64,
+    F64Trunc => F64,
+    F64Nearest => F64,
+});
+
+pub(crate) const fn encode_local_binop32_kind(
+    op: LocalBinop32Op,
+    rhs_shape: LocalFastRhsShape,
+) -> u32 {
+    (op as u32) << 1 | rhs_shape as u32
+}
+
+pub(crate) const fn encode_local_binop64_kind(
+    op: LocalBinop64Op,
+    rhs_shape: LocalFastRhsShape,
+) -> u32 {
+    (op as u32) << 1 | rhs_shape as u32
+}
+
+pub(crate) const fn encode_local_cmp32_kind(op: LocalCmp32Op, rhs_shape: LocalFastRhsShape) -> u32 {
+    (op as u32) << 1 | rhs_shape as u32
+}
+
+pub(crate) const fn encode_local_cmp64_kind(op: LocalCmp64Op, rhs_shape: LocalFastRhsShape) -> u32 {
+    (op as u32) << 1 | rhs_shape as u32
+}
+
+pub(crate) const fn encode_local_unary32_kind(op: LocalUnary32Op) -> u32 {
+    op as u32
+}
+
+pub(crate) const fn encode_local_unary64_kind(op: LocalUnary64Op) -> u32 {
+    op as u32
+}
+
+pub(crate) fn decode_local_binop32_kind(kind: u32) -> Option<(LocalBinop32Op, LocalFastRhsShape)> {
+    Some((
+        LocalBinop32Op::from_index(kind >> 1)?,
+        LocalFastRhsShape::from_encoded(kind)?,
+    ))
+}
+
+pub(crate) fn decode_local_binop64_kind(kind: u32) -> Option<(LocalBinop64Op, LocalFastRhsShape)> {
+    Some((
+        LocalBinop64Op::from_index(kind >> 1)?,
+        LocalFastRhsShape::from_encoded(kind)?,
+    ))
+}
+
+pub(crate) fn decode_local_cmp32_kind(kind: u32) -> Option<(LocalCmp32Op, LocalFastRhsShape)> {
+    Some((
+        LocalCmp32Op::from_index(kind >> 1)?,
+        LocalFastRhsShape::from_encoded(kind)?,
+    ))
+}
+
+pub(crate) fn decode_local_cmp64_kind(kind: u32) -> Option<(LocalCmp64Op, LocalFastRhsShape)> {
+    Some((
+        LocalCmp64Op::from_index(kind >> 1)?,
+        LocalFastRhsShape::from_encoded(kind)?,
+    ))
+}
+
+pub(crate) fn decode_local_unary32_kind(kind: u32) -> Option<LocalUnary32Op> {
+    LocalUnary32Op::from_index(kind)
+}
+
+pub(crate) fn decode_local_unary64_kind(kind: u32) -> Option<LocalUnary64Op> {
+    LocalUnary64Op::from_index(kind)
+}
+
 #[derive(Clone, Copy)]
 pub union Operand {
     pub i32: i32,
@@ -400,6 +683,8 @@ pub union Operand {
     pub drop_size: u32,
     pub local_addr: u32,
     pub select: u32,
+    pub call_recipe_ref: CallRecipeRef,
+    pub direct_call_target: DirectCallTarget,
     pub memarg: MemArg,
     pub block_return: BlockReturn,
     pub loop_param: LoopParam,
@@ -415,6 +700,209 @@ pub union Instr {
 }
 unsafe impl Send for Instr {}
 unsafe impl Sync for Instr {}
+
+#[derive(Clone)]
+pub(crate) struct MaterializedFunction {
+    pub(crate) instrs: Vec<Instr>,
+    pub(crate) op_lens: Vec<u16>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+pub(crate) struct LoweredFunction {
+    pub(crate) code: Vec<LoweredOp>,
+    pub(crate) const_pool: Vec<[u8; 8]>,
+    pub(crate) call_recipes: Vec<CallRecipeRef>,
+    pub(crate) jump_table: Vec<LoweredJumpTarget>,
+    pub(crate) block_map: Vec<LoweredBlockMap>,
+    pub(crate) materialized_preview: Option<MaterializedFunction>,
+}
+
+impl LoweredFunction {
+    pub(crate) fn from_materialized(instrs: Vec<Instr>, op_lens: Vec<u16>) -> Self {
+        let mut code = Vec::with_capacity(op_lens.len());
+        let mut cursor = 0usize;
+        for len in &op_lens {
+            let width = usize::from(*len);
+            let op = unsafe { instrs[cursor].op };
+            let operands = (1..width)
+                .map(|offset| {
+                    lower_materialized_operand(op, offset, unsafe {
+                        instrs[cursor + offset].operand
+                    })
+                })
+                .collect();
+            code.push(LoweredOp {
+                label: None,
+                op,
+                operands,
+            });
+            cursor += width;
+        }
+        debug_assert_eq!(cursor, instrs.len());
+        Self {
+            code,
+            const_pool: Vec::new(),
+            call_recipes: Vec::new(),
+            jump_table: Vec::new(),
+            block_map: Vec::new(),
+            materialized_preview: Some(MaterializedFunction { instrs, op_lens }),
+        }
+    }
+
+    pub(crate) fn materialize(&self) -> MaterializedFunction {
+        self.materialize_inner(None)
+    }
+
+    pub(crate) fn materialize_with_recipe_slots(
+        &self,
+        recipe_slots: &[u32],
+    ) -> MaterializedFunction {
+        if let Some(preview) = &self.materialized_preview {
+            let mut preview = preview.clone();
+            resolve_direct_call_operands_in_materialized(
+                &mut preview.instrs,
+                &preview.op_lens,
+                recipe_slots,
+            );
+            return preview;
+        }
+        self.materialize_inner(Some(recipe_slots))
+    }
+
+    fn materialize_inner(&self, recipe_slots: Option<&[u32]>) -> MaterializedFunction {
+        if recipe_slots.is_none() {
+            if let Some(preview) = &self.materialized_preview {
+                return preview.clone();
+            }
+        }
+        let mut label_to_addr = vec![0usize; self.block_map.len()];
+        let mut cursor = 0usize;
+        for op in &self.code {
+            if let Some(label) = op.label {
+                if label >= label_to_addr.len() {
+                    label_to_addr.resize(label + 1, 0);
+                }
+                label_to_addr[label] = cursor;
+            }
+            cursor += 1 + op.operands.len();
+        }
+        let mut instrs = Vec::with_capacity(cursor);
+        let mut op_lens = Vec::with_capacity(self.code.len());
+        for op in &self.code {
+            instrs.push(Instr { op: op.op });
+            for operand in &op.operands {
+                instrs.push(Instr {
+                    operand: operand.materialize(&label_to_addr, &self.const_pool, recipe_slots),
+                });
+            }
+            op_lens.push(
+                u16::try_from(1 + op.operands.len())
+                    .expect("lowered instruction length exceeds u16::MAX"),
+            );
+        }
+        MaterializedFunction { instrs, op_lens }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LoweredOp {
+    pub(crate) label: Option<usize>,
+    pub(crate) op: Op,
+    pub(crate) operands: Vec<LoweredOperand>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum LoweredOperand {
+    Raw([u8; 8]),
+    ConstPoolRef(u32),
+    JumpTarget(usize),
+    CallRecipeRef(CallRecipeRef),
+}
+
+impl LoweredOperand {
+    fn materialize(
+        &self,
+        label_to_addr: &[usize],
+        const_pool: &[[u8; 8]],
+        recipe_slots: Option<&[u32]>,
+    ) -> Operand {
+        match self {
+            Self::Raw(encoded) => Operand { encoded: *encoded },
+            Self::ConstPoolRef(index) => Operand {
+                encoded: const_pool[*index as usize],
+            },
+            Self::JumpTarget(label) => Operand {
+                jump_addr: u32::try_from(label_to_addr[*label])
+                    .expect("lowered jump target exceeds u32::MAX"),
+            },
+            Self::CallRecipeRef(target) => {
+                let resolved = recipe_slots
+                    .and_then(|slots| slots.get(target.funcidx as usize).copied())
+                    .map(|slot| target.with_recipe_slot(slot))
+                    .unwrap_or(*target);
+                Operand {
+                    call_recipe_ref: resolved,
+                }
+            }
+        }
+    }
+}
+
+fn lower_materialized_operand(op: Op, offset: usize, operand: Operand) -> LoweredOperand {
+    if offset == 1 && is_direct_call_op(op) {
+        return LoweredOperand::CallRecipeRef(unsafe { operand.call_recipe_ref });
+    }
+    LoweredOperand::Raw(unsafe { operand.encoded })
+}
+
+fn is_direct_call_op(op: Op) -> bool {
+    std::ptr::fn_addr_eq(op, crate::runtime::vm::op_call as Op)
+        || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_call_i32_crc16_update16 as Op)
+        || std::ptr::fn_addr_eq(
+            op,
+            crate::runtime::vm::op_call_i32_numeric_token_state_transition as Op,
+        )
+        || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_call_import as Op)
+        || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_return_call as Op)
+        || std::ptr::fn_addr_eq(op, crate::runtime::vm::op_return_call_import as Op)
+}
+
+fn resolve_direct_call_operands_in_materialized(
+    instrs: &mut [Instr],
+    op_lens: &[u16],
+    recipe_slots: &[u32],
+) {
+    let mut cursor = 0usize;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        if is_direct_call_op(op) {
+            let target = unsafe { instrs[cursor + 1].operand.call_recipe_ref };
+            if let Some(recipe_slot) = recipe_slots.get(target.funcidx as usize).copied() {
+                instrs[cursor + 1] = Instr {
+                    operand: Operand {
+                        call_recipe_ref: target.with_recipe_slot(recipe_slot),
+                    },
+                };
+            }
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoweredJumpTarget {
+    pub(crate) label: usize,
+    pub(crate) block_id: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoweredBlockMap {
+    pub(crate) block_id: usize,
+    pub(crate) label: usize,
+    pub(crate) code_index: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -549,6 +1037,8 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
     pub local_reference: LocalReference,
+    pub(crate) local_base_ptr: *mut u8,
+    pub(crate) default_local_memory_ptr: *mut Memory,
     pub(crate) current_frame: CallFrameCache,
     pub store: &'a Store,
     pub gc: &'a mut StoreInner,
@@ -587,6 +1077,18 @@ fn snapshot_memory_kind(kind: CachedMemoryKind) -> SnapshotMemoryKind {
 }
 
 impl ExecuteContext<'_> {
+    fn refresh_default_local_memory_ptr(&mut self) {
+        self.default_local_memory_ptr = match self.current_frame.memory0_kind {
+            CachedMemoryKind::Local => self
+                .gc
+                .local_memory_mut(unsafe {
+                    LocalMemoryId::from_raw_unchecked(self.current_frame.memory0_raw)
+                })
+                .memory_mut() as *mut Memory,
+            CachedMemoryKind::None | CachedMemoryKind::Shared => std::ptr::null_mut(),
+        };
+    }
+
     pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
         let default_memory = snapshot_memory_kind(self.current_frame.memory0_kind);
         let caller_memory = self
@@ -603,11 +1105,25 @@ impl ExecuteContext<'_> {
 
     pub fn set_local_reference(&mut self, local_reference: LocalReference) {
         self.local_reference = local_reference;
+        self.local_base_ptr = unsafe { self.stack.local_area_mut_ptr(&local_reference) };
         if local_reference.local_size as usize
             >= std::mem::size_of::<crate::common::stack::CallStackInfo>()
         {
             self.current_frame = self.stack.frame_cache(&local_reference);
         }
+        self.refresh_default_local_memory_ptr();
+    }
+
+    #[inline(always)]
+    pub(crate) fn set_local_reference_with_frame(
+        &mut self,
+        local_reference: LocalReference,
+        frame: CallFrameCache,
+    ) {
+        self.local_reference = local_reference;
+        self.local_base_ptr = unsafe { self.stack.local_area_mut_ptr(&local_reference) };
+        self.current_frame = frame;
+        self.refresh_default_local_memory_ptr();
     }
 
     #[inline(always)]
@@ -644,6 +1160,22 @@ impl ExecuteContext<'_> {
     }
     pub fn memory_addr(&self) -> Option<MemoryHandle> {
         self.current_frame.memory0_handle()
+    }
+
+    /// # Safety
+    /// The active frame must have a default local memory and the cached pointer must have been
+    /// refreshed from the current frame after the last frame transition.
+    pub unsafe fn default_local_memory_unchecked(&self) -> &Memory {
+        debug_assert!(!self.default_local_memory_ptr.is_null());
+        unsafe { &*self.default_local_memory_ptr }
+    }
+
+    /// # Safety
+    /// The active frame must have a default local memory and the cached pointer must have been
+    /// refreshed from the current frame after the last frame transition.
+    pub unsafe fn default_local_memory_mut_unchecked(&mut self) -> &mut Memory {
+        debug_assert!(!self.default_local_memory_ptr.is_null());
+        unsafe { &mut *self.default_local_memory_ptr }
     }
     #[inline(always)]
     fn memory_slot_at(&self, memidx: u32) -> Option<InstanceMemorySlot> {
@@ -956,9 +1488,14 @@ pub struct LocalsData {
     count_i64: u32,
     count_f64: u32,
     count_v128: u32,
+    param_bytes: u32,
+    temp_bytes: u32,
 }
 impl LocalsData {
     pub fn byte_size(&self) -> usize {
+        self.base_byte_size() + self.temp_bytes as usize
+    }
+    pub(crate) fn base_byte_size(&self) -> usize {
         self.word_size() * 4
     }
     pub(crate) fn word_size(&self) -> usize {
@@ -970,6 +1507,8 @@ impl LocalsData {
             count_i32,
             count_i64,
             count_v128,
+            param_bytes: _,
+            temp_bytes: _,
         } = self;
         (*count_i32 as usize
             + *count_f32 as usize
@@ -977,6 +1516,14 @@ impl LocalsData {
             + *count_func_ref as usize)
             + (*count_i64 as usize + *count_f64 as usize) * 2
             + *count_v128 as usize * 4
+    }
+    pub(crate) fn set_param_bytes(&mut self, param_bytes: u32) {
+        self.param_bytes = param_bytes;
+    }
+    pub(crate) fn allocate_temp_slot(&mut self, ty: ValType) -> u32 {
+        let addr = self.param_bytes + self.base_byte_size() as u32 + self.temp_bytes;
+        self.temp_bytes += ty.stack_size().u32();
+        addr
     }
     pub(crate) fn create_reassignment_table(
         &self,

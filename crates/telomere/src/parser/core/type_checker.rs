@@ -10,6 +10,12 @@ pub enum MaybeUnreachable {
     Unreachable(bool),
     Normal(ValType),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StackSnapshot {
+    pub(crate) reachable: bool,
+    pub(crate) types: Vec<ValType>,
+}
 #[derive(Debug)]
 pub struct TypeChecker {
     types: Vec<MaybeUnreachable>,
@@ -30,6 +36,18 @@ impl TypeChecker {
     }
     pub fn current_block(&self) -> Result<(&BlockKind, &BlockType, &usize)> {
         self.get_block(0)
+    }
+
+    pub(crate) fn snapshot_stack(&self) -> StackSnapshot {
+        let mut reachable = true;
+        let mut types = Vec::with_capacity(self.types.len());
+        for ty in &self.types {
+            match ty {
+                MaybeUnreachable::Normal(ty) => types.push(*ty),
+                MaybeUnreachable::Unreachable(_) => reachable = false,
+            }
+        }
+        StackSnapshot { reachable, types }
     }
     pub fn block_base(&self) -> Result<usize> {
         Ok(*self.current_block()?.2)
