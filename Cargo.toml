@@ -16,6 +16,7 @@ vm-diagnostics = ["telomere/vm-diagnostics"]
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
 anyhow = "1.0.98"
+libc.workspace = true
 telomere = { path = "crates/telomere", default-features = false }
 telomere-component.workspace = true
 telomere-component-wasi = { path = "crates/telomere-component-wasi" }

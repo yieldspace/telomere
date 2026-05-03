@@ -523,11 +523,8 @@ pub async fn instantiate(
                         &crc16_update_recipe_slots,
                         vm::op_call_i32_crc16_update16,
                     );
-                    crc16_update_masked_wrapper_return_addr(
-                        &materialized.instrs,
-                        &materialized.op_lens,
-                    )
-                    .map(|_| gc.call_recipe_slot_for_func(func_addr))
+                    crc16_update_masked_wrapper_shape(&materialized.instrs, &materialized.op_lens)
+                        .map(|_| gc.call_recipe_slot_for_func(func_addr))
                 }
                 RuntimeFunctionBody::Host(_) | RuntimeFunctionBody::AsyncHost(_) => None,
             })
@@ -940,45 +937,58 @@ fn rewrite_direct_calls_for_slots(
     debug_assert_eq!(cursor, instrs.len());
 }
 
-fn crc16_update_masked_wrapper_return_addr(instrs: &[Instr], op_lens: &[u16]) -> Option<usize> {
-    if instrs.len() < 4 || op_lens.len() > 12 {
+#[derive(Clone, Copy)]
+struct Crc16UpdateMaskedWrapperShape {
+    data_local: u32,
+    crc_local: u32,
+    return_addr: usize,
+}
+
+fn crc16_update_masked_wrapper_shape(
+    instrs: &[Instr],
+    op_lens: &[u16],
+) -> Option<Crc16UpdateMaskedWrapperShape> {
+    const EXPECTED_LENS: [u16; 5] = [4, 2, 2, 1, 2];
+
+    if op_lens != EXPECTED_LENS.as_slice() {
+        return None;
+    }
+    let required_instrs = EXPECTED_LENS.iter().map(|len| usize::from(*len)).sum();
+    if instrs.len() != required_instrs {
         return None;
     }
 
+    let expected = [
+        vm::op_local_binop32 as crate::common::Op,
+        vm::op_local_get4 as crate::common::Op,
+        vm::op_call_i32_crc16_update16 as crate::common::Op,
+        vm::op_end as crate::common::Op,
+        vm::special_function_return as crate::common::Op,
+    ];
     let mut cursor = 0usize;
-    let mut crc_call_count = 0usize;
-    let mut return_addr = None;
-    for len in op_lens {
+    for (index, expected_op) in expected.into_iter().enumerate() {
         let op = unsafe { instrs[cursor].op };
-        if std::ptr::fn_addr_eq(op, vm::op_call_i32_crc16_update16 as crate::common::Op) {
-            crc_call_count += 1;
-        } else if std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op)
-            || std::ptr::fn_addr_eq(
-                op,
-                vm::op_call_i32_numeric_token_state_transition as crate::common::Op,
-            )
-            || std::ptr::fn_addr_eq(op, vm::op_call_import as crate::common::Op)
-            || std::ptr::fn_addr_eq(op, vm::op_call_indirect as crate::common::Op)
-            || std::ptr::fn_addr_eq(op, vm::op_return_call as crate::common::Op)
-            || std::ptr::fn_addr_eq(op, vm::op_return_call_import as crate::common::Op)
-            || std::ptr::fn_addr_eq(op, vm::op_return_call_indirect as crate::common::Op)
-            || std::ptr::fn_addr_eq(op, vm::op_br as crate::common::Op)
-            || std::ptr::fn_addr_eq(op, vm::op_br_if as crate::common::Op)
-            || std::ptr::fn_addr_eq(op, vm::op_if as crate::common::Op)
-            || std::ptr::fn_addr_eq(op, vm::op_loop as crate::common::Op)
-        {
+        if !std::ptr::fn_addr_eq(op, expected_op) {
             return None;
-        } else if std::ptr::fn_addr_eq(op, vm::special_function_return as crate::common::Op) {
-            return_addr = Some(cursor);
         }
-        cursor += usize::from(*len);
+        cursor += usize::from(op_lens[index]);
     }
-    debug_assert_eq!(cursor, instrs.len());
-    if crc_call_count == 1 {
-        return_addr
-    } else {
-        None
+
+    let mask_kind = unsafe { instrs[1].operand.u32 };
+    let data_local = unsafe { instrs[2].operand.local_addr };
+    let mask_rhs = unsafe { instrs[3].operand.i32 };
+    if decode_local_binop32_kind(mask_kind)
+        != Some((LocalBinop32Op::I32And, LocalFastRhsShape::Const))
+        || mask_rhs != 0xffff
+    {
+        return None;
     }
+
+    Some(Crc16UpdateMaskedWrapperShape {
+        data_local,
+        crc_local: unsafe { instrs[5].operand.local_addr },
+        return_addr: 9,
+    })
 }
 
 fn materialized_starts_with_cached_u16_low7_guard(instrs: &[Instr], op_lens: &[u16]) -> bool {
@@ -1041,7 +1051,7 @@ fn materialized_starts_with_cached_u16_low7_guard(instrs: &[Instr], op_lens: &[u
 }
 
 fn rewrite_crc16_update_masked_wrapper(instrs: &mut [Instr], op_lens: &[u16]) {
-    let Some(return_addr) = crc16_update_masked_wrapper_return_addr(instrs, op_lens) else {
+    let Some(shape) = crc16_update_masked_wrapper_shape(instrs, op_lens) else {
         return;
     };
 
@@ -1049,14 +1059,18 @@ fn rewrite_crc16_update_masked_wrapper(instrs: &mut [Instr], op_lens: &[u16]) {
         op: vm::op_i32_crc16_update16_masked,
     };
     instrs[1] = Instr {
-        operand: crate::common::Operand { local_addr: 0 },
+        operand: crate::common::Operand {
+            local_addr: shape.data_local,
+        },
     };
     instrs[2] = Instr {
-        operand: crate::common::Operand { local_addr: 4 },
+        operand: crate::common::Operand {
+            local_addr: shape.crc_local,
+        },
     };
     instrs[3] = Instr {
         operand: crate::common::Operand {
-            jump_addr: u32::try_from(return_addr).expect("return address exceeds u32::MAX"),
+            jump_addr: u32::try_from(shape.return_addr).expect("return address exceeds u32::MAX"),
         },
     };
 }
@@ -1485,6 +1499,123 @@ mod tests {
             unsafe { instrs[0].op },
             vm::op_call as crate::common::Op
         ));
+    }
+
+    fn crc16_update_masked_wrapper_instrs(
+        data_local: u32,
+        crc_local: u32,
+    ) -> (Vec<Instr>, Vec<u16>) {
+        let and_const = crate::common::encode_local_binop32_kind(
+            LocalBinop32Op::I32And,
+            LocalFastRhsShape::Const,
+        );
+
+        (
+            vec![
+                Instr {
+                    op: vm::op_local_binop32,
+                },
+                Instr {
+                    operand: crate::common::Operand { u32: and_const },
+                },
+                Instr {
+                    operand: crate::common::Operand {
+                        local_addr: data_local,
+                    },
+                },
+                Instr {
+                    operand: crate::common::Operand { i32: 0xffff },
+                },
+                Instr {
+                    op: vm::op_local_get4,
+                },
+                Instr {
+                    operand: crate::common::Operand {
+                        local_addr: crc_local,
+                    },
+                },
+                Instr {
+                    op: vm::op_call_i32_crc16_update16,
+                },
+                Instr {
+                    operand: crate::common::Operand {
+                        call_recipe_ref: crate::common::CallRecipeRef::from_funcidx(1)
+                            .with_recipe_slot(7),
+                    },
+                },
+                Instr { op: vm::op_end },
+                Instr {
+                    op: vm::special_function_return,
+                },
+                Instr {
+                    operand: crate::common::Operand { jump_addr: 0 },
+                },
+            ],
+            vec![4, 2, 2, 1, 2],
+        )
+    }
+
+    #[test]
+    fn crc16_update_masked_wrapper_matcher_accepts_exact_shape() {
+        let (instrs, op_lens) = crc16_update_masked_wrapper_instrs(8, 12);
+        let shape = crc16_update_masked_wrapper_shape(&instrs, &op_lens)
+            .expect("exact masked CRC wrapper shape must match");
+
+        assert_eq!(shape.data_local, 8);
+        assert_eq!(shape.crc_local, 12);
+        assert_eq!(shape.return_addr, 9);
+    }
+
+    #[test]
+    fn crc16_update_masked_wrapper_rewrite_uses_matched_local_operands() {
+        let (mut instrs, op_lens) = crc16_update_masked_wrapper_instrs(8, 12);
+        rewrite_crc16_update_masked_wrapper(&mut instrs, &op_lens);
+
+        assert!(std::ptr::fn_addr_eq(
+            unsafe { instrs[0].op },
+            vm::op_i32_crc16_update16_masked as crate::common::Op
+        ));
+        assert_eq!(unsafe { instrs[1].operand.local_addr }, 8);
+        assert_eq!(unsafe { instrs[2].operand.local_addr }, 12);
+        assert_eq!(unsafe { instrs[3].operand.jump_addr }, 9);
+    }
+
+    #[test]
+    fn crc16_update_masked_wrapper_matcher_rejects_unrewritten_call() {
+        let (mut instrs, op_lens) = crc16_update_masked_wrapper_instrs(0, 4);
+        instrs[6] = Instr { op: vm::op_call };
+
+        assert!(crc16_update_masked_wrapper_shape(&instrs, &op_lens).is_none());
+    }
+
+    #[test]
+    fn crc16_update_masked_wrapper_matcher_rejects_other_mask() {
+        let (mut instrs, op_lens) = crc16_update_masked_wrapper_instrs(0, 4);
+        instrs[3] = Instr {
+            operand: crate::common::Operand { i32: 0xff },
+        };
+
+        assert!(crc16_update_masked_wrapper_shape(&instrs, &op_lens).is_none());
+    }
+
+    #[test]
+    fn crc16_update_masked_wrapper_matcher_rejects_extra_transform() {
+        let (mut instrs, mut op_lens) = crc16_update_masked_wrapper_instrs(0, 4);
+        instrs.insert(
+            6,
+            Instr {
+                op: vm::op_i32_const,
+            },
+        );
+        instrs.insert(
+            7,
+            Instr {
+                operand: crate::common::Operand { i32: 1 },
+            },
+        );
+        op_lens.insert(2, 2);
+
+        assert!(crc16_update_masked_wrapper_shape(&instrs, &op_lens).is_none());
     }
 
     fn cached_u16_low7_guard_instrs() -> (Vec<Instr>, Vec<u16>) {

@@ -9,8 +9,8 @@ pub(crate) mod versioning;
 use super::{cfg::build_program, InstructionMeta};
 use crate::common::{FuncIdx, FuncType, Instr, LocalsData, LoweredFunction};
 
-const CODE_SIZE_GROWTH_BUDGET_PCT: usize = 10_000;
-const CODE_SIZE_GROWTH_BUDGET_ABS: usize = 10_000;
+const CODE_SIZE_GROWTH_BUDGET_PCT: usize = 10;
+const CODE_SIZE_GROWTH_BUDGET_ABS: usize = 8;
 
 pub(super) fn optimize_function(
     funcidx: FuncIdx,
@@ -84,4 +84,21 @@ fn exceeds_code_size_budget(original_ops: usize, lowered_ops: usize) -> bool {
         / 100;
     let allowed = original_ops.saturating_add(relative_slack.max(CODE_SIZE_GROWTH_BUDGET_ABS));
     lowered_ops > allowed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::exceeds_code_size_budget;
+
+    #[test]
+    fn code_size_budget_uses_documented_absolute_slack_for_small_functions() {
+        assert!(!exceeds_code_size_budget(20, 28));
+        assert!(exceeds_code_size_budget(20, 29));
+    }
+
+    #[test]
+    fn code_size_budget_uses_documented_relative_slack_for_large_functions() {
+        assert!(!exceeds_code_size_budget(1000, 1100));
+        assert!(exceeds_code_size_budget(1000, 1101));
+    }
 }
