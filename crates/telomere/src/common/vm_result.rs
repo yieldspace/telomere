@@ -11,6 +11,7 @@ pub enum VMResult<V> {
     TableUninitialized,
     Unlinkable,
     InvalidOperand,
+    Unimplemented,
 }
 #[macro_export]
 macro_rules! vm_try {
@@ -26,6 +27,7 @@ macro_rules! vm_try {
             VMResult::TableUninitialized => return VMResult::TableUninitialized,
             VMResult::Unlinkable => return VMResult::Unlinkable,
             VMResult::InvalidOperand => return VMResult::InvalidOperand,
+            VMResult::Unimplemented => return VMResult::Unimplemented,
         }
     };
 }
@@ -65,6 +67,9 @@ impl<V> VMResult<V> {
             }
             VMResult::InvalidOperand => {
                 panic!("called `VMResult::unwrap()` on an `Err` value: InvalidOperand")
+            }
+            VMResult::Unimplemented => {
+                panic!("called `VMResult::unwrap()` on an `Err` value: Unimplemented")
             }
         }
     }

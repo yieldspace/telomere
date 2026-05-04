@@ -22,7 +22,7 @@ mod object_ref;
 pub(crate) mod store;
 pub use object_ref::ObjectRef;
 pub(crate) use store::{FunctionInstanceData, InstanceData, ModuleInstance, StoreInner};
-pub use store::{InstanceHandle, MemoryHandle, Store, StoreState};
+pub use store::{InstanceHandle, JitConfig, MemoryHandle, RuntimeConfig, Store, StoreState};
 use store::{InstanceMemorySlot, LocalMemoryId, SharedMemoryId};
 
 use crate::runtime::scheduler::EffectSupplier;

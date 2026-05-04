@@ -6,6 +6,8 @@ use super::{
     AsyncHostFunction, CallFrameCache, Data, Elem, ExportSection, FuncType, GlobalType,
     HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
 };
+#[cfg(feature = "jit")]
+use crate::runtime::jit::StoreJitCache;
 use parking_lot::{Mutex, MutexGuard};
 use std::{
     cell::RefCell,
@@ -133,6 +135,7 @@ pub(crate) enum FunctionBody {
     Wasm {
         locals: LocalsData,
         code: Arc<[Instr]>,
+        op_lens: Arc<[u16]>,
         lowered: Arc<crate::common::LoweredFunction>,
     },
     Host(HostFunction),
@@ -237,6 +240,26 @@ impl FunctionInstanceData {
     pub(crate) fn replace_async_host_code_pointer(&mut self, fp: AsyncHostFunction) {
         self.body = FunctionBody::AsyncHost(fp);
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JitConfig {
+    pub enabled: bool,
+    pub code_cache_max_bytes: u32,
+}
+
+impl Default for JitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            code_cache_max_bytes: 4 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RuntimeConfig {
+    pub jit: JitConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -1597,6 +1620,9 @@ pub struct Store {
     identity: Arc<()>,
     segments: Mutex<StoreSegments>,
     next_instance_id: AtomicU32,
+    runtime_config: RuntimeConfig,
+    #[cfg(feature = "jit")]
+    jit_cache: StoreJitCache,
     pub state: StoreState,
 }
 
@@ -1612,13 +1638,36 @@ impl Store {
     }
 
     pub fn new_with_state(state: StoreState) -> Self {
+        Self::new_with_state_and_runtime_config(state, RuntimeConfig::default())
+    }
+
+    pub fn new_with_runtime_config(runtime_config: RuntimeConfig) -> Self {
+        Self::new_with_state_and_runtime_config(StoreState::default(), runtime_config)
+    }
+
+    pub fn new_with_state_and_runtime_config(
+        state: StoreState,
+        runtime_config: RuntimeConfig,
+    ) -> Self {
         Self {
             runtime: Arc::new(Mutex::new(StoreInner::new())),
             identity: Arc::new(()),
             segments: Mutex::new(StoreSegments::default()),
             next_instance_id: AtomicU32::new(1),
+            runtime_config,
+            #[cfg(feature = "jit")]
+            jit_cache: StoreJitCache::default(),
             state,
         }
+    }
+
+    pub fn runtime_config(&self) -> RuntimeConfig {
+        self.runtime_config
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn jit_cache(&self) -> &StoreJitCache {
+        &self.jit_cache
     }
 
     pub(crate) fn lock_runtime_unchecked(&self) -> StoreRuntimeGuard<'_> {

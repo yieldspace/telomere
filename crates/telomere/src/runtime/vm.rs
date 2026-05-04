@@ -1205,12 +1205,16 @@ pub(crate) use bulk_memory::{
     op_mem_fill_shared, op_mem_init_indexed_local, op_mem_init_indexed_shared, op_mem_init_local,
     op_mem_init_shared,
 };
+#[cfg(feature = "jit")]
+pub(crate) use call::jit_call_direct;
 pub(crate) use call::{
     op_call, op_call_cached_u16_low7_guard, op_call_i32_crc16_update16,
     op_call_i32_crc16_update16_masked, op_call_i32_list_crc_summary,
     op_call_i32_numeric_token_state_transition, op_call_import, op_call_indirect, op_return_call,
     op_return_call_import, op_return_call_indirect, special_start_function_call,
 };
+#[cfg(feature = "jit")]
+pub(crate) use call::{op_call_jit_lazy, op_return_call_jit_lazy, special_start_jit_function_call};
 pub use control::special_function_return;
 pub(crate) use control::*;
 pub(crate) use globals::*;
@@ -1355,6 +1359,21 @@ pub(crate) const START_HOST_FUNCTION_PROGRAM: [Instr; 1] = [Instr {
     op: special_start_function_call,
 }];
 
+#[cfg(feature = "jit")]
+pub(crate) const START_JIT_FUNCTION_PROGRAM: [Instr; 1] = [Instr {
+    op: special_start_jit_function_call,
+}];
+
+pub(crate) fn wasm_entry_pc(_store: &Store) -> StablePc {
+    #[cfg(feature = "jit")]
+    {
+        if crate::runtime::jit::supported() && _store.runtime_config().jit.enabled {
+            return StablePc::from_stable_ptr(START_JIT_FUNCTION_PROGRAM.as_ptr());
+        }
+    }
+    StablePc::from_relative_index(0)
+}
+
 pub async fn run_module_function(
     instance: &InstanceHandle,
     store: &Store,
@@ -1435,7 +1454,7 @@ pub async fn run_module_function_with_driver<D: ExecutionDriver>(
             ));
 
             scheduler.push(Task {
-                fp: StablePc::from_relative_index(0),
+                fp: wasm_entry_pc(store),
                 task_id: 0,
                 stack,
                 local_reference,
@@ -1524,7 +1543,7 @@ pub(crate) fn run_module_function_sync_with_gc(
             };
 
             scheduler.push(Task {
-                fp: StablePc::from_relative_index(0),
+                fp: wasm_entry_pc(store),
                 task_id: 0,
                 stack,
                 local_reference,
@@ -1555,6 +1574,7 @@ pub(crate) fn run_module_function_sync_with_gc(
         VMResult::Unlinkable => Ok(VMResult::Unlinkable),
         VMResult::InvalidOperand => Ok(VMResult::InvalidOperand),
         VMResult::UnalignedAtomic => Ok(VMResult::UnalignedAtomic),
+        VMResult::Unimplemented => Ok(VMResult::Unimplemented),
     }
 }
 
@@ -1570,6 +1590,7 @@ fn vm_result_err_into_result_value<T>(result: VMResult<T>) -> VMResult<ResultVal
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+        VMResult::Unimplemented => VMResult::Unimplemented,
     }
 }
 

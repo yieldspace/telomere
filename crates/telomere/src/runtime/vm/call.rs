@@ -108,6 +108,69 @@ unsafe fn internal_op_call(
     }
 }
 
+#[cfg(feature = "jit")]
+/// Telomere runtime helper for JIT direct `call` / `return_call` sites.
+///
+/// Stack effect: internal runtime call dispatch.
+/// Traps: returns a JIT trap exit for the same trap cases as `op_call` and `op_return_call`.
+/// Notes: This is the JIT-facing wrapper around the existing direct-threaded call helper, so the
+/// tail-call frame replacement contract remains owned by `internal_op_call`.
+///
+/// # Safety
+/// - `tail_code` must point to the call recipe operand in the active decoded instruction stream.
+/// - `ctx` must reference a live execution context whose stack and current frame match that stream.
+/// - The caller must return to the JIT/interpreter continuation indicated by the returned exit.
+pub(crate) unsafe fn jit_call_direct(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> crate::runtime::jit::JitNativeExit {
+    if ctx.effect.get_pending_count() != 0 {
+        return crate::runtime::jit::JitNativeExit::done();
+    }
+    let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };
+    let jit_wasm_target = matches!(recipe.target, CallDispatchTarget::Wasm { .. });
+    match unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) } {
+        VMResult::Success(CallOutcome::Immediate(_ptr)) if jit_wasm_target => unsafe {
+            crate::runtime::jit::enter_current_frame_from_jit_call(ctx)
+        },
+        VMResult::Success(CallOutcome::Immediate(ptr)) => {
+            crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
+        }
+        VMResult::Success(CallOutcome::Pending) => crate::runtime::jit::JitNativeExit::done(),
+        VMResult::Unreachable => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unreachable)
+        }
+        VMResult::StackOverflow => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::StackOverflow)
+        }
+        VMResult::MemoryIndexOutOfRange => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::MemoryIndexOutOfRange)
+        }
+        VMResult::TableIndexOutOfRange => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableIndexOutOfRange)
+        }
+        VMResult::CallIndirectInvalidType => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::CallIndirectInvalidType)
+        }
+        VMResult::TableUninitialized => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableUninitialized)
+        }
+        VMResult::Unlinkable => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unlinkable)
+        }
+        VMResult::InvalidOperand => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand)
+        }
+        VMResult::UnalignedAtomic => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::UnalignedAtomic)
+        }
+        VMResult::Unimplemented => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unimplemented)
+        }
+    }
+}
+
 #[inline(always)]
 fn cached_return_pc(return_addr: *const Instr, ctx: &ExecuteContext) -> StablePc {
     let code_base = ctx.code();
@@ -173,6 +236,45 @@ pub unsafe fn op_call(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMRe
     let recipe = decode_direct_call_recipe(tail_code, ctx);
     match vm_try!(internal_op_call(tail_code.offset(1), recipe, ctx, false)) {
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
+        CallOutcome::Pending => VMResult::Success(()),
+    }
+}
+
+#[cfg(feature = "jit")]
+/// WebAssembly `call` quickened to the lazy baseline JIT entry path.
+///
+/// Stack effect: `[params] -> [results]`.
+/// Traps: propagates target traps or returns `Unimplemented` when the callee cannot be compiled.
+/// Notes: This handler is installed only for direct local Wasm callees when runtime JIT is enabled.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The recipe must describe a Wasm target prepared by instantiation-time callsite quickening.
+/// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+pub unsafe fn op_call_jit_lazy(tail_code: *const Instr, ctx: &mut ExecuteContext) -> VMResult<()> {
+    unsafe { op_call_jit_lazy_inner(tail_code, ctx, false) }
+}
+
+#[cfg(feature = "jit")]
+unsafe fn op_call_jit_lazy_inner(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<()> {
+    if ctx.effect.get_pending_count() != 0 {
+        trace!("waiting effect: {:?}", ctx.cont);
+        return VMResult::Success(());
+    }
+    let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };
+    if !matches!(recipe.target, CallDispatchTarget::Wasm { .. }) {
+        return if is_return_call {
+            unsafe { op_return_call(tail_code, ctx) }
+        } else {
+            unsafe { op_call(tail_code, ctx) }
+        };
+    }
+    match vm_try!(unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) }) {
+        CallOutcome::Immediate(_ptr) => unsafe { crate::runtime::jit::enter_current_frame(ctx) },
         CallOutcome::Pending => VMResult::Success(()),
     }
 }
@@ -549,6 +651,25 @@ pub unsafe fn op_return_call(tail_code: *const Instr, ctx: &mut ExecuteContext) 
     }
 }
 
+#[cfg(feature = "jit")]
+/// WebAssembly `return_call` quickened to the lazy baseline JIT entry path.
+///
+/// Stack effect: tail-calls the target with the active frame replaced by the callee frame.
+/// Traps: propagates target traps or returns `Unimplemented` when the callee cannot be compiled.
+/// Notes: This keeps the interpreter tail-call helper unchanged while allowing JIT-enabled
+/// callsites to enter compiled code without a generic `call_code` JIT check.
+///
+/// # Safety
+/// - `tail_code` must point to the direct-call recipe operand for the active instruction stream.
+/// - The recipe must describe a Wasm target prepared by instantiation-time callsite quickening.
+/// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+pub unsafe fn op_return_call_jit_lazy(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    unsafe { op_call_jit_lazy_inner(tail_code, ctx, true) }
+}
+
 /// WebAssembly `return_call` for imported or otherwise generic direct callees.
 ///
 /// Related spec:
@@ -718,4 +839,22 @@ pub unsafe fn special_start_function_call(
         CallOutcome::Immediate(ptr) => call_next(ptr, 0, ctx),
         CallOutcome::Pending => VMResult::Success(()),
     }
+}
+
+#[cfg(feature = "jit")]
+/// Telomere internal trampoline for starting a Wasm function through lazy baseline JIT.
+///
+/// Stack effect: internal runtime continuation.
+/// Traps: propagates target traps or returns `Unimplemented` when the current function cannot be compiled.
+/// Notes: Used for exported/start Wasm functions that do not have an interpreter caller opcode to quicken.
+///
+/// # Safety
+/// - `ctx` must already contain the target Wasm frame as the current frame.
+/// - The active store must have runtime JIT enabled and run on a supported target.
+/// - This handler must not keep borrows, locks, or guards alive across JIT entry or tail-dispatch.
+pub unsafe fn special_start_jit_function_call(
+    _tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> VMResult<()> {
+    unsafe { crate::runtime::jit::enter_current_frame(ctx) }
 }

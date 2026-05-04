@@ -57,6 +57,11 @@ generate_trap_func!(
     VMResult::TableUninitialized
 );
 generate_trap_func!(traps_unlinkable, TRAPS_UNLINKABLE, VMResult::Unlinkable);
+generate_trap_func!(
+    traps_unimplemented,
+    TRAPS_UNIMPLEMENTED,
+    VMResult::Unimplemented
+);
 generate_trap_func!(traps_unreachable, TRAPS_UNREACHABLE, VMResult::Unreachable);
 
 #[allow(dead_code)]
@@ -76,6 +81,7 @@ pub(crate) unsafe fn trap_func<T>(res: VMResult<T>) -> *const Instr {
         VMResult::TableIndexOutOfRange => TRAPS_TABLE_INDEX_OUT_OF_RANGE.as_ptr(),
         VMResult::TableUninitialized => TRAPS_TABLE_UNINITIALIZED.as_ptr(),
         VMResult::Unlinkable => TRAPS_UNLINKABLE.as_ptr(),
+        VMResult::Unimplemented => TRAPS_UNIMPLEMENTED.as_ptr(),
         VMResult::Unreachable => TRAPS_UNREACHABLE.as_ptr(),
         VMResult::Success(_) => unreachable!(),
     }

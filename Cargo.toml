@@ -10,6 +10,7 @@ publish.workspace = true
 [features]
 default = ["full"]
 full = ["telomere/full"]
+jit = ["telomere/jit"]
 vm-profile = ["telomere/vm-profile"]
 vm-diagnostics = ["telomere/vm-diagnostics"]
 
@@ -54,6 +55,7 @@ telomere-macros = { path = "crates/telomere-macros" }
 tokio = { version = "1.0", features = ["full"] }
 getrandom = "0.3.3"
 libc = "0.2.175"
+mmap-rs = "0.7.0"
 
 regex = "1.11.1"
 

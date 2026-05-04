@@ -393,6 +393,7 @@ pub async fn instantiate(
                         body: RuntimeFunctionBody::Wasm {
                             locals: code.locals,
                             code: materialized.instrs.into(),
+                            op_lens: materialized.op_lens.into(),
                             lowered: code.lowered.clone(),
                         },
                         funcidx,
@@ -486,6 +487,11 @@ pub async fn instantiate(
             .iter()
             .map(|&funcaddr| gc.call_recipe_slot_for_func(funcaddr))
             .collect::<Vec<_>>();
+        #[cfg(feature = "jit")]
+        let jit_local_wasm_recipe_slots = local_wasm_funcs
+            .iter()
+            .map(|&func_addr| gc.call_recipe_slot_for_func(func_addr))
+            .collect::<Vec<_>>();
         let numeric_transition_recipe_slots = local_wasm_funcs
             .iter()
             .filter_map(|&func_addr| match &gc.get_func(func_addr).body {
@@ -575,6 +581,14 @@ pub async fn instantiate(
                 vm::op_call_cached_u16_low7_guard,
             );
             rewrite_crc16_update_masked_wrapper(&mut materialized.instrs, &materialized.op_lens);
+            #[cfg(feature = "jit")]
+            if crate::runtime::jit::supported() && store.runtime_config().jit.enabled {
+                rewrite_direct_wasm_calls_for_jit(
+                    &mut materialized.instrs,
+                    &materialized.op_lens,
+                    &jit_local_wasm_recipe_slots,
+                );
+            }
             #[cfg(feature = "vm-diagnostics")]
             dump_materialized_function_if_requested(
                 instance
@@ -586,9 +600,10 @@ pub async fn instantiate(
                 &materialized.op_lens,
             );
             let func = gc.get_func_mut(func_addr);
-            let RuntimeFunctionBody::Wasm { code, .. } = &mut func.body else {
+            let RuntimeFunctionBody::Wasm { code, op_lens, .. } = &mut func.body else {
                 unreachable!("materialized local wasm function must remain wasm")
             };
+            *op_lens = materialized.op_lens.into();
             *code = materialized.instrs.into();
         }
         for &funcaddr in &instance.funcs {
@@ -655,7 +670,7 @@ pub async fn instantiate(
                 ));
 
                 scheduler.push(Task {
-                    fp: StablePc::from_relative_index(0),
+                    fp: vm::wasm_entry_pc(store),
                     task_id: 0,
                     stack,
                     local_reference,
@@ -935,6 +950,56 @@ fn rewrite_direct_calls_for_slots(
         cursor += usize::from(*len);
     }
     debug_assert_eq!(cursor, instrs.len());
+}
+
+#[cfg(feature = "jit")]
+fn rewrite_direct_wasm_calls_for_jit(
+    instrs: &mut [Instr],
+    op_lens: &[u16],
+    local_wasm_recipe_slots: &[u32],
+) {
+    if local_wasm_recipe_slots.is_empty() {
+        return;
+    }
+
+    let mut cursor = 0usize;
+    for len in op_lens {
+        let op = unsafe { instrs[cursor].op };
+        let replacement = if is_direct_call_opcode(op) {
+            Some(vm::op_call_jit_lazy as crate::common::Op)
+        } else if std::ptr::fn_addr_eq(op, vm::op_return_call as crate::common::Op) {
+            Some(vm::op_return_call_jit_lazy as crate::common::Op)
+        } else {
+            None
+        };
+        if let Some(replacement) = replacement {
+            let target = unsafe { instrs[cursor + 1].operand.call_recipe_ref };
+            if target
+                .resolved_recipe_slot()
+                .is_some_and(|slot| local_wasm_recipe_slots.contains(&slot))
+            {
+                instrs[cursor] = Instr { op: replacement };
+            }
+        }
+        cursor += usize::from(*len);
+    }
+    debug_assert_eq!(cursor, instrs.len());
+}
+
+#[cfg(feature = "jit")]
+fn is_direct_call_opcode(op: crate::common::Op) -> bool {
+    std::ptr::fn_addr_eq(op, vm::op_call as crate::common::Op)
+        || std::ptr::fn_addr_eq(
+            op,
+            vm::op_call_i32_numeric_token_state_transition as crate::common::Op,
+        )
+        || std::ptr::fn_addr_eq(op, vm::op_call_i32_crc16_update16 as crate::common::Op)
+        || std::ptr::fn_addr_eq(
+            op,
+            vm::op_call_i32_crc16_update16_masked as crate::common::Op,
+        )
+        || std::ptr::fn_addr_eq(op, vm::op_call_cached_u16_low7_guard as crate::common::Op)
+        || std::ptr::fn_addr_eq(op, vm::op_call_i32_list_crc_summary as crate::common::Op)
 }
 
 #[derive(Clone, Copy)]

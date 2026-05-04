@@ -41,6 +41,7 @@ async fn call_v128(
             VMResult::Unlinkable => VMResult::Unlinkable,
             VMResult::InvalidOperand => VMResult::InvalidOperand,
             VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+            VMResult::Unimplemented => VMResult::Unimplemented,
         },
     }
 }
@@ -57,6 +58,7 @@ fn vm_result_map_unit(result: VMResult<ResultValue>) -> VMResult<i32> {
         VMResult::Unlinkable => VMResult::Unlinkable,
         VMResult::InvalidOperand => VMResult::InvalidOperand,
         VMResult::UnalignedAtomic => VMResult::UnalignedAtomic,
+        VMResult::Unimplemented => VMResult::Unimplemented,
     }
 }
 

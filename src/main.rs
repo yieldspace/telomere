@@ -2,7 +2,7 @@ use anyhow::Context;
 use clap::Parser;
 use cli::{Cli, Command, CoreCommand};
 use std::{ffi::OsString, fs, path::Path, process::ExitCode};
-use telomere::{ResultValue, WasmValue};
+use telomere::{JitConfig, ResultValue, RuntimeConfig, WasmValue};
 
 mod cli;
 mod component_cli;
@@ -52,7 +52,14 @@ async fn run_core_module_with_stdio(
         );
     }
     let (func, wasm_args) = legacy_core_invocation(&command, &module)?;
-    let ret = run_exported_core_function(module, &func, &wasm_args).await?;
+    let ret = run_exported_core_function(
+        module,
+        &func,
+        &wasm_args,
+        command.jit,
+        command.jit_code_cache_mib,
+    )
+    .await?;
     println!("{}", format_result_values(&ret));
     Ok(ExitCode::SUCCESS)
 }
@@ -113,8 +120,22 @@ async fn run_exported_core_function(
     module: telomere::Module,
     func: &str,
     wasm_args: &ResultValue,
+    jit: bool,
+    jit_code_cache_mib: u32,
 ) -> anyhow::Result<ResultValue> {
-    let store = telomere::Store::new();
+    if jit && !telomere::jit_supported() {
+        anyhow::bail!("`--jit` requires the `jit` feature on a supported macOS arm64 target");
+    }
+    let store = if jit {
+        telomere::Store::new_with_runtime_config(RuntimeConfig {
+            jit: JitConfig {
+                enabled: true,
+                code_cache_max_bytes: jit_code_cache_mib.saturating_mul(1024 * 1024),
+            },
+        })
+    } else {
+        telomere::Store::new()
+    };
     let registry = telomere::Registry::new();
     let instance = vm_result_to_anyhow(
         telomere::instantiate(module, &store, &registry).await,
@@ -165,6 +186,7 @@ fn vm_result_to_anyhow<T>(
         telomere::VMResult::Unlinkable => Err(anyhow::anyhow!("{context}: unlinkable")),
         telomere::VMResult::InvalidOperand => Err(anyhow::anyhow!("{context}: invalid operand")),
         telomere::VMResult::UnalignedAtomic => Err(anyhow::anyhow!("{context}: unaligned atomic")),
+        telomere::VMResult::Unimplemented => Err(anyhow::anyhow!("{context}: unimplemented")),
     }
 }
 
@@ -201,6 +223,8 @@ mod tests {
             name: path.clone(),
             tail_args: vec![],
             args_after_separator: false,
+            jit: false,
+            jit_code_cache_mib: 4,
         };
 
         let error = run_core_module(command)
@@ -227,6 +251,8 @@ mod tests {
             name: path.clone(),
             tail_args: vec![],
             args_after_separator: false,
+            jit: false,
+            jit_code_cache_mib: 4,
         };
 
         let exit = run_core_module_with_stdio(
@@ -276,6 +302,8 @@ mod tests {
             name: path.clone(),
             tail_args: vec![],
             args_after_separator: false,
+            jit: false,
+            jit_code_cache_mib: 4,
         };
         let captured = core_wasi_preview1::CapturedStdio::default();
 
@@ -338,6 +366,8 @@ mod tests {
             name: path.clone(),
             tail_args: vec![],
             args_after_separator: false,
+            jit: false,
+            jit_code_cache_mib: 4,
         };
         let captured = core_wasi_preview1::CapturedStdio::default();
 

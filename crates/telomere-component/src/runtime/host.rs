@@ -538,5 +538,8 @@ pub(super) fn vm_result_to_component_error(
         CoreVMResult::UnalignedAtomic => {
             ComponentError::Trap(format!("{context} trapped: unaligned atomic"))
         }
+        CoreVMResult::Unimplemented => {
+            ComponentError::Runtime(format!("{context} failed: unimplemented"))
+        }
     }
 }

@@ -2,6 +2,7 @@
 #[macro_use]
 mod trace;
 pub(crate) mod instantiate;
+pub mod jit;
 pub(crate) mod memory_effect;
 pub(crate) mod scheduler;
 #[allow(clippy::missing_safety_doc)]
@@ -15,6 +16,7 @@ pub use instantiate::link_async_host_function_with_export_name;
 pub use instantiate::link_async_host_function_with_function_idx;
 pub use instantiate::link_host_function_with_export_name;
 pub use instantiate::link_host_function_with_function_idx;
+pub use jit::supported as jit_supported;
 pub use memory_effect::{
     Completion, CompletionPayload, HostCallPending, MemoryWaitPending, PendingOp, WasmAsyncPending,
 };
