@@ -1,8 +1,17 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use parking_lot::Mutex;
 
-use crate::common::{store::FunctionBody, ObjectRef, VMResult};
+use crate::common::{
+    store::{FunctionBody, StoreInner},
+    ObjectRef, VMResult,
+};
 
 use super::{
     abi::JitEntry,
@@ -18,6 +27,7 @@ pub(crate) struct StoreJitCache {
 #[derive(Default)]
 struct StoreJitCacheInner {
     compiled: HashMap<ObjectRef, CachedFunction>,
+    disabled: HashSet<ObjectRef>,
     arena: CodeArena,
     used_bytes: usize,
     clock: u64,
@@ -52,10 +62,12 @@ impl StoreJitCache {
         &self,
         funcaddr: ObjectRef,
         body: &FunctionBody,
+        gc: &StoreInner,
         max_bytes: u32,
     ) -> VMResult<Arc<CompiledFunction>> {
         let max_bytes = max_bytes as usize;
         if max_bytes == 0 {
+            trace_compile_reject("max_zero", 0, 0, max_bytes);
             return VMResult::Unimplemented;
         }
 
@@ -63,6 +75,10 @@ impl StoreJitCache {
             let mut inner = self.inner.lock();
             inner.clock = inner.clock.wrapping_add(1);
             let clock = inner.clock;
+            if inner.disabled.contains(&funcaddr) {
+                trace_compile_reject("disabled", 0, 0, max_bytes);
+                return VMResult::Unimplemented;
+            }
             if let Some(cached) = inner.compiled.get_mut(&funcaddr) {
                 cached.last_used = clock;
                 return VMResult::Success(cached.tiers.active().clone());
@@ -72,21 +88,37 @@ impl StoreJitCache {
         let FunctionBody::Wasm { code, op_lens, .. } = body else {
             return VMResult::Unimplemented;
         };
-        let bytes = match backend::emit_baseline_function(funcaddr, code, op_lens) {
+        let bytes = match backend::emit_baseline_function(funcaddr, code, op_lens, gc) {
             Ok(bytes) => bytes,
-            Err(()) => return VMResult::Unimplemented,
+            Err(()) => {
+                trace_compile_reject("emit", 0, 0, max_bytes);
+                return VMResult::Unimplemented;
+            }
         };
         let allocation_len = match CodeArena::allocation_len(bytes.len()) {
             Ok(len) => len,
-            Err(()) => return VMResult::Unimplemented,
+            Err(()) => {
+                trace_compile_reject("allocation_len", bytes.len(), 0, max_bytes);
+                return VMResult::Unimplemented;
+            }
         };
         if allocation_len > max_bytes {
+            trace_compile_reject("too_large", bytes.len(), allocation_len, max_bytes);
             return VMResult::Unimplemented;
         }
 
         let mut inner = self.inner.lock();
         inner.clock = inner.clock.wrapping_add(1);
         let clock = inner.clock;
+        if inner.disabled.contains(&funcaddr) {
+            trace_compile_reject(
+                "disabled_after_emit",
+                bytes.len(),
+                allocation_len,
+                max_bytes,
+            );
+            return VMResult::Unimplemented;
+        }
         if let Some(cached) = inner.compiled.get_mut(&funcaddr) {
             cached.last_used = clock;
             return VMResult::Success(cached.tiers.active().clone());
@@ -94,7 +126,10 @@ impl StoreJitCache {
         inner.evict_until(max_bytes.saturating_sub(allocation_len));
         let compiled = match CompiledFunction::from_bytes(&bytes, &inner.arena) {
             Ok(compiled) => Arc::new(compiled),
-            Err(()) => return VMResult::Unimplemented,
+            Err(()) => {
+                trace_compile_reject("from_bytes", bytes.len(), allocation_len, max_bytes);
+                return VMResult::Unimplemented;
+            }
         };
         inner.used_bytes = inner.used_bytes.saturating_add(compiled.code_size());
         inner.compiled.insert(
@@ -105,6 +140,31 @@ impl StoreJitCache {
             },
         );
         VMResult::Success(compiled)
+    }
+
+    pub(crate) fn disable(&self, funcaddr: ObjectRef) {
+        let mut inner = self.inner.lock();
+        if let Some(cached) = inner.compiled.remove(&funcaddr) {
+            inner.used_bytes = inner.used_bytes.saturating_sub(cached.tiers.code_size());
+        }
+        inner.disabled.insert(funcaddr);
+    }
+}
+
+fn trace_compile_reject(reason: &'static str, bytes_len: usize, allocation_len: usize, max: usize) {
+    if std::env::var_os("TELOMERE_JIT_TRACE_COMPILE").is_some() {
+        static COMPILE_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+        let max_count = std::env::var("TELOMERE_JIT_TRACE_COMPILE_MAX")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(64);
+        let index = COMPILE_TRACE_COUNT.fetch_add(1, Ordering::Relaxed);
+        if index >= max_count {
+            return;
+        }
+        eprintln!(
+            "[telomere-jit] compile_reject reason={reason} bytes={bytes_len} allocation={allocation_len} max={max}"
+        );
     }
 }
 

@@ -313,6 +313,24 @@ pub struct Memory {
     max_pages: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+pub(crate) struct MemoryJitLayout {
+    pub(crate) region_ptr: usize,
+    pub(crate) current_pages: usize,
+}
+
+#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+impl MemoryJitLayout {
+    pub(crate) fn get() -> Self {
+        Self {
+            region_ptr: std::mem::offset_of!(Memory, region)
+                + std::mem::offset_of!(MmapRegion, ptr),
+            current_pages: std::mem::offset_of!(Memory, current_pages),
+        }
+    }
+}
+
 impl fmt::Debug for Memory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Memory")

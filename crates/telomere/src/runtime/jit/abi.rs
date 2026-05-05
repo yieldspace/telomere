@@ -17,6 +17,7 @@ impl JitNativeExit {
     pub const TRAP: u64 = 3;
     pub const DONE: u64 = 4;
     pub const FALLBACK_PTR: u64 = 5;
+    pub const PENDING: u64 = 6;
 
     pub const fn keep_going() -> Self {
         Self {
@@ -49,6 +50,20 @@ impl JitNativeExit {
     pub const fn done() -> Self {
         Self {
             kind: Self::DONE,
+            value: 0,
+        }
+    }
+
+    pub const fn done_with_value(value: u64) -> Self {
+        Self {
+            kind: Self::DONE,
+            value,
+        }
+    }
+
+    pub const fn pending() -> Self {
+        Self {
+            kind: Self::PENDING,
             value: 0,
         }
     }

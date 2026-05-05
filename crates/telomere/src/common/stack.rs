@@ -255,6 +255,12 @@ impl Stack {
     }
     fn add_top(&mut self, n: usize) -> VMResult<()> {
         self.top = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
+            if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
+                eprintln!(
+                    "[telomere-stack] checked_add overflow top={} add={n}",
+                    self.top
+                );
+            }
             VMResult::StackOverflow
         }));
         VMResult::Success(())
@@ -266,9 +272,18 @@ impl Stack {
         let last = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
             VMResult::StackOverflow
         }));
+        let memory_len = self.memory.len();
         VMResult::Success(vm_try!(VMResult::from_option(
             self.memory.get_mut(self.top..last),
-            || VMResult::StackOverflow
+            || {
+                if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
+                    eprintln!(
+                        "[telomere-stack] memory range overflow top={} last={last} len={}",
+                        self.top, memory_len
+                    );
+                }
+                VMResult::StackOverflow
+            }
         )))
     }
     pub fn push_u8_array<const N: usize>(&mut self, v: [u8; N]) -> VMResult<()> {
@@ -877,12 +892,24 @@ impl Stack {
             || VMResult::StackOverflow
         ));
         if new_top > self.memory.len() {
+            if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
+                eprintln!(
+                    "[telomere-stack] frame overflow local_top={local_top} param_size={param_size} local_size={local_size} info_top={info_top} new_top={new_top} len={}",
+                    self.memory.len()
+                );
+            }
             return VMResult::StackOverflow;
         }
         VMResult::Success(new_top)
     }
     fn copy_top_bytes_to(&mut self, dst: usize, size: usize) -> VMResult<()> {
         let src = vm_try!(VMResult::from_option(self.top.checked_sub(size), || {
+            if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
+                eprintln!(
+                    "[telomere-stack] copy_top underflow top={} size={size} dst={dst}",
+                    self.top
+                );
+            }
             VMResult::StackOverflow
         }));
         if size == 0 || src == dst {
@@ -968,7 +995,15 @@ impl Stack {
     ) -> VMResult<LocalReference> {
         let local_top = vm_try!(VMResult::from_option(
             self.top.checked_sub(param_size),
-            || VMResult::StackOverflow
+            || {
+                if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {
+                    eprintln!(
+                        "[telomere-stack] function_call underflow top={} param_size={param_size} local_size={local_size}",
+                        self.top
+                    );
+                }
+                VMResult::StackOverflow
+            }
         ));
         let new_top = vm_try!(self.frame_end_from_local_top(local_top, param_size, local_size));
         vm_try!(self.zero_new_locals(local_top + param_size, local_size));
@@ -1019,6 +1054,36 @@ impl Stack {
             return_pc.resolve(runtime, self, prev_local_reference),
         )
     }
+
+    pub(crate) fn function_return_optional_continuation(
+        &mut self,
+        reference: &LocalReference,
+        return_size: usize,
+        runtime: &StoreInner,
+    ) -> (LocalReference, Option<*const Instr>) {
+        if reference.local_size as usize <= std::mem::size_of::<CallStackInfo>().saturating_sub(1) {
+            return (*reference, None);
+        }
+        let CallStackInfo {
+            return_pc,
+            prev_local_reference_top,
+            prev_local_reference_size,
+            ..
+        } = self.call_stack_info(reference);
+        let prev_local_reference = LocalReference {
+            local_size: prev_local_reference_size,
+            local_top: prev_local_reference_top,
+        };
+        match self.copy_top_bytes_to(reference.local_top, return_size) {
+            VMResult::Success(()) => {}
+            VMResult::StackOverflow => unreachable!("validated function return must fit in stack"),
+            other => unreachable!("unexpected return copy failure: {other:?}"),
+        }
+        self.top = reference.local_top + return_size;
+        let continuation = return_pc.resolve_optional(runtime, self, prev_local_reference);
+        (prev_local_reference, continuation)
+    }
+
     /// Like `function_return` but assumes the return data is already written at `local_top`.
     pub fn function_return_in_place(
         &mut self,

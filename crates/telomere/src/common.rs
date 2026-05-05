@@ -7,7 +7,7 @@ use std::{fmt::Display, future::Future, pin::Pin, sync::Arc};
 use custom_section::NameSubSection;
 
 pub use vm_result::VMResult;
-mod memory;
+pub(crate) mod memory;
 pub use memory::{
     AtomicRmwOp, LocalMemoryObject, MemArg, Memory, MemoryInitError, SharedMemoryObject,
 };
@@ -953,6 +953,22 @@ impl StablePc {
                 unsafe { base.add(index) }
             }
             None => self.0 as *const Instr,
+        }
+    }
+
+    pub(crate) fn resolve_optional(
+        self,
+        runtime: &StoreInner,
+        stack: &Stack,
+        local_reference: LocalReference,
+    ) -> Option<*const Instr> {
+        match self.relative_index() {
+            Some(index) => {
+                let (base, len) = Self::current_frame_code_range(runtime, stack, local_reference)?;
+                debug_assert!(index < len);
+                Some(unsafe { base.add(index) })
+            }
+            None => Some(self.0 as *const Instr),
         }
     }
 

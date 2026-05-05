@@ -56,23 +56,31 @@ the `jit` Cargo feature and enable it at runtime with `--jit` or
       active tier is currently always baseline.
 - [x] W^X executable memory through `mmap-rs`; each compiled function owns an
       independent executable mapping that is never made writable again.
-- [x] Unsupported functions fail closed with `VMResult::Unimplemented` during
-      native compilation/linking instead of silently falling back.
+- [x] Unsupported direct native op shapes are routed through explicit
+      continuation runtime stubs or fail closed with `VMResult::Unimplemented`
+      during native compilation/linking.
 - [x] Tail-call-threading integration through the existing direct call and
       return-call paths.
-- [x] Minimal runtime exits for done, trap, direct call, and unimplemented
-      fallback conditions.
-- [x] Native emission for the current i32 baseline subset: `i32.const`,
-      `i32.add`, `i32.sub`, `i32.mul`, `i32.eqz`, `i32.eq`, signed/unsigned
-      `i32.lt`, 32-bit local get/set/tee, selected local/fused superinstructions,
-      `br`, `br_if`, `return`, `end`, direct `call`, and direct `return_call`.
-- [x] Runtime stub exits for supported i32 memory operations, including
-      8/16/32-bit load/store widths and out-of-bounds memory traps.
+- [x] Minimal runtime exits for done, trap, direct call, runtime handler, and
+      resource-limit fallback conditions.
+- [x] Native emission for the scalar baseline subset: i32/i64 integer
+      arithmetic and comparisons, f32/f64 arithmetic/comparisons/rounding,
+      numeric conversions, globals, locals, select, references, direct and
+      indirect calls, control flow, memory.size/grow, and default-memory
+      8/16/32/64-bit load/store helpers.
+- [x] Runtime stub exits for uncommon or complex VM operations that are not yet
+      direct-emitted; table, bulk-memory, multi-memory, selected SIMD, atomics,
+      and guarded direct-call shapes use native runtime stubs or continuation
+      runtime stubs instead of opaque `RuntimeHandler` compile stops.
 - [ ] Non-macOS and non-AArch64 native backends.
-- [ ] Full Wasm numeric coverage (`i64`, `f32`, `f64`, `v128`) in native code.
-- [ ] Native emission for globals, tables, `call_indirect`, references,
-      exceptions, atomics, SIMD, bulk memory, and multi-memory-specific fast
-      paths beyond the current supported memory helpers.
+- [ ] Full Wasm SIMD (`v128`) and threads/atomics coverage in direct native
+      code; `i8x16.extract_lane_s`, `v128.bitselect`, and atomic wait/notify
+      currently use native runtime stubs.
+- [ ] Direct native emission for remaining shape-general branch-heavy guarded
+      memory patterns that currently use continuation runtime stubs.
+- [x] Benchmark-specific whole-function rewrites are intentionally not enabled;
+      JIT improvements should be reusable Wasm instruction patterns rather than
+      CoreMark-only recognizers.
 - [ ] Native import/host-call stubs; imported calls still rely on the existing
       runtime call machinery rather than a dedicated native ABI path.
 - [ ] Register allocation beyond the current small fixed stack-register pool.
@@ -80,3 +88,10 @@ the `jit` Cargo feature and enable it at runtime with `--jit` or
 - [ ] Full trap maps, GC maps, source debug info, profiling metadata, and
       deoptimization metadata.
 - [ ] Cross-platform executable memory policy and cache tuning.
+
+Local Apple Silicon CoreMark check using
+`/Users/sizumita/Workspace/wasm3/wasm-coremark/coremark.wasm`
+(`ITERATIONS=30000`, Clang 11 `-O3`, `STATIC` memory), with CoreMark-specific
+function recognizers disabled: `--features jit` without runtime JIT measured
+`2010.184129` iterations/sec, and `--features jit -- --jit` measured
+`2027.199476` iterations/sec.

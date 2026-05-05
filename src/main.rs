@@ -41,7 +41,15 @@ async fn run_core_module_with_stdio(
 ) -> anyhow::Result<ExitCode> {
     let module = parse_module_from_path(&command.name)?;
     if should_run_wasi(&command, &module) {
-        return core_wasi_preview1::run(module, &command.name, &command.tail_args, stdio).await;
+        return core_wasi_preview1::run(
+            module,
+            &command.name,
+            &command.tail_args,
+            stdio,
+            command.jit,
+            command.jit_code_cache_mib,
+        )
+        .await;
     }
 
     if command.args_after_separator {

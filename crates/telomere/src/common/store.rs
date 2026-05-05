@@ -154,6 +154,7 @@ pub(crate) struct CallRecipe {
     pub(crate) frame: CallFrameCache,
     pub(crate) param_size: u32,
     pub(crate) local_size: u32,
+    pub(crate) return_size: u32,
     pub(crate) return_arity: u32,
     pub(crate) target: CallDispatchTarget,
 }
@@ -666,6 +667,7 @@ impl StoreInner {
         let typeidx = module.functions[funcinst.funcidx as usize];
         let functype = &module.function_types[typeidx.0 as usize];
         let param_size = functype.0.iter().map(|ty| ty.stack_size().u32()).sum();
+        let return_size = functype.1.iter().map(|ty| ty.stack_size().u32()).sum();
         let return_arity = u32::try_from(functype.1 .0.len()).expect("return arity exceeds u32");
         CallRecipe {
             frame: CallFrameCache::from_cached_parts(
@@ -676,6 +678,7 @@ impl StoreInner {
             ),
             param_size,
             local_size,
+            return_size,
             return_arity,
             target,
         }

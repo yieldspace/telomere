@@ -665,8 +665,21 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
     }
 
     label!(op_local_get4, "op_local_get4");
+    label!(op_local_get8, "op_local_get8");
+    label!(op_local_get16, "op_local_get16");
     label!(op_local_set4, "op_local_set4");
+    label!(op_local_set8, "op_local_set8");
+    label!(op_local_set16, "op_local_set16");
     label!(op_local_tee4, "op_local_tee4");
+    label!(op_local_tee8, "op_local_tee8");
+    label!(op_local_tee16, "op_local_tee16");
+    label!(op_drop, "op_drop");
+    label!(op_global_get4, "op_global_get4");
+    label!(op_global_get8, "op_global_get8");
+    label!(op_global_get16, "op_global_get16");
+    label!(op_global_set4, "op_global_set4");
+    label!(op_global_set8, "op_global_set8");
+    label!(op_global_set16, "op_global_set16");
     label!(op_local_get4_set4, "op_local_get4_set4");
     label!(op_local_get4_tee4, "op_local_get4_tee4");
     label!(op_local_get4_local_get4, "op_local_get4_local_get4");
@@ -688,11 +701,16 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
         op_local_get4x3_i32_add_const_binop_i32_add_tee4_i32_const_store,
         "op_local_get4x3_i32_add_const_binop_i32_add_tee4_i32_const_store"
     );
+    label!(op_select, "op_select");
     label!(op_select4, "op_select4");
     label!(op_select4_set4, "op_select4_set4");
     label!(op_select4_tee4, "op_select4_tee4");
+    label!(op_select8, "op_select8");
+    label!(op_select16, "op_select16");
     label!(op_br_if, "op_br_if");
+    label!(op_br, "op_br");
     label!(op_br_table, "op_br_table");
+    label!(op_else, "op_else");
     label!(op_local_get4_br_table, "op_local_get4_br_table");
     label!(
         op_local_get4_i32_const_add_br_table,
@@ -706,12 +724,23 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
     label!(special_function_return, "special_function_return");
     label!(special_function_vm_end, "special_function_vm_end");
     label!(op_call, "op_call");
+    label!(op_call_import, "op_call_import");
+    #[cfg(feature = "jit")]
+    label!(op_call_jit_lazy, "op_call_jit_lazy");
+    label!(op_call_indirect, "op_call_indirect");
+    label!(op_return_call, "op_return_call");
+    label!(op_return_call_import, "op_return_call_import");
+    #[cfg(feature = "jit")]
+    label!(op_return_call_jit_lazy, "op_return_call_jit_lazy");
+    label!(op_return_call_indirect, "op_return_call_indirect");
     label!(op_i32_const, "op_i32_const");
     label!(op_i32_const_set4, "op_i32_const_set4");
     label!(op_i32_const_tee4, "op_i32_const_tee4");
     label!(op_i32_add, "op_i32_add");
     label!(op_i32_sub, "op_i32_sub");
     label!(op_i32_mul, "op_i32_mul");
+    label!(op_i32_clz, "op_i32_clz");
+    label!(op_i32_ctz, "op_i32_ctz");
     label!(op_i32_and, "op_i32_and");
     label!(op_i32_or, "op_i32_or");
     label!(op_i32_xor, "op_i32_xor");
@@ -727,10 +756,58 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
     label!(op_i32_gt_u, "op_i32_gt_u");
     label!(op_i32_le_u, "op_i32_le_u");
     label!(op_i32_ge_s, "op_i32_ge_s");
+    label!(op_i32_lt_s, "op_i32_lt_s");
+    label!(op_i32_le_s, "op_i32_le_s");
+    label!(op_i32_ge_u, "op_i32_ge_u");
+    label!(op_i32_eqz, "op_i32_eqz");
+    label!(op_i32_rotl, "op_i32_rotl");
+    label!(op_i32_rotr, "op_i32_rotr");
+    label!(op_i32_div_s, "op_i32_div_s");
+    label!(op_i32_div_u, "op_i32_div_u");
+    label!(op_i32_rem_s, "op_i32_rem_s");
+    label!(op_i32_rem_u, "op_i32_rem_u");
+    label!(op_i32_wrap_i64, "op_i32_wrap_i64");
+    label!(op_i32_extend8_s, "op_i32_extend8_s");
+    label!(op_i32_extend16_s, "op_i32_extend16_s");
+    label!(op_i64_const, "op_i64_const");
+    label!(op_i64_add, "op_i64_add");
+    label!(op_i64_sub, "op_i64_sub");
+    label!(op_i64_mul, "op_i64_mul");
+    label!(op_i64_div_s, "op_i64_div_s");
+    label!(op_i64_div_u, "op_i64_div_u");
+    label!(op_i64_rem_s, "op_i64_rem_s");
+    label!(op_i64_rem_u, "op_i64_rem_u");
+    label!(op_i64_and, "op_i64_and");
+    label!(op_i64_or, "op_i64_or");
+    label!(op_i64_xor, "op_i64_xor");
+    label!(op_i64_shl, "op_i64_shl");
+    label!(op_i64_shr_s, "op_i64_shr_s");
+    label!(op_i64_shr_u, "op_i64_shr_u");
+    label!(op_i64_rotl, "op_i64_rotl");
+    label!(op_i64_rotr, "op_i64_rotr");
+    label!(op_i64_eqz, "op_i64_eqz");
+    label!(op_i64_eq, "op_i64_eq");
+    label!(op_i64_ne, "op_i64_ne");
+    label!(op_i64_lt_s, "op_i64_lt_s");
+    label!(op_i64_lt_u, "op_i64_lt_u");
+    label!(op_i64_gt_s, "op_i64_gt_s");
+    label!(op_i64_gt_u, "op_i64_gt_u");
+    label!(op_i64_le_s, "op_i64_le_s");
+    label!(op_i64_le_u, "op_i64_le_u");
+    label!(op_i64_ge_s, "op_i64_ge_s");
+    label!(op_i64_ge_u, "op_i64_ge_u");
+    label!(op_i64_extend_i32_s, "op_i64_extend_i32_s");
+    label!(op_i64_extend_i32_u, "op_i64_extend_i32_u");
+    label!(op_i64_extend8_s, "op_i64_extend8_s");
+    label!(op_i64_extend16_s, "op_i64_extend16_s");
+    label!(op_i64_extend32_s, "op_i64_extend32_s");
     label!(op_local_binop32, "op_local_binop32");
     label!(op_local_binop32_set4, "op_local_binop32_set4");
     label!(op_local_binop32_tee4, "op_local_binop32_tee4");
     label!(op_local_binop32_br_if, "op_local_binop32_br_if");
+    label!(op_local_binop64, "op_local_binop64");
+    label!(op_local_binop64_set8, "op_local_binop64_set8");
+    label!(op_local_binop64_tee8, "op_local_binop64_tee8");
     label!(
         op_local_get4_i32_const_add_set4,
         "op_local_get4_i32_const_add_set4"
@@ -743,10 +820,61 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
         op_local_get4_i32_const_add_tee4_br_if,
         "op_local_get4_i32_const_add_tee4_br_if"
     );
+    label!(
+        op_local_get4_i32_const_add_br_if,
+        "op_local_get4_i32_const_add_br_if"
+    );
+    label!(
+        op_local_get4_local_get4_i32_add_br_if,
+        "op_local_get4_local_get4_i32_add_br_if"
+    );
+    label!(op_local_get4_i32_eqz_br_if, "op_local_get4_i32_eqz_br_if");
+    label!(
+        op_local_get4_i32_const_compare_br_if,
+        "op_local_get4_i32_const_compare_br_if"
+    );
+    label!(
+        op_local_get4_local_get4_compare_br_if,
+        "op_local_get4_local_get4_compare_br_if"
+    );
+    label!(
+        op_local_get4_i32_const_and_br_if,
+        "op_local_get4_i32_const_and_br_if"
+    );
+    label!(
+        op_local_get4_i32_const_and_eqz_br_if,
+        "op_local_get4_i32_const_and_eqz_br_if"
+    );
+    label!(
+        op_local_get4_i32_const_and_i32_const_compare_br_if,
+        "op_local_get4_i32_const_and_i32_const_compare_br_if"
+    );
+    label!(
+        op_local_get4_i32_const_and_tee4_i32_const_eq_br_if,
+        "op_local_get4_i32_const_and_tee4_i32_const_eq_br_if"
+    );
+    label!(
+        op_local_get4_set4_local_get4_i32_const_compare_br_if,
+        "op_local_get4_set4_local_get4_i32_const_compare_br_if"
+    );
+    label!(
+        op_local_get4_i32_const_add_i32_const_and_i32_const_compare_br_if,
+        "op_local_get4_i32_const_add_i32_const_and_i32_const_compare_br_if"
+    );
     label!(op_local_cmp32, "op_local_cmp32");
     label!(op_local_cmp32_set4, "op_local_cmp32_set4");
     label!(op_local_cmp32_tee4, "op_local_cmp32_tee4");
     label!(op_local_cmp32_br_if, "op_local_cmp32_br_if");
+    label!(op_local_cmp64, "op_local_cmp64");
+    label!(op_local_cmp64_set4, "op_local_cmp64_set4");
+    label!(op_local_cmp64_tee4, "op_local_cmp64_tee4");
+    label!(op_local_cmp64_br_if, "op_local_cmp64_br_if");
+    label!(op_local_unary32, "op_local_unary32");
+    label!(op_local_unary32_set4, "op_local_unary32_set4");
+    label!(op_local_unary32_tee4, "op_local_unary32_tee4");
+    label!(op_local_unary64, "op_local_unary64");
+    label!(op_local_unary64_set8, "op_local_unary64_set8");
+    label!(op_local_unary64_tee8, "op_local_unary64_tee8");
     label!(op_i32_const_binop, "op_i32_const_binop");
     label!(op_i32_const_binop_set4, "op_i32_const_binop_set4");
     label!(op_i32_const_binop_tee4, "op_i32_const_binop_tee4");
@@ -756,12 +884,91 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
     label!(op_i32_const_cmp_tee4, "op_i32_const_cmp_tee4");
     label!(op_i32_const_cmp_br_if, "op_i32_const_cmp_br_if");
     label!(op_i32_load_local_base, "op_i32_load_local_base");
+    label!(op_i32_load_local_base_set4, "op_i32_load_local_base_set4");
+    label!(op_i32_load_local_base_tee4, "op_i32_load_local_base_tee4");
     label!(op_i32_load16_s_local_base, "op_i32_load16_s_local_base");
+    label!(
+        op_i32_load16_s_local_base_set4,
+        "op_i32_load16_s_local_base_set4"
+    );
+    label!(
+        op_i32_load16_s_local_base_tee4,
+        "op_i32_load16_s_local_base_tee4"
+    );
     label!(op_i32_load16_u_local_base, "op_i32_load16_u_local_base");
+    label!(
+        op_i32_load16_u_local_base_set4,
+        "op_i32_load16_u_local_base_set4"
+    );
+    label!(
+        op_i32_load16_u_local_base_tee4,
+        "op_i32_load16_u_local_base_tee4"
+    );
     label!(op_i32_load8_u_local_base, "op_i32_load8_u_local_base");
+    label!(
+        op_i32_load8_u_local_base_set4,
+        "op_i32_load8_u_local_base_set4"
+    );
+    label!(
+        op_i32_load8_u_local_base_tee4,
+        "op_i32_load8_u_local_base_tee4"
+    );
+    label!(op_i32_load8_s_local_base, "op_i32_load8_s_local_base");
+    label!(
+        op_i32_load8_s_local_base_set4,
+        "op_i32_load8_s_local_base_set4"
+    );
+    label!(
+        op_i32_load8_s_local_base_tee4,
+        "op_i32_load8_s_local_base_tee4"
+    );
+    label!(op_i32_load, "op_i32_load");
+    label!(op_i64_load, "op_i64_load");
+    label!(op_i32_load_const_base, "op_i32_load_const_base");
+    label!(op_i32_load8_u, "op_i32_load8_u");
+    label!(op_i32_load8_s, "op_i32_load8_s");
+    label!(op_i32_load16_u, "op_i32_load16_u");
+    label!(op_i32_load16_s, "op_i32_load16_s");
+    label!(op_i32_load_tee4_br_if, "op_i32_load_tee4_br_if");
+    label!(
+        op_i32_load_tee4_i32_eqz_br_if,
+        "op_i32_load_tee4_i32_eqz_br_if"
+    );
+    label!(op_i32_load8_u_tee4_br_if, "op_i32_load8_u_tee4_br_if");
+    label!(
+        op_i32_load8_u_tee4_i32_eqz_br_if,
+        "op_i32_load8_u_tee4_i32_eqz_br_if"
+    );
+    label!(op_i32_load8_s_tee4_br_if, "op_i32_load8_s_tee4_br_if");
+    label!(
+        op_i32_load8_s_tee4_i32_eqz_br_if,
+        "op_i32_load8_s_tee4_i32_eqz_br_if"
+    );
+    label!(op_i32_load16_u_tee4_br_if, "op_i32_load16_u_tee4_br_if");
+    label!(
+        op_i32_load16_u_tee4_i32_eqz_br_if,
+        "op_i32_load16_u_tee4_i32_eqz_br_if"
+    );
+    label!(op_i32_load16_s_tee4_br_if, "op_i32_load16_s_tee4_br_if");
+    label!(
+        op_i32_load16_s_tee4_i32_eqz_br_if,
+        "op_i32_load16_s_tee4_i32_eqz_br_if"
+    );
+    label!(op_i32_store, "op_i32_store");
+    label!(op_i64_store, "op_i64_store");
+    label!(
+        op_f32_store_const_base_local4,
+        "op_f32_store_const_base_local4"
+    );
+    label!(op_i32_store8, "op_i32_store8");
+    label!(op_i32_store16, "op_i32_store16");
     label!(op_i32_store_local_base, "op_i32_store_local_base");
     label!(op_i32_store16_local_base, "op_i32_store16_local_base");
     label!(op_i32_store8_local_base, "op_i32_store8_local_base");
+    label!(
+        op_i32_store_local_base_local_get4,
+        "op_i32_store_local_base_local_get4"
+    );
     label!(op_i32_inc_local_base, "op_i32_inc_local_base");
     label!(
         op_local_get4_i32_inc_local_base,
@@ -898,6 +1105,123 @@ pub(crate) fn diagnostic_op_label(op: Op) -> &'static str {
         op_i32_load_local_base_tee4_i32_load8_u_tee4_br_if,
         "op_i32_load_local_base_tee4_i32_load8_u_tee4_br_if"
     );
+    label!(
+        op_i32_load_local_base_tee4_br_if,
+        "op_i32_load_local_base_tee4_br_if"
+    );
+    label!(
+        op_i32_load_local_base_tee4_i32_eqz_br_if,
+        "op_i32_load_local_base_tee4_i32_eqz_br_if"
+    );
+    label!(
+        op_i32_load8_u_local_base_tee4_br_if,
+        "op_i32_load8_u_local_base_tee4_br_if"
+    );
+    label!(
+        op_i32_load8_u_local_base_tee4_i32_eqz_br_if,
+        "op_i32_load8_u_local_base_tee4_i32_eqz_br_if"
+    );
+    label!(
+        op_i32_load8_s_local_base_tee4_br_if,
+        "op_i32_load8_s_local_base_tee4_br_if"
+    );
+    label!(
+        op_i32_load8_s_local_base_tee4_i32_eqz_br_if,
+        "op_i32_load8_s_local_base_tee4_i32_eqz_br_if"
+    );
+    label!(
+        op_i32_load16_u_local_base_tee4_br_if,
+        "op_i32_load16_u_local_base_tee4_br_if"
+    );
+    label!(
+        op_i32_load16_u_local_base_tee4_i32_eqz_br_if,
+        "op_i32_load16_u_local_base_tee4_i32_eqz_br_if"
+    );
+    label!(
+        op_i32_load16_s_local_base_tee4_br_if,
+        "op_i32_load16_s_local_base_tee4_br_if"
+    );
+    label!(
+        op_i32_load16_s_local_base_tee4_i32_eqz_br_if,
+        "op_i32_load16_s_local_base_tee4_i32_eqz_br_if"
+    );
+    label!(
+        op_i32_load_local_base_local_get4,
+        "op_i32_load_local_base_local_get4"
+    );
+    label!(
+        op_i32_load8_u_local_base_local_get4,
+        "op_i32_load8_u_local_base_local_get4"
+    );
+    label!(
+        op_i32_load8_u_local_base_tee4_local_get4,
+        "op_i32_load8_u_local_base_tee4_local_get4"
+    );
+    label!(
+        op_i32_load8_s_local_base_local_get4,
+        "op_i32_load8_s_local_base_local_get4"
+    );
+    label!(
+        op_i32_load8_s_local_base_tee4_local_get4,
+        "op_i32_load8_s_local_base_tee4_local_get4"
+    );
+    label!(
+        op_i32_load16_u_local_base_local_get4,
+        "op_i32_load16_u_local_base_local_get4"
+    );
+    label!(
+        op_i32_load16_u_local_base_tee4_local_get4,
+        "op_i32_load16_u_local_base_tee4_local_get4"
+    );
+    label!(
+        op_i32_load16_s_local_base_local_get4,
+        "op_i32_load16_s_local_base_local_get4"
+    );
+    label!(
+        op_i32_load16_s_local_base_tee4_local_get4,
+        "op_i32_load16_s_local_base_tee4_local_get4"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_compare_br_if,
+        "op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_compare_br_if"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_search_loop,
+        "op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_search_loop"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_search_loop_fallthrough,
+        "op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_search_loop_fallthrough"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_search_loop,
+        "op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_search_loop"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_search_loop_fallthrough,
+        "op_i32_load_local_base_set4_i32_load8_u_local_base_local_masked_search_loop_fallthrough"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load_local_base_local_eq_br_if,
+        "op_i32_load_local_base_set4_i32_load_local_base_local_eq_br_if"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load8_u_local_base_local_eq_br_if,
+        "op_i32_load_local_base_set4_i32_load8_u_local_base_local_eq_br_if"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load8_s_local_base_local_eq_br_if,
+        "op_i32_load_local_base_set4_i32_load8_s_local_base_local_eq_br_if"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_br_if,
+        "op_i32_load_local_base_set4_i32_load16_u_local_base_local_eq_br_if"
+    );
+    label!(
+        op_i32_load_local_base_set4_i32_load16_s_local_base_local_eq_br_if,
+        "op_i32_load_local_base_set4_i32_load16_s_local_base_local_eq_br_if"
+    );
+    label!(op_mem_fill_local, "op_mem_fill");
     "unknown"
 }
 
@@ -1205,8 +1529,10 @@ pub(crate) use bulk_memory::{
     op_mem_fill_shared, op_mem_init_indexed_local, op_mem_init_indexed_shared, op_mem_init_local,
     op_mem_init_shared,
 };
+#[allow(unused_imports)]
+pub(crate) use bulk_memory::{op_mem_copy, op_mem_fill, op_mem_init};
 #[cfg(feature = "jit")]
-pub(crate) use call::jit_call_direct;
+pub(crate) use call::{jit_call_direct, jit_call_indirect};
 pub(crate) use call::{
     op_call, op_call_cached_u16_low7_guard, op_call_i32_crc16_update16,
     op_call_i32_crc16_update16_masked, op_call_i32_list_crc_summary,

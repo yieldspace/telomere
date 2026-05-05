@@ -126,18 +126,34 @@ pub(crate) unsafe fn jit_call_direct(
     is_return_call: bool,
 ) -> crate::runtime::jit::JitNativeExit {
     if ctx.effect.get_pending_count() != 0 {
-        return crate::runtime::jit::JitNativeExit::done();
+        return crate::runtime::jit::JitNativeExit::pending();
     }
     let recipe = unsafe { decode_direct_call_recipe(tail_code, ctx) };
-    let jit_wasm_target = matches!(recipe.target, CallDispatchTarget::Wasm { .. });
+    if let CallDispatchTarget::Wasm { local_size } = recipe.target {
+        return match unsafe {
+            prepare_jit_wasm_call(
+                tail_code.offset(1),
+                recipe,
+                local_size as usize,
+                ctx,
+                is_return_call,
+            )
+        } {
+            VMResult::Success(()) => unsafe {
+                finish_jit_wasm_call(tail_code.offset(1), recipe, ctx, is_return_call)
+            },
+            other => crate::runtime::jit::JitNativeExit::trap(other),
+        };
+    }
     match unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) } {
-        VMResult::Success(CallOutcome::Immediate(_ptr)) if jit_wasm_target => unsafe {
-            crate::runtime::jit::enter_current_frame_from_jit_call(ctx)
-        },
         VMResult::Success(CallOutcome::Immediate(ptr)) => {
-            crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
+            if !is_return_call && ptr == tail_code.offset(1) {
+                crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+            } else {
+                crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
+            }
         }
-        VMResult::Success(CallOutcome::Pending) => crate::runtime::jit::JitNativeExit::done(),
+        VMResult::Success(CallOutcome::Pending) => crate::runtime::jit::JitNativeExit::pending(),
         VMResult::Unreachable => {
             crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unreachable)
         }
@@ -169,6 +185,192 @@ pub(crate) unsafe fn jit_call_direct(
             crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unimplemented)
         }
     }
+}
+
+#[cfg(feature = "jit")]
+/// Telomere runtime helper for JIT `call_indirect` / `return_call_indirect` sites.
+///
+/// Stack effect: pops the indirect table element index and dispatches to the resolved target.
+/// Traps: returns a JIT trap exit for the same table, type, and call failures as
+/// `op_call_indirect` and `op_return_call_indirect`.
+/// Notes: The helper resolves the callee through the active table and then reuses the direct-call
+/// JIT entry path for Wasm targets so nested JIT fallback remains tied to the callee frame.
+///
+/// # Safety
+/// - `tail_code` must point to the decoded indirect call instruction in the active stream.
+/// - `ctx` must reference a live execution context whose stack contains the validated table index.
+/// - The caller must honor the returned JIT exit and resume through the indicated continuation.
+pub(crate) unsafe fn jit_call_indirect(
+    tail_code: *const Instr,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> crate::runtime::jit::JitNativeExit {
+    if ctx.effect.get_pending_count() != 0 {
+        return crate::runtime::jit::JitNativeExit::pending();
+    }
+    let i = ctx.stack.pop_u32();
+    let tableidx = unsafe { (*tail_code).operand.u32 as usize };
+    let table_addr = match ctx.instance().tables.as_slice().get(tableidx) {
+        Some(addr) => *addr,
+        None => {
+            return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableIndexOutOfRange);
+        }
+    };
+    let table = ctx.gc.get_table(table_addr);
+    let Some(func_addr) = table.1.get(i as usize).copied() else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableIndexOutOfRange);
+    };
+    if func_addr == TABLE_UNINITIALIZED {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableUninitialized);
+    }
+    let func_addr = ObjectRef(func_addr);
+    let funcinst = ctx.gc.get_func(func_addr);
+    let instance = ctx.gc.instance(funcinst.instance);
+    let module = ctx.gc.get_module(instance.module_addr);
+    let Some(actual_typeidx) = module.functions.get(funcinst.funcidx as usize) else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+    };
+    let Some(actual_ft) = module.function_types.get(actual_typeidx.0 as usize) else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+    };
+    let expected_typeidx = unsafe { (*tail_code.offset(1)).operand.u32 };
+    let Some(expected_ft) = ctx.module().function_types.get(expected_typeidx as usize) else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+    };
+    if actual_ft != expected_ft {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::CallIndirectInvalidType);
+    }
+    let recipe = ensure_indirect_call_recipe(func_addr, ctx);
+    if let CallDispatchTarget::Wasm { local_size } = recipe.target {
+        return match unsafe {
+            prepare_jit_wasm_call(
+                tail_code.offset(2),
+                recipe,
+                local_size as usize,
+                ctx,
+                is_return_call,
+            )
+        } {
+            VMResult::Success(()) => unsafe {
+                finish_jit_wasm_call(tail_code.offset(2), recipe, ctx, is_return_call)
+            },
+            other => crate::runtime::jit::JitNativeExit::trap(other),
+        };
+    }
+    match unsafe { internal_op_call(tail_code.offset(2), recipe, ctx, is_return_call) } {
+        VMResult::Success(CallOutcome::Immediate(ptr)) => {
+            if !is_return_call && ptr == unsafe { tail_code.offset(2) } {
+                crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+            } else {
+                crate::runtime::jit::JitNativeExit::continue_ptr(ptr)
+            }
+        }
+        VMResult::Success(CallOutcome::Pending) => crate::runtime::jit::JitNativeExit::pending(),
+        VMResult::Unreachable => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unreachable)
+        }
+        VMResult::StackOverflow => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::StackOverflow)
+        }
+        VMResult::MemoryIndexOutOfRange => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::MemoryIndexOutOfRange)
+        }
+        VMResult::TableIndexOutOfRange => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableIndexOutOfRange)
+        }
+        VMResult::CallIndirectInvalidType => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::CallIndirectInvalidType)
+        }
+        VMResult::TableUninitialized => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::TableUninitialized)
+        }
+        VMResult::Unlinkable => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unlinkable)
+        }
+        VMResult::InvalidOperand => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand)
+        }
+        VMResult::UnalignedAtomic => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::UnalignedAtomic)
+        }
+        VMResult::Unimplemented => {
+            crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::Unimplemented)
+        }
+    }
+}
+
+#[cfg(feature = "jit")]
+unsafe fn prepare_jit_wasm_call(
+    return_addr: *const Instr,
+    recipe: CallDispatchCache,
+    local_size: usize,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> VMResult<()> {
+    let param_size = recipe.param_size as usize;
+    if is_return_call {
+        let local_reference = vm_try!(ctx.stack.function_return_call_cached(
+            &ctx.local_reference,
+            param_size,
+            local_size,
+            recipe.frame,
+        ));
+        ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+    } else {
+        let return_pc = cached_return_pc(return_addr, ctx);
+        let local_reference = vm_try!(ctx.stack.function_call_cached(
+            param_size,
+            local_size,
+            recipe.frame,
+            ctx.local_reference,
+            return_pc,
+        ));
+        ctx.set_local_reference_with_frame(local_reference, recipe.frame);
+    }
+    VMResult::Success(())
+}
+
+#[cfg(feature = "jit")]
+unsafe fn finish_jit_wasm_call(
+    continuation: *const Instr,
+    recipe: CallDispatchCache,
+    ctx: &mut ExecuteContext,
+    is_return_call: bool,
+) -> crate::runtime::jit::JitNativeExit {
+    let exit = unsafe { crate::runtime::jit::enter_current_frame_from_jit_call(ctx) };
+    let returned_to_continuation = exit.kind == crate::runtime::jit::JitNativeExit::DONE
+        || (exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR
+            && exit.value == continuation as u64);
+    if !is_return_call && returned_to_continuation {
+        crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+    } else if !is_return_call
+        && matches!(
+            exit.kind,
+            crate::runtime::jit::JitNativeExit::CONTINUE_PTR
+                | crate::runtime::jit::JitNativeExit::FALLBACK_PTR
+        )
+    {
+        let continue_exit = unsafe {
+            crate::runtime::jit::run_interpreter_continue_from_jit_call(
+                exit.value as *const Instr,
+                continuation,
+                ctx,
+            )
+        };
+        if continue_exit.kind == crate::runtime::jit::JitNativeExit::DONE {
+            crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
+        } else {
+            continue_exit
+        }
+    } else {
+        exit
+    }
+}
+
+#[cfg(feature = "jit")]
+#[inline(always)]
+fn pack_call_stack_sizes(recipe: CallDispatchCache) -> u64 {
+    (u64::from(recipe.param_size) << 32) | u64::from(recipe.return_size)
 }
 
 #[inline(always)]

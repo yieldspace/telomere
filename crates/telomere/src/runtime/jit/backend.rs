@@ -1,5 +1,7 @@
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod aarch64_macos;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+mod ops;
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub(crate) use aarch64_macos::emit_baseline_function;
@@ -9,6 +11,7 @@ pub(crate) fn emit_baseline_function(
     _funcaddr: crate::common::ObjectRef,
     _code: &[crate::common::Instr],
     _op_lens: &[u16],
+    _gc: &crate::common::store::StoreInner,
 ) -> Result<Vec<u8>, ()> {
     Err(())
 }

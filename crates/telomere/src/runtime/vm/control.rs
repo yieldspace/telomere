@@ -296,13 +296,26 @@ pub unsafe fn special_function_return(
     ctx: &mut ExecuteContext,
 ) -> VMResult<()> {
     trace!("function return");
-    let (prev_local_ref, tail_code) = ctx.stack.function_return(
+    let (prev_local_ref, tail_code) = ctx.stack.function_return_optional_continuation(
         &ctx.local_reference(),
         (*tail_code).operand.drop_size as usize,
         ctx.gc,
     );
     ctx.set_local_reference(prev_local_ref);
-    call_next(tail_code, 0, ctx)
+    match tail_code {
+        Some(tail_code) => {
+            #[cfg(feature = "jit")]
+            if crate::runtime::jit::should_stop_interpreter_at(tail_code) {
+                ctx.cont = tail_code;
+                return VMResult::Success(());
+            }
+            call_next(tail_code, 0, ctx)
+        }
+        None => {
+            ctx.cont = std::ptr::null();
+            VMResult::Success(())
+        }
+    }
 }
 
 /// Telomere internal `special_block_return` trampoline.

@@ -370,112 +370,6 @@ fn fuse_local_get4x3_add_const_binop_add_consumer(
     })
 }
 
-#[allow(dead_code)]
-fn fuse_numeric_token_state_transition_function(code: &mut [LoweredOp]) -> Option<()> {
-    let entry = code.first()?;
-    if !std::ptr::fn_addr_eq(entry.op, vm::op_i32_load_local_base_tee4 as Op)
-        || !std::ptr::fn_addr_eq(code.get(1)?.op, vm::op_i32_load8_u as Op)
-        || !std::ptr::fn_addr_eq(code.get(2)?.op, vm::op_local_tee4 as Op)
-        || !code
-            .iter()
-            .any(|op| std::ptr::fn_addr_eq(op.op, vm::op_local_get4_br_table as Op))
-        || !code.iter().any(|op| {
-            std::ptr::fn_addr_eq(
-                op.op,
-                vm::op_i32_guarded_load8_u_local_base_set4_local_get4_set4_local_get4_br_if as Op,
-            )
-        })
-        || !code
-            .iter()
-            .any(|op| std::ptr::fn_addr_eq(op.op, vm::op_local_get4_i32_const_add_br_table as Op))
-    {
-        return None;
-    }
-    let return_label = code
-        .iter()
-        .find(|op| std::ptr::fn_addr_eq(op.op, vm::special_function_return as Op))?
-        .label?;
-    let label = entry.label;
-    code[0] = LoweredOp {
-        label,
-        op: vm::op_i32_numeric_token_state_transition as Op,
-        operands: vec![
-            raw_local_operand(0),
-            raw_local_operand(4),
-            LoweredOperand::JumpTarget(return_label),
-        ],
-    };
-    Some(())
-}
-
-#[allow(dead_code)]
-fn fuse_crc16_update16_function(code: &mut [LoweredOp]) -> Option<()> {
-    let entry = code.first()?;
-    let select_steps = code
-        .iter()
-        .filter(|op| {
-            std::ptr::fn_addr_eq(op.op, vm::op_i32_select_bit_step4 as Op)
-                || std::ptr::fn_addr_eq(op.op, vm::op_i32_select_bit_step4_run as Op)
-        })
-        .count();
-    if code.len() < 30 || select_steps == 0 || !code.iter().all(is_crc16_update16_candidate_op) {
-        return None;
-    }
-    let return_label = code
-        .iter()
-        .find(|op| std::ptr::fn_addr_eq(op.op, vm::special_function_return as Op))?
-        .label?;
-    let label = entry.label;
-    code[0] = LoweredOp {
-        label,
-        op: vm::op_i32_crc16_update16 as Op,
-        operands: vec![
-            raw_local_operand(0),
-            raw_local_operand(4),
-            LoweredOperand::JumpTarget(return_label),
-        ],
-    };
-    Some(())
-}
-
-#[allow(dead_code)]
-fn is_crc16_update16_candidate_op(op: &LoweredOp) -> bool {
-    [
-        vm::op_end as Op,
-        vm::op_local_get4 as Op,
-        vm::op_local_get4_local_get4 as Op,
-        vm::op_local_get4_local_get4_local_get4 as Op,
-        vm::op_local_get4_run as Op,
-        vm::op_local_get4_run_skip as Op,
-        vm::op_local_set4 as Op,
-        vm::op_local_tee4 as Op,
-        vm::op_i32_const as Op,
-        vm::op_i32_const_binop as Op,
-        vm::op_i32_const_binop_set4 as Op,
-        vm::op_i32_const_binop_tee4 as Op,
-        vm::op_i32_const_cmp as Op,
-        vm::op_i32_const_cmp_set4 as Op,
-        vm::op_i32_const_cmp_tee4 as Op,
-        vm::op_i32_and as Op,
-        vm::op_i32_or as Op,
-        vm::op_i32_xor as Op,
-        vm::op_i32_shl as Op,
-        vm::op_i32_shr_u as Op,
-        vm::op_i32_eq as Op,
-        vm::op_i32_eqz as Op,
-        vm::op_select4 as Op,
-        vm::op_select4_set4 as Op,
-        vm::op_select4_tee4 as Op,
-        vm::op_i32_select_bit_step4 as Op,
-        vm::op_i32_select_bit_step4_run as Op,
-        vm::op_i32_crc16_update16 as Op,
-        vm::op_return as Op,
-        vm::special_function_return as Op,
-    ]
-    .into_iter()
-    .any(|candidate| std::ptr::fn_addr_eq(op.op, candidate))
-}
-
 fn fuse_load8_update_branch_taken_local_get4(
     code: &[LoweredOp],
     cursor: usize,
@@ -1035,10 +929,6 @@ fn raw_local_addr(operand: Option<&LoweredOperand>) -> Option<u32> {
 
 fn raw_u32_operand(value: u32) -> LoweredOperand {
     LoweredOperand::Raw(unsafe { Operand { u32: value }.encoded })
-}
-
-fn raw_local_operand(local_addr: u32) -> LoweredOperand {
-    LoweredOperand::Raw(unsafe { Operand { local_addr }.encoded })
 }
 
 fn lowered_i32_scalar_load_kind(op: Op) -> Option<u32> {
