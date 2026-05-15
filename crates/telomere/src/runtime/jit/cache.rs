@@ -13,11 +13,8 @@ use crate::common::{
     ObjectRef, VMResult,
 };
 
-use super::{
-    abi::JitEntry,
-    backend,
-    code_memory::{CodeArena, ExecutableCode},
-};
+use super::{abi::JitEntry, backend};
+use telomere_jit_codegen::code_memory::{CodeArena, ExecutableCode};
 
 #[derive(Default)]
 pub(crate) struct StoreJitCache {
@@ -97,7 +94,7 @@ impl StoreJitCache {
         };
         let allocation_len = match CodeArena::allocation_len(bytes.len()) {
             Ok(len) => len,
-            Err(()) => {
+            Err(_) => {
                 trace_compile_reject("allocation_len", bytes.len(), 0, max_bytes);
                 return VMResult::Unimplemented;
             }
@@ -214,7 +211,7 @@ impl CompiledTiers {
 
 impl CompiledFunction {
     fn from_bytes(bytes: &[u8], arena: &CodeArena) -> Result<Self, ()> {
-        let code = arena.allocate(bytes)?;
+        let code = arena.allocate(bytes).map_err(|_| ())?;
         let entry = unsafe { std::mem::transmute::<*mut u8, JitEntry>(code.ptr()) };
         Ok(Self {
             entry,

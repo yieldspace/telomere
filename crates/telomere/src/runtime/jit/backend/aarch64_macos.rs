@@ -41,6 +41,9 @@ use super::ops::{
     I32BinaryOp, I32CompareOp, I32UnaryOp, I64BinaryOp, I64CompareOp, I64UnaryOp, SearchCompare,
     SelectBitStep4,
 };
+use telomere_jit_codegen::arch::aarch64::{
+    patch_branch as patch_a64_branch, A64BaselineMasm, BranchKind, Cond,
+};
 
 pub(crate) fn emit_baseline_function(
     funcaddr: ObjectRef,
@@ -66,37 +69,6 @@ enum FixupKind {
     CbnzX(u8),
     CbnzW(u8),
     CbzW(u8),
-}
-
-#[derive(Clone, Copy)]
-enum Cond {
-    Eq = 0,
-    Ne = 1,
-    Lo = 3,
-    Hs = 2,
-    Hi = 8,
-    Ls = 9,
-    Lt = 11,
-    Ge = 10,
-    Gt = 12,
-    Le = 13,
-}
-
-impl Cond {
-    fn inverted(self) -> Self {
-        match self {
-            Self::Eq => Self::Ne,
-            Self::Ne => Self::Eq,
-            Self::Lo => Self::Hs,
-            Self::Hs => Self::Lo,
-            Self::Hi => Self::Ls,
-            Self::Ls => Self::Hi,
-            Self::Lt => Self::Ge,
-            Self::Ge => Self::Lt,
-            Self::Gt => Self::Le,
-            Self::Le => Self::Gt,
-        }
-    }
 }
 
 fn cond_for_i32_compare(op: I32CompareOp) -> Cond {
@@ -172,10 +144,24 @@ struct Emitter<'a> {
     wasm: &'a [Instr],
     op_lens: &'a [u16],
     gc: &'a StoreInner,
-    bytes: Vec<u8>,
+    masm: A64BaselineMasm,
     labels: Vec<Option<usize>>,
     fixups: Vec<Fixup>,
     stack_depth: usize,
+}
+
+impl std::ops::Deref for Emitter<'_> {
+    type Target = A64BaselineMasm;
+
+    fn deref(&self) -> &Self::Target {
+        &self.masm
+    }
+}
+
+impl std::ops::DerefMut for Emitter<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.masm
+    }
 }
 
 impl<'a> Emitter<'a> {
@@ -185,7 +171,7 @@ impl<'a> Emitter<'a> {
             wasm,
             op_lens,
             gc,
-            bytes: Vec::with_capacity(wasm.len() * 16),
+            masm: A64BaselineMasm::with_capacity(wasm.len() * 16),
             labels: vec![None; wasm.len().saturating_add(1)],
             fixups: Vec::new(),
             stack_depth: 0,
@@ -281,7 +267,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_op_or_runtime(&mut self, cursor: usize, op: BaselineOp) -> Result<EmitControl, ()> {
-        let byte_checkpoint = self.bytes.len();
+        let byte_checkpoint = self.masm.offset();
         let fixup_checkpoint = self.fixups.len();
         let stack_checkpoint = self.stack_depth;
         match self.emit_op(cursor, op) {
@@ -299,7 +285,7 @@ impl<'a> Emitter<'a> {
                         op as usize
                     );
                 }
-                self.bytes.truncate(byte_checkpoint);
+                self.masm.truncate(byte_checkpoint);
                 self.fixups.truncate(fixup_checkpoint);
                 self.stack_depth = stack_checkpoint;
                 self.flush_stack()?;
@@ -1859,13 +1845,12 @@ impl BaselineOpEmitter<'_, '_> {
                 if self.stack_depth > 1 {
                     if target <= cursor {
                         let cond = self.pop_reg()?;
-                        let skip_fallback_at = self.offset();
-                        self.insn(0x34000000 | u32::from(cond));
+                        let skip_fallback_at = self.branch_placeholder(FixupKind::CbzW(cond));
                         self.flush_stack_for_fallback()?;
                         self.return_fallback_index(target);
                         let skip_fallback_target = self.offset();
                         patch_branch(
-                            &mut self.bytes,
+                            self.masm.as_mut_bytes(),
                             skip_fallback_at,
                             skip_fallback_target,
                             FixupKind::CbzW(cond),
@@ -2379,26 +2364,26 @@ impl<'a> Emitter<'a> {
                 .get(fixup.target_index)
                 .and_then(|label| *label)
                 .unwrap_or(epilogue);
-            patch_branch(&mut self.bytes, fixup.at, target, fixup.kind)?;
+            patch_branch(self.masm.as_mut_bytes(), fixup.at, target, fixup.kind)?;
         }
-        Ok(self.bytes)
+        Ok(self.masm.into_bytes())
     }
 
     fn offset(&self) -> usize {
-        self.bytes.len()
+        self.masm.offset()
     }
 
     fn prologue(&mut self) {
         self.stp_pre(29, 30);
-        self.insn(0x910003fd);
+        self.mov_x_from_sp(29);
         self.stp_pre(19, 20);
         self.stp_pre(21, 22);
         self.stp_pre(23, 24);
         self.stp_pre(25, 26);
         self.stp_pre(27, 28);
-        self.insn(0xaa0003f3);
-        self.insn(0xaa0103f4);
-        self.insn(0xaa0203f5);
+        self.mov_x(19, 0);
+        self.mov_x(20, 1);
+        self.mov_x(21, 2);
     }
 
     fn restore_and_ret(&mut self) {
@@ -2408,7 +2393,7 @@ impl<'a> Emitter<'a> {
         self.ldp_post(21, 22);
         self.ldp_post(19, 20);
         self.ldp_post(29, 30);
-        self.insn(0xd65f03c0);
+        self.ret();
     }
 
     fn push_reg(&mut self) -> Result<u8, ()> {
@@ -2692,24 +2677,22 @@ impl<'a> Emitter<'a> {
             Ok(false)
         } else {
             self.cmp_w_imm(0, JitNativeExit::DONE as u32)?;
-            let done_branch = self.offset();
-            self.insn(0x54000000 | Cond::Eq as u32);
+            let done_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
             self.return_if_exit();
             let done_target = self.offset();
             patch_branch(
-                &mut self.bytes,
+                self.masm.as_mut_bytes(),
                 done_branch,
                 done_target,
                 FixupKind::BCond(Cond::Eq),
             )?;
             self.mov_imm_u64(16, expected_layout);
             self.cmp_x(1, 16);
-            let expected_layout_branch = self.offset();
-            self.insn(0x54000000 | Cond::Eq as u32);
+            let expected_layout_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
             self.return_fallback_index(continuation_index);
             let expected_layout_target = self.offset();
             patch_branch(
-                &mut self.bytes,
+                self.masm.as_mut_bytes(),
                 expected_layout_branch,
                 expected_layout_target,
                 FixupKind::BCond(Cond::Eq),
@@ -2736,24 +2719,22 @@ impl<'a> Emitter<'a> {
             Ok(false)
         } else {
             self.cmp_w_imm(0, JitNativeExit::DONE as u32)?;
-            let done_branch = self.offset();
-            self.insn(0x54000000 | Cond::Eq as u32);
+            let done_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
             self.return_if_exit();
             let done_target = self.offset();
             patch_branch(
-                &mut self.bytes,
+                self.masm.as_mut_bytes(),
                 done_branch,
                 done_target,
                 FixupKind::BCond(Cond::Eq),
             )?;
             self.mov_imm_u64(16, expected_layout);
             self.cmp_x(1, 16);
-            let expected_layout_branch = self.offset();
-            self.insn(0x54000000 | Cond::Eq as u32);
+            let expected_layout_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
             self.return_fallback_index(continuation_index);
             let expected_layout_target = self.offset();
             patch_branch(
-                &mut self.bytes,
+                self.masm.as_mut_bytes(),
                 expected_layout_branch,
                 expected_layout_target,
                 FixupKind::BCond(Cond::Eq),
@@ -2843,15 +2824,19 @@ impl<'a> Emitter<'a> {
             self.branch_to(miss_target, FixupKind::BCond(Cond::Eq));
             None
         } else {
-            let at = self.offset();
-            self.insn(0x54000000 | Cond::Eq as u32);
+            let at = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
             Some(at)
         };
         self.mov_w(12, 16);
         self.branch_to_offset(loop_start, FixupKind::B)?;
         if let Some(at) = fallthrough_branch {
             let target = self.offset();
-            patch_branch(&mut self.bytes, at, target, FixupKind::BCond(Cond::Eq))?;
+            patch_branch(
+                self.masm.as_mut_bytes(),
+                at,
+                target,
+                FixupKind::BCond(Cond::Eq),
+            )?;
         }
         Ok(())
     }
@@ -2875,14 +2860,13 @@ impl<'a> Emitter<'a> {
         self.store_local4_from_reg(cursor_local, 14)?;
         self.inline_i32_store(13, store_memarg.offset, 4, 12)?;
         self.cmp_w_imm(14, 0)?;
-        let done_branch = self.offset();
-        self.insn(0x54000000 | Cond::Eq as u32);
+        let done_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
         self.mov_w(12, 13);
         self.mov_w(13, 14);
         self.branch_to_offset(loop_start, FixupKind::B)?;
         let done_target = self.offset();
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             done_branch,
             done_target,
             FixupKind::BCond(Cond::Eq),
@@ -2909,13 +2893,12 @@ impl<'a> Emitter<'a> {
         self.inline_i32_store(12, store_memarg.offset, 4, 14)?;
         self.store_local4_from_reg(prev_local, 12)?;
         self.cmp_w_imm(13, 0)?;
-        let done_branch = self.offset();
-        self.insn(0x54000000 | Cond::Eq as u32);
+        let done_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
         self.mov_w(12, 13);
         self.branch_to_offset(loop_start, FixupKind::B)?;
         let done_target = self.offset();
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             done_branch,
             done_target,
             FixupKind::BCond(Cond::Eq),
@@ -3038,12 +3021,11 @@ impl<'a> Emitter<'a> {
         self.add_imm_u64(end_x, end_x, u64::from(width))?;
         self.load_default_memory_data_size(11)?;
         self.cmp_x(end_x, 11);
-        let ok_branch = self.offset();
-        self.insn(0x54000000 | Cond::Ls as u32);
+        let ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ls));
         self.return_trap(VMResult::<()>::MemoryIndexOutOfRange);
         let target = self.offset();
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             ok_branch,
             target,
             FixupKind::BCond(Cond::Ls),
@@ -3052,11 +3034,11 @@ impl<'a> Emitter<'a> {
     }
 
     fn load_default_memory_ptr(&mut self, rd: u8) -> Result<(), ()> {
-        self.ldr_x_imm(
+        Ok(self.ldr_x_imm(
             rd,
             19,
             std::mem::offset_of!(ExecuteContext<'_>, default_local_memory_ptr),
-        )
+        )?)
     }
 
     fn load_default_memory_data_size(&mut self, rd: u8) -> Result<(), ()> {
@@ -3070,24 +3052,19 @@ impl<'a> Emitter<'a> {
     fn load_default_memory_data_ptr(&mut self, rd: u8) -> Result<(), ()> {
         let layout = MemoryJitLayout::get();
         self.load_default_memory_ptr(rd)?;
-        self.ldr_x_imm(rd, rd, layout.region_ptr)
+        Ok(self.ldr_x_imm(rd, rd, layout.region_ptr)?)
     }
 
     fn load_code_ptr_operand(&mut self, rd: u8, operand_index: usize) {
         let byte_offset = operand_index
             .checked_mul(std::mem::size_of::<Instr>())
             .expect("jit operand offset overflow");
-        if byte_offset <= 4095 {
-            self.insn(0x91000000 | ((byte_offset as u32) << 10) | (20 << 5) | u32::from(rd));
-        } else {
-            self.mov_imm_u64(rd, byte_offset as u64);
-            self.insn(0x8b000000 | (u32::from(rd) << 16) | (20 << 5) | u32::from(rd));
-        }
+        self.add_imm_u64(rd, 20, byte_offset as u64)
+            .expect("code pointer operand offset is encodable");
     }
 
     fn return_if_exit(&mut self) {
-        let at = self.offset();
-        self.insn(0xb5000000);
+        let at = self.branch_placeholder(FixupKind::CbnzX(0));
         self.fixups.push(Fixup {
             at,
             target_index: usize::MAX,
@@ -3096,8 +3073,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn branch_to_epilogue(&mut self) {
-        let at = self.offset();
-        self.insn(0x14000000);
+        let at = self.branch_placeholder(FixupKind::B);
         self.fixups.push(Fixup {
             at,
             target_index: usize::MAX,
@@ -3106,14 +3082,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn branch_to(&mut self, target_index: usize, kind: FixupKind) {
-        let at = self.offset();
-        self.insn(match kind {
-            FixupKind::B => 0x14000000,
-            FixupKind::BCond(cond) => 0x54000000 | cond as u32,
-            FixupKind::CbnzX(rt) => 0xb5000000 | u32::from(rt),
-            FixupKind::CbnzW(rt) => 0x35000000 | u32::from(rt),
-            FixupKind::CbzW(rt) => 0x34000000 | u32::from(rt),
-        });
+        let at = self.branch_placeholder(kind);
         self.fixups.push(Fixup {
             at,
             target_index,
@@ -3122,15 +3091,14 @@ impl<'a> Emitter<'a> {
     }
 
     fn branch_to_offset(&mut self, target_offset: usize, kind: FixupKind) -> Result<(), ()> {
-        let at = self.offset();
-        self.insn(match kind {
-            FixupKind::B => 0x14000000,
-            FixupKind::BCond(cond) => 0x54000000 | cond as u32,
-            FixupKind::CbnzX(rt) => 0xb5000000 | u32::from(rt),
-            FixupKind::CbnzW(rt) => 0x35000000 | u32::from(rt),
-            FixupKind::CbzW(rt) => 0x34000000 | u32::from(rt),
-        });
-        patch_branch(&mut self.bytes, at, target_offset, kind)
+        let at = self.branch_placeholder(kind);
+        patch_branch(self.masm.as_mut_bytes(), at, target_offset, kind)
+    }
+
+    fn branch_placeholder(&mut self, kind: FixupKind) -> usize {
+        self.masm
+            .branch_placeholder(branch_kind(kind))
+            .expect("valid branch kind")
     }
 
     fn branch_table(&mut self, index_reg: u8, targets: &[usize]) -> Result<(), ()> {
@@ -3158,15 +3126,14 @@ impl<'a> Emitter<'a> {
     }
 
     fn return_fallback_ptr_if_nonzero(&mut self, cond: u8, index: usize) -> Result<(), ()> {
-        let skip_fallback_at = self.offset();
-        self.insn(0x34000000 | u32::from(cond));
+        let skip_fallback_at = self.branch_placeholder(FixupKind::CbzW(cond));
         self.flush_stack_for_fallback()?;
         self.mov_imm_u64(0, JitNativeExit::FALLBACK_PTR);
         self.load_code_ptr_operand(1, index);
         self.branch_to_epilogue();
         let skip_fallback_target = self.offset();
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             skip_fallback_at,
             skip_fallback_target,
             FixupKind::CbzW(cond),
@@ -3176,45 +3143,7 @@ impl<'a> Emitter<'a> {
 
     fn call_ptr(&mut self, ptr: usize) {
         self.mov_imm_u64(16, ptr as u64);
-        self.insn(0xd63f0200);
-    }
-
-    fn mov_x(&mut self, rd: u8, rn: u8) {
-        self.insn(0xaa0003e0 | (u32::from(rn) << 16) | u32::from(rd));
-    }
-
-    fn mov_w(&mut self, rd: u8, rn: u8) {
-        self.insn(0x2a0003e0 | (u32::from(rn) << 16) | u32::from(rd));
-    }
-
-    fn mov_imm_u32(&mut self, rd: u8, value: u32) {
-        self.insn(0x52800000 | ((value & 0xffff) << 5) | u32::from(rd));
-        let hi = (value >> 16) & 0xffff;
-        if hi != 0 {
-            self.insn(0x72800000 | (1 << 21) | (hi << 5) | u32::from(rd));
-        }
-    }
-
-    fn mov_imm_u64(&mut self, rd: u8, value: u64) {
-        self.insn(0xd2800000 | (((value & 0xffff) as u32) << 5) | u32::from(rd));
-        for hw in 1..4 {
-            let part = ((value >> (hw * 16)) & 0xffff) as u32;
-            if part != 0 {
-                self.insn(0xf2800000 | ((hw as u32) << 21) | (part << 5) | u32::from(rd));
-            }
-        }
-    }
-
-    fn insn(&mut self, insn: u32) {
-        self.bytes.extend_from_slice(&insn.to_le_bytes());
-    }
-
-    fn stp_pre(&mut self, rt: u8, rt2: u8) {
-        self.insn(0xa9800000 | (0x7e << 15) | (u32::from(rt2) << 10) | (31 << 5) | u32::from(rt));
-    }
-
-    fn ldp_post(&mut self, rt: u8, rt2: u8) {
-        self.insn(0xa8c00000 | (2 << 15) | (u32::from(rt2) << 10) | (31 << 5) | u32::from(rt));
+        self.blr_x(16);
     }
 
     fn load_local4_to_reg(&mut self, rd: u8, local: u32) -> Result<(), ()> {
@@ -3227,29 +3156,29 @@ impl<'a> Emitter<'a> {
 
     fn load_store_local4(&mut self, rt: u8, local: u32, load: bool) -> Result<(), ()> {
         if local <= 255 {
-            let base = if load { 0xb8400000 } else { 0xb8000000 };
-            self.insn(base | (local << 12) | (21 << 5) | u32::from(rt));
+            if load {
+                self.ldr_w_unscaled_imm(rt, 21, local)?;
+            } else {
+                self.str_w_unscaled_imm(rt, 21, local)?;
+            }
             return Ok(());
         }
         self.addr_local(17, local)?;
-        let base = if load { 0xb9400000 } else { 0xb9000000 };
-        self.insn(base | (17 << 5) | u32::from(rt));
+        if load {
+            self.ldr_w(rt, 17);
+        } else {
+            self.str_w(rt, 17);
+        }
         Ok(())
     }
 
     fn addr_local(&mut self, rd: u8, local: u32) -> Result<(), ()> {
-        if local <= 4095 {
-            self.insn(0x91000000 | (local << 10) | (21 << 5) | u32::from(rd));
-        } else {
-            self.mov_imm_u64(rd, u64::from(local));
-            self.insn(0x8b000000 | (u32::from(rd) << 16) | (21 << 5) | u32::from(rd));
-        }
-        Ok(())
+        Ok(self.add_imm_u64(rd, 21, u64::from(local))?)
     }
 
     fn load_local_base_addr_to_reg(&mut self, rd: u8, local: u32, delta: u32) -> Result<(), ()> {
         self.load_local4_to_reg(rd, local)?;
-        self.add_imm_u32(rd, rd, delta)
+        Ok(self.add_imm_u32(rd, rd, delta)?)
     }
 
     fn load_local_scaled_index_addr_to_reg(
@@ -3269,27 +3198,7 @@ impl<'a> Emitter<'a> {
             self.lsl_w_imm(17, 17, scale_log2);
         }
         self.add_w(rd, rd, 17);
-        self.add_imm_u32(rd, rd, delta)
-    }
-
-    fn add_imm_u32(&mut self, rd: u8, rn: u8, imm: u32) -> Result<(), ()> {
-        if imm <= 4095 {
-            self.insn(0x11000000 | (imm << 10) | (u32::from(rn) << 5) | u32::from(rd));
-        } else {
-            self.mov_imm_u32(17, imm);
-            self.add_w(rd, rn, 17);
-        }
-        Ok(())
-    }
-
-    fn add_imm_u64(&mut self, rd: u8, rn: u8, imm: u64) -> Result<(), ()> {
-        if imm <= 4095 {
-            self.insn(0x91000000 | ((imm as u32) << 10) | (u32::from(rn) << 5) | u32::from(rd));
-        } else {
-            self.mov_imm_u64(17, imm);
-            self.add_x(rd, rn, 17);
-        }
-        Ok(())
+        Ok(self.add_imm_u32(rd, rd, delta)?)
     }
 
     fn emit_i32_const_binop(&mut self, kind: u32, lhs: u8, rhs: u32) -> Result<(), ()> {
@@ -3300,7 +3209,7 @@ impl<'a> Emitter<'a> {
             LocalBinop32Op::I32Add => self.add_imm_u32(lhs, lhs, rhs)?,
             LocalBinop32Op::I32Sub => {
                 if rhs <= 4095 {
-                    self.insn(0x51000000 | (rhs << 10) | (u32::from(lhs) << 5) | u32::from(lhs));
+                    self.sub_imm_u32(lhs, lhs, rhs)?;
                 } else {
                     self.mov_imm_u32(17, rhs);
                     self.sub_w(lhs, lhs, 17);
@@ -3408,12 +3317,11 @@ impl<'a> Emitter<'a> {
 
     fn trap_if_i32_divisor_zero(&mut self, rhs: u8) -> Result<(), ()> {
         self.cmp_w_imm(rhs, 0)?;
-        let nonzero_branch = self.offset();
-        self.insn(0x54000000 | Cond::Ne as u32);
+        let nonzero_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
         self.return_trap(VMResult::<()>::InvalidOperand);
         let nonzero_target = self.offset();
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             nonzero_branch,
             nonzero_target,
             FixupKind::BCond(Cond::Ne),
@@ -3424,21 +3332,19 @@ impl<'a> Emitter<'a> {
     fn trap_if_i32_div_s_overflow(&mut self, lhs: u8, rhs: u8) -> Result<(), ()> {
         self.mov_imm_u32(17, 0x8000_0000);
         self.cmp_w(lhs, 17);
-        let lhs_ok_branch = self.offset();
-        self.insn(0x54000000 | Cond::Ne as u32);
+        let lhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
         self.cmp_w_u32(rhs, u32::MAX);
-        let rhs_ok_branch = self.offset();
-        self.insn(0x54000000 | Cond::Ne as u32);
+        let rhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
         self.return_trap(VMResult::<()>::InvalidOperand);
         let ok_target = self.offset();
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             lhs_ok_branch,
             ok_target,
             FixupKind::BCond(Cond::Ne),
         )?;
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             rhs_ok_branch,
             ok_target,
             FixupKind::BCond(Cond::Ne),
@@ -3449,12 +3355,11 @@ impl<'a> Emitter<'a> {
     fn trap_if_i64_divisor_zero(&mut self, rhs: u8) -> Result<(), ()> {
         self.mov_imm_u64(9, 0);
         self.cmp_x(rhs, 9);
-        let nonzero_branch = self.offset();
-        self.insn(0x54000000 | Cond::Ne as u32);
+        let nonzero_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
         self.return_trap(VMResult::<()>::InvalidOperand);
         let nonzero_target = self.offset();
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             nonzero_branch,
             nonzero_target,
             FixupKind::BCond(Cond::Ne),
@@ -3465,22 +3370,20 @@ impl<'a> Emitter<'a> {
     fn trap_if_i64_div_s_overflow(&mut self, lhs: u8, rhs: u8) -> Result<(), ()> {
         self.mov_imm_u64(9, 0x8000_0000_0000_0000);
         self.cmp_x(lhs, 9);
-        let lhs_ok_branch = self.offset();
-        self.insn(0x54000000 | Cond::Ne as u32);
+        let lhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
         self.mov_imm_u64(9, u64::MAX);
         self.cmp_x(rhs, 9);
-        let rhs_ok_branch = self.offset();
-        self.insn(0x54000000 | Cond::Ne as u32);
+        let rhs_ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ne));
         self.return_trap(VMResult::<()>::InvalidOperand);
         let ok_target = self.offset();
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             lhs_ok_branch,
             ok_target,
             FixupKind::BCond(Cond::Ne),
         )?;
         patch_branch(
-            &mut self.bytes,
+            self.masm.as_mut_bytes(),
             rhs_ok_branch,
             ok_target,
             FixupKind::BCond(Cond::Ne),
@@ -3984,470 +3887,20 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
-
-    fn add_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x0b000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn add_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x8b000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn sub_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x4b000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn sub_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0xcb000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn mul_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x1b007c00 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn udiv_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x1ac00800 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn sdiv_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x1ac00c00 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn udiv_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x9ac00800 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn sdiv_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x9ac00c00 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn msub_w(&mut self, rd: u8, rn: u8, rm: u8, ra: u8) {
-        self.insn(
-            0x1b008000
-                | (u32::from(rm) << 16)
-                | (u32::from(ra) << 10)
-                | (u32::from(rn) << 5)
-                | u32::from(rd),
-        );
-    }
-
-    fn msub_x(&mut self, rd: u8, rn: u8, rm: u8, ra: u8) {
-        self.insn(
-            0x9b008000
-                | (u32::from(rm) << 16)
-                | (u32::from(ra) << 10)
-                | (u32::from(rn) << 5)
-                | u32::from(rd),
-        );
-    }
-
-    fn mul_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x9b007c00 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn neg_w(&mut self, rd: u8, rm: u8) {
-        self.insn(0x4b0003e0 | (u32::from(rm) << 16) | u32::from(rd));
-    }
-
-    fn neg_x(&mut self, rd: u8, rm: u8) {
-        self.insn(0xcb0003e0 | (u32::from(rm) << 16) | u32::from(rd));
-    }
-
-    fn and_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x0a000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn and_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x8a000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn orr_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x2a000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn orr_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0xaa000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn eor_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x4a000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn eor_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0xca000000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn lslv_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x1ac02000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn lslv_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x9ac02000 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn lsrv_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x1ac02400 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn lsrv_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x9ac02400 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn asrv_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x1ac02800 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn asrv_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x9ac02800 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn rorv_w(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x1ac02c00 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn rorv_x(&mut self, rd: u8, rn: u8, rm: u8) {
-        self.insn(0x9ac02c00 | (u32::from(rm) << 16) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn rbit_w(&mut self, rd: u8, rn: u8) {
-        self.insn(0x5ac00000 | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn rbit_x(&mut self, rd: u8, rn: u8) {
-        self.insn(0xdac00000 | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn clz_w(&mut self, rd: u8, rn: u8) {
-        self.insn(0x5ac01000 | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn clz_x(&mut self, rd: u8, rn: u8) {
-        self.insn(0xdac01000 | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn sxth_w(&mut self, rd: u8, rn: u8) {
-        self.insn(0x13003c00 | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn sxtb_w(&mut self, rd: u8, rn: u8) {
-        self.insn(0x13001c00 | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn cmp_w(&mut self, rn: u8, rm: u8) {
-        self.insn(0x6b00001f | (u32::from(rm) << 16) | (u32::from(rn) << 5));
-    }
-
-    fn cmp_x(&mut self, rn: u8, rm: u8) {
-        self.insn(0xeb00001f | (u32::from(rm) << 16) | (u32::from(rn) << 5));
-    }
-
-    fn cmp_w_imm(&mut self, rn: u8, imm: u32) -> Result<(), ()> {
-        if imm > 4095 {
-            return Err(());
-        }
-        self.insn(0x7100001f | (imm << 10) | (u32::from(rn) << 5));
-        Ok(())
-    }
-
-    fn cmp_w_u32(&mut self, rn: u8, imm: u32) {
-        if imm <= 4095 {
-            self.insn(0x7100001f | (imm << 10) | (u32::from(rn) << 5));
-        } else {
-            self.mov_imm_u32(17, imm);
-            self.cmp_w(rn, 17);
-        }
-    }
-
-    fn cset_w(&mut self, rd: u8, cond: Cond) {
-        let inverted = cond.inverted() as u32;
-        self.insn(0x1a800400 | (31 << 16) | (inverted << 12) | (31 << 5) | u32::from(rd));
-    }
-
-    fn csel_w(&mut self, rd: u8, rn: u8, rm: u8, cond: Cond) {
-        self.insn(
-            0x1a800000
-                | (u32::from(rm) << 16)
-                | ((cond as u32) << 12)
-                | (u32::from(rn) << 5)
-                | u32::from(rd),
-        );
-    }
-
-    fn fmov_s_from_w(&mut self, vd: u8, rn: u8) {
-        self.insn(0x1e270000 | (u32::from(rn) << 5) | u32::from(vd));
-    }
-
-    fn fmov_w_from_s(&mut self, rd: u8, vn: u8) {
-        self.insn(0x1e260000 | (u32::from(vn) << 5) | u32::from(rd));
-    }
-
-    fn fmov_d_from_x(&mut self, vd: u8, rn: u8) {
-        self.insn(0x9e670000 | (u32::from(rn) << 5) | u32::from(vd));
-    }
-
-    fn fmov_x_from_d(&mut self, rd: u8, vn: u8) {
-        self.insn(0x9e660000 | (u32::from(vn) << 5) | u32::from(rd));
-    }
-
-    fn fcmp_s(&mut self, vn: u8, vm: u8) {
-        self.insn(0x1e202000 | (u32::from(vm) << 16) | (u32::from(vn) << 5));
-    }
-
-    fn fcmp_d(&mut self, vn: u8, vm: u8) {
-        self.insn(0x1e602000 | (u32::from(vm) << 16) | (u32::from(vn) << 5));
-    }
-
-    fn fadd_d(&mut self, vd: u8, vn: u8, vm: u8) {
-        self.insn(0x1e602800 | (u32::from(vm) << 16) | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fadd_s(&mut self, vd: u8, vn: u8, vm: u8) {
-        self.insn(0x1e202800 | (u32::from(vm) << 16) | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fsub_d(&mut self, vd: u8, vn: u8, vm: u8) {
-        self.insn(0x1e603800 | (u32::from(vm) << 16) | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fsub_s(&mut self, vd: u8, vn: u8, vm: u8) {
-        self.insn(0x1e203800 | (u32::from(vm) << 16) | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fmul_d(&mut self, vd: u8, vn: u8, vm: u8) {
-        self.insn(0x1e600800 | (u32::from(vm) << 16) | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fmul_s(&mut self, vd: u8, vn: u8, vm: u8) {
-        self.insn(0x1e200800 | (u32::from(vm) << 16) | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fdiv_d(&mut self, vd: u8, vn: u8, vm: u8) {
-        self.insn(0x1e601800 | (u32::from(vm) << 16) | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fdiv_s(&mut self, vd: u8, vn: u8, vm: u8) {
-        self.insn(0x1e201800 | (u32::from(vm) << 16) | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fabs_s(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e20c000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fabs_d(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e60c000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fneg_s(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e214000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fneg_d(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e614000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fsqrt_s(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e21c000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn fsqrt_d(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e61c000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn frintn_s(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e244000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn frintn_d(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e644000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn frintp_s(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e24c000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn frintp_d(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e64c000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn frintm_s(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e254000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn frintm_d(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e654000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn frintz_s(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e25c000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn frintz_d(&mut self, vd: u8, vn: u8) {
-        self.insn(0x1e65c000 | (u32::from(vn) << 5) | u32::from(vd));
-    }
-
-    fn cvtf_d_from_w(&mut self, vd: u8, rn: u8, signed: bool) {
-        let base = if signed { 0x1e620000 } else { 0x1e630000 };
-        self.insn(base | (u32::from(rn) << 5) | u32::from(vd));
-    }
-
-    fn cvtf_d_from_x(&mut self, vd: u8, rn: u8, signed: bool) {
-        let base = if signed { 0x9e620000 } else { 0x9e630000 };
-        self.insn(base | (u32::from(rn) << 5) | u32::from(vd));
-    }
-
-    fn fcvt_w_from_s(&mut self, rd: u8, vn: u8, signed: bool) {
-        let base = if signed { 0x1e380000 } else { 0x1e390000 };
-        self.insn(base | (u32::from(vn) << 5) | u32::from(rd));
-    }
-
-    fn fcvt_w_from_d(&mut self, rd: u8, vn: u8, signed: bool) {
-        let base = if signed { 0x1e780000 } else { 0x1e790000 };
-        self.insn(base | (u32::from(vn) << 5) | u32::from(rd));
-    }
-
-    fn lsl_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
-        self.ubfm_w(rd, rn, (32 - shift) & 31, 31 - shift);
-    }
-
-    fn lsr_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
-        self.ubfm_w(rd, rn, shift, 31);
-    }
-
-    fn asr_w_imm(&mut self, rd: u8, rn: u8, shift: u32) {
-        self.sbfm_w(rd, rn, shift, 31);
-    }
-
-    fn ubfm_w(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
-        self.insn(0x53000000 | (immr << 16) | (imms << 10) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn ubfm_x(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
-        self.insn(0xd3400000 | (immr << 16) | (imms << 10) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn sbfm_w(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
-        self.insn(0x13000000 | (immr << 16) | (imms << 10) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn sbfm_x(&mut self, rd: u8, rn: u8, immr: u32, imms: u32) {
-        self.insn(0x93400000 | (immr << 16) | (imms << 10) | (u32::from(rn) << 5) | u32::from(rd));
-    }
-
-    fn lsl_x_imm(&mut self, rd: u8, rn: u8, shift: u32) -> Result<(), ()> {
-        if shift >= 64 {
-            return Err(());
-        }
-        self.insn(
-            0xd3400000
-                | (((64 - shift) & 63) << 16)
-                | ((63 - shift) << 10)
-                | (u32::from(rn) << 5)
-                | u32::from(rd),
-        );
-        Ok(())
-    }
-
-    fn lsr_x_imm(&mut self, rd: u8, rn: u8, shift: u32) -> Result<(), ()> {
-        if shift >= 64 {
-            return Err(());
-        }
-        self.ubfm_x(rd, rn, shift, 63);
-        Ok(())
-    }
-
-    fn ldr_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> Result<(), ()> {
-        if offset % 8 != 0 || offset / 8 > 4095 {
-            return Err(());
-        }
-        self.insn(
-            0xf9400000 | (((offset / 8) as u32) << 10) | (u32::from(rn) << 5) | u32::from(rt),
-        );
-        Ok(())
-    }
-
-    fn ldr_w_imm(&mut self, rt: u8, rn: u8, offset: usize) -> Result<(), ()> {
-        if offset % 4 != 0 || offset / 4 > 4095 {
-            return Err(());
-        }
-        self.insn(
-            0xb9400000 | (((offset / 4) as u32) << 10) | (u32::from(rn) << 5) | u32::from(rt),
-        );
-        Ok(())
-    }
-
-    fn ldrb_w(&mut self, rt: u8, rn: u8) {
-        self.insn(0x39400000 | (u32::from(rn) << 5) | u32::from(rt));
-    }
-
-    fn ldrsb_w(&mut self, rt: u8, rn: u8) {
-        self.insn(0x39c00000 | (u32::from(rn) << 5) | u32::from(rt));
-    }
-
-    fn ldrh_w(&mut self, rt: u8, rn: u8) {
-        self.insn(0x79400000 | (u32::from(rn) << 5) | u32::from(rt));
-    }
-
-    fn ldrsh_w(&mut self, rt: u8, rn: u8) {
-        self.insn(0x79c00000 | (u32::from(rn) << 5) | u32::from(rt));
-    }
-
-    fn ldr_w(&mut self, rt: u8, rn: u8) {
-        self.insn(0xb9400000 | (u32::from(rn) << 5) | u32::from(rt));
-    }
-
-    fn strb_w(&mut self, rt: u8, rn: u8) {
-        self.insn(0x39000000 | (u32::from(rn) << 5) | u32::from(rt));
-    }
-
-    fn strh_w(&mut self, rt: u8, rn: u8) {
-        self.insn(0x79000000 | (u32::from(rn) << 5) | u32::from(rt));
-    }
-
-    fn str_w(&mut self, rt: u8, rn: u8) {
-        self.insn(0xb9000000 | (u32::from(rn) << 5) | u32::from(rt));
+}
+
+fn branch_kind(kind: FixupKind) -> BranchKind {
+    match kind {
+        FixupKind::B => BranchKind::B,
+        FixupKind::BCond(cond) => BranchKind::BCond(cond),
+        FixupKind::CbnzX(rt) => BranchKind::CbnzX(rt),
+        FixupKind::CbnzW(rt) => BranchKind::CbnzW(rt),
+        FixupKind::CbzW(rt) => BranchKind::CbzW(rt),
     }
 }
 
 fn patch_branch(bytes: &mut [u8], at: usize, target: usize, kind: FixupKind) -> Result<(), ()> {
-    let delta = target as isize - at as isize;
-    if delta % 4 != 0 {
-        return Err(());
-    }
-    let words = delta / 4;
-    let insn = match kind {
-        FixupKind::B => {
-            if !(-(1 << 25)..(1 << 25)).contains(&words) {
-                return Err(());
-            }
-            0x14000000 | ((words as i32 as u32) & 0x03ff_ffff)
-        }
-        FixupKind::BCond(cond) => {
-            if !(-(1 << 18)..(1 << 18)).contains(&words) {
-                return Err(());
-            }
-            0x54000000 | (((words as i32 as u32) & 0x7ffff) << 5) | cond as u32
-        }
-        FixupKind::CbnzX(rt) => {
-            if !(-(1 << 18)..(1 << 18)).contains(&words) {
-                return Err(());
-            }
-            0xb5000000 | (((words as i32 as u32) & 0x7ffff) << 5) | u32::from(rt)
-        }
-        FixupKind::CbnzW(rt) => {
-            if !(-(1 << 18)..(1 << 18)).contains(&words) {
-                return Err(());
-            }
-            0x35000000 | (((words as i32 as u32) & 0x7ffff) << 5) | u32::from(rt)
-        }
-        FixupKind::CbzW(rt) => {
-            if !(-(1 << 18)..(1 << 18)).contains(&words) {
-                return Err(());
-            }
-            0x34000000 | (((words as i32 as u32) & 0x7ffff) << 5) | u32::from(rt)
-        }
-    };
-    bytes[at..at + 4].copy_from_slice(&insn.to_le_bytes());
-    Ok(())
+    patch_a64_branch(bytes, at, target, branch_kind(kind)).map_err(|_| ())
 }
 
 fn trace_compile_message(args: std::fmt::Arguments<'_>) {

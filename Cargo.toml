@@ -30,6 +30,7 @@ wat = "1.243.0"
 resolver = "2"
 members = [
     "crates/telomere",
+    "crates/telomere-jit-codegen",
     "crates/telomere-component",
     "crates/telomere-component-bindgen",
     "crates/telomere-component-wasi",
@@ -48,6 +49,7 @@ keywords = ["webassembly", "runtime"]
 
 [workspace.dependencies]
 telomere = { path = "crates/telomere" }
+telomere-jit-codegen = { path = "crates/telomere-jit-codegen" }
 telomere-component = { path = "crates/telomere-component" }
 telomere-component-bindgen = { path = "crates/telomere-component-bindgen" }
 union-find = {path = "crates/union-find"}

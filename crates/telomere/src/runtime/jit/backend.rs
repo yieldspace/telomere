@@ -17,5 +17,5 @@ pub(crate) fn emit_baseline_function(
 }
 
 pub(crate) fn supported() -> bool {
-    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+    telomere_jit_codegen::target::supported()
 }

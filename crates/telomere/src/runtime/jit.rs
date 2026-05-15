@@ -5,8 +5,6 @@ mod backend;
 #[cfg(feature = "jit")]
 mod cache;
 #[cfg(feature = "jit")]
-mod code_memory;
-#[cfg(feature = "jit")]
 mod stubs;
 
 #[cfg(feature = "jit")]
@@ -31,11 +29,17 @@ pub use abi::JitNativeExit;
 pub(crate) use cache::StoreJitCache;
 
 pub fn supported() -> bool {
-    cfg!(all(
-        feature = "jit",
-        target_os = "macos",
-        target_arch = "aarch64"
-    ))
+    jit_supported()
+}
+
+#[cfg(feature = "jit")]
+fn jit_supported() -> bool {
+    telomere_jit_codegen::target::supported()
+}
+
+#[cfg(not(feature = "jit"))]
+fn jit_supported() -> bool {
+    false
 }
 
 #[cfg(feature = "jit")]
