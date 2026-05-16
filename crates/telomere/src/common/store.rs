@@ -303,13 +303,13 @@ impl GlobalValue {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(feature = "jit")]
 pub(crate) struct GlobalValueJitLayout {
     pub(crate) bytes: usize,
     pub(crate) size: usize,
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(feature = "jit")]
 impl GlobalValueJitLayout {
     pub(crate) fn get() -> Self {
         Self {

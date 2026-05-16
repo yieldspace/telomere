@@ -1,11 +1,25 @@
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 use telomere::{
     common::{ExecuteContext, InstanceHandle, Instr},
     link_host_function_with_function_idx, Registry, ResultValue, VMResult, WasmValue,
 };
 use telomere::{JitConfig, RuntimeConfig, Store};
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 fn parse_module(wat: &str) -> telomere::Module {
     let bytes = wat::parse_str(wat).expect("wat should parse");
     let mut reader = telomere::IoReadBinaryReader::from(&bytes[..]);
@@ -30,7 +44,34 @@ fn runtime_config_defaults_to_jit_off() {
     );
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[test]
+fn jit_supported_matches_target_matrix() {
+    let expected = cfg!(all(
+        feature = "jit",
+        any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(
+                any(target_os = "macos", target_os = "linux"),
+                target_arch = "x86_64"
+            ),
+            all(
+                target_os = "linux",
+                target_arch = "riscv64",
+                target_env = "gnu"
+            )
+        )
+    ));
+    assert_eq!(telomere::jit_supported(), expected);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 fn jit_store() -> Store {
     Store::new_with_runtime_config(RuntimeConfig {
         jit: JitConfig {
@@ -40,7 +81,14 @@ fn jit_store() -> Store {
     })
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 async fn invoke_jit(wat: &str, name: &str, args: Vec<WasmValue>) -> VMResult<ResultValue> {
     let module = parse_module(wat);
     let store = jit_store();
@@ -52,7 +100,14 @@ async fn invoke_jit(wat: &str, name: &str, args: Vec<WasmValue>) -> VMResult<Res
     telomere::run_module_function(&instance, &store, name, &ResultValue::new(args)).await
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 async fn instantiate_jit_wat(wat: &str, store: &Store, registry: &Registry) -> InstanceHandle {
     let module = parse_module(wat);
     match telomere::instantiate(module, store, registry).await {
@@ -61,7 +116,14 @@ async fn instantiate_jit_wat(wat: &str, store: &Store, registry: &Registry) -> I
     }
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 fn host_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     let value = i32::from_le_bytes(
         ctx.stack
@@ -77,12 +139,26 @@ fn host_add_one(ctx: &mut ExecuteContext) -> VMResult<*const Instr> {
     VMResult::Success(return_addr)
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 fn assert_success_i32(result: VMResult<ResultValue>, expected: i32) {
     assert_success_values(result, ResultValue::new(vec![WasmValue::I32(expected)]));
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 fn assert_success_values(result: VMResult<ResultValue>, expected: ResultValue) {
     let VMResult::Success(values) = result else {
         panic!("expected success {expected:?}, got {result:?}");
@@ -90,12 +166,26 @@ fn assert_success_values(result: VMResult<ResultValue>, expected: ResultValue) {
     assert_eq!(values, expected);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 trait VmResultMap<T> {
     fn map<U>(self, f: impl FnOnce(T) -> U) -> VMResult<U>;
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 impl<T> VmResultMap<T> for VMResult<T> {
     fn map<U>(self, f: impl FnOnce(T) -> U) -> VMResult<U> {
         match self {
@@ -114,7 +204,14 @@ impl<T> VmResultMap<T> for VMResult<T> {
     }
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_i32_locals_and_arithmetic() {
     let result = invoke_jit(
@@ -138,7 +235,14 @@ async fn jit_executes_i32_locals_and_arithmetic() {
     assert_success_i32(result, 75);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_direct_call_enters_callee() {
     let result = invoke_jit(
@@ -160,7 +264,14 @@ async fn jit_direct_call_enters_callee() {
     assert_success_i32(result, 42);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_direct_call_result_is_available_to_continuation() {
     let result = invoke_jit(
@@ -184,7 +295,14 @@ async fn jit_direct_call_result_is_available_to_continuation() {
     assert_success_i32(result, 44);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_call_to_rejected_callee_resumes_native_caller() {
     let result = invoke_jit(
@@ -206,7 +324,14 @@ async fn jit_call_to_rejected_callee_resumes_native_caller() {
     assert_success_i32(result, 11);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_br_if_fallback_preserves_fallthrough_stack() {
     let result = invoke_jit(
@@ -228,7 +353,14 @@ async fn jit_br_if_fallback_preserves_fallthrough_stack() {
     assert_success_i32(result, 8);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_br_if_fallback_preserves_taken_stack() {
     let result = invoke_jit(
@@ -250,7 +382,14 @@ async fn jit_br_if_fallback_preserves_taken_stack() {
     assert_success_i32(result, 7);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_i32_const_cmp_br_if_block_result_taken() {
     let result = invoke_jit(
@@ -274,7 +413,14 @@ async fn jit_i32_const_cmp_br_if_block_result_taken() {
     assert_success_i32(result, 7);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_i32_const_cmp_br_if_block_result_fallthrough() {
     let result = invoke_jit(
@@ -298,7 +444,14 @@ async fn jit_i32_const_cmp_br_if_block_result_fallthrough() {
     assert_success_i32(result, 9);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_nested_i32_const_cmp_br_if_block_result_taken() {
     let result = invoke_jit(
@@ -327,7 +480,14 @@ async fn jit_nested_i32_const_cmp_br_if_block_result_taken() {
     assert_success_i32(result, 9);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_repeated_i32_const_cmp_br_if_block_result_taken_does_not_leak_stack() {
     let result = invoke_jit(
@@ -377,7 +537,14 @@ async fn jit_repeated_i32_const_cmp_br_if_block_result_taken_does_not_leak_stack
     assert_success_i32(result, 7000);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_nested_direct_call_fallback_uses_callee_pc_for_fallthrough() {
     let result = invoke_jit(
@@ -404,7 +571,14 @@ async fn jit_nested_direct_call_fallback_uses_callee_pc_for_fallthrough() {
     assert_success_i32(result, 10);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_nested_direct_call_fallback_uses_callee_pc_for_taken_branch() {
     let result = invoke_jit(
@@ -431,7 +605,14 @@ async fn jit_nested_direct_call_fallback_uses_callee_pc_for_taken_branch() {
     assert_success_i32(result, 9);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_import_direct_call_uses_runtime_helper() {
     let store = jit_store();
@@ -473,7 +654,14 @@ async fn jit_import_direct_call_uses_runtime_helper() {
     assert_success_i32(result, 44);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_import_return_call_uses_runtime_helper() {
     let store = jit_store();
@@ -513,7 +701,14 @@ async fn jit_import_return_call_uses_runtime_helper() {
     assert_success_i32(result, 42);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_runtime_handler_executes_unsupported_i64_ops() {
     let result = invoke_jit(
@@ -532,7 +727,14 @@ async fn jit_runtime_handler_executes_unsupported_i64_ops() {
     assert_success_values(result, ResultValue::new(vec![WasmValue::I64(42)]));
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_inlines_global_get_set_for_scalar_simd_and_refs() {
     let result = invoke_jit(
@@ -599,7 +801,14 @@ async fn jit_inlines_global_get_set_for_scalar_simd_and_refs() {
     );
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_inlines_imported_mutable_global_access() {
     let store = jit_store();
@@ -639,7 +848,14 @@ async fn jit_inlines_imported_mutable_global_access() {
     assert_success_i32(result, 77);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_runtime_handler_flushes_native_stack_before_fallback() {
     let result = invoke_jit(
@@ -658,7 +874,14 @@ async fn jit_runtime_handler_flushes_native_stack_before_fallback() {
     assert_success_i32(result, 9);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_runtime_handler_handles_direct_emit_resource_limits() {
     let result = invoke_jit(
@@ -689,7 +912,14 @@ async fn jit_runtime_handler_handles_direct_emit_resource_limits() {
     assert_success_i32(result, 36);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_i32_bitwise_and_variable_shifts() {
     let result = invoke_jit(
@@ -736,7 +966,14 @@ async fn jit_executes_i32_bitwise_and_variable_shifts() {
     assert_success_i32(result, 83);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_native_popcnt_and_i64_unary_ops() {
     let result = invoke_jit(
@@ -764,7 +1001,14 @@ async fn jit_executes_native_popcnt_and_i64_unary_ops() {
     assert_success_values(result, ResultValue::new(vec![WasmValue::I64(80)]));
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_native_float_rounding_ops() {
     let result = invoke_jit(
@@ -806,7 +1050,14 @@ async fn jit_executes_native_float_rounding_ops() {
     );
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_native_float_helpers_and_conversions() {
     let result = invoke_jit(
@@ -862,7 +1113,14 @@ async fn jit_executes_native_float_helpers_and_conversions() {
     );
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_i32_compare_family() {
     let result = invoke_jit(
@@ -937,7 +1195,14 @@ async fn jit_executes_i32_compare_family() {
     assert_success_i32(result, 206);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_local_get_br_table() {
     let wat = r#"
@@ -960,7 +1225,14 @@ async fn jit_executes_local_get_br_table() {
     assert_success_i32(invoke_jit(wat, "run", vec![WasmValue::I32(2)]).await, 30);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_local_get_const_add_br_table() {
     let wat = r#"
@@ -985,7 +1257,14 @@ async fn jit_executes_local_get_const_add_br_table() {
     assert_success_i32(invoke_jit(wat, "run", vec![WasmValue::I32(1)]).await, 30);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_i32_memory_load_store_stubs() {
     let result = invoke_jit(
@@ -1011,7 +1290,14 @@ async fn jit_executes_i32_memory_load_store_stubs() {
     assert_success_i32(result, 77);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_native_wide_memory_ops() {
     let result = invoke_jit(
@@ -1062,7 +1348,14 @@ async fn jit_executes_native_wide_memory_ops() {
     );
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_memory_load_traps_on_out_of_bounds() {
     let result = invoke_jit(
@@ -1081,7 +1374,14 @@ async fn jit_memory_load_traps_on_out_of_bounds() {
     assert!(matches!(result, VMResult::MemoryIndexOutOfRange));
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_bulk_memory_runtime_stubs() {
     let result = invoke_jit(
@@ -1106,7 +1406,14 @@ async fn jit_executes_bulk_memory_runtime_stubs() {
     assert_success_i32(result, 0x64636261);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_table_runtime_stubs() {
     let result = invoke_jit(
@@ -1126,7 +1433,14 @@ async fn jit_executes_table_runtime_stubs() {
     assert_success_i32(result, 1);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_simd_runtime_stubs() {
     let result = invoke_jit(
@@ -1144,7 +1458,14 @@ async fn jit_executes_simd_runtime_stubs() {
     assert_success_i32(result, -1);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_executes_atomic_runtime_stubs() {
     let result = invoke_jit(
@@ -1172,7 +1493,14 @@ async fn jit_executes_atomic_runtime_stubs() {
     assert_success_i32(result, 1);
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
 #[tokio::test]
 async fn jit_falls_back_when_function_exceeds_code_cache_limit() {
     let module = parse_module(

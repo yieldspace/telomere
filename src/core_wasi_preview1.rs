@@ -247,7 +247,9 @@ pub(crate) async fn run(
 ) -> anyhow::Result<ExitCode> {
     validate_preview1_module(&module)?;
     if jit && !telomere::jit_supported() {
-        bail!("`--jit` requires the `jit` feature on a supported macOS arm64 target");
+        bail!(
+            "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux riscv64gc"
+        );
     }
 
     let state = Box::new(CoreWasiPreview1State::new(path, guest_argv, stdio));

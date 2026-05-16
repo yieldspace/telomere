@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  workspace-test:
+    name: Workspace tests
     runs-on: ubuntu-latest
 
     steps:
@@ -29,3 +29,79 @@ jobs:
 
       - name: Test
         run: cargo test --verbose --release --workspace
+
+  jit-native-test:
+    name: JIT tests (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: jit-native-${{ matrix.target }}
+
+      - name: Check JIT target
+        run: cargo check -p telomere --features jit --target ${{ matrix.target }}
+
+      - name: JIT regression tests
+        run: cargo test -p telomere --release --features jit --target ${{ matrix.target }} --test jit
+
+      - name: JIT CLI smoke test
+        shell: bash
+        run: |
+          output="$(cargo run --quiet --features jit --target ${{ matrix.target }} -- --jit examples/add.wasm main 1 2)"
+          if [ "$output" != "3" ]; then
+            echo "expected 3, got: $output"
+            exit 1
+          fi
+
+  jit-cross-check:
+    name: JIT cross-check (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - riscv64gc-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: jit-cross-${{ matrix.target }}
+
+      - name: Check core JIT target
+        run: cargo check -p telomere --features jit --target ${{ matrix.target }}
+
+      - name: Check CLI JIT target
+        run: cargo check -p telomere-cli --features jit --target ${{ matrix.target }}

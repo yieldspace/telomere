@@ -314,13 +314,13 @@ pub struct Memory {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(feature = "jit")]
 pub(crate) struct MemoryJitLayout {
     pub(crate) region_ptr: usize,
     pub(crate) current_pages: usize,
 }
 
-#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[cfg(feature = "jit")]
 impl MemoryJitLayout {
     pub(crate) fn get() -> Self {
         Self {

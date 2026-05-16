@@ -49,7 +49,9 @@ the `jit` Cargo feature and enable it at runtime with `--jit` or
 - [x] Function-level lazy compilation on first JIT-enabled wasm call.
 - [x] Single-pass direct native emitter written in Rust; LLVM and external code
       generators are not used.
-- [x] macOS AArch64 backend for local development on Apple Silicon.
+- [x] Native baseline backends for macOS AArch64, macOS/Linux x86_64, and
+      Linux GNU riscv64 targets using the standard riscv64gc F/D floating-point
+      ISA assumptions.
 - [x] Store-local native code cache with a configurable byte cap
       (`--jit-code-cache-mib`, default 4 MiB) and least-recently-used eviction.
 - [x] Tier-aware cache structure prepared for a future optimizing tier; the
@@ -71,7 +73,6 @@ the `jit` Cargo feature and enable it at runtime with `--jit` or
 - [x] Native helper calls remain for supported JIT ABI operations, while
       complex VM operations that would require interpreter continuation are
       rejected for whole-function interpreter execution.
-- [ ] Non-macOS and non-AArch64 native backends.
 - [ ] Full Wasm SIMD (`v128`) and threads/atomics coverage in direct native
       code; `i8x16.extract_lane_s`, `v128.bitselect`, and atomic wait/notify
       currently use native runtime stubs.
@@ -86,7 +87,8 @@ the `jit` Cargo feature and enable it at runtime with `--jit` or
 - [ ] Hotness counters, tier-up policy, and an optimizing compiler.
 - [ ] Full trap maps, GC maps, source debug info, profiling metadata, and
       deoptimization metadata.
-- [ ] Cross-platform executable memory policy and cache tuning.
+- [ ] Broader cross-platform executable memory policy and cache tuning beyond
+      the currently supported Unix-like targets.
 
 Local Apple Silicon CoreMark check using
 `/Users/sizumita/Workspace/wasm3/wasm-coremark/coremark.wasm`

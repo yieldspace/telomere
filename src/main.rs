@@ -132,7 +132,9 @@ async fn run_exported_core_function(
     jit_code_cache_mib: u32,
 ) -> anyhow::Result<ResultValue> {
     if jit && !telomere::jit_supported() {
-        anyhow::bail!("`--jit` requires the `jit` feature on a supported macOS arm64 target");
+        anyhow::bail!(
+            "`--jit` requires the `jit` feature on a supported target: macOS arm64, macOS/Linux x86_64, or Linux riscv64gc"
+        );
     }
     let store = if jit {
         telomere::Store::new_with_runtime_config(RuntimeConfig {

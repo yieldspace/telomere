@@ -27,6 +27,7 @@ impl CodeArena {
             .map_err(|_| CodeMemoryError)?;
         let ptr = map.as_mut_ptr();
         write_code(map.as_mut_slice(), 0, code_len, bytes)?;
+        flush_instruction_cache(ptr, bytes.len())?;
         let map = map.make_exec().map_err(|_| CodeMemoryError)?;
         Ok(ExecutableCode {
             ptr,
@@ -99,6 +100,24 @@ fn align_up(value: usize, align: usize) -> Result<usize, CodeMemoryError> {
         .checked_add(align - 1)
         .map(|value| value & !(align - 1))
         .ok_or(CodeMemoryError)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "riscv64"))]
+fn flush_instruction_cache(ptr: *mut u8, len: usize) -> Result<(), CodeMemoryError> {
+    if len == 0 {
+        return Ok(());
+    }
+    unsafe extern "C" {
+        fn __clear_cache(start: *mut u8, end: *mut u8);
+    }
+    let end = unsafe { ptr.add(len) };
+    unsafe { __clear_cache(ptr, end) };
+    Ok(())
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "riscv64")))]
+fn flush_instruction_cache(_ptr: *mut u8, _len: usize) -> Result<(), CodeMemoryError> {
+    Ok(())
 }
 
 #[cfg(all(test, target_os = "macos", target_arch = "aarch64"))]

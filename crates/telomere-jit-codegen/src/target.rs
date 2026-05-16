@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetArch {
     Aarch64,
+    Riscv64,
     X86_64,
     Unsupported,
 }
@@ -28,7 +29,18 @@ pub fn current() -> TargetInfo {
 }
 
 pub fn supported() -> bool {
-    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+    cfg!(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(
+            any(target_os = "macos", target_os = "linux"),
+            target_arch = "x86_64"
+        ),
+        all(
+            target_os = "linux",
+            target_arch = "riscv64",
+            target_env = "gnu"
+        )
+    ))
 }
 
 const fn current_arch() -> TargetArch {
@@ -36,11 +48,19 @@ const fn current_arch() -> TargetArch {
     {
         TargetArch::Aarch64
     }
+    #[cfg(target_arch = "riscv64")]
+    {
+        TargetArch::Riscv64
+    }
     #[cfg(target_arch = "x86_64")]
     {
         TargetArch::X86_64
     }
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "x86_64"
+    )))]
     {
         TargetArch::Unsupported
     }
