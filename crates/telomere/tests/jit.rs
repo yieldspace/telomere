@@ -326,6 +326,68 @@ async fn jit_direct_call_result_is_available_to_continuation() {
     )
 ))]
 #[tokio::test]
+async fn jit_repeated_lazy_direct_call_keeps_cache_state_stable() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (func $add1 (param i32) (result i32)
+            local.get 0
+            i32.const 1
+            i32.add)
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            call $add1
+            call $add1
+            i32.const 3
+            i32.add))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let before = store.jit_cache_stats();
+    let first = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(10)]),
+    )
+    .await;
+    let after_first = store.jit_cache_stats();
+    let second = telomere::run_module_function(
+        &instance,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(20)]),
+    )
+    .await;
+    let after_second = store.jit_cache_stats();
+
+    assert_success_i32(first, 15);
+    assert_success_i32(second, 25);
+    assert_jit_accepted(before, after_first);
+    assert_eq!(
+        after_second.compiled_functions, after_first.compiled_functions,
+        "expected repeated lazy direct calls to reuse accepted JIT entries, first={after_first:?} second={after_second:?}"
+    );
+    assert_eq!(
+        after_second.rejected_functions, after_first.rejected_functions,
+        "expected no JIT rejection on repeated lazy direct calls, first={after_first:?} second={after_second:?}"
+    );
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
 async fn jit_call_to_rejected_callee_resumes_native_caller() {
     let result = invoke_jit(
         r#"
@@ -1536,6 +1598,183 @@ async fn jit_nested_br_if_value_preserves_fallthrough_branch_value() {
     .await;
 
     assert_success_i32(result, 5);
+}
+
+#[cfg(all(
+    feature = "jit",
+    any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(any(target_os = "macos", target_os = "linux"), target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "riscv64", target_env = "gnu")
+    )
+))]
+#[tokio::test]
+async fn jit_native_multi_value_control_branches() {
+    let store = jit_store();
+    let registry = Registry::new();
+    let instance = instantiate_jit_wat(
+        r#"
+        (module
+          (func (export "br_multi_base") (result i32)
+            i32.const 5
+            block (result i32 i32 i64)
+              i32.const 7
+              i32.const 11
+              i64.const 13
+              br 0
+            end
+            drop
+            i32.add
+            i32.add)
+
+          (func (export "br_if_multi") (param $take i32) (result i32 i64)
+            block (result i32 i64)
+              i32.const 4
+              i64.const 9
+              local.get $take
+              br_if 0
+              drop
+              drop
+              i32.const 5
+              i64.const 10
+            end)
+
+          (func (export "br_table_multi") (param $idx i32) (result i32 i32)
+            block $outer (result i32 i32)
+              block $inner (result i32 i32)
+                i32.const 3
+                i32.const 4
+                local.get $idx
+                br_table $inner $outer
+              end
+              i32.const 10
+              i32.add
+            end)
+
+          (func (export "loop_params") (param $n i32) (result i32 i32)
+            (local $a i32)
+            (local $b i32)
+            block $exit (result i32 i32)
+              i32.const 1
+              i32.const 10
+              loop $loop (param i32 i32)
+                local.set $b
+                local.set $a
+                local.get $n
+                i32.eqz
+                if
+                  local.get $a
+                  local.get $b
+                  br $exit
+                end
+                local.get $n
+                i32.const 1
+                i32.sub
+                local.set $n
+                local.get $a
+                i32.const 1
+                i32.add
+                local.get $b
+                i32.const 2
+                i32.add
+                br $loop
+              end
+              unreachable
+            end))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let mut before = store.jit_cache_stats();
+    let br_multi = telomere::run_module_function(
+        &instance,
+        &store,
+        "br_multi_base",
+        &ResultValue::new(vec![]),
+    )
+    .await;
+    let mut after = store.jit_cache_stats();
+    assert_success_i32(br_multi, 23);
+    assert_jit_accepted(before, after);
+
+    before = after;
+    let br_if_taken = telomere::run_module_function(
+        &instance,
+        &store,
+        "br_if_multi",
+        &ResultValue::new(vec![WasmValue::I32(1)]),
+    )
+    .await;
+    after = store.jit_cache_stats();
+    assert_success_values(
+        br_if_taken,
+        ResultValue::new(vec![WasmValue::I32(4), WasmValue::I64(9)]),
+    );
+    assert_jit_accepted(before, after);
+
+    let after_taken = after;
+    let br_if_fallthrough = telomere::run_module_function(
+        &instance,
+        &store,
+        "br_if_multi",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    after = store.jit_cache_stats();
+    assert_success_values(
+        br_if_fallthrough,
+        ResultValue::new(vec![WasmValue::I32(5), WasmValue::I64(10)]),
+    );
+    assert_eq!(after.compiled_functions, after_taken.compiled_functions);
+    assert_eq!(after.rejected_functions, after_taken.rejected_functions);
+
+    before = after;
+    let br_table_inner = telomere::run_module_function(
+        &instance,
+        &store,
+        "br_table_multi",
+        &ResultValue::new(vec![WasmValue::I32(0)]),
+    )
+    .await;
+    after = store.jit_cache_stats();
+    assert_success_values(
+        br_table_inner,
+        ResultValue::new(vec![WasmValue::I32(3), WasmValue::I32(14)]),
+    );
+    assert_jit_accepted(before, after);
+
+    let after_inner = after;
+    let br_table_outer = telomere::run_module_function(
+        &instance,
+        &store,
+        "br_table_multi",
+        &ResultValue::new(vec![WasmValue::I32(1)]),
+    )
+    .await;
+    after = store.jit_cache_stats();
+    assert_success_values(
+        br_table_outer,
+        ResultValue::new(vec![WasmValue::I32(3), WasmValue::I32(4)]),
+    );
+    assert_eq!(after.compiled_functions, after_inner.compiled_functions);
+    assert_eq!(after.rejected_functions, after_inner.rejected_functions);
+
+    before = after;
+    let loop_params = telomere::run_module_function(
+        &instance,
+        &store,
+        "loop_params",
+        &ResultValue::new(vec![WasmValue::I32(3)]),
+    )
+    .await;
+    after = store.jit_cache_stats();
+    assert_success_values(
+        loop_params,
+        ResultValue::new(vec![WasmValue::I32(4), WasmValue::I32(16)]),
+    );
+    assert_jit_accepted(before, after);
 }
 
 #[cfg(all(

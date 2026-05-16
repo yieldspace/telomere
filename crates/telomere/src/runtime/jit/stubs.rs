@@ -1512,6 +1512,7 @@ pub(crate) extern "C" fn function_return(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) extern "C" fn block_return(
     ctx: *mut ExecuteContext<'_>,
     stack_top: u32,

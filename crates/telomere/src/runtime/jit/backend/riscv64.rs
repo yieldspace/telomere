@@ -4,13 +4,13 @@ use crate::common::{
     memory::MemoryJitLayout,
     store::{CallDispatchCache, CallDispatchTarget, GlobalValueJitLayout, StoreInner},
     ExecuteContext, Instr, LocalBinop32Op, LocalBinop64Op, LocalCmp32Op, LocalCmp64Op,
-    LocalFastRhsShape, LocalUnary32Op, LocalUnary64Op, MemArg, ObjectRef, VMResult, PAGE_SIZE,
+    LocalFastRhsShape, LocalReference, LocalUnary32Op, LocalUnary64Op, MemArg, ObjectRef, VMResult,
+    PAGE_SIZE,
 };
 use crate::runtime::jit::abi::{vm_result_code, JitNativeExit};
 use crate::runtime::jit::profile::{self, Counter};
 use crate::runtime::jit::stubs::{
-    atomic_fence as jit_atomic_fence, block_return as jit_block_return,
-    call_i32_crc16_update16 as jit_call_i32_crc16_update16,
+    atomic_fence as jit_atomic_fence, call_i32_crc16_update16 as jit_call_i32_crc16_update16,
     call_i32_list_crc_summary as jit_call_i32_list_crc_summary, direct_call as jit_direct_call,
     f32_max_bits as jit_f32_max_bits, f32_min_bits as jit_f32_min_bits,
     f64_max_bits as jit_f64_max_bits, f64_min_bits as jit_f64_min_bits,
@@ -96,6 +96,7 @@ fn cond_for_i64_compare(op: I64CompareOp) -> Cond {
 }
 
 const STACK_REGS: [u8; 7] = [22, 23, 24, 25, 26, 27, 28];
+const BLOCK_RETURN_NATIVE_UNROLL_SLOTS: usize = 8;
 
 enum EmitControl {
     Continue,
@@ -2063,8 +2064,7 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::Loop { param } => {
                 if param.param_size != 0 {
-                    self.flush_stack()?;
-                    self.call_block_return_helper(param.stack_top, param.param_size);
+                    self.emit_block_return_native(param.stack_top, param.param_size)?;
                 } else if self.stack_depth > 0 {
                     self.flush_stack()?;
                 }
@@ -2083,8 +2083,10 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::BlockReturn { block_return } => {
                 if block_return.return_size != 0 {
-                    self.flush_stack()?;
-                    self.call_block_return_helper(block_return.stack_top, block_return.return_size);
+                    self.emit_block_return_native(
+                        block_return.stack_top,
+                        block_return.return_size,
+                    )?;
                 } else if self.stack_depth > 0 {
                     self.flush_stack()?;
                 }
@@ -2446,6 +2448,127 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    fn emit_block_return_native(&mut self, stack_top: u32, byte_size: u32) -> Result<(), ()> {
+        profile::count(Counter::EmitBlockReturnNative);
+        profile::add(Counter::EmitBlockReturnNativeByte, u64::from(byte_size));
+        self.flush_stack()?;
+        if byte_size == 0 {
+            self.stack_depth = 0;
+            return Ok(());
+        }
+        if byte_size % 4 != 0 {
+            return Err(());
+        }
+        let slots = usize::try_from(byte_size / 4).map_err(|_| ())?;
+        let local_reference_offset = std::mem::offset_of!(ExecuteContext<'_>, local_reference);
+        let local_top_offset =
+            local_reference_offset + std::mem::offset_of!(LocalReference, local_top);
+        let local_size_offset =
+            local_reference_offset + std::mem::offset_of!(LocalReference, local_size);
+
+        self.ldr_x_imm(
+            9,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, stack_top_ptr),
+        )?;
+        self.ldr_x_imm(10, 9, 0)?;
+        self.mov_imm_u64(11, u64::from(byte_size));
+        self.sub_x(12, 10, 11);
+        self.ldr_x_imm(
+            13,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, stack_memory_ptr),
+        )?;
+        self.add_x(12, 13, 12);
+
+        self.ldr_x_imm(14, 19, local_top_offset)?;
+        self.ldr_w_imm(15, 19, local_size_offset)?;
+        self.add_x(14, 14, 15);
+        if stack_top != 0 {
+            self.add_imm_u64(14, 14, u64::from(stack_top))?;
+        }
+        self.add_x(16, 13, 14);
+
+        self.cmp_x(16, 12);
+        let copy_done_eq = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
+        let backward_branch = self.branch_placeholder(FixupKind::BCond(Cond::Hi));
+        self.emit_native_word_copy_forward(slots)?;
+        let forward_done = self.branch_placeholder(FixupKind::B);
+        let backward_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            backward_branch,
+            backward_target,
+            FixupKind::BCond(Cond::Hi),
+        )?;
+        self.emit_native_word_copy_backward(slots)?;
+        let copy_done_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            copy_done_eq,
+            copy_done_target,
+            FixupKind::BCond(Cond::Eq),
+        )?;
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            forward_done,
+            copy_done_target,
+            FixupKind::B,
+        )?;
+
+        self.add_x(14, 14, 11);
+        self.str_x_imm(14, 9, 0)?;
+        self.stack_depth = 0;
+        Ok(())
+    }
+
+    fn emit_native_word_copy_forward(&mut self, slots: usize) -> Result<(), ()> {
+        if slots <= BLOCK_RETURN_NATIVE_UNROLL_SLOTS {
+            for slot in 0..slots {
+                let offset = slot.checked_mul(4).ok_or(())?;
+                self.ldr_w_imm(15, 12, offset)?;
+                self.str_w_imm(15, 16, offset)?;
+            }
+            return Ok(());
+        }
+
+        self.mov_imm_u32(17, u32::try_from(slots).map_err(|_| ())?);
+        let loop_start = self.offset();
+        self.ldr_w(15, 12);
+        self.str_w(15, 16);
+        self.add_imm_u64(12, 12, 4)?;
+        self.add_imm_u64(16, 16, 4)?;
+        self.sub_imm_u32(17, 17, 1)?;
+        self.branch_to_offset(loop_start, FixupKind::CbnzW(17))
+    }
+
+    fn emit_native_word_copy_backward(&mut self, slots: usize) -> Result<(), ()> {
+        if slots <= BLOCK_RETURN_NATIVE_UNROLL_SLOTS {
+            for slot in (0..slots).rev() {
+                let offset = slot.checked_mul(4).ok_or(())?;
+                self.ldr_w_imm(15, 12, offset)?;
+                self.str_w_imm(15, 16, offset)?;
+            }
+            return Ok(());
+        }
+
+        let last_offset = slots
+            .checked_sub(1)
+            .and_then(|slot| slot.checked_mul(4))
+            .ok_or(())?;
+        self.add_imm_u64(12, 12, u64::try_from(last_offset).map_err(|_| ())?)?;
+        self.add_imm_u64(16, 16, u64::try_from(last_offset).map_err(|_| ())?)?;
+        self.mov_imm_u32(17, u32::try_from(slots).map_err(|_| ())?);
+        self.mov_imm_u64(10, 4);
+        let loop_start = self.offset();
+        self.ldr_w(15, 12);
+        self.str_w(15, 16);
+        self.sub_imm_u32(17, 17, 1)?;
+        self.sub_x(12, 12, 10);
+        self.sub_x(16, 16, 10);
+        self.branch_to_offset(loop_start, FixupKind::CbnzW(17))
+    }
+
     fn flush_stack(&mut self) -> Result<(), ()> {
         profile::count(Counter::EmitStackFlush);
         profile::add(Counter::EmitStackFlushSlot, self.stack_depth as u64);
@@ -2751,13 +2874,6 @@ impl<'a> Emitter<'a> {
         self.mov_imm_u32(1, return_size);
         self.call_ptr(jit_function_return as *const () as usize);
         self.branch_to_epilogue();
-    }
-
-    fn call_block_return_helper(&mut self, stack_top: u32, return_size: u32) {
-        self.mov_x(0, 19);
-        self.mov_imm_u32(1, stack_top);
-        self.mov_imm_u32(2, return_size);
-        self.call_ptr(jit_block_return as *const () as usize);
     }
 
     fn call_direct_helper(

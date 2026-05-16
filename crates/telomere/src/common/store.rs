@@ -7,7 +7,7 @@ use super::{
     HostFunction, Instr, LocalsData, MemType, Stack, TableType, TypeIdx, VMResult,
 };
 #[cfg(feature = "jit")]
-use crate::runtime::jit::StoreJitCache;
+use crate::runtime::jit::{CompiledFunction, StoreJitCache};
 use parking_lot::{Mutex, MutexGuard};
 use std::{
     cell::RefCell,
@@ -377,6 +377,8 @@ pub struct StoreInner {
     funcs: Vec<FunctionInstanceData>,
     call_recipes: Vec<Option<CallRecipe>>,
     jit_rejected_funcs: Vec<AtomicBool>,
+    #[cfg(feature = "jit")]
+    jit_compiled_funcs: Vec<RefCell<Weak<CompiledFunction>>>,
     tables: Vec<super::TableInstance>,
     globals: Vec<GlobalValue>,
     local_memories: Vec<LocalMemoryObject>,
@@ -620,6 +622,8 @@ impl StoreInner {
         self.funcs.push(func);
         self.call_recipes.push(None);
         self.jit_rejected_funcs.push(AtomicBool::new(false));
+        #[cfg(feature = "jit")]
+        self.jit_compiled_funcs.push(RefCell::new(Weak::new()));
         id
     }
 
@@ -664,8 +668,31 @@ impl StoreInner {
     }
 
     pub(crate) fn mark_jit_rejected_func(&self, addr: ObjectRef) {
-        self.jit_rejected_funcs[self.call_recipe_slot_for_func_addr(addr)]
-            .store(true, Ordering::Relaxed);
+        let slot = self.call_recipe_slot_for_func_addr(addr);
+        self.jit_rejected_funcs[slot].store(true, Ordering::Relaxed);
+        #[cfg(feature = "jit")]
+        {
+            *self.jit_compiled_funcs[slot].borrow_mut() = Weak::new();
+        }
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn jit_cached_compiled_func(
+        &self,
+        addr: ObjectRef,
+    ) -> Option<Arc<CompiledFunction>> {
+        let slot = self.call_recipe_slot_for_func_addr(addr);
+        self.jit_compiled_funcs[slot].borrow().upgrade()
+    }
+
+    #[cfg(feature = "jit")]
+    pub(crate) fn set_jit_cached_compiled_func(
+        &self,
+        addr: ObjectRef,
+        compiled: &Arc<CompiledFunction>,
+    ) {
+        let slot = self.call_recipe_slot_for_func_addr(addr);
+        *self.jit_compiled_funcs[slot].borrow_mut() = Arc::downgrade(compiled);
     }
 
     pub(crate) fn call_recipe(&self, slot: u32) -> Option<CallRecipe> {

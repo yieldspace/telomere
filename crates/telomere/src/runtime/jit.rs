@@ -30,7 +30,7 @@ pub use abi::JitNativeExit;
 #[cfg(feature = "jit")]
 pub use cache::JitCacheStats;
 #[cfg(feature = "jit")]
-pub(crate) use cache::StoreJitCache;
+pub(crate) use cache::{CompiledFunction, StoreJitCache};
 
 pub fn supported() -> bool {
     jit_supported()
@@ -79,6 +79,34 @@ pub(crate) unsafe fn enter_current_frame_from_jit_call(
         VMResult::Unimplemented => JitNativeExit::fallback_pc(code_base),
         other => JitNativeExit::trap(other),
     }
+}
+
+#[cfg(feature = "jit")]
+pub(crate) unsafe fn enter_current_frame_from_lazy_call(
+    ctx: &mut ExecuteContext<'_>,
+    continuation: *const Instr,
+) -> VMResult<()> {
+    let code_base = ctx.code();
+    let exit = match unsafe { enter_current_frame_raw(ctx) } {
+        VMResult::Success(exit) => exit,
+        VMResult::Unimplemented => {
+            ctx.cont = code_base;
+            return VMResult::Success(());
+        }
+        VMResult::Unreachable => return VMResult::Unreachable,
+        VMResult::StackOverflow => return VMResult::StackOverflow,
+        VMResult::MemoryIndexOutOfRange => return VMResult::MemoryIndexOutOfRange,
+        VMResult::TableIndexOutOfRange => return VMResult::TableIndexOutOfRange,
+        VMResult::CallIndirectInvalidType => return VMResult::CallIndirectInvalidType,
+        VMResult::TableUninitialized => return VMResult::TableUninitialized,
+        VMResult::Unlinkable => return VMResult::Unlinkable,
+        VMResult::InvalidOperand => return VMResult::InvalidOperand,
+        VMResult::UnalignedAtomic => return VMResult::UnalignedAtomic,
+    };
+    if exit.kind == JitNativeExit::CONTINUE_PTR && exit.value == continuation as u64 {
+        return unsafe { vm::call_code(continuation, ctx) };
+    }
+    unsafe { handle_exit(exit, code_base, ctx) }
 }
 
 #[cfg(feature = "jit")]
@@ -162,14 +190,23 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
         let FunctionBody::Wasm { code, .. } = &func.body else {
             return VMResult::Unimplemented;
         };
-        let max_bytes = ctx.store.runtime_config().jit.code_cache_max_bytes;
-        (
-            vm_try!(ctx
-                .store
-                .jit_cache()
-                .get_or_compile(funcaddr, &func.body, ctx.gc, max_bytes)),
-            code.as_ptr(),
-        )
+        let code_base = code.as_ptr();
+        let compiled = match ctx.gc.jit_cached_compiled_func(funcaddr) {
+            Some(compiled) if ctx.store.jit_cache().touch_compiled(funcaddr, &compiled) => {
+                profile::count(profile::Counter::CompileFrameCacheHit);
+                compiled
+            }
+            _ => {
+                let max_bytes = ctx.store.runtime_config().jit.code_cache_max_bytes;
+                let compiled = vm_try!(ctx
+                    .store
+                    .jit_cache()
+                    .get_or_compile(funcaddr, &func.body, ctx.gc, max_bytes));
+                ctx.gc.set_jit_cached_compiled_func(funcaddr, &compiled);
+                compiled
+            }
+        };
+        (compiled, code_base)
     };
     VMResult::Success(unsafe {
         (compiled.entry())(

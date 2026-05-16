@@ -170,6 +170,24 @@ impl StoreJitCache {
         VMResult::Success(compiled)
     }
 
+    pub(crate) fn touch_compiled(
+        &self,
+        funcaddr: ObjectRef,
+        compiled: &Arc<CompiledFunction>,
+    ) -> bool {
+        let mut inner = self.inner.lock();
+        inner.clock = inner.clock.wrapping_add(1);
+        let clock = inner.clock;
+        let Some(cached) = inner.compiled.get_mut(&funcaddr) else {
+            return false;
+        };
+        if !Arc::ptr_eq(cached.tiers.active(), compiled) {
+            return false;
+        }
+        cached.last_used = clock;
+        true
+    }
+
     fn mark_rejected(&self, funcaddr: ObjectRef) {
         let mut inner = self.inner.lock();
         if let Some(cached) = inner.compiled.remove(&funcaddr) {
@@ -276,16 +294,85 @@ mod tests {
 
     #[test]
     fn compiled_tiers_start_with_active_baseline() {
-        let code = ExecutableCode::test_stub(32);
-        let compiled = Arc::new(CompiledFunction {
-            entry: noop_entry,
-            code_size: code.len(),
-            _code: code,
-        });
+        let compiled = test_compiled(32);
         let tiers = CompiledTiers::baseline(compiled.clone());
 
         assert!(Arc::ptr_eq(tiers.active(), &compiled));
         assert_eq!(tiers.code_size(), 32);
+    }
+
+    #[test]
+    fn touch_compiled_refreshes_lru_before_eviction() {
+        let cache = StoreJitCache::default();
+        let func_a = ObjectRef(1);
+        let func_b = ObjectRef(2);
+        let compiled_a = test_compiled(32);
+        let compiled_b = test_compiled(32);
+
+        {
+            let mut inner = cache.inner.lock();
+            inner.clock = 2;
+            inner.used_bytes = compiled_a.code_size() + compiled_b.code_size();
+            inner.compiled.insert(
+                func_a,
+                CachedFunction {
+                    tiers: CompiledTiers::baseline(compiled_a.clone()),
+                    last_used: 1,
+                },
+            );
+            inner.compiled.insert(
+                func_b,
+                CachedFunction {
+                    tiers: CompiledTiers::baseline(compiled_b.clone()),
+                    last_used: 2,
+                },
+            );
+        }
+
+        assert!(cache.touch_compiled(func_a, &compiled_a));
+
+        let mut inner = cache.inner.lock();
+        let target_used_bytes = inner.used_bytes.saturating_sub(compiled_b.code_size());
+        inner.evict_until(target_used_bytes);
+
+        assert!(inner.compiled.contains_key(&func_a));
+        assert!(!inner.compiled.contains_key(&func_b));
+        assert_eq!(inner.compiled.get(&func_a).unwrap().last_used, 3);
+    }
+
+    #[test]
+    fn touch_compiled_rejects_stale_weak_entry() {
+        let cache = StoreJitCache::default();
+        let func = ObjectRef(3);
+        let current = test_compiled(32);
+        let stale = test_compiled(32);
+
+        {
+            let mut inner = cache.inner.lock();
+            inner.clock = 1;
+            inner.used_bytes = current.code_size();
+            inner.compiled.insert(
+                func,
+                CachedFunction {
+                    tiers: CompiledTiers::baseline(current),
+                    last_used: 1,
+                },
+            );
+        }
+
+        assert!(!cache.touch_compiled(func, &stale));
+
+        let inner = cache.inner.lock();
+        assert_eq!(inner.compiled.get(&func).unwrap().last_used, 1);
+    }
+
+    fn test_compiled(code_size: usize) -> Arc<CompiledFunction> {
+        let code = ExecutableCode::test_stub(code_size);
+        Arc::new(CompiledFunction {
+            entry: noop_entry,
+            code_size: code.len(),
+            _code: code,
+        })
     }
 
     unsafe extern "C" fn noop_entry(

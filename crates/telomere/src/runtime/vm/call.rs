@@ -370,12 +370,18 @@ unsafe fn finish_jit_wasm_call(
     is_return_call: bool,
 ) -> crate::runtime::jit::JitNativeExit {
     let exit = unsafe { crate::runtime::jit::enter_current_frame_from_jit_call(ctx) };
-    crate::runtime::jit::profile::count_exit(exit.kind);
     let returned_to_continuation = exit.kind == crate::runtime::jit::JitNativeExit::DONE
         || (exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR
             && exit.value == continuation as u64)
         || (exit.kind == crate::runtime::jit::JitNativeExit::PENDING && ctx.cont == continuation);
     if !is_return_call && returned_to_continuation {
+        if exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR {
+            crate::runtime::jit::profile::count(
+                crate::runtime::jit::profile::Counter::ExitContinuePtrConsumed,
+            );
+        } else {
+            crate::runtime::jit::profile::count_exit(exit.kind);
+        }
         crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
     } else if !is_return_call
         && matches!(
@@ -384,6 +390,7 @@ unsafe fn finish_jit_wasm_call(
                 | crate::runtime::jit::JitNativeExit::FALLBACK_PTR
         )
     {
+        crate::runtime::jit::profile::count_exit(exit.kind);
         let continue_exit = unsafe {
             crate::runtime::jit::run_interpreter_continue_from_jit_call(
                 exit.value as *const Instr,
@@ -397,6 +404,7 @@ unsafe fn finish_jit_wasm_call(
             continue_exit
         }
     } else {
+        crate::runtime::jit::profile::count_exit(exit.kind);
         exit
     }
 }
@@ -532,7 +540,9 @@ unsafe fn op_call_jit_lazy_inner(
         };
     }
     match vm_try!(unsafe { internal_op_call(tail_code.offset(1), recipe, ctx, is_return_call) }) {
-        CallOutcome::Immediate(_ptr) => unsafe { crate::runtime::jit::enter_current_frame(ctx) },
+        CallOutcome::Immediate(_ptr) => unsafe {
+            crate::runtime::jit::enter_current_frame_from_lazy_call(ctx, tail_code.offset(1))
+        },
         CallOutcome::Pending => VMResult::Success(()),
     }
 }
