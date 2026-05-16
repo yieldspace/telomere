@@ -1052,9 +1052,14 @@ pub const PAGE_SIZE_MAX: usize = 4 * 1024 * 1024 * 1024 / PAGE_SIZE;
 
 pub struct ExecuteContext<'a> {
     pub stack: &'a mut Stack,
+    pub(crate) stack_memory_ptr: *mut u8,
+    pub(crate) stack_memory_len: usize,
+    pub(crate) stack_top_ptr: *mut usize,
     pub local_reference: LocalReference,
     pub(crate) local_base_ptr: *mut u8,
     pub(crate) default_local_memory_ptr: *mut Memory,
+    pub(crate) current_instance_globals_ptr: *const ObjectRef,
+    pub(crate) global_values_ptr: *mut store::GlobalValue,
     pub(crate) current_frame: CallFrameCache,
     pub store: &'a Store,
     pub gc: &'a mut StoreInner,
@@ -1105,6 +1110,21 @@ impl ExecuteContext<'_> {
         };
     }
 
+    fn refresh_jit_global_ptrs(&mut self) {
+        self.current_instance_globals_ptr = if self.current_frame.code_addr.is_null() {
+            std::ptr::null()
+        } else {
+            self.gc
+                .jit_instance_global_addrs_ptr(self.current_frame.instance)
+        };
+        self.global_values_ptr = self.gc.jit_global_values_ptr();
+    }
+
+    fn refresh_frame_cached_ptrs(&mut self) {
+        self.refresh_default_local_memory_ptr();
+        self.refresh_jit_global_ptrs();
+    }
+
     pub(crate) fn snapshot(&self) -> ExecuteContextSnapshot {
         let default_memory = snapshot_memory_kind(self.current_frame.memory0_kind);
         let caller_memory = self
@@ -1127,7 +1147,7 @@ impl ExecuteContext<'_> {
         {
             self.current_frame = self.stack.frame_cache(&local_reference);
         }
-        self.refresh_default_local_memory_ptr();
+        self.refresh_frame_cached_ptrs();
     }
 
     #[inline(always)]
@@ -1139,7 +1159,7 @@ impl ExecuteContext<'_> {
         self.local_reference = local_reference;
         self.local_base_ptr = unsafe { self.stack.local_area_mut_ptr(&local_reference) };
         self.current_frame = frame;
-        self.refresh_default_local_memory_ptr();
+        self.refresh_frame_cached_ptrs();
     }
 
     #[inline(always)]

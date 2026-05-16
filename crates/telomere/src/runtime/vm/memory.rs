@@ -7341,12 +7341,21 @@ mod tests {
             local_top: 0,
             local_size: 0,
         };
+        let stack_memory_ptr = stack.jit_memory_ptr();
+        let stack_memory_len = stack.jit_memory_len();
+        let stack_top_ptr = stack.jit_top_ptr();
         let local_base_ptr = unsafe { stack.local_area_mut_ptr(&local_reference) };
+        let global_values_ptr = gc.jit_global_values_ptr();
         ExecuteContext {
             stack,
+            stack_memory_ptr,
+            stack_memory_len,
+            stack_top_ptr,
             local_reference,
             local_base_ptr,
             default_local_memory_ptr: gc.local_memory_mut(memory_id).memory_mut() as *mut Memory,
+            current_instance_globals_ptr: std::ptr::null(),
+            global_values_ptr,
             current_frame: frame(CachedMemoryKind::Local, memory_id.raw()),
             store,
             gc,

@@ -1532,7 +1532,7 @@ pub(crate) use bulk_memory::{
 #[allow(unused_imports)]
 pub(crate) use bulk_memory::{op_mem_copy, op_mem_fill, op_mem_init};
 #[cfg(feature = "jit")]
-pub(crate) use call::{jit_call_direct, jit_call_indirect};
+pub(crate) use call::{jit_call_direct, jit_call_direct_wasm_fast, jit_call_indirect};
 pub(crate) use call::{
     op_call, op_call_cached_u16_low7_guard, op_call_i32_crc16_update16,
     op_call_i32_crc16_update16_masked, op_call_i32_list_crc_summary,

@@ -111,6 +111,7 @@ mod enc {
     pub(super) const LDRSH_W_UNSIGNED: u32 = 0x79c0_0000;
     pub(super) const STRB_W_UNSIGNED: u32 = 0x3900_0000;
     pub(super) const STRH_W_UNSIGNED: u32 = 0x7900_0000;
+    pub(super) const STR_X_UNSIGNED_IMM: u32 = 0xf900_0000;
     pub(super) const STR_W_UNSIGNED: u32 = 0xb900_0000;
     pub(super) const STR_W_UNSCALED_IMM: u32 = 0xb800_0000;
 }
@@ -818,6 +819,16 @@ impl A64Masm {
         self.insn(enc::STR_W_UNSIGNED | (rn.bits() << 5) | rt.bits());
     }
 
+    pub fn str_x_imm(&mut self, rt: XReg, rn: XReg, offset: usize) -> AsmResult {
+        if offset % 8 != 0 || offset / 8 > 4095 {
+            return Err(AsmError::InvalidImmediate);
+        }
+        self.insn(
+            enc::STR_X_UNSIGNED_IMM | (((offset / 8) as u32) << 10) | (rn.bits() << 5) | rt.bits(),
+        );
+        Ok(())
+    }
+
     pub fn str_w_imm(&mut self, rt: WReg, rn: XReg, offset: usize) -> AsmResult {
         if offset % 4 != 0 || offset / 4 > 4095 {
             return Err(AsmError::InvalidImmediate);
@@ -1320,6 +1331,10 @@ impl A64BaselineMasm {
 
     pub fn str_w(&mut self, rt: u8, rn: u8) {
         self.inner.str_w(Self::w(rt), Self::x(rn));
+    }
+
+    pub fn str_x_imm(&mut self, rt: u8, rn: u8, offset: usize) -> AsmResult {
+        self.inner.str_x_imm(Self::x(rt), Self::x(rn), offset)
     }
 
     pub fn str_w_unscaled_imm(&mut self, rt: u8, rn: u8, offset: u32) -> AsmResult {

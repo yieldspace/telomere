@@ -13,7 +13,11 @@ use crate::common::{
     ObjectRef, VMResult,
 };
 
-use super::{abi::JitEntry, backend};
+use super::{
+    abi::JitEntry,
+    backend,
+    profile::{self, Counter},
+};
 use telomere_jit_codegen::code_memory::{CodeArena, ExecutableCode};
 
 #[derive(Default)]
@@ -62,8 +66,10 @@ impl StoreJitCache {
         gc: &StoreInner,
         max_bytes: u32,
     ) -> VMResult<Arc<CompiledFunction>> {
+        profile::count(Counter::CompileAttempt);
         let max_bytes = max_bytes as usize;
         if max_bytes == 0 {
+            profile::count(Counter::CompileRejectMaxZero);
             trace_compile_reject("max_zero", 0, 0, max_bytes);
             return VMResult::Unimplemented;
         }
@@ -73,10 +79,12 @@ impl StoreJitCache {
             inner.clock = inner.clock.wrapping_add(1);
             let clock = inner.clock;
             if inner.disabled.contains(&funcaddr) {
+                profile::count(Counter::CompileRejectDisabled);
                 trace_compile_reject("disabled", 0, 0, max_bytes);
                 return VMResult::Unimplemented;
             }
             if let Some(cached) = inner.compiled.get_mut(&funcaddr) {
+                profile::count(Counter::CompileHit);
                 cached.last_used = clock;
                 return VMResult::Success(cached.tiers.active().clone());
             }
@@ -88,19 +96,28 @@ impl StoreJitCache {
         let bytes = match backend::emit_baseline_function(funcaddr, code, op_lens, gc) {
             Ok(bytes) => bytes,
             Err(()) => {
+                profile::count(Counter::CompileRejectEmit);
                 trace_compile_reject("emit", 0, 0, max_bytes);
+                gc.mark_jit_rejected_func(funcaddr);
+                self.mark_rejected(funcaddr);
                 return VMResult::Unimplemented;
             }
         };
         let allocation_len = match CodeArena::allocation_len(bytes.len()) {
             Ok(len) => len,
             Err(_) => {
+                profile::count(Counter::CompileRejectAllocationLen);
                 trace_compile_reject("allocation_len", bytes.len(), 0, max_bytes);
+                gc.mark_jit_rejected_func(funcaddr);
+                self.mark_rejected(funcaddr);
                 return VMResult::Unimplemented;
             }
         };
         if allocation_len > max_bytes {
+            profile::count(Counter::CompileRejectTooLarge);
             trace_compile_reject("too_large", bytes.len(), allocation_len, max_bytes);
+            gc.mark_jit_rejected_func(funcaddr);
+            self.mark_rejected(funcaddr);
             return VMResult::Unimplemented;
         }
 
@@ -108,6 +125,7 @@ impl StoreJitCache {
         inner.clock = inner.clock.wrapping_add(1);
         let clock = inner.clock;
         if inner.disabled.contains(&funcaddr) {
+            profile::count(Counter::CompileRejectDisabledAfterEmit);
             trace_compile_reject(
                 "disabled_after_emit",
                 bytes.len(),
@@ -117,6 +135,7 @@ impl StoreJitCache {
             return VMResult::Unimplemented;
         }
         if let Some(cached) = inner.compiled.get_mut(&funcaddr) {
+            profile::count(Counter::CompileHit);
             cached.last_used = clock;
             return VMResult::Success(cached.tiers.active().clone());
         }
@@ -124,10 +143,15 @@ impl StoreJitCache {
         let compiled = match CompiledFunction::from_bytes(&bytes, &inner.arena) {
             Ok(compiled) => Arc::new(compiled),
             Err(()) => {
+                profile::count(Counter::CompileRejectFromBytes);
                 trace_compile_reject("from_bytes", bytes.len(), allocation_len, max_bytes);
+                gc.mark_jit_rejected_func(funcaddr);
+                inner.disabled.insert(funcaddr);
                 return VMResult::Unimplemented;
             }
         };
+        profile::count(Counter::CompileAccepted);
+        profile::add(Counter::CompileBytes, bytes.len() as u64);
         inner.used_bytes = inner.used_bytes.saturating_add(compiled.code_size());
         inner.compiled.insert(
             funcaddr,
@@ -139,7 +163,7 @@ impl StoreJitCache {
         VMResult::Success(compiled)
     }
 
-    pub(crate) fn disable(&self, funcaddr: ObjectRef) {
+    fn mark_rejected(&self, funcaddr: ObjectRef) {
         let mut inner = self.inner.lock();
         if let Some(cached) = inner.compiled.remove(&funcaddr) {
             inner.used_bytes = inner.used_bytes.saturating_sub(cached.tiers.code_size());

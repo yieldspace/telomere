@@ -2,11 +2,12 @@ use crate::common::{
     decode_local_binop32_kind, decode_local_binop64_kind, decode_local_cmp32_kind,
     decode_local_cmp64_kind, decode_local_unary32_kind, decode_local_unary64_kind,
     memory::MemoryJitLayout,
-    store::{CallDispatchCache, StoreInner},
+    store::{CallDispatchCache, CallDispatchTarget, GlobalValueJitLayout, StoreInner},
     ExecuteContext, Instr, LocalBinop32Op, LocalBinop64Op, LocalCmp32Op, LocalCmp64Op,
     LocalFastRhsShape, LocalUnary32Op, LocalUnary64Op, MemArg, ObjectRef, VMResult, PAGE_SIZE,
 };
 use crate::runtime::jit::abi::{vm_result_code, JitNativeExit};
+use crate::runtime::jit::profile::{self, Counter};
 use crate::runtime::jit::stubs::{
     atomic_fence as jit_atomic_fence, block_return as jit_block_return,
     call_i32_crc16_update16 as jit_call_i32_crc16_update16,
@@ -17,8 +18,6 @@ use crate::runtime::jit::stubs::{
     f32_min_bits as jit_f32_min_bits, f64_copysign_bits as jit_f64_copysign_bits,
     f64_max_bits as jit_f64_max_bits, f64_min_bits as jit_f64_min_bits,
     f64_promote_f32_bits as jit_f64_promote_f32_bits, function_return as jit_function_return,
-    global_get4 as jit_global_get4, global_get4_lane as jit_global_get4_lane,
-    global_set4 as jit_global_set4, global_set4_lane as jit_global_set4_lane,
     i32_core_state_benchmark as jit_i32_core_state_benchmark,
     i32_crc16_update16 as jit_i32_crc16_update16,
     i32_list_crc_pair_loop as jit_i32_list_crc_pair_loop,
@@ -29,11 +28,9 @@ use crate::runtime::jit::stubs::{
     i32_trunc_f32 as jit_i32_trunc_f32, i32_trunc_f64 as jit_i32_trunc_f64,
     i64_popcnt_value as jit_i64_popcnt_value, i64_trunc_f32 as jit_i64_trunc_f32,
     i64_trunc_f64 as jit_i64_trunc_f64, indirect_call as jit_indirect_call,
-    interpreter_fallback as jit_interpreter_fallback, memory_copy as jit_memory_copy,
-    memory_fill as jit_memory_fill, memory_grow as jit_memory_grow, memory_size as jit_memory_size,
-    pop_i32 as jit_pop_i32, push_i32 as jit_push_i32, ref_func as jit_ref_func,
-    runtime_continuation_op as jit_runtime_continuation_op, runtime_handler as jit_runtime_handler,
-    runtime_stack_op as jit_runtime_stack_op,
+    memory_copy as jit_memory_copy, memory_fill as jit_memory_fill, memory_grow as jit_memory_grow,
+    memory_size as jit_memory_size, ref_func as jit_ref_func,
+    wasm_direct_call_fast as jit_wasm_direct_call_fast,
 };
 
 use super::ops::{
@@ -68,7 +65,6 @@ enum FixupKind {
     BCond(Cond),
     CbnzX(u8),
     CbnzW(u8),
-    CbzW(u8),
 }
 
 fn cond_for_i32_compare(op: I32CompareOp) -> Cond {
@@ -267,30 +263,22 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_op_or_runtime(&mut self, cursor: usize, op: BaselineOp) -> Result<EmitControl, ()> {
-        let byte_checkpoint = self.masm.offset();
-        let fixup_checkpoint = self.fixups.len();
-        let stack_checkpoint = self.stack_depth;
         match self.emit_op(cursor, op) {
             Ok(control) => Ok(control),
             Err(()) => {
-                if std::env::var_os("TELOMERE_JIT_TRACE_FALLBACK").is_some() {
+                if std::env::var_os("TELOMERE_JIT_TRACE_COMPILE").is_some() {
                     let op = unsafe { self.wasm[cursor].op };
                     #[cfg(feature = "vm-diagnostics")]
                     let op_label = crate::runtime::vm::diagnostic_op_label(op);
                     #[cfg(not(feature = "vm-diagnostics"))]
                     let op_label = "unknown";
                     eprintln!(
-                        "[telomere-jit] compile_stop pc={cursor} op={op_label} stack_depth={} op_addr=0x{:x}",
+                        "[telomere-jit] compile_reject_emit pc={cursor} op={op_label} stack_depth={} op_addr=0x{:x}",
                         self.stack_depth,
                         op as usize
                     );
                 }
-                self.masm.truncate(byte_checkpoint);
-                self.fixups.truncate(fixup_checkpoint);
-                self.stack_depth = stack_checkpoint;
-                self.flush_stack()?;
-                self.call_runtime_handler(cursor);
-                Ok(EmitControl::Stop)
+                Err(())
             }
         }
     }
@@ -486,16 +474,14 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::I32ConstBinopBrIf { kind, rhs, target } => {
                 if self.stack_depth == 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 let value = self.pop_reg()?;
                 self.emit_i32_const_binop(kind, value, rhs)?;
                 if self.stack_depth == 0 {
                     self.branch_to(target, FixupKind::CbnzW(value));
                 } else {
-                    self.return_fallback_ptr_if_nonzero(value, target)?;
+                    return Err(());
                 }
             }
             BaselineOp::I32ConstBinopWrite4 {
@@ -530,16 +516,14 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::I32ConstCmpBrIf { kind, rhs, target } => {
                 if self.stack_depth == 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 let value = self.pop_reg()?;
                 self.emit_i32_const_cmp(kind, value, rhs)?;
                 if self.stack_depth == 0 {
                     self.branch_to(target, FixupKind::CbnzW(value));
                 } else {
-                    self.return_fallback_ptr_if_nonzero(value, target)?;
+                    return Err(());
                 }
             }
             BaselineOp::LocalBinop32Write4 {
@@ -760,32 +744,28 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::GlobalGet4 { index } => {
                 let dst = self.push_reg()?;
-                self.call_global_get4(index);
-                self.mov_w(dst, 0);
+                self.inline_global_get4(dst, index, 0)?;
             }
             BaselineOp::GlobalGetSlots { index, slots } => {
                 for lane in 0..slots {
                     let dst = self.push_reg()?;
-                    self.call_global_get4_lane(index, u32::try_from(lane).map_err(|_| ())?);
-                    self.mov_w(dst, 0);
+                    self.inline_global_get4(dst, index, u32::try_from(lane).map_err(|_| ())?)?;
                 }
             }
             BaselineOp::GlobalSet4 { index } => {
                 let value = self.pop_reg()?;
-                self.call_global_set4(index, value);
+                self.inline_global_set4(index, 0, value)?;
             }
             BaselineOp::GlobalSetSlots { index, slots } => {
                 for lane in (0..slots).rev() {
                     let value = self.pop_reg()?;
-                    self.call_global_set4_lane(index, u32::try_from(lane).map_err(|_| ())?, value);
+                    self.inline_global_set4(index, u32::try_from(lane).map_err(|_| ())?, value)?;
                 }
             }
             BaselineOp::Drop { size } => {
                 let slots = usize::try_from(size / 4).map_err(|_| ())?;
                 if size % 4 != 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.ensure_stack_slots(slots)?;
                 self.stack_depth -= slots;
@@ -1353,9 +1333,7 @@ impl BaselineOpEmitter<'_, '_> {
                 target,
             } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.load_local_base_addr_to_reg(16, first_base_local, first_delta)?;
                 self.inline_i32_load(16, first_memarg.offset, 4, false)?;
@@ -1484,9 +1462,7 @@ impl BaselineOpEmitter<'_, '_> {
                 target,
             } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.load_local_base_addr_to_reg(16, first_base_local, first_delta)?;
                 self.inline_i32_load(16, first_memarg.offset, first_width, first_signed)?;
@@ -1664,9 +1640,7 @@ impl BaselineOpEmitter<'_, '_> {
                 target,
             } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.load_local_base_addr_to_reg(16, first_base_local, first_delta)?;
                 self.inline_i32_load(16, first_memarg.offset, 4, false)?;
@@ -1685,9 +1659,7 @@ impl BaselineOpEmitter<'_, '_> {
                 target,
             } => {
                 if self.stack_depth != 1 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 let addr = self.pop_reg()?;
                 self.inline_i32_load(addr, memarg.offset, width, signed)?;
@@ -1710,9 +1682,7 @@ impl BaselineOpEmitter<'_, '_> {
                 target,
             } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.load_local_base_addr_to_reg(16, base_local, delta)?;
                 self.inline_i32_load(16, memarg.offset, width, signed)?;
@@ -1742,9 +1712,7 @@ impl BaselineOpEmitter<'_, '_> {
                 true_target,
             } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
 
                 self.load_local4_to_reg(16, next_src)?;
@@ -1787,9 +1755,7 @@ impl BaselineOpEmitter<'_, '_> {
                 target,
             } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.load_local4_to_reg(16, add_src)?;
                 self.add_imm_u32(16, 16, imm)?;
@@ -1803,12 +1769,14 @@ impl BaselineOpEmitter<'_, '_> {
                 return Ok(EmitControl::SkipNextOp);
             }
             BaselineOp::MemoryFill => {
+                profile::count(Counter::EmitMemoryFill);
                 let len = self.pop_reg()?;
                 let data = self.pop_reg()?;
                 let ptr = self.pop_reg()?;
                 self.call_memory_fill(ptr, data, len);
             }
             BaselineOp::MemoryCopy => {
+                profile::count(Counter::EmitMemoryCopy);
                 let len = self.pop_reg()?;
                 let src = self.pop_reg()?;
                 let dst = self.pop_reg()?;
@@ -1836,26 +1804,13 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::BrIf { target } => {
                 if self.stack_depth == 0 {
-                    self.mov_x(0, 19);
-                    self.call_ptr(jit_pop_i32 as *const () as usize);
-                    self.mov_w(16, 0);
+                    self.inline_pop_i32(16)?;
                     self.branch_to(target, FixupKind::CbnzW(16));
                     return Ok(EmitControl::Continue);
                 }
                 if self.stack_depth > 1 {
                     if target <= cursor {
-                        let cond = self.pop_reg()?;
-                        let skip_fallback_at = self.branch_placeholder(FixupKind::CbzW(cond));
-                        self.flush_stack_for_fallback()?;
-                        self.return_fallback_index(target);
-                        let skip_fallback_target = self.offset();
-                        patch_branch(
-                            self.masm.as_mut_bytes(),
-                            skip_fallback_at,
-                            skip_fallback_target,
-                            FixupKind::CbzW(cond),
-                        )?;
-                        return Ok(EmitControl::Continue);
+                        return Err(());
                     }
                     let cond = self.pop_reg()?;
                     self.branch_to(target, FixupKind::CbnzW(cond));
@@ -1867,18 +1822,14 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::LocalGet4BrIf { local, target } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.load_local4_to_reg(16, local)?;
                 self.branch_to(target, FixupKind::CbnzW(16));
             }
             BaselineOp::LocalGet4I32ConstAddBrIf { local, imm, target } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.load_local4_to_reg(16, local)?;
                 self.add_imm_u32(16, 16, imm)?;
@@ -2035,9 +1986,7 @@ impl BaselineOpEmitter<'_, '_> {
                 targets,
             } => {
                 if self.stack_depth > 0 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 self.load_local4_to_reg(16, local)?;
                 if addend != 0 {
@@ -2048,9 +1997,7 @@ impl BaselineOpEmitter<'_, '_> {
             }
             BaselineOp::BrTable { targets } => {
                 if self.stack_depth != 1 {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 let index = self.pop_reg()?;
                 self.branch_table(index, &targets)?;
@@ -2209,24 +2156,35 @@ impl BaselineOpEmitter<'_, '_> {
                         recipe.param_size,
                         recipe.return_size,
                     );
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 let expected_layout = pack_call_stack_sizes(recipe);
+                let use_wasm_fast_path =
+                    !is_return_call && matches!(recipe.target, CallDispatchTarget::Wasm { .. });
                 self.flush_stack()?;
-                let continued = self.call_direct_helper(
-                    operand_index,
-                    continuation_index,
-                    is_return_call,
-                    expected_layout,
-                    reload_slots,
-                )?;
+                let continued = if use_wasm_fast_path {
+                    profile::count(Counter::EmitDirectCallFast);
+                    self.call_wasm_direct_fast_helper(
+                        recipe.frame.code_addr,
+                        continuation_index,
+                        expected_layout,
+                        reload_slots,
+                    )?
+                } else {
+                    profile::count(Counter::EmitDirectCallHelper);
+                    self.call_direct_helper(
+                        operand_index,
+                        continuation_index,
+                        is_return_call,
+                        expected_layout,
+                        reload_slots,
+                    )?
+                };
                 if !is_return_call {
                     if continued {
                         return Ok(EmitControl::Continue);
                     }
-                    self.return_fallback_index(continuation_index);
+                    return Err(());
                 }
                 return Ok(EmitControl::Stop);
             }
@@ -2250,11 +2208,10 @@ impl BaselineOpEmitter<'_, '_> {
                 };
                 let reload_slots = usize::try_from(reload_size / 4).map_err(|_| ())?;
                 if reload_size % 4 != 0 || reload_slots > STACK_REGS.len() {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
+                    return Err(());
                 }
                 let expected_layout = (u64::from(param_size) << 32) | u64::from(return_size);
+                profile::count(Counter::EmitIndirectCallHelper);
                 self.flush_stack()?;
                 let continued = self.call_indirect_helper(
                     operand_index,
@@ -2267,7 +2224,7 @@ impl BaselineOpEmitter<'_, '_> {
                     if continued {
                         return Ok(EmitControl::Continue);
                     }
-                    self.return_fallback_index(continuation_index);
+                    return Err(());
                 }
                 return Ok(EmitControl::Stop);
             }
@@ -2302,32 +2259,14 @@ impl BaselineOpEmitter<'_, '_> {
                 pop_slots,
                 push_slots,
             } => {
-                if self.stack_depth < pop_slots {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
-                }
-                let reload_slots = self
-                    .stack_depth
-                    .checked_sub(pop_slots)
-                    .and_then(|slots| slots.checked_add(push_slots))
-                    .ok_or(())?;
-                if reload_slots > STACK_REGS.len() {
-                    self.flush_stack_for_fallback()?;
-                    self.return_fallback_index(cursor);
-                    return Ok(EmitControl::Stop);
-                }
-                self.flush_stack()?;
-                self.call_runtime_stack_op(pc_index, kind);
-                self.reload_stack_slots(reload_slots)?;
+                let _ = (pc_index, kind, pop_slots, push_slots);
+                profile::count(Counter::CompileRejectRuntimeStub);
+                return Err(());
             }
             BaselineOp::RuntimeContinuationStub { pc_index, kind } => {
-                self.flush_stack()?;
-                self.call_runtime_continuation_op(pc_index, kind);
-            }
-            BaselineOp::InterpreterFallback { pc_index } => {
-                self.flush_stack()?;
-                self.call_interpreter_fallback(pc_index);
+                let _ = (pc_index, kind);
+                profile::count(Counter::CompileRejectRuntimeContinuationStub);
+                return Err(());
             }
         }
         Ok(EmitControl::Continue)
@@ -2338,25 +2277,15 @@ impl<'a> Emitter<'a> {
     fn finish(mut self) -> Result<Vec<u8>, ()> {
         let epilogue = self.offset();
         self.restore_and_ret();
-        let mut fallback_targets = Vec::new();
         for fixup in &self.fixups {
             if fixup.target_index != usize::MAX
                 && self
                     .labels
                     .get(fixup.target_index)
                     .is_some_and(Option::is_none)
-                && !fallback_targets.contains(&fixup.target_index)
             {
-                fallback_targets.push(fixup.target_index);
-            }
-        }
-        for target_index in fallback_targets {
-            let offset = self.offset();
-            let Some(label) = self.labels.get_mut(target_index) else {
                 return Err(());
-            };
-            *label = Some(offset);
-            self.return_fallback_index(target_index);
+            }
         }
         for fixup in self.fixups {
             let target = self
@@ -2447,17 +2376,12 @@ impl<'a> Emitter<'a> {
     }
 
     fn flush_stack(&mut self) -> Result<(), ()> {
-        for reg in STACK_REGS.iter().take(self.stack_depth) {
-            self.call_helper_reg(jit_push_i32 as *const () as usize, *reg);
+        profile::count(Counter::EmitStackFlush);
+        profile::add(Counter::EmitStackFlushSlot, self.stack_depth as u64);
+        for reg in STACK_REGS.iter().take(self.stack_depth).copied() {
+            self.inline_push_i32(reg)?;
         }
         self.stack_depth = 0;
-        Ok(())
-    }
-
-    fn flush_stack_for_fallback(&mut self) -> Result<(), ()> {
-        for reg in STACK_REGS.iter().take(self.stack_depth) {
-            self.call_helper_reg(jit_push_i32 as *const () as usize, *reg);
-        }
         Ok(())
     }
 
@@ -2465,51 +2389,130 @@ impl<'a> Emitter<'a> {
         if slots > STACK_REGS.len() {
             return Err(());
         }
+        profile::count(Counter::EmitStackReload);
+        profile::add(Counter::EmitStackReloadSlot, slots as u64);
         let mut regs = Vec::with_capacity(slots);
         for _ in 0..slots {
             regs.push(self.push_reg()?);
         }
         for reg in regs.into_iter().rev() {
-            self.mov_x(0, 19);
-            self.call_ptr(jit_pop_i32 as *const () as usize);
-            self.mov_w(reg, 0);
+            self.inline_pop_i32(reg)?;
         }
         Ok(())
     }
 
-    fn call_helper_reg(&mut self, helper: usize, rn: u8) {
-        self.mov_x(0, 19);
-        self.mov_w(1, rn);
-        self.call_ptr(helper);
-        self.return_if_exit();
+    fn inline_push_i32(&mut self, value: u8) -> Result<(), ()> {
+        self.ldr_x_imm(
+            9,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, stack_top_ptr),
+        )?;
+        self.ldr_x_imm(10, 9, 0)?;
+        self.add_imm_u64(11, 10, 4)?;
+        self.ldr_x_imm(
+            12,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, stack_memory_len),
+        )?;
+        self.cmp_x(11, 12);
+        let ok_branch = self.branch_placeholder(FixupKind::BCond(Cond::Ls));
+        self.return_trap(VMResult::<()>::StackOverflow);
+        let ok_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            ok_branch,
+            ok_target,
+            FixupKind::BCond(Cond::Ls),
+        )?;
+        self.ldr_x_imm(
+            12,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, stack_memory_ptr),
+        )?;
+        self.add_x(12, 12, 10);
+        self.str_w(value, 12);
+        self.str_x_imm(11, 9, 0)?;
+        Ok(())
     }
 
-    fn call_global_get4(&mut self, index: u32) {
-        self.mov_x(0, 19);
-        self.mov_imm_u32(1, index);
-        self.call_ptr(jit_global_get4 as *const () as usize);
+    fn inline_pop_i32(&mut self, dst: u8) -> Result<(), ()> {
+        self.ldr_x_imm(
+            9,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, stack_top_ptr),
+        )?;
+        self.ldr_x_imm(10, 9, 0)?;
+        self.mov_imm_u64(11, 4);
+        self.sub_x(10, 10, 11);
+        self.ldr_x_imm(
+            12,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, stack_memory_ptr),
+        )?;
+        self.add_x(12, 12, 10);
+        self.ldr_w(dst, 12);
+        self.str_x_imm(10, 9, 0)?;
+        Ok(())
     }
 
-    fn call_global_get4_lane(&mut self, index: u32, lane: u32) {
-        self.mov_x(0, 19);
-        self.mov_imm_u32(1, index);
-        self.mov_imm_u32(2, lane);
-        self.call_ptr(jit_global_get4_lane as *const () as usize);
+    fn inline_global_get4(&mut self, dst: u8, index: u32, lane: u32) -> Result<(), ()> {
+        profile::count(Counter::EmitGlobalGetInline);
+        self.global_lane_addr(9, index, lane)?;
+        self.ldr_w(dst, 9);
+        Ok(())
     }
 
-    fn call_global_set4(&mut self, index: u32, value: u8) {
-        self.mov_x(0, 19);
-        self.mov_imm_u32(1, index);
-        self.mov_w(2, value);
-        self.call_ptr(jit_global_set4 as *const () as usize);
+    fn inline_global_set4(&mut self, index: u32, lane: u32, value: u8) -> Result<(), ()> {
+        profile::count(Counter::EmitGlobalSetInline);
+        self.global_lane_addr(9, index, lane)?;
+        self.str_w(value, 9);
+        Ok(())
     }
 
-    fn call_global_set4_lane(&mut self, index: u32, lane: u32, value: u8) {
-        self.mov_x(0, 19);
-        self.mov_imm_u32(1, index);
-        self.mov_imm_u32(2, lane);
-        self.mov_w(3, value);
-        self.call_ptr(jit_global_set4_lane as *const () as usize);
+    fn global_lane_addr(&mut self, addr: u8, index: u32, lane: u32) -> Result<(), ()> {
+        let layout = GlobalValueJitLayout::get();
+        let table_offset = usize::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(std::mem::size_of::<ObjectRef>()))
+            .ok_or(())?;
+        self.ldr_x_imm(
+            addr,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, current_instance_globals_ptr),
+        )?;
+        if table_offset % 4 == 0 && table_offset / 4 <= 4095 {
+            self.ldr_w_imm(addr, addr, table_offset)?;
+        } else {
+            self.add_imm_u64(10, addr, u64::try_from(table_offset).map_err(|_| ())?)?;
+            self.ldr_w(addr, 10);
+        }
+        self.ubfm_w(addr, addr, 0, 28);
+        self.sub_imm_u32(addr, addr, 1)?;
+        if layout.size.is_power_of_two() {
+            self.lsl_x_imm(addr, addr, layout.size.trailing_zeros())?;
+        } else {
+            self.mov_imm_u64(10, u64::try_from(layout.size).map_err(|_| ())?);
+            self.mul_x(addr, addr, 10);
+        }
+        self.ldr_x_imm(
+            10,
+            19,
+            std::mem::offset_of!(ExecuteContext<'_>, global_values_ptr),
+        )?;
+        self.add_x(addr, 10, addr);
+        let lane_offset = layout
+            .bytes
+            .checked_add(
+                usize::try_from(lane)
+                    .map_err(|_| ())?
+                    .checked_mul(4)
+                    .ok_or(())?,
+            )
+            .ok_or(())?;
+        if lane_offset != 0 {
+            self.add_imm_u64(addr, addr, u64::try_from(lane_offset).map_err(|_| ())?)?;
+        }
+        Ok(())
     }
 
     fn call_memory_fill(&mut self, ptr: u8, data: u8, len: u8) {
@@ -2663,7 +2666,7 @@ impl<'a> Emitter<'a> {
     fn call_direct_helper(
         &mut self,
         operand_index: usize,
-        continuation_index: usize,
+        _continuation_index: usize,
         is_return_call: bool,
         expected_layout: u64,
         reload_slots: usize,
@@ -2676,36 +2679,28 @@ impl<'a> Emitter<'a> {
             self.branch_to_epilogue();
             Ok(false)
         } else {
-            self.cmp_w_imm(0, JitNativeExit::DONE as u32)?;
-            let done_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
-            self.return_if_exit();
-            let done_target = self.offset();
-            patch_branch(
-                self.masm.as_mut_bytes(),
-                done_branch,
-                done_target,
-                FixupKind::BCond(Cond::Eq),
-            )?;
-            self.mov_imm_u64(16, expected_layout);
-            self.cmp_x(1, 16);
-            let expected_layout_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
-            self.return_fallback_index(continuation_index);
-            let expected_layout_target = self.offset();
-            patch_branch(
-                self.masm.as_mut_bytes(),
-                expected_layout_branch,
-                expected_layout_target,
-                FixupKind::BCond(Cond::Eq),
-            )?;
-            self.reload_stack_slots(reload_slots)?;
-            Ok(true)
+            self.finish_call_helper_result(expected_layout, reload_slots)
         }
+    }
+
+    fn call_wasm_direct_fast_helper(
+        &mut self,
+        funcaddr: ObjectRef,
+        continuation_index: usize,
+        expected_layout: u64,
+        reload_slots: usize,
+    ) -> Result<bool, ()> {
+        self.mov_x(0, 19);
+        self.mov_imm_u32(1, funcaddr.get());
+        self.load_code_ptr_operand(2, continuation_index);
+        self.call_ptr(jit_wasm_direct_call_fast as *const () as usize);
+        self.finish_call_helper_result(expected_layout, reload_slots)
     }
 
     fn call_indirect_helper(
         &mut self,
         operand_index: usize,
-        continuation_index: usize,
+        _continuation_index: usize,
         is_return_call: bool,
         expected_layout: u64,
         reload_slots: usize,
@@ -2718,52 +2713,38 @@ impl<'a> Emitter<'a> {
             self.branch_to_epilogue();
             Ok(false)
         } else {
-            self.cmp_w_imm(0, JitNativeExit::DONE as u32)?;
-            let done_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
-            self.return_if_exit();
-            let done_target = self.offset();
-            patch_branch(
-                self.masm.as_mut_bytes(),
-                done_branch,
-                done_target,
-                FixupKind::BCond(Cond::Eq),
-            )?;
-            self.mov_imm_u64(16, expected_layout);
-            self.cmp_x(1, 16);
-            let expected_layout_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
-            self.return_fallback_index(continuation_index);
-            let expected_layout_target = self.offset();
-            patch_branch(
-                self.masm.as_mut_bytes(),
-                expected_layout_branch,
-                expected_layout_target,
-                FixupKind::BCond(Cond::Eq),
-            )?;
-            self.reload_stack_slots(reload_slots)?;
-            Ok(true)
+            self.finish_call_helper_result(expected_layout, reload_slots)
         }
     }
 
-    fn call_runtime_handler(&mut self, pc_index: usize) {
-        self.mov_x(0, 19);
-        self.load_code_ptr_operand(1, pc_index);
-        self.call_ptr(jit_runtime_handler as *const () as usize);
-        self.branch_to_epilogue();
-    }
-
-    fn call_interpreter_fallback(&mut self, pc_index: usize) {
-        self.mov_x(0, 19);
-        self.load_code_ptr_operand(1, pc_index);
-        self.call_ptr(jit_interpreter_fallback as *const () as usize);
-        self.branch_to_epilogue();
-    }
-
-    fn call_runtime_continuation_op(&mut self, pc_index: usize, kind: u32) {
-        self.mov_x(0, 19);
-        self.load_code_ptr_operand(1, pc_index);
-        self.mov_imm_u32(2, kind);
-        self.call_ptr(jit_runtime_continuation_op as *const () as usize);
-        self.branch_to_epilogue();
+    fn finish_call_helper_result(
+        &mut self,
+        expected_layout: u64,
+        reload_slots: usize,
+    ) -> Result<bool, ()> {
+        self.cmp_w_imm(0, JitNativeExit::DONE as u32)?;
+        let done_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
+        self.return_if_exit();
+        let done_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            done_branch,
+            done_target,
+            FixupKind::BCond(Cond::Eq),
+        )?;
+        self.mov_imm_u64(16, expected_layout);
+        self.cmp_x(1, 16);
+        let expected_layout_branch = self.branch_placeholder(FixupKind::BCond(Cond::Eq));
+        self.return_trap(VMResult::<()>::InvalidOperand);
+        let expected_layout_target = self.offset();
+        patch_branch(
+            self.masm.as_mut_bytes(),
+            expected_layout_branch,
+            expected_layout_target,
+            FixupKind::BCond(Cond::Eq),
+        )?;
+        self.reload_stack_slots(reload_slots)?;
+        Ok(true)
     }
 
     fn call_i32_store_local_base_from_vm_stack(
@@ -2777,14 +2758,6 @@ impl<'a> Emitter<'a> {
         self.call_ptr(jit_i32_store_local_base_from_vm_stack as *const () as usize);
         self.return_if_exit();
         Ok(())
-    }
-
-    fn call_runtime_stack_op(&mut self, pc_index: usize, kind: u32) {
-        self.mov_x(0, 19);
-        self.load_code_ptr_operand(1, pc_index);
-        self.mov_imm_u32(2, kind);
-        self.call_ptr(jit_runtime_stack_op as *const () as usize);
-        self.return_if_exit();
     }
 
     fn emit_search_loop(&mut self, plan: SearchLoopPlan) -> Result<(), ()> {
@@ -2965,6 +2938,7 @@ impl<'a> Emitter<'a> {
         width: u32,
         signed: bool,
     ) -> Result<(), ()> {
+        profile::count(Counter::EmitInlineI32Load);
         self.checked_memory_start(9, 10, addr, offset, width)?;
         self.load_default_memory_data_ptr(11)?;
         self.add_x(11, 11, 9);
@@ -2980,6 +2954,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn inline_i32_store(&mut self, addr: u8, offset: u32, width: u32, value: u8) -> Result<(), ()> {
+        profile::count(Counter::EmitInlineI32Store);
         self.checked_memory_start(9, 10, addr, offset, width)?;
         self.load_default_memory_data_ptr(11)?;
         self.add_x(11, 11, 9);
@@ -3119,29 +3094,8 @@ impl<'a> Emitter<'a> {
         self.branch_to_epilogue();
     }
 
-    fn return_fallback_index(&mut self, index: usize) {
-        self.mov_imm_u64(0, JitNativeExit::FALLBACK_INDEX);
-        self.mov_imm_u64(1, index as u64);
-        self.branch_to_epilogue();
-    }
-
-    fn return_fallback_ptr_if_nonzero(&mut self, cond: u8, index: usize) -> Result<(), ()> {
-        let skip_fallback_at = self.branch_placeholder(FixupKind::CbzW(cond));
-        self.flush_stack_for_fallback()?;
-        self.mov_imm_u64(0, JitNativeExit::FALLBACK_PTR);
-        self.load_code_ptr_operand(1, index);
-        self.branch_to_epilogue();
-        let skip_fallback_target = self.offset();
-        patch_branch(
-            self.masm.as_mut_bytes(),
-            skip_fallback_at,
-            skip_fallback_target,
-            FixupKind::CbzW(cond),
-        )?;
-        Ok(())
-    }
-
     fn call_ptr(&mut self, ptr: usize) {
+        profile::count(Counter::EmitHelperCall);
         self.mov_imm_u64(16, ptr as u64);
         self.blr_x(16);
     }
@@ -3895,7 +3849,6 @@ fn branch_kind(kind: FixupKind) -> BranchKind {
         FixupKind::BCond(cond) => BranchKind::BCond(cond),
         FixupKind::CbnzX(rt) => BranchKind::CbnzX(rt),
         FixupKind::CbnzW(rt) => BranchKind::CbnzW(rt),
-        FixupKind::CbzW(rt) => BranchKind::CbzW(rt),
     }
 }
 

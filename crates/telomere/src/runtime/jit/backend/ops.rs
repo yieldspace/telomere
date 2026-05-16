@@ -1027,9 +1027,6 @@ pub(super) enum BaselineOp {
         pc_index: usize,
         kind: u32,
     },
-    InterpreterFallback {
-        pc_index: usize,
-    },
 }
 
 #[derive(Clone)]
@@ -3481,7 +3478,7 @@ pub(super) fn decode_baseline_op(code: &[Instr], cursor: usize) -> Result<Baseli
     {
         return (spec.decode)(code, cursor);
     }
-    Ok(BaselineOp::InterpreterFallback { pc_index: cursor })
+    Err(())
 }
 
 const RUNTIME_STUB_DATA_DROP: u32 = 0;
@@ -5027,7 +5024,7 @@ fn decode_select(code: &[Instr], cursor: usize) -> Result<BaselineOp, ()> {
         4 => decode_select4(code, cursor),
         8 => decode_select8(code, cursor),
         16 => decode_select16(code, cursor),
-        _ => Ok(BaselineOp::InterpreterFallback { pc_index: cursor }),
+        _ => Err(()),
     }
 }
 

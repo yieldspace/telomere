@@ -1,17 +1,19 @@
 use crate::{
     common::store::{CallDispatchCache, CallDispatchTarget},
     common::{
-        execute_elem_init_const_expr, AtomicWaitResult, ElemInit, ExecuteContext, Instr,
+        execute_elem_init_const_expr, AtomicWaitResult, ElemInit, ExecuteContext, Instr, ObjectRef,
         SharedMemoryObject, SharedWaitRegistration, StablePc, VMResult,
     },
     runtime::{
-        jit,
         memory_effect::{MemoryWaitPending, PendingOp},
         vm,
     },
 };
 
-use super::abi::JitNativeExit;
+use super::{
+    abi::JitNativeExit,
+    profile::{self, Counter},
+};
 
 const RUNTIME_STUB_DATA_DROP: u32 = 0;
 const RUNTIME_STUB_ELEM_DROP: u32 = 1;
@@ -115,7 +117,9 @@ const RUNTIME_CONT_SIMD_V128_LOAD_INDEXED_LOCAL: u32 = 57;
 const RUNTIME_CONT_SIMD_V128_LOAD_INDEXED_SHARED: u32 = 58;
 const RUNTIME_CONT_SIMD_V128_LOAD_SHARED: u32 = 59;
 
+#[allow(dead_code)]
 pub(crate) extern "C" fn push_i32(ctx: *mut ExecuteContext<'_>, value: u32) -> JitNativeExit {
+    profile::count(Counter::RuntimePushI32);
     let ctx = unsafe { &mut *ctx };
     match ctx.stack.push_u32_fast(value) {
         VMResult::Success(()) => JitNativeExit::keep_going(),
@@ -123,20 +127,25 @@ pub(crate) extern "C" fn push_i32(ctx: *mut ExecuteContext<'_>, value: u32) -> J
     }
 }
 
+#[allow(dead_code)]
 pub(crate) extern "C" fn pop_i32(ctx: *mut ExecuteContext<'_>) -> u32 {
+    profile::count(Counter::RuntimePopI32);
     let ctx = unsafe { &mut *ctx };
     ctx.stack.pop_u32_fast()
 }
 
 pub(crate) extern "C" fn i32_popcnt_value(value: u32) -> u32 {
+    profile::count(Counter::RuntimeNumericHelper);
     value.count_ones()
 }
 
 pub(crate) extern "C" fn i64_popcnt_value(value: u64) -> u64 {
+    profile::count(Counter::RuntimeNumericHelper);
     u64::from(value.count_ones())
 }
 
 pub(crate) extern "C" fn f32_min_bits(lhs: u32, rhs: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
     let lhs = f32::from_bits(lhs);
     let rhs = f32::from_bits(rhs);
     if lhs.is_nan() || rhs.is_nan() {
@@ -149,6 +158,7 @@ pub(crate) extern "C" fn f32_min_bits(lhs: u32, rhs: u32) -> u32 {
 }
 
 pub(crate) extern "C" fn f32_max_bits(lhs: u32, rhs: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
     let lhs = f32::from_bits(lhs);
     let rhs = f32::from_bits(rhs);
     if lhs.is_nan() || rhs.is_nan() {
@@ -161,10 +171,12 @@ pub(crate) extern "C" fn f32_max_bits(lhs: u32, rhs: u32) -> u32 {
 }
 
 pub(crate) extern "C" fn f32_copysign_bits(lhs: u32, rhs: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
     f32::from_bits(lhs).copysign(f32::from_bits(rhs)).to_bits()
 }
 
 pub(crate) extern "C" fn f64_min_bits(lhs: u64, rhs: u64) -> u64 {
+    profile::count(Counter::RuntimeFloatHelper);
     let lhs = f64::from_bits(lhs);
     let rhs = f64::from_bits(rhs);
     if lhs.is_nan() || rhs.is_nan() {
@@ -177,6 +189,7 @@ pub(crate) extern "C" fn f64_min_bits(lhs: u64, rhs: u64) -> u64 {
 }
 
 pub(crate) extern "C" fn f64_max_bits(lhs: u64, rhs: u64) -> u64 {
+    profile::count(Counter::RuntimeFloatHelper);
     let lhs = f64::from_bits(lhs);
     let rhs = f64::from_bits(rhs);
     if lhs.is_nan() || rhs.is_nan() {
@@ -189,10 +202,12 @@ pub(crate) extern "C" fn f64_max_bits(lhs: u64, rhs: u64) -> u64 {
 }
 
 pub(crate) extern "C" fn f64_copysign_bits(lhs: u64, rhs: u64) -> u64 {
+    profile::count(Counter::RuntimeFloatHelper);
     f64::from_bits(lhs).copysign(f64::from_bits(rhs)).to_bits()
 }
 
 pub(crate) extern "C" fn f32_convert_i32_bits(value: u32, signed: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
     if signed != 0 {
         (value as i32 as f32).to_bits()
     } else {
@@ -201,6 +216,7 @@ pub(crate) extern "C" fn f32_convert_i32_bits(value: u32, signed: u32) -> u32 {
 }
 
 pub(crate) extern "C" fn f32_convert_i64_bits(value: u64, signed: u32) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
     if signed != 0 {
         (value as i64 as f32).to_bits()
     } else {
@@ -209,10 +225,12 @@ pub(crate) extern "C" fn f32_convert_i64_bits(value: u64, signed: u32) -> u32 {
 }
 
 pub(crate) extern "C" fn f32_demote_f64_bits(value: u64) -> u32 {
+    profile::count(Counter::RuntimeFloatHelper);
     (f64::from_bits(value) as f32).to_bits()
 }
 
 pub(crate) extern "C" fn f64_promote_f32_bits(value: u32) -> u64 {
+    profile::count(Counter::RuntimeFloatHelper);
     f64::from(f32::from_bits(value)).to_bits()
 }
 
@@ -224,6 +242,7 @@ fn value_exit(value: u64) -> JitNativeExit {
 }
 
 pub(crate) extern "C" fn i32_trunc_f32(value: u32, signed: u32) -> JitNativeExit {
+    profile::count(Counter::RuntimeFloatHelper);
     let value = f32::from_bits(value);
     let converted = if signed != 0 {
         if (i32::MIN as f32) <= value && value < (i32::MAX as f32) {
@@ -240,6 +259,7 @@ pub(crate) extern "C" fn i32_trunc_f32(value: u32, signed: u32) -> JitNativeExit
 }
 
 pub(crate) extern "C" fn i32_trunc_f64(value: u64, signed: u32) -> JitNativeExit {
+    profile::count(Counter::RuntimeFloatHelper);
     let value = f64::from_bits(value).trunc();
     let converted = if signed != 0 {
         if (i32::MIN as f64) <= value && value <= (i32::MAX as f64) {
@@ -256,6 +276,7 @@ pub(crate) extern "C" fn i32_trunc_f64(value: u64, signed: u32) -> JitNativeExit
 }
 
 pub(crate) extern "C" fn i64_trunc_f32(value: u32, signed: u32, saturating: u32) -> JitNativeExit {
+    profile::count(Counter::RuntimeFloatHelper);
     let value = f32::from_bits(value);
     if saturating != 0 {
         let converted = if signed != 0 {
@@ -280,6 +301,7 @@ pub(crate) extern "C" fn i64_trunc_f32(value: u32, signed: u32, saturating: u32)
 }
 
 pub(crate) extern "C" fn i64_trunc_f64(value: u64, signed: u32, saturating: u32) -> JitNativeExit {
+    profile::count(Counter::RuntimeFloatHelper);
     let value = f64::from_bits(value);
     if saturating != 0 {
         let converted = if signed != 0 {
@@ -323,52 +345,13 @@ pub(crate) extern "C" fn ref_func(ctx: *mut ExecuteContext<'_>, funcidx: u32) ->
     ctx.instance().funcs.as_slice()[funcidx as usize].get()
 }
 
-pub(crate) extern "C" fn global_get4(ctx: *mut ExecuteContext<'_>, index: u32) -> u32 {
-    global_get4_lane(ctx, index, 0)
-}
-
-pub(crate) extern "C" fn global_get4_lane(
-    ctx: *mut ExecuteContext<'_>,
-    index: u32,
-    lane: u32,
-) -> u32 {
-    let ctx = unsafe { &mut *ctx };
-    let addr = ctx.instance().globals.as_slice()[index as usize];
-    let bytes = ctx.gc.get_global(addr);
-    let start = lane as usize * 4;
-    u32::from_le_bytes(
-        bytes[start..start + 4]
-            .try_into()
-            .expect("global.get lane size mismatch"),
-    )
-}
-
-pub(crate) extern "C" fn global_set4(ctx: *mut ExecuteContext<'_>, index: u32, value: u32) {
-    global_set4_lane(ctx, index, 0, value);
-}
-
-pub(crate) extern "C" fn global_set4_lane(
-    ctx: *mut ExecuteContext<'_>,
-    index: u32,
-    lane: u32,
-    value: u32,
-) {
-    let ctx = unsafe { &mut *ctx };
-    let addr = ctx.instance().globals.as_slice()[index as usize];
-    let start = lane as usize * 4;
-    ctx.gc
-        .get_global_mut(addr)
-        .get_mut(start..start + 4)
-        .expect("global.set lane size mismatch")
-        .copy_from_slice(&value.to_le_bytes());
-}
-
 pub(crate) extern "C" fn memory_fill(
     ctx: *mut ExecuteContext<'_>,
     ptr: u32,
     data: u32,
     len: u32,
 ) -> JitNativeExit {
+    profile::count(Counter::RuntimeMemoryFill);
     let ctx = unsafe { &mut *ctx };
     match ctx.gc.local_fill_memory(
         unsafe { ctx.default_local_memory_id_unchecked() },
@@ -387,6 +370,7 @@ pub(crate) extern "C" fn memory_copy(
     src: u32,
     len: u32,
 ) -> JitNativeExit {
+    profile::count(Counter::RuntimeMemoryCopy);
     let ctx = unsafe { &mut *ctx };
     match ctx.gc.local_copy_memory(
         unsafe { ctx.default_local_memory_id_unchecked() },
@@ -400,6 +384,7 @@ pub(crate) extern "C" fn memory_copy(
 }
 
 pub(crate) extern "C" fn memory_size(ctx: *mut ExecuteContext<'_>, shared: u32) -> u32 {
+    profile::count(Counter::RuntimeMemorySize);
     let ctx = unsafe { &mut *ctx };
     if shared != 0 {
         ctx.gc
@@ -411,6 +396,7 @@ pub(crate) extern "C" fn memory_size(ctx: *mut ExecuteContext<'_>, shared: u32) 
 }
 
 pub(crate) extern "C" fn memory_grow(ctx: *mut ExecuteContext<'_>, delta: u32, shared: u32) -> u32 {
+    profile::count(Counter::RuntimeMemoryGrow);
     let ctx = unsafe { &mut *ctx };
     let result = if shared != 0 {
         ctx.gc
@@ -425,11 +411,13 @@ pub(crate) extern "C" fn memory_grow(ctx: *mut ExecuteContext<'_>, delta: u32, s
     }
 }
 
+#[allow(dead_code)]
 pub(crate) extern "C" fn runtime_stack_op(
     ctx: *mut ExecuteContext<'_>,
     pc: *const Instr,
     kind: u32,
 ) -> JitNativeExit {
+    profile::count(Counter::RuntimeDirectCallHelper);
     let ctx = unsafe { &mut *ctx };
     if runtime_stub_must_wait_for_effect(kind) && ctx.effect.get_pending_count() != 0 {
         return JitNativeExit::fallback_pc(pc);
@@ -536,11 +524,13 @@ pub(crate) extern "C" fn runtime_stack_op(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) extern "C" fn runtime_continuation_op(
     ctx: *mut ExecuteContext<'_>,
     pc: *const Instr,
     kind: u32,
 ) -> JitNativeExit {
+    profile::count(Counter::RuntimeDirectCallFast);
     let ctx = unsafe { &mut *ctx };
     let tail_code = unsafe { pc.add(1) };
     let result = match kind {
@@ -745,6 +735,7 @@ pub(crate) extern "C" fn i32_store_local_base_from_vm_stack(
     pc: *const Instr,
     width: u32,
 ) -> JitNativeExit {
+    profile::count(Counter::RuntimeIndirectCallHelper);
     let ctx = unsafe { &mut *ctx };
     let base_local = unsafe { (*pc.add(1)).operand.local_addr as usize };
     let delta = unsafe { (*pc.add(2)).operand.i32 as u32 };
@@ -1565,6 +1556,15 @@ pub(crate) extern "C" fn direct_call(
     unsafe { vm::jit_call_direct(tail_code, ctx, is_return_call != 0) }
 }
 
+pub(crate) extern "C" fn wasm_direct_call_fast(
+    ctx: *mut ExecuteContext<'_>,
+    funcaddr: u32,
+    continuation: *const Instr,
+) -> JitNativeExit {
+    let ctx = unsafe { &mut *ctx };
+    unsafe { vm::jit_call_direct_wasm_fast(ObjectRef(funcaddr), continuation, ctx) }
+}
+
 pub(crate) extern "C" fn indirect_call(
     ctx: *mut ExecuteContext<'_>,
     tail_code: *const Instr,
@@ -1883,31 +1883,4 @@ pub(crate) extern "C" fn i32_select_bit_step4(
         }
         other => JitNativeExit::trap(other),
     }
-}
-
-pub(crate) extern "C" fn runtime_handler(
-    ctx: *mut ExecuteContext<'_>,
-    pc: *const Instr,
-) -> JitNativeExit {
-    let ctx = unsafe { &mut *ctx };
-    if std::env::var_os("TELOMERE_JIT_TRACE_FALLBACK").is_some() {
-        let pc_index = unsafe { pc.offset_from(ctx.current_frame.code_base) };
-        let funcidx = ctx
-            .instance()
-            .funcs
-            .iter()
-            .position(|addr| *addr == ctx.current_frame.code_addr)
-            .map(|index| index.to_string())
-            .unwrap_or_else(|| "unknown".to_owned());
-        eprintln!("[telomere-jit] fallback funcidx={funcidx} pc={pc_index}");
-    }
-    JitNativeExit::continue_ptr(pc)
-}
-
-pub(crate) extern "C" fn interpreter_fallback(
-    ctx: *mut ExecuteContext<'_>,
-    pc: *const Instr,
-) -> JitNativeExit {
-    let ctx = unsafe { &mut *ctx };
-    unsafe { jit::run_interpreter_continue_from_jit_call(pc, std::ptr::null(), ctx) }
 }

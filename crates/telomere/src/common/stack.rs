@@ -253,6 +253,18 @@ impl Stack {
             top: 0,
         }
     }
+
+    pub(crate) fn jit_memory_ptr(&mut self) -> *mut u8 {
+        self.memory.as_mut_ptr()
+    }
+
+    pub(crate) fn jit_memory_len(&self) -> usize {
+        self.memory.len()
+    }
+
+    pub(crate) fn jit_top_ptr(&mut self) -> *mut usize {
+        &mut self.top
+    }
     fn add_top(&mut self, n: usize) -> VMResult<()> {
         self.top = vm_try!(VMResult::from_option(self.top.checked_add(n), || {
             if std::env::var_os("TELOMERE_STACK_TRACE_OVERFLOW").is_some() {

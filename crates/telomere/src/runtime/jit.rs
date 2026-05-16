@@ -5,6 +5,8 @@ mod backend;
 #[cfg(feature = "jit")]
 mod cache;
 #[cfg(feature = "jit")]
+pub(crate) mod profile;
+#[cfg(feature = "jit")]
 mod stubs;
 
 #[cfg(feature = "jit")]
@@ -44,6 +46,7 @@ fn jit_supported() -> bool {
 
 #[cfg(feature = "jit")]
 pub(crate) unsafe fn enter_current_frame(ctx: &mut ExecuteContext<'_>) -> VMResult<()> {
+    let _profile_guard = profile::RunGuard::new();
     let code_base = ctx.code();
     let exit = match unsafe { enter_current_frame_raw(ctx) } {
         VMResult::Success(exit) => exit,
@@ -128,6 +131,10 @@ unsafe fn enter_current_frame_raw(ctx: &mut ExecuteContext<'_>) -> VMResult<JitN
         return VMResult::Unimplemented;
     }
     let funcaddr = ctx.current_frame.code_addr;
+    if ctx.gc.jit_rejected_func(funcaddr) {
+        profile::count(profile::Counter::CompileRejectKnownRejected);
+        return VMResult::Unimplemented;
+    }
     let too_deep = JIT_ENTRY_DEPTH.with(|depth| {
         let current = depth.get();
         if current >= 256 {
@@ -203,33 +210,46 @@ impl Drop for JitInterpreterStopGuard {
 #[cfg(feature = "jit")]
 unsafe fn handle_exit(
     exit: JitNativeExit,
-    code_base: *const crate::common::Instr,
+    _code_base: *const crate::common::Instr,
     ctx: &mut ExecuteContext<'_>,
 ) -> VMResult<()> {
     match exit.kind {
-        JitNativeExit::FALLBACK_INDEX => unsafe {
-            trace_fallback_exit(ctx, "fallback_index", code_base.add(exit.value as usize));
-            ctx.store.jit_cache().disable(ctx.current_frame.code_addr);
-            ctx.cont = code_base.add(exit.value as usize);
-            VMResult::Success(())
-        },
+        JitNativeExit::FALLBACK_INDEX => {
+            profile::count_exit(exit.kind);
+            VMResult::InvalidOperand
+        }
         JitNativeExit::FALLBACK_PTR => unsafe {
+            profile::count_exit(exit.kind);
             trace_fallback_exit(ctx, "fallback_ptr", exit.value as *const _);
             ctx.cont = exit.value as *const _;
             VMResult::Success(())
         },
         JitNativeExit::CONTINUE_PTR => {
+            profile::count_exit(exit.kind);
             ctx.cont = exit.value as *const _;
             VMResult::Success(())
         }
         JitNativeExit::DONE => {
+            profile::count_exit(exit.kind);
             ctx.cont = std::ptr::null();
             VMResult::Success(())
         }
-        JitNativeExit::PENDING => VMResult::Success(()),
-        JitNativeExit::TRAP => abi::vm_result_from_code(exit.value),
-        JitNativeExit::KEEP_GOING => VMResult::InvalidOperand,
-        _ => VMResult::InvalidOperand,
+        JitNativeExit::PENDING => {
+            profile::count_exit(exit.kind);
+            VMResult::Success(())
+        }
+        JitNativeExit::TRAP => {
+            profile::count_exit(exit.kind);
+            abi::vm_result_from_code(exit.value)
+        }
+        JitNativeExit::KEEP_GOING => {
+            profile::count_exit(exit.kind);
+            VMResult::InvalidOperand
+        }
+        _ => {
+            profile::count_exit(exit.kind);
+            VMResult::InvalidOperand
+        }
     }
 }
 

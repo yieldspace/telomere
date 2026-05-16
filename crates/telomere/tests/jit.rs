@@ -186,6 +186,28 @@ async fn jit_direct_call_result_is_available_to_continuation() {
 
 #[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
 #[tokio::test]
+async fn jit_call_to_rejected_callee_resumes_native_caller() {
+    let result = invoke_jit(
+        r#"
+        (module
+          (table 1 funcref)
+          (func $callee (result i32)
+            table.size)
+          (func (export "run") (result i32)
+            i32.const 10
+            call $callee
+            i32.add))
+        "#,
+        "run",
+        Vec::new(),
+    )
+    .await;
+
+    assert_success_i32(result, 11);
+}
+
+#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[tokio::test]
 async fn jit_br_if_fallback_preserves_fallthrough_stack() {
     let result = invoke_jit(
         r#"
@@ -508,6 +530,113 @@ async fn jit_runtime_handler_executes_unsupported_i64_ops() {
     .await;
 
     assert_success_values(result, ResultValue::new(vec![WasmValue::I64(42)]));
+}
+
+#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[tokio::test]
+async fn jit_inlines_global_get_set_for_scalar_simd_and_refs() {
+    let result = invoke_jit(
+        r#"
+        (module
+          (func $target)
+          (elem declare funcref (ref.func $target))
+          (global $i32 (mut i32) (i32.const 0))
+          (global $i64 (mut i64) (i64.const 0))
+          (global $f32 (mut f32) (f32.const 0))
+          (global $f64 (mut f64) (f64.const 0))
+          (global $v128 (mut v128) (v128.const i32x4 0 0 0 0))
+          (global $funcref (mut funcref) (ref.null func))
+          (global $externref (mut externref) (ref.null extern))
+          (func (export "run") (result i32 i64 f32 f64 v128 i32 i32)
+            i32.const 123456
+            global.set $i32
+            global.get $i32
+
+            i64.const 0x1122334455667788
+            global.set $i64
+            global.get $i64
+
+            f32.const 3.5
+            global.set $f32
+            global.get $f32
+
+            f64.const -9.25
+            global.set $f64
+            global.get $f64
+
+            v128.const i8x16 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+            global.set $v128
+            global.get $v128
+
+            ref.func $target
+            global.set $funcref
+            global.get $funcref
+            ref.is_null
+
+            ref.null extern
+            global.set $externref
+            global.get $externref
+            ref.is_null))
+        "#,
+        "run",
+        Vec::new(),
+    )
+    .await;
+
+    assert_success_values(
+        result,
+        ResultValue::new(vec![
+            WasmValue::I32(123456),
+            WasmValue::I64(0x1122334455667788),
+            WasmValue::F32(3.5),
+            WasmValue::F64(-9.25),
+            WasmValue::V128(u128::from_le_bytes([
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+            ])),
+            WasmValue::I32(0),
+            WasmValue::I32(1),
+        ]),
+    );
+}
+
+#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+#[tokio::test]
+async fn jit_inlines_imported_mutable_global_access() {
+    let store = jit_store();
+    let mut registry = Registry::new();
+    let producer = instantiate_jit_wat(
+        r#"
+        (module
+          (global (export "g") (mut i32) (i32.const 10)))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+    registry.register("producer", producer);
+    let consumer = instantiate_jit_wat(
+        r#"
+        (module
+          (import "producer" "g" (global $g (mut i32)))
+          (func (export "run") (param i32) (result i32)
+            local.get 0
+            global.set $g
+            global.get $g))
+        "#,
+        &store,
+        &registry,
+    )
+    .await;
+
+    let result = telomere::run_module_function(
+        &consumer,
+        &store,
+        "run",
+        &ResultValue::new(vec![WasmValue::I32(77)]),
+    )
+    .await;
+
+    assert_success_i32(result, 77);
 }
 
 #[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]

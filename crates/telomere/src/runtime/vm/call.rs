@@ -188,6 +188,34 @@ pub(crate) unsafe fn jit_call_direct(
 }
 
 #[cfg(feature = "jit")]
+/// Fast JIT helper for direct calls whose callee is known to be a Wasm function.
+///
+/// # Safety
+/// - `continuation` must point to the instruction immediately after the active callsite.
+/// - `ctx` must still describe the caller frame when this helper is entered.
+/// - The caller must honor the returned JIT exit and resume through the indicated continuation.
+pub(crate) unsafe fn jit_call_direct_wasm_fast(
+    funcaddr: ObjectRef,
+    continuation: *const Instr,
+    ctx: &mut ExecuteContext,
+) -> crate::runtime::jit::JitNativeExit {
+    if ctx.effect.get_pending_count() != 0 {
+        return crate::runtime::jit::JitNativeExit::pending();
+    }
+    let recipe = ensure_call_recipe(funcaddr, ctx);
+    let CallDispatchTarget::Wasm { local_size } = recipe.target else {
+        return crate::runtime::jit::JitNativeExit::trap(VMResult::<()>::InvalidOperand);
+    };
+    match unsafe { prepare_jit_wasm_call(continuation, recipe, local_size as usize, ctx, false) } {
+        VMResult::Success(()) if ctx.gc.jit_rejected_func(funcaddr) => unsafe {
+            finish_rejected_direct_wasm_call(continuation, recipe, ctx)
+        },
+        VMResult::Success(()) => unsafe { finish_jit_wasm_call(continuation, recipe, ctx, false) },
+        other => crate::runtime::jit::JitNativeExit::trap(other),
+    }
+}
+
+#[cfg(feature = "jit")]
 /// Telomere runtime helper for JIT `call_indirect` / `return_call_indirect` sites.
 ///
 /// Stack effect: pops the indirect table element index and dispatches to the resolved target.
@@ -338,6 +366,7 @@ unsafe fn finish_jit_wasm_call(
     is_return_call: bool,
 ) -> crate::runtime::jit::JitNativeExit {
     let exit = unsafe { crate::runtime::jit::enter_current_frame_from_jit_call(ctx) };
+    crate::runtime::jit::profile::count_exit(exit.kind);
     let returned_to_continuation = exit.kind == crate::runtime::jit::JitNativeExit::DONE
         || (exit.kind == crate::runtime::jit::JitNativeExit::CONTINUE_PTR
             && exit.value == continuation as u64);
@@ -362,6 +391,25 @@ unsafe fn finish_jit_wasm_call(
         } else {
             continue_exit
         }
+    } else {
+        exit
+    }
+}
+
+#[cfg(feature = "jit")]
+unsafe fn finish_rejected_direct_wasm_call(
+    continuation: *const Instr,
+    recipe: CallDispatchCache,
+    ctx: &mut ExecuteContext,
+) -> crate::runtime::jit::JitNativeExit {
+    crate::runtime::jit::profile::count(
+        crate::runtime::jit::profile::Counter::RuntimeRejectedWasmCallFast,
+    );
+    let exit = unsafe {
+        crate::runtime::jit::run_interpreter_continue_from_jit_call(ctx.code(), continuation, ctx)
+    };
+    if exit.kind == crate::runtime::jit::JitNativeExit::DONE {
+        crate::runtime::jit::JitNativeExit::done_with_value(pack_call_stack_sizes(recipe))
     } else {
         exit
     }

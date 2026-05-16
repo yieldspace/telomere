@@ -16,7 +16,7 @@ use std::{
     num::NonZeroU32,
     ops::{Deref, DerefMut},
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Weak,
     },
 };
@@ -263,34 +263,58 @@ pub struct RuntimeConfig {
     pub jit: JitConfig,
 }
 
+#[repr(C, align(4))]
 #[derive(Debug, Clone)]
-pub(crate) enum GlobalValue {
-    Bytes4([u8; 4]),
-    Bytes8([u8; 8]),
-    Bytes16([u8; 16]),
-    Ref(u32),
+pub(crate) struct GlobalValue {
+    bytes: [u8; 16],
+    len: u8,
 }
 
 impl GlobalValue {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        match self {
-            Self::Bytes4(bytes) => bytes,
-            Self::Bytes8(bytes) => bytes,
-            Self::Bytes16(bytes) => bytes,
-            Self::Ref(raw) => unsafe {
-                std::slice::from_raw_parts(raw as *const u32 as *const u8, 4)
-            },
+    fn from_bytes(bytes: &[u8]) -> Self {
+        debug_assert!(bytes.len() <= 16);
+        let mut data = [0u8; 16];
+        data[..bytes.len()].copy_from_slice(bytes);
+        Self {
+            bytes: data,
+            len: bytes.len() as u8,
         }
     }
 
+    fn bytes4(bytes: [u8; 4]) -> Self {
+        Self::from_bytes(&bytes)
+    }
+
+    fn bytes8(bytes: [u8; 8]) -> Self {
+        Self::from_bytes(&bytes)
+    }
+
+    fn bytes16(bytes: [u8; 16]) -> Self {
+        Self::from_bytes(&bytes)
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+
     pub(crate) fn as_bytes_mut(&mut self) -> &mut [u8] {
-        match self {
-            Self::Bytes4(bytes) => bytes,
-            Self::Bytes8(bytes) => bytes,
-            Self::Bytes16(bytes) => bytes,
-            Self::Ref(raw) => unsafe {
-                std::slice::from_raw_parts_mut(raw as *mut u32 as *mut u8, 4)
-            },
+        &mut self.bytes[..self.len as usize]
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+pub(crate) struct GlobalValueJitLayout {
+    pub(crate) bytes: usize,
+    pub(crate) size: usize,
+}
+
+#[cfg(all(feature = "jit", target_os = "macos", target_arch = "aarch64"))]
+impl GlobalValueJitLayout {
+    pub(crate) fn get() -> Self {
+        Self {
+            bytes: std::mem::offset_of!(GlobalValue, bytes),
+            size: std::mem::size_of::<GlobalValue>(),
         }
     }
 }
@@ -352,6 +376,7 @@ pub struct StoreInner {
     instances: Vec<InstanceData>,
     funcs: Vec<FunctionInstanceData>,
     call_recipes: Vec<Option<CallRecipe>>,
+    jit_rejected_funcs: Vec<AtomicBool>,
     tables: Vec<super::TableInstance>,
     globals: Vec<GlobalValue>,
     local_memories: Vec<LocalMemoryObject>,
@@ -594,6 +619,7 @@ impl StoreInner {
         let id = FuncId::from_index(self.funcs.len());
         self.funcs.push(func);
         self.call_recipes.push(None);
+        self.jit_rejected_funcs.push(AtomicBool::new(false));
         id
     }
 
@@ -631,6 +657,15 @@ impl StoreInner {
     pub(crate) fn call_recipe_slot_for_func(&self, addr: ObjectRef) -> u32 {
         u32::try_from(self.call_recipe_slot_for_func_addr(addr))
             .expect("call recipe slot exceeds u32::MAX")
+    }
+
+    pub(crate) fn jit_rejected_func(&self, addr: ObjectRef) -> bool {
+        self.jit_rejected_funcs[self.call_recipe_slot_for_func_addr(addr)].load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn mark_jit_rejected_func(&self, addr: ObjectRef) {
+        self.jit_rejected_funcs[self.call_recipe_slot_for_func_addr(addr)]
+            .store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn call_recipe(&self, slot: u32) -> Option<CallRecipe> {
@@ -729,23 +764,31 @@ impl StoreInner {
         &self.globals[id.index()]
     }
 
+    pub(crate) fn jit_global_values_ptr(&mut self) -> *mut GlobalValue {
+        self.globals.as_mut_ptr()
+    }
+
+    pub(crate) fn jit_instance_global_addrs_ptr(&self, instance: InstanceId) -> *const ObjectRef {
+        self.instances[instance.index()].globals.as_ptr()
+    }
+
     pub(crate) fn new_global_ref(&mut self, global_ref: ObjectRef) -> ObjectRef {
-        let id = self.alloc_global(GlobalValue::Ref(global_ref.get()));
+        let id = self.alloc_global(GlobalValue::bytes4(global_ref.get().to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
     pub(crate) fn new_global_data4(&mut self, data: u32) -> ObjectRef {
-        let id = self.alloc_global(GlobalValue::Bytes4(data.to_le_bytes()));
+        let id = self.alloc_global(GlobalValue::bytes4(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
     pub(crate) fn new_global_data8(&mut self, data: u64) -> ObjectRef {
-        let id = self.alloc_global(GlobalValue::Bytes8(data.to_le_bytes()));
+        let id = self.alloc_global(GlobalValue::bytes8(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
     pub(crate) fn new_global_data16(&mut self, data: u128) -> ObjectRef {
-        let id = self.alloc_global(GlobalValue::Bytes16(data.to_le_bytes()));
+        let id = self.alloc_global(GlobalValue::bytes16(data.to_le_bytes()));
         encode_object_ref(ObjectKind::Global, id.raw())
     }
 
